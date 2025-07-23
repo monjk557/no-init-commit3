@@ -1,0 +1,827 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Setup Project Structure and Configuration",
+        "description": "Initialize the project structure for the collabops-git-executor component with proper configuration handling.",
+        "details": "Create a Go project with the following structure:\n- cmd/: Entry point for the application\n- internal/: Internal packages\n- pkg/: Reusable packages\n- config/: Configuration files\n\nImplement configuration handling using Viper (v1.16.0+) to parse the config.yaml file with the following sections:\n- server.port\n- server.base_path\n- git.repo_root\n- git.enable_packfile\n- jwt.algorithm\n- jwt.public_key_path\n\nCreate a Dockerfile and docker-compose.yml for local development. Use Go 1.20+ for better performance and security features. Implement graceful shutdown handling for the HTTP server.",
+        "testStrategy": "Write unit tests for configuration loading using testify (v1.8.4+). Create a test config file and verify all fields are correctly parsed. Test error handling for missing or malformed configuration files.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create Project Directory Structure",
+            "description": "Initialize the Go project with the required directory structure following best practices",
+            "dependencies": [],
+            "details": "Create the following directory structure:\n- cmd/: For application entry points\n- internal/: For internal packages not meant to be imported\n- pkg/: For reusable packages that can be imported\n- config/: For configuration files\n\nInitialize the Go module with 'go mod init github.com/collabops/git-executor'\nCreate a basic README.md with project description\nSetup .gitignore file for Go projects\n<info added on 2025-07-23T07:30:18.747Z>\n**Task 1.1 Implementation Complete**\n\nSuccessfully created the complete Go project directory structure:\n\n**Created directories:**\n- `cmd/` - Application entry points\n- `internal/` - Internal packages (not for external import)\n- `pkg/` - Reusable packages (can be imported)\n- `config/` - Configuration files\n- `docs/` - Documentation\n- `deployments/` - Docker and deployment configs\n- `bin/` - Build artifacts directory\n\n**Created essential files:**\n- `go.mod` - Go module definition with Go 1.21+ and key dependencies\n  - go-git v5.16.2 for Git operations\n  - chi v5.0.12 for HTTP routing\n  - viper v1.18.2 for configuration\n  - zap v1.26.0 for logging\n  - testify v1.9.0 for testing\n  - prometheus client for metrics\n\n- `README.md` - Comprehensive project documentation including:\n  - Architecture overview\n  - API endpoint specifications\n  - Development setup instructions\n  - Configuration examples\n  - Docker setup\n\n- `.gitignore` - Complete Go project gitignore covering:\n  - Go build artifacts\n  - IDE files (VS Code, GoLand)\n  - OS files (macOS, Windows, Linux)\n  - Security files (certificates, keys)\n  - Application-specific exclusions\n\nProject structure follows Go best practices and is ready for implementation of subsequent tasks.\n</info added on 2025-07-23T07:30:18.747Z>",
+            "status": "done",
+            "testStrategy": "Verify the directory structure exists and follows Go project conventions. Ensure go.mod is properly initialized with Go 1.20+ as the minimum version."
+          },
+          {
+            "id": 2,
+            "title": "Implement Configuration Handling with Viper",
+            "description": "Create a configuration package using Viper to parse and validate config.yaml",
+            "dependencies": [],
+            "details": "Create a config package in internal/config/\nImplement configuration loading using Viper v1.16.0+\nDefine configuration struct with all required fields:\n- server.port\n- server.base_path\n- git.repo_root\n- git.enable_packfile\n- jwt.algorithm\n- jwt.public_key_path\nImplement validation for required fields\nProvide default values where appropriate\nCreate a sample config.yaml file in the config/ directory\n<info added on 2025-07-23T07:40:30.492Z>\n**TASK COMPLETED SUCCESSFULLY**\n\nImplementation Status: COMPLETE\nFiles Created:\n- internal/config/config.go (209 lines) - Main configuration package with Viper integration\n- internal/config/config_test.go (367 lines) - Comprehensive test suite with 42 verification checks\n- config/config.yaml.example (115 lines) - Sample configuration with detailed documentation\n\nKey Features Implemented:\n- Complete Viper v1.16.0+ integration with YAML configuration loading\n- Comprehensive configuration structs for Server, Git, JWT, and Log sections\n- Robust validation logic for all required fields\n- Environment variable support with COLLABOPS_ prefix\n- Default value handling for all configuration options\n- JWT algorithm validation (RS256/HS256/ES256)\n- Production-ready error handling and logging\n\nTesting Results:\n- All 42 verification checks passed via scripts/verify-config.sh\n- Comprehensive test coverage including valid/invalid YAML handling\n- Environment variable override testing\n- Validation logic verification for all config sections\n\nConfiguration package is production-ready and fully tested. Ready to proceed with next subtask.\n</info added on 2025-07-23T07:40:30.492Z>",
+            "status": "done",
+            "testStrategy": "Write unit tests using testify v1.8.4+ to verify:\n- Configuration loads correctly from a valid file\n- Validation fails for missing required fields\n- Default values are applied correctly\n- Error handling works for malformed configuration"
+          },
+          {
+            "id": 3,
+            "title": "Create HTTP Server with Graceful Shutdown",
+            "description": "Implement the HTTP server with proper routing and graceful shutdown handling",
+            "dependencies": [],
+            "details": "Create a server package in internal/server/\nImplement HTTP server initialization using the loaded configuration\nSetup basic routing structure with a router (e.g., gorilla/mux or chi)\nImplement graceful shutdown with context and signal handling\nCreate health check endpoint at /health\nEnsure server respects server.port and server.base_path from configuration\nImplement proper error handling and logging",
+            "status": "pending",
+            "testStrategy": "Write unit tests to verify:\n- Server initializes with correct configuration\n- Graceful shutdown works when receiving termination signals\n- Health check endpoint returns 200 OK\n- Server respects base path configuration"
+          },
+          {
+            "id": 4,
+            "title": "Create Dockerfile and Docker Compose Setup",
+            "description": "Implement Docker configuration for local development and deployment",
+            "dependencies": [],
+            "details": "Create a Dockerfile with:\n- Go 1.20+ as the base image\n- Multi-stage build for smaller final image\n- Proper WORKDIR, COPY, and RUN commands\n- Non-root user for security\n- Appropriate EXPOSE and CMD directives\n\nCreate docker-compose.yml with:\n- Service definition for git-executor\n- Volume mapping for configuration and repositories\n- Environment variable configuration\n- Network setup for local development\n- Optional development tools (e.g., hot reload)",
+            "status": "pending",
+            "testStrategy": "Verify Docker setup by:\n- Building the Docker image successfully\n- Running the container with docker-compose up\n- Checking the container starts without errors\n- Verifying configuration can be properly mounted and loaded"
+          },
+          {
+            "id": 5,
+            "title": "Implement Basic Logging and Error Handling",
+            "description": "Set up structured logging and centralized error handling for the application",
+            "dependencies": [],
+            "details": "Create a logging package in internal/logging/\nImplement structured logging using zap v1.24.0+\nConfigure log levels based on environment (development/production)\nImplement request ID generation for request tracing\nCreate centralized error handling utilities\nEnsure all errors are properly logged with context\nImplement log rotation for production use\nAdd logging middleware for HTTP requests",
+            "status": "pending",
+            "testStrategy": "Write unit tests to verify:\n- Log output format is correct\n- Different log levels work as expected\n- Request IDs are generated and propagated\n- Error handling captures and logs errors properly\n- Log rotation works correctly"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Implement Repository Path Management",
+        "description": "Create a repository path management system to handle the mapping between API paths and filesystem paths.",
+        "details": "Implement a package for repository path management with the following functions:\n- getRepoPath(owner, repo string) string: Returns the filesystem path for a given repository\n- validateRepoPath(path string) error: Validates if a path is within the allowed repository root\n- ensureRepoExists(path string) error: Checks if a repository exists at the given path\n\nUse path/filepath package for path manipulation to ensure cross-platform compatibility. Implement proper path sanitization to prevent path traversal attacks. Use os.Stat() to check if repositories exist. \n\nThe repository structure should follow the pattern defined in the PRD: /var/lib/git/repos/{owner}/{repo}.git",
+        "testStrategy": "Write unit tests for path generation, validation, and existence checking. Include tests for path traversal attack prevention. Mock filesystem operations using testify/mock or an appropriate filesystem mocking library.",
+        "priority": "high",
+        "dependencies": [
+          1
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create Repository Path Configuration Package",
+            "description": "Create a configuration package to define the repository root path and path patterns for the repository management system.",
+            "dependencies": [],
+            "details": "Implement a configuration structure that defines the base repository path (/var/lib/git/repos) and path patterns for owner/repo structure. Include validation for the base path and ensure it's properly initialized. Create constants for path separators and repository file extensions (.git). This will serve as the foundation for all path operations.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for configuration validation, path pattern generation, and base path initialization. Test edge cases like invalid base paths and ensure cross-platform compatibility."
+          },
+          {
+            "id": 2,
+            "title": "Implement getRepoPath Function",
+            "description": "Implement the getRepoPath function that maps owner and repository names to filesystem paths following the defined structure.",
+            "dependencies": [
+              "2.1"
+            ],
+            "details": "Create the getRepoPath(owner, repo string) string function that constructs filesystem paths using the pattern /var/lib/git/repos/{owner}/{repo}.git. Use path/filepath package for cross-platform compatibility. Implement input sanitization to prevent path traversal attacks by validating owner and repo parameters. Handle edge cases like empty strings and special characters.",
+            "status": "pending",
+            "testStrategy": "Write unit tests covering valid owner/repo combinations, empty inputs, special characters, and path traversal attempts. Verify cross-platform path generation and proper sanitization."
+          },
+          {
+            "id": 3,
+            "title": "Implement validateRepoPath Function",
+            "description": "Implement the validateRepoPath function to ensure paths are within the allowed repository root and prevent security vulnerabilities.",
+            "dependencies": [
+              "2.1"
+            ],
+            "details": "Create the validateRepoPath(path string) error function that validates if a given path is within the allowed repository root. Use filepath.Clean and filepath.Abs to resolve paths and prevent directory traversal attacks. Check that the resolved path starts with the repository root path. Return appropriate errors for invalid paths, including detailed error messages for debugging.",
+            "status": "pending",
+            "testStrategy": "Write comprehensive unit tests for path validation including valid paths, path traversal attempts (../, symlinks), absolute paths outside the root, and malformed paths. Test both Unix and Windows path formats."
+          },
+          {
+            "id": 4,
+            "title": "Implement ensureRepoExists Function",
+            "description": "Implement the ensureRepoExists function to check repository existence on the filesystem using os.Stat operations.",
+            "dependencies": [
+              "2.2",
+              "2.3"
+            ],
+            "details": "Create the ensureRepoExists(path string) error function that uses os.Stat() to verify if a repository exists at the given path. First validate the path using validateRepoPath, then check for the existence of the .git directory or bare repository structure. Handle different repository types (bare vs non-bare). Return descriptive errors for non-existent repositories, permission issues, or invalid repository structures.",
+            "status": "pending",
+            "testStrategy": "Write unit tests using temporary directories to test repository existence checking. Mock filesystem operations where appropriate. Test scenarios include existing repositories, non-existent paths, permission denied cases, and invalid repository structures."
+          },
+          {
+            "id": 5,
+            "title": "Create Repository Path Management Package Integration",
+            "description": "Integrate all path management functions into a cohesive package with proper error handling and documentation.",
+            "dependencies": [
+              "2.2",
+              "2.3",
+              "2.4"
+            ],
+            "details": "Create a unified repository path management package that exports all three functions with consistent error handling and logging. Add comprehensive documentation with usage examples. Implement proper error types for different failure scenarios. Add package-level initialization and configuration options. Ensure thread-safety for concurrent access patterns.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that combine all functions in realistic usage scenarios. Test concurrent access patterns, error propagation, and package initialization. Include benchmarks for performance validation and memory usage analysis."
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Implement Authentication Header Processing",
+        "description": "Create middleware to process authentication headers and extract user information for downstream operations.",
+        "details": "Implement HTTP middleware that:\n1. Extracts the X-USER-ID header from incoming requests\n2. Validates the presence of required headers\n3. Attaches user context to the request for downstream handlers\n\nThe middleware should follow the authentication flow described in the PRD, where the executor primarily relies on the X-USER-ID header passed from the gateway. \n\nUse the context package to store and retrieve user information. Implement proper error handling for missing headers. \n\nFor the fallback JWT decoding (extreme cases only), use golang-jwt/jwt (v4.5.0+) library with support for RS256 algorithm. Load the public key from the configured path.",
+        "testStrategy": "Write unit tests for the middleware using httptest package. Test scenarios:\n- Valid X-USER-ID header\n- Missing X-USER-ID header\n- Fallback JWT decoding (if implemented)\n\nMock the JWT verification process for testing.",
+        "priority": "high",
+        "dependencies": [
+          1
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Extract and Validate X-USER-ID Header",
+            "description": "Implement middleware function to extract and validate the X-USER-ID header from incoming HTTP requests.",
+            "dependencies": [],
+            "details": "Create a middleware function that extracts the X-USER-ID header from the request. Implement validation logic to ensure the header is present and contains a valid user identifier. Return appropriate HTTP 401 Unauthorized errors when the header is missing or invalid. Use the http.Handler interface for middleware implementation.",
+            "status": "pending",
+            "testStrategy": "Write unit tests using httptest package to verify header extraction and validation. Test cases should include: valid X-USER-ID header present, missing X-USER-ID header, and malformed X-USER-ID header values."
+          },
+          {
+            "id": 2,
+            "title": "Implement User Context Creation",
+            "description": "Create functionality to store user information in the request context for downstream handlers.",
+            "dependencies": [
+              "3.1"
+            ],
+            "details": "Use the context package to create a new context with user information attached. Define appropriate context key types to avoid key collisions. Create helper functions to retrieve user information from context in downstream handlers. Ensure thread safety for context operations.",
+            "status": "pending",
+            "testStrategy": "Write unit tests to verify context creation and retrieval. Test that user information is correctly stored in and retrieved from the context. Test context propagation through the middleware chain."
+          },
+          {
+            "id": 3,
+            "title": "Implement JWT Fallback Authentication",
+            "description": "Create fallback authentication using JWT when X-USER-ID header is not available.",
+            "dependencies": [
+              "3.1",
+              "3.2"
+            ],
+            "details": "Implement JWT token verification using golang-jwt/jwt v4.5.0+ with RS256 algorithm support. Create functionality to load and parse the public key from the configured path. Extract user information from verified JWT claims. Handle JWT validation errors appropriately with detailed error messages.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Create Complete Authentication Middleware",
+            "description": "Integrate header extraction and JWT fallback into a complete authentication middleware.",
+            "dependencies": [
+              "3.1",
+              "3.2",
+              "3.3"
+            ],
+            "details": "Create a unified middleware that attempts X-USER-ID header authentication first, then falls back to JWT authentication if needed. Implement proper error handling for authentication failures. Add logging for authentication attempts and failures. Make the middleware configurable through environment variables or configuration files.",
+            "status": "pending",
+            "testStrategy": "Write integration tests for the complete middleware. Test the authentication flow with various scenarios: valid header, missing header with valid JWT, and completely invalid authentication. Mock JWT verification for testing."
+          },
+          {
+            "id": 5,
+            "title": "Document and Optimize Authentication Middleware",
+            "description": "Document the authentication middleware and optimize its performance.",
+            "dependencies": [
+              "3.4"
+            ],
+            "details": "Create comprehensive documentation for the middleware including usage examples, configuration options, and error handling. Add detailed code comments explaining the authentication flow. Implement performance optimizations such as caching JWT verification results. Add metrics collection for authentication attempts, successes, and failures.",
+            "status": "pending",
+            "testStrategy": "Write benchmark tests to measure middleware performance. Compare performance with and without optimizations. Verify documentation accuracy by having another team member attempt to use the middleware based solely on the documentation."
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Implement Permission Verification with API-Service",
+        "description": "Create a client to verify repository access permissions by querying the API-Service.",
+        "details": "Implement a permission verification client that:\n1. Makes HTTP requests to the API-Service endpoint\n2. Caches permission results to reduce API calls\n3. Handles API-Service unavailability gracefully\n\nThe client should call: GET http://api-service.local/permissions/:user_id/:repo_owner/:repo_name?op=write (or read)\n\nUse net/http package with proper timeout settings (context with timeout). Implement retry logic with exponential backoff using cenkalti/backoff (v4.2.1+). \n\nImplement a caching layer using a concurrent map (sync.Map) or a more sophisticated LRU cache like golang-lru (v0.5.4+) to reduce API calls. Cache entries should expire after a configurable duration (default: 5 minutes).",
+        "testStrategy": "Write unit tests for the permission client using httptest package to mock the API-Service. Test scenarios:\n- Successful permission check\n- API-Service unavailable\n- Cache hit/miss behavior\n- Permission denied\n\nUse dependency injection to mock the HTTP client for testing.",
+        "priority": "high",
+        "dependencies": [
+          3
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design and implement the permission client interface",
+            "description": "Create the interface and basic structure for the permission verification client that will interact with the API-Service.",
+            "dependencies": [],
+            "details": "Define a clear interface for the permission client with methods like CheckReadAccess and CheckWriteAccess. Implement a struct that satisfies this interface. Include configuration options for timeout settings, retry attempts, and cache duration. The interface should be designed for easy mocking in tests.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for the interface implementation with mocked HTTP responses. Test the basic structure and configuration options."
+          },
+          {
+            "id": 2,
+            "title": "Implement HTTP request functionality with timeout and retry logic",
+            "description": "Create the core HTTP request functionality with proper timeout settings and retry logic using exponential backoff.",
+            "dependencies": [
+              "4.1"
+            ],
+            "details": "Use the net/http package to make requests to the API-Service endpoint. Implement context with timeout for all requests. Integrate cenkalti/backoff (v4.2.1+) for retry logic with exponential backoff. Handle different types of errors appropriately (connection errors, timeout errors, HTTP status errors). Format the API URL correctly: GET http://api-service.local/permissions/:user_id/:repo_owner/:repo_name?op=write (or read).",
+            "status": "pending",
+            "testStrategy": "Test HTTP request functionality with httptest package. Create test cases for successful requests, timeouts, and various error scenarios. Verify retry behavior works as expected with different error types."
+          },
+          {
+            "id": 3,
+            "title": "Implement caching layer for permission results",
+            "description": "Create a caching mechanism to store permission check results and reduce API calls.",
+            "dependencies": [
+              "4.1"
+            ],
+            "details": "Implement a caching layer using sync.Map for thread safety or golang-lru (v0.5.4+) for more sophisticated LRU caching. Cache keys should be constructed from user_id, repo_owner, repo_name, and operation type. Cache entries should expire after a configurable duration (default: 5 minutes). Implement thread-safe methods for adding, retrieving, and invalidating cache entries.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for cache hit/miss behavior, expiration of cache entries, and thread safety under concurrent access. Test with various cache configurations and expiration times."
+          },
+          {
+            "id": 4,
+            "title": "Implement graceful handling of API-Service unavailability",
+            "description": "Create robust error handling for when the API-Service is unavailable or returns errors.",
+            "dependencies": [
+              "4.2"
+            ],
+            "details": "Implement different strategies for handling API-Service unavailability: return cached results if available (even if slightly stale), implement circuit breaker pattern to prevent cascading failures, log detailed error information for troubleshooting. Define clear error types that can be returned to callers. Consider implementing a fallback permission policy (e.g., deny all or allow read-only) when the service is completely unavailable.",
+            "status": "pending",
+            "testStrategy": "Test behavior when API-Service returns different error codes (500, 503, etc.). Test circuit breaker functionality. Verify cached results are returned when appropriate during service unavailability."
+          },
+          {
+            "id": 5,
+            "title": "Integrate and test the complete permission verification client",
+            "description": "Combine all components into a complete permission verification client and perform comprehensive testing.",
+            "dependencies": [
+              "4.2",
+              "4.3",
+              "4.4"
+            ],
+            "details": "Integrate HTTP requests, caching, and error handling into a cohesive permission client. Implement clean public methods that hide implementation details. Add comprehensive logging throughout the client for debugging and monitoring. Create configuration options for all aspects of the client (timeouts, retry policy, cache settings, etc.). Ensure thread safety for concurrent usage.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that verify the complete flow from permission request through caching. Test scenarios should include: successful permission checks, API-Service unavailability, cache hit/miss behavior, permission denied responses, and concurrent access patterns. Use dependency injection to mock the HTTP client for testing."
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Implement Git Repository Interface with go-git",
+        "description": "Create a Git repository interface using go-git to perform Git operations on the filesystem.",
+        "details": "Implement a Git repository interface using go-git (v5.7.0+) with the following operations:\n- OpenRepository(path string) (Repository, error)\n- GetTree(repo Repository, ref string) ([]TreeEntry, error)\n- GetBlob(repo Repository, path, ref string) ([]byte, error)\n- GetCommits(repo Repository, ref string, limit, skip int) ([]Commit, error)\n\nCreate appropriate data structures for TreeEntry and Commit. Use interfaces for better testability. Implement proper error handling for common Git operations (invalid ref, non-existent path, etc.).\n\nUse go-git's plumbing package for low-level operations when needed. Implement a repository caching mechanism using sync.Map to avoid repeatedly opening the same repository.",
+        "testStrategy": "Write unit tests for Git operations using a test repository. Test scenarios:\n- Opening valid/invalid repositories\n- Retrieving trees at different refs\n- Retrieving blobs at different paths and refs\n- Retrieving commit history with pagination\n\nUse a temporary directory with a test Git repository for integration tests.",
+        "priority": "high",
+        "dependencies": [
+          2
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define Repository Interface and Data Structures",
+            "description": "Create the Repository interface and define data structures for TreeEntry and Commit that will be used throughout the implementation.",
+            "dependencies": [],
+            "details": "Define a Repository interface that abstracts Git operations. Create structs for TreeEntry (containing path, mode, type, hash) and Commit (containing hash, author, committer, message, date). Ensure the interface is designed for testability with methods that can be easily mocked. Include appropriate error types for common Git operations failures.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for the data structures to ensure they properly represent Git objects. Test serialization/deserialization if needed. Create mock implementations of the Repository interface for use in other tests."
+          },
+          {
+            "id": 2,
+            "title": "Implement OpenRepository Function",
+            "description": "Implement the OpenRepository function that opens a Git repository at a specified path.",
+            "dependencies": [
+              "5.1"
+            ],
+            "details": "Create a function that takes a filesystem path and returns a Repository interface implementation. Use go-git to open the repository at the specified path. Handle common errors like non-existent repositories, permission issues, or invalid Git repositories. Return appropriate error messages that are helpful for debugging.",
+            "status": "pending",
+            "testStrategy": "Test opening valid repositories, non-existent repositories, and repositories with permission issues. Create a temporary test repository for positive test cases."
+          },
+          {
+            "id": 3,
+            "title": "Implement Tree and Blob Retrieval Functions",
+            "description": "Implement GetTree and GetBlob functions to retrieve directory structure and file contents from a Git repository.",
+            "dependencies": [
+              "5.1",
+              "5.2"
+            ],
+            "details": "Implement GetTree to return a slice of TreeEntry objects representing the directory structure at a given reference. Implement GetBlob to return the contents of a file at a specific path and reference. Use go-git's plumbing package for low-level operations when needed. Handle errors for invalid references, non-existent paths, and other common issues.",
+            "status": "pending",
+            "testStrategy": "Test retrieving trees at different references (branches, tags, commits). Test retrieving blobs at different paths and references. Test error cases like invalid references and non-existent paths."
+          },
+          {
+            "id": 4,
+            "title": "Implement Commit History Retrieval",
+            "description": "Implement the GetCommits function to retrieve commit history with pagination support.",
+            "dependencies": [
+              "5.1",
+              "5.2"
+            ],
+            "details": "Implement GetCommits to return a slice of Commit objects representing the commit history starting from a given reference. Support pagination with limit and skip parameters. Handle edge cases like reaching the end of history. Ensure proper error handling for invalid references.",
+            "status": "pending",
+            "testStrategy": "Test retrieving commits with different pagination parameters. Test from different starting points (branches, tags, specific commits). Test edge cases like empty repositories or repositories with few commits."
+          },
+          {
+            "id": 5,
+            "title": "Implement Repository Caching Mechanism",
+            "description": "Create a caching layer using sync.Map to avoid repeatedly opening the same repository.",
+            "dependencies": [
+              "5.2"
+            ],
+            "details": "Implement a repository caching mechanism using sync.Map for thread safety. Cache repositories based on their filesystem path. Ensure proper cleanup of resources when repositories are no longer needed. Consider implementing an LRU eviction policy to limit memory usage. Modify the OpenRepository function to use the cache.",
+            "status": "pending",
+            "testStrategy": "Test cache hit/miss behavior. Test concurrent access to the cache. Benchmark performance improvement with cached vs. non-cached repository operations. Test resource cleanup when repositories are evicted from the cache."
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Implement Tree API Endpoint",
+        "description": "Create an API endpoint to retrieve the tree structure of a repository at a specific reference.",
+        "details": "Implement a HTTP handler for GET /repos/:owner/:repo/tree?ref=:ref that:\n1. Validates the request parameters\n2. Checks user permissions using the permission client\n3. Retrieves the tree structure using the Git repository interface\n4. Returns a JSON response with the tree entries\n\nThe response should follow the format specified in the PRD:\n```json\n[\n  { \"type\": \"tree\", \"name\": \"cmd\", \"path\": \"cmd\" },\n  { \"type\": \"blob\", \"name\": \"README.md\", \"path\": \"README.md\" }\n]\n```\n\nImplement proper error handling for invalid references, non-existent repositories, and permission denied errors. Use chi router (v5.0.8+) for routing with path parameters.",
+        "testStrategy": "Write unit tests for the tree API endpoint using httptest package. Test scenarios:\n- Valid request with existing repository and reference\n- Invalid reference\n- Non-existent repository\n- Permission denied\n\nMock the Git repository interface and permission client for testing.",
+        "priority": "medium",
+        "dependencies": [
+          4,
+          5
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement request parameter validation for tree endpoint",
+            "description": "Create validation logic for the GET /repos/:owner/:repo/tree endpoint to validate owner, repo, and ref query parameters. Ensure parameters are not empty, contain valid characters, and meet format requirements.",
+            "dependencies": [],
+            "details": "Implement parameter validation that checks: 1) owner and repo path parameters are non-empty and contain valid repository name characters, 2) ref query parameter is provided and contains valid Git reference characters, 3) return appropriate HTTP 400 Bad Request errors with descriptive messages for invalid parameters. Use chi router's URLParam function to extract path parameters and r.URL.Query().Get() for query parameters.",
+            "status": "pending",
+            "testStrategy": "Write unit tests using httptest to verify validation logic with various invalid parameter combinations: empty owner/repo, special characters, missing ref parameter, and valid parameter sets."
+          },
+          {
+            "id": 2,
+            "title": "Implement permission checking for tree access",
+            "description": "Integrate with the permission client to verify user has read access to the repository before retrieving tree structure. Handle authentication and authorization errors appropriately.",
+            "dependencies": [
+              "6.1"
+            ],
+            "details": "Use the permission client interface to check if the authenticated user has read permissions for the specified repository. Extract user context from the HTTP request, call the permission client's CheckPermission method with read access level, and return HTTP 403 Forbidden for permission denied or HTTP 401 Unauthorized for authentication failures. Implement proper error handling and logging for permission check failures.",
+            "status": "pending",
+            "testStrategy": "Write unit tests with mocked permission client to test scenarios: valid user with read access, user without read access, unauthenticated requests, and permission client errors."
+          },
+          {
+            "id": 3,
+            "title": "Implement Git repository tree retrieval",
+            "description": "Use the Git repository interface to retrieve the tree structure at the specified reference. Handle Git-specific errors like invalid references and non-existent repositories.",
+            "dependencies": [
+              "6.2"
+            ],
+            "details": "Implement tree retrieval logic that: 1) opens the Git repository using the repository interface, 2) resolves the reference to a commit object, 3) retrieves the tree object from the commit, 4) iterates through tree entries to collect file and directory information, 5) handles Git errors for invalid references (HTTP 404), non-existent repositories (HTTP 404), and other Git operation failures (HTTP 500). Use proper resource cleanup for opened repositories.",
+            "status": "pending",
+            "testStrategy": "Write unit tests with mocked Git repository interface to test: successful tree retrieval, invalid reference errors, non-existent repository errors, and Git operation failures."
+          },
+          {
+            "id": 4,
+            "title": "Implement JSON response formatting for tree entries",
+            "description": "Format the retrieved tree structure into the specified JSON response format with proper type classification (tree/blob) and path information.",
+            "dependencies": [
+              "6.3"
+            ],
+            "details": "Transform Git tree entries into the required JSON format: 1) classify entries as 'tree' for directories or 'blob' for files based on Git object type, 2) extract name from the tree entry, 3) construct full path for each entry, 4) create JSON array with objects containing type, name, and path fields, 5) set appropriate Content-Type header to application/json, 6) handle JSON marshaling errors. Ensure response matches the PRD specification exactly.",
+            "status": "pending",
+            "testStrategy": "Write unit tests to verify JSON response format matches specification, test with various tree structures including nested directories and different file types, and validate JSON marshaling."
+          },
+          {
+            "id": 5,
+            "title": "Integrate tree endpoint with chi router and implement error handling",
+            "description": "Set up the complete HTTP handler with chi router integration, comprehensive error handling, and proper HTTP status codes for all error scenarios.",
+            "dependencies": [
+              "6.1",
+              "6.2",
+              "6.3",
+              "6.4"
+            ],
+            "details": "Create the complete HTTP handler function that: 1) integrates with chi router using r.Get() with path pattern '/repos/{owner}/{repo}/tree', 2) implements comprehensive error handling for all failure scenarios with appropriate HTTP status codes (400 for validation errors, 401/403 for auth errors, 404 for not found, 500 for server errors), 3) includes proper logging for errors and successful requests, 4) sets appropriate response headers, 5) handles panics with recovery middleware. Ensure the handler follows REST API best practices.",
+            "status": "pending",
+            "testStrategy": "Write integration tests using httptest to test the complete endpoint with real chi router setup, covering all success and error scenarios end-to-end."
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Implement Blob API Endpoint",
+        "description": "Create an API endpoint to retrieve the content of a blob at a specific path and reference.",
+        "details": "Implement a HTTP handler for GET /repos/:owner/:repo/blob?path=:path&ref=:ref that:\n1. Validates the request parameters\n2. Checks user permissions using the permission client\n3. Retrieves the blob content using the Git repository interface\n4. Returns the blob content with appropriate Content-Type header\n\nImplement content type detection based on file extension or content analysis using http.DetectContentType(). For text files, return the content as-is. For binary files, consider base64 encoding or appropriate handling.\n\nImplement proper error handling for invalid paths, non-existent blobs, and permission denied errors.",
+        "testStrategy": "Write unit tests for the blob API endpoint using httptest package. Test scenarios:\n- Valid request with existing blob\n- Invalid path\n- Non-existent blob\n- Permission denied\n- Different content types (text, binary)\n\nMock the Git repository interface and permission client for testing.",
+        "priority": "medium",
+        "dependencies": [
+          4,
+          5
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Request Parameter Validation",
+            "description": "Create validation logic for the blob API endpoint parameters including owner, repo, path, and ref query parameters.",
+            "dependencies": [],
+            "details": "Implement parameter validation that checks for required parameters (owner, repo, path, ref), validates parameter formats, sanitizes path inputs to prevent directory traversal attacks, and ensures ref parameter is a valid Git reference format. Return appropriate HTTP 400 errors with descriptive messages for invalid parameters.",
+            "status": "pending",
+            "testStrategy": "Write unit tests covering valid parameter combinations, missing required parameters, invalid parameter formats, and path traversal attempts. Use table-driven tests to cover multiple validation scenarios."
+          },
+          {
+            "id": 2,
+            "title": "Implement Permission Checking",
+            "description": "Integrate with the permission client to verify user has read access to the specified repository before retrieving blob content.",
+            "dependencies": [
+              "7.1"
+            ],
+            "details": "Use the permission client interface to check if the authenticated user has read permissions for the repository. Handle authentication errors, permission denied scenarios, and service unavailability. Cache permission results where appropriate to improve performance.",
+            "status": "pending",
+            "testStrategy": "Write unit tests with mocked permission client covering scenarios: valid permissions, permission denied, authentication failures, and permission service errors. Test caching behavior if implemented."
+          },
+          {
+            "id": 3,
+            "title": "Implement Blob Content Retrieval",
+            "description": "Use the Git repository interface to retrieve blob content at the specified path and reference.",
+            "dependencies": [
+              "7.2"
+            ],
+            "details": "Implement blob retrieval using the Git repository interface that resolves the reference to a commit, navigates the tree structure to find the blob at the specified path, and retrieves the blob content. Handle cases where the reference doesn't exist, path is not found, or path points to a directory instead of a file.",
+            "status": "pending",
+            "testStrategy": "Write unit tests with mocked Git repository interface covering: successful blob retrieval, non-existent reference, invalid path, path pointing to directory, and Git operation errors."
+          },
+          {
+            "id": 4,
+            "title": "Implement Content Type Detection and Response Formatting",
+            "description": "Detect content type of blob data and format the response appropriately for text and binary files.",
+            "dependencies": [
+              "7.3"
+            ],
+            "details": "Implement content type detection using file extension mapping and http.DetectContentType() for content analysis. For text files, return content as-is with appropriate text/* Content-Type. For binary files, implement base64 encoding with application/octet-stream or specific binary Content-Type. Include proper HTTP headers for content length and caching.",
+            "status": "pending",
+            "testStrategy": "Write unit tests covering different file types: text files (various extensions), binary files, files without extensions, and edge cases. Test Content-Type header setting and response body formatting for each type."
+          },
+          {
+            "id": 5,
+            "title": "Implement Error Handling and HTTP Handler Integration",
+            "description": "Create comprehensive error handling and integrate all components into a complete HTTP handler for the blob API endpoint.",
+            "dependencies": [
+              "7.1",
+              "7.2",
+              "7.3",
+              "7.4"
+            ],
+            "details": "Implement the main HTTP handler that orchestrates all components with proper error handling for each failure scenario. Map internal errors to appropriate HTTP status codes (400 for bad requests, 403 for permission denied, 404 for not found, 500 for server errors). Include request logging and metrics collection. Ensure proper resource cleanup and context handling.",
+            "status": "pending",
+            "testStrategy": "Write integration tests using httptest covering the complete request flow: successful requests, various error scenarios, proper HTTP status codes and headers. Test with different blob types and sizes to ensure proper handling."
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Implement Commit Log API Endpoint",
+        "description": "Create an API endpoint to retrieve the commit history of a repository at a specific reference.",
+        "details": "Implement a HTTP handler for GET /repos/:owner/:repo/commits?ref=:ref&limit=:limit&skip=:skip that:\n1. Validates the request parameters\n2. Checks user permissions using the permission client\n3. Retrieves the commit history using the Git repository interface\n4. Returns a JSON response with the commits\n\nThe response should include commit details such as:\n- SHA\n- Author name and email\n- Committer name and email\n- Commit message\n- Timestamp\n- Parent commits\n\nImplement pagination using limit and skip parameters with sensible defaults (limit=30, skip=0). Implement proper error handling for invalid references and permission denied errors.",
+        "testStrategy": "Write unit tests for the commit log API endpoint using httptest package. Test scenarios:\n- Valid request with existing repository and reference\n- Invalid reference\n- Pagination with different limit and skip values\n- Permission denied\n\nMock the Git repository interface and permission client for testing.",
+        "priority": "medium",
+        "dependencies": [
+          4,
+          5
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define API Request/Response Models and Validation",
+            "description": "Create the data structures and validation logic for the commit log API endpoint request parameters and response format.",
+            "dependencies": [],
+            "details": "Define structs for CommitLogRequest (with owner, repo, ref, limit, skip parameters) and CommitLogResponse (with commits array). Implement validation for request parameters including ref format validation, limit bounds (1-100), and skip non-negative validation. Create Commit struct with SHA, Author, Committer, Message, Timestamp, and ParentCommits fields. Add JSON tags and validation tags using a validation library.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for request validation covering valid parameters, invalid ref formats, out-of-bounds limit values, negative skip values, and JSON marshaling/unmarshaling of response structures."
+          },
+          {
+            "id": 2,
+            "title": "Implement HTTP Handler Function",
+            "description": "Create the main HTTP handler function that processes the GET /repos/:owner/:repo/commits endpoint.",
+            "dependencies": [
+              "8.1"
+            ],
+            "details": "Implement the HTTP handler function that extracts path parameters (owner, repo) and query parameters (ref, limit, skip). Parse and validate all parameters using the validation logic from subtask 1. Set default values for limit (30) and skip (0) when not provided. Handle URL parameter extraction and type conversion with proper error handling for malformed parameters.",
+            "status": "pending",
+            "testStrategy": "Write unit tests using httptest to test parameter extraction, default value assignment, and error responses for malformed requests. Test with various combinations of present and missing query parameters."
+          },
+          {
+            "id": 3,
+            "title": "Integrate Permission Checking",
+            "description": "Implement user permission validation using the permission client to ensure the user has read access to the repository.",
+            "dependencies": [
+              "8.2"
+            ],
+            "details": "Extract user information from the request context or authentication headers. Call the permission client to verify the user has read access to the specified repository. Handle permission denied scenarios with appropriate HTTP 403 responses. Implement proper error handling for permission client failures and timeout scenarios.",
+            "status": "pending",
+            "testStrategy": "Write unit tests with mocked permission client testing successful permission checks, permission denied scenarios, and permission client error conditions. Verify correct HTTP status codes and error messages are returned."
+          },
+          {
+            "id": 4,
+            "title": "Implement Git Repository Commit History Retrieval",
+            "description": "Integrate with the Git repository interface to retrieve commit history with pagination support.",
+            "dependencies": [
+              "8.3"
+            ],
+            "details": "Use the Git repository interface to open the repository and retrieve commit history starting from the specified reference. Implement pagination by skipping the specified number of commits and limiting results. Extract commit information including SHA, author details, committer details, message, timestamp, and parent commit SHAs. Handle invalid references and non-existent repositories with appropriate error responses.",
+            "status": "pending",
+            "testStrategy": "Write unit tests with mocked Git repository interface testing successful commit retrieval, pagination behavior, invalid reference handling, and repository access errors. Verify commit data extraction and formatting."
+          },
+          {
+            "id": 5,
+            "title": "Implement Response Formatting and Error Handling",
+            "description": "Format the commit data into JSON response and implement comprehensive error handling for all failure scenarios.",
+            "dependencies": [
+              "8.1",
+              "8.4"
+            ],
+            "details": "Convert the retrieved commit data into the defined response format with proper JSON serialization. Implement error handling for all scenarios including invalid parameters, permission denied, invalid references, repository not found, and internal server errors. Set appropriate HTTP status codes (200, 400, 403, 404, 500) and Content-Type headers. Add request logging and error logging for operational visibility.",
+            "status": "pending",
+            "testStrategy": "Write unit tests covering successful responses with various commit data, all error scenarios with correct HTTP status codes, JSON response format validation, and proper error message formatting. Test edge cases like empty commit history and large commit messages."
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Implement Git Smart HTTP Protocol for Fetch",
+        "description": "Implement the Git Smart HTTP protocol endpoints for fetching data from repositories.",
+        "details": "Implement HTTP handlers for Git Smart HTTP protocol:\n- GET /repos/:owner/:repo/info/refs?service=git-upload-pack\n- POST /repos/:owner/:repo/git-upload-pack\n\nThese endpoints should:\n1. Validate the request parameters\n2. Check user permissions (read access)\n3. Execute the appropriate Git commands using go-git or shell commands\n4. Stream the response back to the client with appropriate headers\n\nFor the info/refs endpoint, generate the advertisement of references. For the git-upload-pack endpoint, process the client's want/have and send the packfile.\n\nUse proper content type headers:\n- application/x-git-upload-pack-advertisement\n- application/x-git-upload-pack-result\n\nImplement streaming responses to handle large repositories efficiently. Consider using io.Pipe() for streaming data between go-git and HTTP response.",
+        "testStrategy": "Write integration tests for the Git Smart HTTP protocol endpoints. Test scenarios:\n- Fetching references advertisement\n- Fetching packfile with different want/have combinations\n- Permission denied\n\nUse a test Git client to verify the protocol implementation works with actual Git clients.",
+        "priority": "high",
+        "dependencies": [
+          4,
+          5
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement info/refs endpoint for git-upload-pack",
+            "description": "Create the HTTP handler for GET /repos/:owner/:repo/info/refs?service=git-upload-pack that advertises references for fetching",
+            "dependencies": [],
+            "details": "Implement a handler that validates request parameters, checks user read permissions, and generates the advertisement of references. Set the Content-Type header to application/x-git-upload-pack-advertisement. Use go-git to list all references in the repository and format them according to the Git Smart HTTP protocol specification. Ensure proper error handling for invalid repositories or insufficient permissions.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that verify the endpoint returns proper reference advertisements. Test with valid repositories, non-existent repositories, and repositories with different permission levels. Verify the response format matches Git protocol specifications using a test Git client."
+          },
+          {
+            "id": 2,
+            "title": "Implement git-upload-pack endpoint",
+            "description": "Create the HTTP handler for POST /repos/:owner/:repo/git-upload-pack that processes client's want/have and sends packfiles",
+            "dependencies": [
+              "9.1"
+            ],
+            "details": "Implement a handler that validates the request body containing want/have lines, checks user read permissions, and processes the client's request to generate and stream the appropriate packfile. Set the Content-Type header to application/x-git-upload-pack-result. Parse the client's want/have lines to determine which objects to include in the packfile. Use go-git or shell commands to generate the packfile and stream it directly to the HTTP response.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that verify the endpoint correctly processes want/have requests and returns valid packfiles. Test with different combinations of wants/haves, including edge cases like requesting non-existent objects. Use a test Git client to verify the packfiles can be correctly processed by Git."
+          },
+          {
+            "id": 3,
+            "title": "Implement streaming response mechanism",
+            "description": "Create a streaming mechanism to efficiently handle large repository data transfers",
+            "dependencies": [
+              "9.1",
+              "9.2"
+            ],
+            "details": "Implement an efficient streaming mechanism using io.Pipe() to connect the Git operations with HTTP responses. This should allow for processing and transferring large repositories without loading everything into memory. Create helper functions that can be reused by both endpoints to stream data from go-git operations to HTTP responses. Implement proper error handling and resource cleanup for the streaming operations.",
+            "status": "pending",
+            "testStrategy": "Write unit tests that verify the streaming mechanism correctly transfers data from Git operations to HTTP responses. Test with large mock data to ensure memory efficiency. Measure performance metrics to verify streaming is working as expected."
+          },
+          {
+            "id": 4,
+            "title": "Implement authentication and authorization",
+            "description": "Add authentication validation and repository access authorization to the Git HTTP endpoints",
+            "dependencies": [
+              "9.1",
+              "9.2"
+            ],
+            "details": "Implement middleware or handler logic to authenticate users and verify they have read access to the requested repository. Integrate with the existing permission system to check if the authenticated user has read access to the repository. Return appropriate HTTP status codes (401 for unauthenticated, 403 for unauthorized) when access is denied. Ensure all Git operations are performed with the correct user context.",
+            "status": "pending",
+            "testStrategy": "Write unit tests that verify authentication and authorization are correctly enforced. Test scenarios should include unauthenticated requests, authenticated users with and without permissions, and different repository visibility settings."
+          },
+          {
+            "id": 5,
+            "title": "Implement error handling and protocol compliance",
+            "description": "Ensure proper error handling and full compliance with Git Smart HTTP protocol specifications",
+            "dependencies": [
+              "9.1",
+              "9.2",
+              "9.3",
+              "9.4"
+            ],
+            "details": "Review and enhance error handling across all Git HTTP endpoints to ensure they return appropriate error messages and status codes. Verify full compliance with the Git Smart HTTP protocol specification, including correct content types, response formats, and protocol negotiation. Implement comprehensive logging for debugging purposes. Test the implementation against actual Git clients to ensure compatibility.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that verify error handling works correctly for various error conditions. Test the implementation against actual Git clients (git fetch, git clone) to ensure full protocol compliance. Verify that error responses are properly formatted and contain useful information for debugging."
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Implement Git Smart HTTP Protocol for Push",
+        "description": "Implement the Git Smart HTTP protocol endpoints for pushing data to repositories.",
+        "details": "Implement HTTP handlers for Git Smart HTTP protocol:\n- GET /repos/:owner/:repo/info/refs?service=git-receive-pack\n- POST /repos/:owner/:repo/git-receive-pack\n\nThese endpoints should:\n1. Validate the request parameters\n2. Check user permissions (write access)\n3. Execute the appropriate Git commands using go-git or shell commands\n4. Process the incoming packfile and update references\n5. Send the response back to the client\n\nUse proper content type headers:\n- application/x-git-receive-pack-advertisement\n- application/x-git-receive-pack-result\n\nImplement a locking mechanism to prevent concurrent pushes to the same repository using sync.Mutex or a distributed lock if running multiple instances. Consider using a per-repository lock rather than a global lock for better concurrency.\n\nImplement proper error handling for reference update failures, packfile parsing errors, and permission denied errors.",
+        "testStrategy": "Write integration tests for the Git Smart HTTP protocol endpoints. Test scenarios:\n- Pushing changes to a repository\n- Concurrent push attempts\n- Permission denied\n- Invalid packfile\n\nUse a test Git client to verify the protocol implementation works with actual Git clients.",
+        "priority": "high",
+        "dependencies": [
+          4,
+          5
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement info/refs endpoint for git-receive-pack",
+            "description": "Create the HTTP handler for GET /repos/:owner/:repo/info/refs?service=git-receive-pack that advertises references for pushing",
+            "dependencies": [],
+            "details": "Implement the handler that validates request parameters, checks user write permissions, executes git commands to generate reference advertisement, and returns the response with proper application/x-git-receive-pack-advertisement content type. Include proper error handling for invalid parameters and permission denied scenarios.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that verify the endpoint returns correct reference advertisement format. Test with valid repository access, invalid repository paths, and permission denied scenarios. Verify the content type headers are set correctly."
+          },
+          {
+            "id": 2,
+            "title": "Implement git-receive-pack endpoint",
+            "description": "Create the HTTP handler for POST /repos/:owner/:repo/git-receive-pack that processes push requests",
+            "dependencies": [
+              "10.1"
+            ],
+            "details": "Implement the handler that receives packfiles from clients, validates request parameters, checks user write permissions, processes the packfile data, updates references in the repository, and returns results with proper application/x-git-receive-pack-result content type. Handle packfile parsing errors and reference update failures appropriately.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that verify the endpoint correctly processes push requests. Test with valid pushes, invalid packfiles, and permission denied scenarios. Use a test Git client to verify end-to-end functionality."
+          },
+          {
+            "id": 3,
+            "title": "Implement repository locking mechanism",
+            "description": "Create a per-repository locking system to prevent concurrent pushes to the same repository",
+            "dependencies": [],
+            "details": "Design and implement a locking mechanism using sync.Mutex or similar that prevents concurrent pushes to the same repository. Create a repository lock manager that can acquire and release locks for specific repositories. Implement timeout handling for locks to prevent deadlocks. Consider using a distributed locking mechanism if the service will run in multiple instances.",
+            "status": "pending",
+            "testStrategy": "Write unit tests that verify lock acquisition and release work correctly. Test concurrent access scenarios to ensure only one push operation can proceed at a time for a given repository. Test timeout handling and lock cleanup."
+          },
+          {
+            "id": 4,
+            "title": "Implement packfile processing",
+            "description": "Create functionality to process incoming packfiles and update repository references",
+            "dependencies": [
+              "10.3"
+            ],
+            "details": "Implement the core logic to process Git packfiles received during push operations. This should handle unpacking objects, validating them, and updating references in the repository. Use go-git library or shell commands to execute the necessary Git operations. Implement proper error handling for malformed packfiles, reference conflicts, and other failure scenarios.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for packfile processing with various test cases including valid packfiles, invalid packfiles, and reference conflicts. Test both successful and failed reference updates."
+          },
+          {
+            "id": 5,
+            "title": "Integrate with authentication and permission system",
+            "description": "Connect the Git push endpoints with the existing authentication and permission checking system",
+            "dependencies": [],
+            "details": "Integrate the push endpoints with the existing authentication middleware and permission checking system. Ensure that only users with write access can push to repositories. Implement proper error responses for unauthorized access attempts. Handle authentication token validation and user identification. Ensure all push operations are properly attributed to authenticated users.",
+            "status": "pending",
+            "testStrategy": "Write integration tests that verify permission checking works correctly. Test scenarios with users having different permission levels (read-only, write, admin) and verify appropriate access control. Test with valid and invalid authentication tokens."
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Implement Repository Caching Layer",
+        "description": "Implement a caching layer for Git repositories to improve performance for repeated operations.",
+        "details": "Implement a repository caching system that:\n1. Caches opened Git repositories in memory\n2. Implements an LRU eviction policy to limit memory usage\n3. Handles repository updates properly\n\nUse golang-lru (v0.5.4+) or a custom implementation with sync.Map for thread safety. Cache repositories based on their filesystem path. Implement proper cleanup of resources when repositories are evicted from the cache.\n\nThe cache should be configurable with:\n- Maximum number of cached repositories\n- TTL for cache entries\n- Maximum memory usage (optional)\n\nImplement metrics for cache hits, misses, and evictions using prometheus client_golang (v1.16.0+) for monitoring cache effectiveness.",
+        "testStrategy": "Write unit tests for the repository cache. Test scenarios:\n- Cache hit/miss behavior\n- LRU eviction\n- Concurrent access\n- Resource cleanup on eviction\n\nMeasure performance improvement with benchmarks comparing cached vs. non-cached repository operations.",
+        "priority": "medium",
+        "dependencies": [
+          5
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design and implement cache configuration structure",
+            "description": "Create a configuration structure for the repository cache with fields for maximum number of cached repositories, TTL for cache entries, and optional maximum memory usage. Include validation logic for configuration parameters.",
+            "dependencies": [],
+            "details": "Define a CacheConfig struct with fields: MaxRepositories (int), TTL (time.Duration), MaxMemoryMB (optional int). Implement validation methods to ensure reasonable limits and default values. Create constructor function NewCacheConfig() with sensible defaults.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for configuration validation, default value assignment, and edge cases like negative values or zero limits."
+          },
+          {
+            "id": 2,
+            "title": "Implement LRU cache with thread-safe operations",
+            "description": "Implement the core LRU cache using golang-lru library or custom implementation with sync.Map. Handle concurrent access safely and implement proper eviction callbacks for resource cleanup.",
+            "dependencies": [
+              "11.1"
+            ],
+            "details": "Use golang-lru v0.5.4+ to create an LRU cache or implement custom solution with sync.Map and sync.RWMutex. Implement eviction callback to properly close Git repositories when evicted. Ensure thread-safe operations for Get, Set, and Remove operations.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for concurrent access scenarios, LRU eviction behavior, and proper resource cleanup during eviction. Use goroutines to test race conditions."
+          },
+          {
+            "id": 3,
+            "title": "Implement TTL-based cache expiration",
+            "description": "Add time-based expiration functionality to complement the LRU eviction policy. Implement background cleanup of expired entries and integrate with the main cache operations.",
+            "dependencies": [
+              "11.2"
+            ],
+            "details": "Create a TTL wrapper around the LRU cache that tracks entry timestamps. Implement background goroutine for periodic cleanup of expired entries. Ensure expired entries are removed during Get operations and implement proper shutdown of cleanup goroutine.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for TTL expiration behavior, background cleanup functionality, and integration with LRU eviction. Test edge cases like very short TTL values."
+          },
+          {
+            "id": 4,
+            "title": "Implement Prometheus metrics for cache monitoring",
+            "description": "Add comprehensive metrics collection using prometheus client_golang v1.16.0+ to track cache hits, misses, evictions, and memory usage for monitoring cache effectiveness.",
+            "dependencies": [
+              "11.3"
+            ],
+            "details": "Create Prometheus metrics: cache_hits_total, cache_misses_total, cache_evictions_total, cache_entries_current, cache_memory_bytes. Implement metrics collection in all cache operations (Get, Set, eviction callbacks). Register metrics with Prometheus registry.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for metrics collection accuracy, proper metric registration, and metric values during various cache operations. Verify metrics are properly incremented/decremented."
+          },
+          {
+            "id": 5,
+            "title": "Integrate cache with Git repository operations",
+            "description": "Create the main RepositoryCache interface and integrate it with existing Git repository operations. Implement proper key generation based on filesystem paths and handle repository updates.",
+            "dependencies": [
+              "11.4"
+            ],
+            "details": "Define RepositoryCache interface with methods: GetRepository(path), InvalidateRepository(path), Close(). Implement cache key generation using absolute filesystem paths. Handle repository updates by invalidating cache entries when repositories change. Integrate with existing Git operations.",
+            "status": "pending",
+            "testStrategy": "Write integration tests for cache integration with Git operations. Test repository invalidation on updates, proper key generation, and performance improvement measurements comparing cached vs non-cached operations."
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Implement Metrics, Logging, and Health Checks",
+        "description": "Implement comprehensive metrics, logging, and health check endpoints for operational visibility.",
+        "details": "Implement the following operational features:\n\n1. Metrics using prometheus client_golang (v1.16.0+):\n   - Request count and latency by endpoint\n   - Git operation counts and latency\n   - Cache hit/miss ratio\n   - Error counts by type\n   - Resource usage (memory, goroutines)\n\n2. Structured logging using zap (v1.24.0+):\n   - Request logging with correlation IDs\n   - Error logging with stack traces\n   - Operation logging with timing\n   - Different log levels (debug, info, warn, error)\n\n3. Health check endpoints:\n   - GET /health/liveness: Basic server liveness\n   - GET /health/readiness: Checks dependencies (filesystem, API-Service)\n\n4. Tracing using OpenTelemetry (v1.16.0+) for distributed tracing:\n   - Trace HTTP requests\n   - Trace Git operations\n   - Trace API-Service calls\n\nImplement graceful degradation when API-Service is unavailable. Configure appropriate log rotation and retention policies.",
+        "testStrategy": "Write unit tests for metrics collection, logging, and health checks. Test scenarios:\n- Metrics registration and collection\n- Log output format and levels\n- Health check responses under different conditions\n\nUse httptest for testing HTTP endpoints and mock dependencies as needed.",
+        "priority": "medium",
+        "dependencies": [
+          1,
+          4,
+          5
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Prometheus Metrics Collection",
+            "description": "Set up Prometheus metrics collection using client_golang library with comprehensive application metrics.",
+            "dependencies": [],
+            "details": "Implement metrics collection for request count and latency by endpoint, Git operation counts and latency, cache hit/miss ratio, error counts by type, and resource usage (memory, goroutines). Create a metrics registry and expose metrics endpoint at /metrics. Use prometheus client_golang v1.16.0+ with proper metric naming conventions and labels.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for metrics registration and collection. Test metric increments, histogram observations, and gauge updates. Verify metrics endpoint returns proper Prometheus format."
+          },
+          {
+            "id": 2,
+            "title": "Implement Structured Logging with Zap",
+            "description": "Set up structured logging using zap library with correlation IDs, error handling, and configurable log levels.",
+            "dependencies": [],
+            "details": "Implement structured logging using zap v1.24.0+ with request logging including correlation IDs, error logging with stack traces, operation logging with timing, and support for different log levels (debug, info, warn, error). Configure log rotation and retention policies. Create logging middleware for HTTP requests.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for log output format and levels. Test correlation ID propagation, stack trace inclusion in error logs, and log level filtering. Verify log rotation configuration."
+          },
+          {
+            "id": 3,
+            "title": "Implement Health Check Endpoints",
+            "description": "Create liveness and readiness health check endpoints with dependency validation.",
+            "dependencies": [],
+            "details": "Implement GET /health/liveness for basic server liveness check and GET /health/readiness for dependency checks including filesystem access and API-Service connectivity. Include graceful degradation when API-Service is unavailable. Return appropriate HTTP status codes and JSON responses with health status details.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for health check endpoints using httptest. Test liveness check always returns 200, readiness check with available/unavailable dependencies, and graceful degradation scenarios."
+          },
+          {
+            "id": 4,
+            "title": "Implement OpenTelemetry Distributed Tracing",
+            "description": "Set up OpenTelemetry tracing for HTTP requests, Git operations, and API-Service calls.",
+            "dependencies": [],
+            "details": "Implement distributed tracing using OpenTelemetry v1.16.0+ to trace HTTP requests, Git operations, and API-Service calls. Configure trace exporters, create spans with proper attributes, and implement trace context propagation. Set up tracing middleware for HTTP handlers and instrument Git operations and external API calls.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for trace creation and span attributes. Test trace context propagation across service boundaries and verify span hierarchy for nested operations. Mock trace exporters for testing."
+          },
+          {
+            "id": 5,
+            "title": "Integrate Observability Components",
+            "description": "Integrate metrics, logging, and tracing components into the main application with proper configuration and middleware.",
+            "dependencies": [
+              "12.1",
+              "12.2",
+              "12.3",
+              "12.4"
+            ],
+            "details": "Integrate all observability components into the main application. Create configuration for metrics, logging, and tracing. Implement HTTP middleware that combines metrics collection, request logging, and tracing. Set up proper shutdown procedures for all observability components and ensure they work together seamlessly.",
+            "status": "pending",
+            "testStrategy": "Write integration tests for combined observability features. Test that HTTP requests generate metrics, logs, and traces simultaneously. Verify configuration loading and component initialization. Test graceful shutdown of all observability components."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "created": "2025-07-23T07:08:52.675Z",
+      "updated": "2025-07-23T07:40:30.762Z",
+      "description": "Tasks for master context"
+    }
+  }
+}

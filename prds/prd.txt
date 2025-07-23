@@ -1,0 +1,122 @@
+===============================
+Product Requirements Document
+Component: collabops-git-executor
+===============================
+
+📌 Purpose
+----------
+The `collabops-git-executor` is a backend component in the CollabOps platform responsible for executing actual Git operations. It interacts with `collabops-git-http` and `collabops-git-ssh` gateways to perform commands like `clone`, `fetch`, `push`, and returns either structured JSON responses or Git-specific packfile streams.
+
+🧱 Architecture
+--------------
+Git Client (SSH/HTTP)
+    ↓
+Gateway Layer: collabops-git-ssh / collabops-git-http
+    ↓ (REST / RPC)
+collabops-git-executor
+    ↓ (go-git)
+Filesystem (e.g., /var/lib/git/repos/{user}/{repo}.git)
+
+Git Executor handles:
+- Tree and blob queries
+- Push/pull operations
+- Commit log retrieval
+- Auth validation (via metadata API or direct JWT decoding in fallback)
+
+🔐 Authentication/Authorization
+-------------------------------
+* Core principle: JWT is validated once and user info is passed via header.
+
+## Path A (Preferred Flow - via Orchestrator)
+1. Client logs in → gets JWT from Orchestrator.
+2. Web app calls Gateway (HTTP/SSH) with JWT.
+3. Gateway forwards:
+   - REST/RPC call to Executor
+   - Includes `X-USER-ID` (parsed from JWT by Orchestrator)
+4. Executor uses `X-USER-ID` to query API-Service (Metadata) for access.
+
+→ `Executor` is dumb. It doesn't parse JWT.
+
+## Path B (Fallback - Gateway Decodes JWT)
+1. Client calls HTTP Gateway directly (e.g. `git clone` from CLI).
+2. JWT sent in `Authorization: Bearer` header.
+3. Gateway decodes JWT (using public key or shared secret).
+4. Gateway passes `X-USER-ID` to Executor.
+
+→ `Executor` still stays dumb.
+
+❗Only in extreme cases (debugging, local CLI dev) should Executor decode JWT directly:
+- Must mount `public.pem` via k8s Secret
+- Not a recommended path
+
+🎯 ONLY header passed = `X-USER-ID`. Other fields (e.g. `X-USER-SCOPE`, `X-USER-NAME`) are deprecated.
+
+✅ Use Cases
+-----------
+1. View tree
+2. Read blob
+3. Fetch commits
+4. Receive push
+5. Verify repo ownership via API-Service using `X-USER-ID`
+
+Example API:
+------------
+GET /repos/jaemin/collabops/tree?ref=main
+
+Response:
+[
+  { "type": "tree", "name": "cmd", "path": "cmd" },
+  { "type": "blob", "name": "README.md", "path": "README.md" }
+]
+
+Push Example (Git Smart HTTP):
+-------------------------------
+POST /repos/:owner/:repo/git-receive-pack
+Body: Packfile stream
+
+Executor:
+- Verifies repo path
+- Uses go-git to apply changes
+- Optionally queries metadata for permission check
+
+💡 Permission Check Example
+----------------------------
+GET http://api-service.local/permissions/:user_id/:repo_owner/:repo_name?op=write
+
+🧠 Internal Logic (Go)
+----------------------
+getRepoPath(owner, repo):
+→ "/var/lib/git/repos/{owner}/{repo}.git"
+
+Check permission:
+→ HTTP GET to metadata API
+
+🔧 Configuration (config.yaml)
+------------------------------
+server:
+  port: 8080
+  base_path: /repos
+
+git:
+  repo_root: /var/lib/git/repos
+  enable_packfile: true
+
+jwt:
+  algorithm: RS256
+  public_key_path: /etc/collabops/public.pem (only used if decoding directly, NOT RECOMMENDED)
+
+📁 Directory Structure
+----------------------
+/var/lib/git/repos/
+├── jaemin/
+│   └── collabops.git/
+│       ├── config
+│       ├── HEAD
+│       └── objects/
+
+📈 Future Considerations
+------------------------
+- Add repo caching layer (sync.Map or LRU)
+- Parallel push handler (per repo lock)
+- Move executor to gRPC if scaling
+- Explore protocol-level streaming with backpressure
