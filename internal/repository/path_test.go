@@ -427,13 +427,13 @@ func TestValidateRepoPathWithDefault(t *testing.T) {
 func TestValidateRepoPath_RelativePaths(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir := t.TempDir()
-	
+
 	// Resolve symlinks for consistent path handling (fixes macOS /var -> /private/var issue)
 	realTempDir, err := filepath.EvalSymlinks(tempDir)
 	if err != nil {
 		realTempDir = tempDir // fallback to original if symlink resolution fails
 	}
-	
+
 	config, err := NewPathConfig(realTempDir)
 	require.NoError(t, err)
 

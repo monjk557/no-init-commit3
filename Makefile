@@ -33,7 +33,7 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build clean test test-coverage test-race test-verbose test-logging lint fmt vet verify help local
+.PHONY: all build clean test test-coverage test-race test-verbose test-logging lint fmt format vet verify help local
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
 .PHONY: verify-structure verify-config verify-all local-setup install-tools
 
@@ -51,7 +51,7 @@ help: ## Show this help message
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(test|verify)"
 	@echo ""
 	@echo "$(GREEN)🔧 Development Commands:$(NC)"
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(deps|fmt|lint|vet|local)"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(deps|fmt|format|lint|vet|local)"
 	@echo ""
 	@echo "$(GREEN)🐳 Docker Commands:$(NC)"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(docker)"
@@ -128,6 +128,26 @@ test-manual-paths: ## Run manual repository path management test
 fmt: ## Format code
 	@echo "$(BLUE)🎨 Formatting code...$(NC)"
 	$(GOFMT) -s -w .
+
+format: ## Auto-format code and show lint results
+	@echo "$(BLUE)🎨 Auto-formatting and organizing code...$(NC)"
+	@echo "$(YELLOW)📝 Running gofmt...$(NC)"
+	$(GOFMT) -s -w .
+	@echo "$(YELLOW)📦 Organizing imports...$(NC)"
+	@if command -v goimports >/dev/null 2>&1; then \
+		goimports -w .; \
+	elif command -v $$(go env GOPATH)/bin/goimports >/dev/null 2>&1; then \
+		$$(go env GOPATH)/bin/goimports -w .; \
+	else \
+		echo "$(YELLOW)⚠️  goimports not found, installing...$(NC)"; \
+		go install golang.org/x/tools/cmd/goimports@latest; \
+		$$(go env GOPATH)/bin/goimports -w .; \
+	fi
+	@echo "$(YELLOW)🔧 Running go mod tidy...$(NC)"
+	go mod tidy
+	@echo "$(GREEN)✨ Formatting complete! Running lint check...$(NC)"
+	@echo ""
+	@$(MAKE) lint
 
 vet: ## Run go vet
 	@echo "$(BLUE)🔍 Running go vet...$(NC)"
