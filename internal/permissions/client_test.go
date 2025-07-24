@@ -70,7 +70,7 @@ func TestConfigValidation(t *testing.T) {
 				CacheTTL:          5 * time.Minute,
 			},
 			expectError: true,
-			errorMsg:    "Timeout must be positive",
+			errorMsg:    "timeout must be positive",
 		},
 		{
 			name: "negative max retries",

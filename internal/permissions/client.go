@@ -267,6 +267,12 @@ func (c *Client) checkAccess(ctx context.Context, userID, repoOwner, repoName st
 	// Attempt API request with circuit breaker protection
 	hasAccess, err := c.requestPermissionWithFallback(ctx, userID, repoOwner, repoName, operation, cachedResult)
 	if err != nil {
+		// Check if this is a ServiceUnavailableError with fallback information
+		var svcErr *ServiceUnavailableError
+		if errors.As(err, &svcErr) && svcErr.FallbackUsed {
+			// Return the fallback access decision with the error
+			return hasAccess, err
+		}
 		return false, err
 	}
 
@@ -290,7 +296,16 @@ func (c *Client) requestPermissionWithFallback(ctx context.Context, userID, repo
 				return cachedResult.HasAccess, nil
 			}
 			// Apply fallback policy
-			return c.config.FallbackPolicy.ShouldAllowAccess(operation, false), err
+			fallbackAccess := c.config.FallbackPolicy.ShouldAllowAccess(operation, false)
+			return fallbackAccess, &ServiceUnavailableError{
+				Operation:      operation,
+				UserID:         userID,
+				RepoOwner:      repoOwner,
+				RepoName:       repoName,
+				FallbackUsed:   true,
+				FallbackAccess: fallbackAccess,
+				Err:            err,
+			}
 		}
 		return hasAccess, nil
 	}

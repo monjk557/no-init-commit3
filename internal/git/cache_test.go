@@ -53,7 +53,7 @@ func TestRepositoryCache_LRUEviction(t *testing.T) {
 		OnEvict: func(path string, repo Repository) {
 			evictedPaths = append(evictedPaths, path)
 			if repo != nil {
-				repo.Close()
+				_ = repo.Close()
 			}
 		},
 	})

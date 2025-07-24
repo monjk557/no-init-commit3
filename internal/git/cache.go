@@ -45,7 +45,7 @@ func DefaultCacheConfig() *CacheConfig {
 		OnEvict: func(path string, repo Repository) {
 			// Default eviction handler closes the repository
 			if repo != nil {
-				repo.Close()
+				_ = repo.Close()
 			}
 		},
 	}

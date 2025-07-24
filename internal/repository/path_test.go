@@ -831,10 +831,12 @@ func TestEnsureRepoExists_ValidWorktreeRepository(t *testing.T) {
 
 func TestEnsureRepoExists_NonExistentRepository(t *testing.T) {
 	tempDir := t.TempDir()
+	realTempDir, err := filepath.EvalSymlinks(tempDir)
+	require.NoError(t, err)
 	config, err := NewPathConfig(tempDir)
 	require.NoError(t, err)
 
-	nonExistentPath := filepath.Join(tempDir, "user", "nonexistent.git")
+	nonExistentPath := filepath.Join(realTempDir, "user", "nonexistent.git")
 
 	err = EnsureRepoExists(config, nonExistentPath)
 	assert.Error(t, err)
@@ -1252,13 +1254,15 @@ func TestGlobalConfiguration(t *testing.T) {
 
 func TestGetAndValidateRepoPath(t *testing.T) {
 	tempDir := t.TempDir()
+	realTempDir, err := filepath.EvalSymlinks(tempDir)
+	require.NoError(t, err)
 	config, err := NewPathConfig(tempDir)
 	require.NoError(t, err)
 
 	t.Run("ValidPath", func(t *testing.T) {
 		path, err := GetAndValidateRepoPath(config, "user", "project")
 		assert.NoError(t, err)
-		assert.Equal(t, filepath.Join(tempDir, "user", "project.git"), path)
+		assert.Equal(t, filepath.Join(realTempDir, "user", "project.git"), path)
 	})
 
 	t.Run("InvalidComponents", func(t *testing.T) {
@@ -1287,12 +1291,14 @@ func TestGetAndValidateRepoPathWithDefault(t *testing.T) {
 
 func TestVerifyRepositoryAccess(t *testing.T) {
 	tempDir := t.TempDir()
+	realTempDir, err := filepath.EvalSymlinks(tempDir)
+	require.NoError(t, err)
 	config, err := NewPathConfig(tempDir)
 	require.NoError(t, err)
 
 	t.Run("ValidRepository", func(t *testing.T) {
 		// Create a valid repository
-		repoPath := filepath.Join(tempDir, "user", "project.git")
+		repoPath := filepath.Join(realTempDir, "user", "project.git")
 		createBareRepository(t, repoPath)
 
 		path, err := VerifyRepositoryAccess(config, "user", "project")
@@ -1312,11 +1318,13 @@ func TestVerifyRepositoryAccess(t *testing.T) {
 
 func TestGetRepositoryInfo(t *testing.T) {
 	tempDir := t.TempDir()
+	realTempDir, err := filepath.EvalSymlinks(tempDir)
+	require.NoError(t, err)
 	config, err := NewPathConfig(tempDir)
 	require.NoError(t, err)
 
 	t.Run("ValidBareRepository", func(t *testing.T) {
-		repoPath := filepath.Join(tempDir, "user", "bare-repo.git")
+		repoPath := filepath.Join(realTempDir, "user", "bare-repo.git")
 		createBareRepository(t, repoPath)
 
 		info, err := GetRepositoryInfo(config, "user", "bare-repo")

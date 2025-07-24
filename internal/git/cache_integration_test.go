@@ -21,17 +21,17 @@ func TestOpenRepositoryWithCache_Integration(t *testing.T) {
 
 	// Create test repositories
 	repo1Path := createTestRepo(t)
-	defer os.RemoveAll(repo1Path)
+	defer func() { _ = os.RemoveAll(repo1Path) }()
 	addFileToRepo(t, repo1Path, "README.md", "# Repo 1")
 	commitRepo(t, repo1Path, "Initial commit")
 
 	repo2Path := createTestRepo(t)
-	defer os.RemoveAll(repo2Path)
+	defer func() { _ = os.RemoveAll(repo2Path) }()
 	addFileToRepo(t, repo2Path, "README.md", "# Repo 2")
 	commitRepo(t, repo2Path, "Initial commit")
 
 	repo3Path := createTestRepo(t)
-	defer os.RemoveAll(repo3Path)
+	defer func() { _ = os.RemoveAll(repo3Path) }()
 	addFileToRepo(t, repo3Path, "README.md", "# Repo 3")
 	commitRepo(t, repo3Path, "Initial commit")
 
@@ -40,7 +40,7 @@ func TestOpenRepositoryWithCache_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo1.Close()
+	defer func() { _ = repo1.Close() }()
 
 	if testCache.Size() != 1 {
 		t.Errorf("Expected cache size 1, got %d", testCache.Size())
@@ -51,7 +51,7 @@ func TestOpenRepositoryWithCache_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open cached repository: %v", err)
 	}
-	defer repo1Again.Close()
+	defer func() { _ = repo1Again.Close() }()
 
 	// Should be the same instance from cache
 	if repo1 != repo1Again {
@@ -67,7 +67,7 @@ func TestOpenRepositoryWithCache_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open second repository: %v", err)
 	}
-	defer repo2.Close()
+	defer func() { _ = repo2.Close() }()
 
 	if testCache.Size() != 2 {
 		t.Errorf("Expected cache size 2, got %d", testCache.Size())
@@ -78,7 +78,7 @@ func TestOpenRepositoryWithCache_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open third repository: %v", err)
 	}
-	defer repo3.Close()
+	defer func() { _ = repo3.Close() }()
 
 	if testCache.Size() != 2 {
 		t.Errorf("Expected cache size still 2 after eviction, got %d", testCache.Size())
@@ -89,7 +89,7 @@ func TestOpenRepositoryWithCache_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to re-open first repository: %v", err)
 	}
-	defer repo1NewInstance.Close()
+	defer func() { _ = repo1NewInstance.Close() }()
 
 	// Should be a different instance since it was evicted and reopened
 	if repo1 == repo1NewInstance {
@@ -108,7 +108,7 @@ func TestOpenRepositoryWithCache_FunctionalityPreserved(t *testing.T) {
 
 	// Create test repository
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 	addFileToRepo(t, repoPath, "main.go", "package main\n\nfunc main() {}")
 	addFileToRepo(t, repoPath, "docs/README.md", "# Documentation")
 	commitRepo(t, repoPath, "Initial commit")
@@ -118,7 +118,7 @@ func TestOpenRepositoryWithCache_FunctionalityPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository with cache: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -186,7 +186,7 @@ func TestOpenRepositoryWithCache_ErrorHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	_, err = OpenRepositoryWithCache(tempDir)
 	if err == nil {
@@ -215,7 +215,7 @@ func TestOpenRepository_vs_OpenRepositoryWithCache(t *testing.T) {
 
 	// Create test repository
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 	addFileToRepo(t, repoPath, "README.md", "# Test")
 	commitRepo(t, repoPath, "Initial commit")
 
@@ -224,7 +224,7 @@ func TestOpenRepository_vs_OpenRepositoryWithCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository without cache: %v", err)
 	}
-	defer repo1.Close()
+	defer func() { _ = repo1.Close() }()
 
 	// Cache should be empty
 	if testCache.Size() != 0 {
@@ -236,7 +236,7 @@ func TestOpenRepository_vs_OpenRepositoryWithCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository with cache: %v", err)
 	}
-	defer repo2.Close()
+	defer func() { _ = repo2.Close() }()
 
 	// Cache should have one item
 	if testCache.Size() != 1 {
@@ -258,7 +258,7 @@ func TestOpenRepository_vs_OpenRepositoryWithCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository with cache again: %v", err)
 	}
-	defer repo3.Close()
+	defer func() { _ = repo3.Close() }()
 
 	if repo2 != repo3 {
 		t.Error("Expected same instance from subsequent cached opens")
@@ -283,7 +283,7 @@ func TestCacheExpiration_Integration(t *testing.T) {
 
 	// Create test repository
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 	addFileToRepo(t, repoPath, "README.md", "# Test")
 	commitRepo(t, repoPath, "Initial commit")
 
@@ -292,7 +292,7 @@ func TestCacheExpiration_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo1.Close()
+	defer func() { _ = repo1.Close() }()
 
 	if testCache.Size() != 1 {
 		t.Errorf("Expected cache size 1, got %d", testCache.Size())
@@ -306,7 +306,7 @@ func TestCacheExpiration_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository after expiration: %v", err)
 	}
-	defer repo2.Close()
+	defer func() { _ = repo2.Close() }()
 
 	// Should be different instances due to expiration
 	if repo1 == repo2 {
@@ -321,7 +321,7 @@ func TestCacheExpiration_Integration(t *testing.T) {
 
 func BenchmarkOpenRepository_WithoutCache(b *testing.B) {
 	repoPath := createTestRepo(&testing.T{})
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 	addFileToRepo(&testing.T{}, repoPath, "README.md", "# Benchmark Test")
 	commitRepo(&testing.T{}, repoPath, "Initial commit")
 
@@ -331,7 +331,7 @@ func BenchmarkOpenRepository_WithoutCache(b *testing.B) {
 		if err != nil {
 			b.Fatalf("Failed to open repository: %v", err)
 		}
-		repo.Close()
+		_ = repo.Close()
 	}
 }
 
@@ -345,7 +345,7 @@ func BenchmarkOpenRepository_WithCache(b *testing.B) {
 	SetGlobalCache(testCache)
 
 	repoPath := createTestRepo(&testing.T{})
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 	addFileToRepo(&testing.T{}, repoPath, "README.md", "# Benchmark Test")
 	commitRepo(&testing.T{}, repoPath, "Initial commit")
 
@@ -355,6 +355,6 @@ func BenchmarkOpenRepository_WithCache(b *testing.B) {
 		if err != nil {
 			b.Fatalf("Failed to open repository: %v", err)
 		}
-		repo.Close()
+		_ = repo.Close()
 	}
 }

@@ -157,7 +157,7 @@ func (r *GoGitRepository) GetBlob(ctx context.Context, path, ref string) ([]byte
 	if err != nil {
 		return nil, NewGitError("get_blob", r.path, ref, fmt.Sprintf("failed to get reader for file %s", path), err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Check for context cancellation before reading
 	select {

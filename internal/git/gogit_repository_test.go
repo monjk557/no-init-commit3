@@ -22,7 +22,7 @@ func createTestRepo(t *testing.T) string {
 	cmd := exec.Command("git", "init")
 	cmd.Dir = tempDir
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 		t.Fatalf("Failed to init git repo: %v", err)
 	}
 
@@ -30,14 +30,14 @@ func createTestRepo(t *testing.T) string {
 	cmd = exec.Command("git", "config", "user.name", "Test User")
 	cmd.Dir = tempDir
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 		t.Fatalf("Failed to set git user name: %v", err)
 	}
 
 	cmd = exec.Command("git", "config", "user.email", "test@example.com")
 	cmd.Dir = tempDir
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 		t.Fatalf("Failed to set git user email: %v", err)
 	}
 
@@ -93,19 +93,11 @@ func createBranch(t *testing.T, repoPath, branchName string) {
 	}
 }
 
-func checkoutBranch(t *testing.T, repoPath, branchName string) {
-	cmd := exec.Command("git", "checkout", branchName)
-	cmd.Dir = repoPath
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to checkout branch %s: %v", branchName, err)
-	}
-}
-
 // OpenRepository tests
 
 func TestOpenRepository_Success(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	// Add initial commit
 	addFileToRepo(t, repoPath, "README.md", "# Test Repository")
@@ -116,7 +108,7 @@ func TestOpenRepository_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	// Verify the repository path
 	if repo.Path() != repoPath {
@@ -124,7 +116,7 @@ func TestOpenRepository_Success(t *testing.T) {
 	}
 
 	// Verify it implements the Repository interface
-	var _ Repository = repo
+	var _ = repo
 }
 
 func TestOpenRepository_NotFound(t *testing.T) {
@@ -147,7 +139,7 @@ func TestOpenRepository_InvalidRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	_, err = OpenRepository(tempDir)
 	if err == nil {
@@ -164,7 +156,7 @@ func TestOpenRepository_InvalidRepository(t *testing.T) {
 
 func TestGoGitRepository_GetTree(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	// Add files and commit
 	addFileToRepo(t, repoPath, "README.md", "# Test Repository")
@@ -176,7 +168,7 @@ func TestGoGitRepository_GetTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -231,7 +223,7 @@ func TestGoGitRepository_GetTree(t *testing.T) {
 
 func TestGoGitRepository_GetTree_InvalidRef(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	addFileToRepo(t, repoPath, "README.md", "# Test")
 	commitRepo(t, repoPath, "Initial commit")
@@ -240,7 +232,7 @@ func TestGoGitRepository_GetTree_InvalidRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -257,7 +249,7 @@ func TestGoGitRepository_GetTree_InvalidRef(t *testing.T) {
 
 func TestGoGitRepository_GetBlob(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	fileContent := "package main\n\nfunc main() {\n\tfmt.Println(\"Hello, World!\")\n}\n"
 	addFileToRepo(t, repoPath, "main.go", fileContent)
@@ -267,7 +259,7 @@ func TestGoGitRepository_GetBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -284,7 +276,7 @@ func TestGoGitRepository_GetBlob(t *testing.T) {
 
 func TestGoGitRepository_GetBlob_NotFound(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	addFileToRepo(t, repoPath, "README.md", "# Test")
 	commitRepo(t, repoPath, "Initial commit")
@@ -293,7 +285,7 @@ func TestGoGitRepository_GetBlob_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -310,7 +302,7 @@ func TestGoGitRepository_GetBlob_NotFound(t *testing.T) {
 
 func TestGoGitRepository_GetCommits(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	// Create multiple commits
 	addFileToRepo(t, repoPath, "README.md", "# Test")
@@ -326,7 +318,7 @@ func TestGoGitRepository_GetCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -391,7 +383,7 @@ func TestGoGitRepository_GetCommits(t *testing.T) {
 
 func TestGoGitRepository_ContextCancellation(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	addFileToRepo(t, repoPath, "README.md", "# Test")
 	commitRepo(t, repoPath, "Initial commit")
@@ -400,7 +392,7 @@ func TestGoGitRepository_ContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	// Create a cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -425,7 +417,7 @@ func TestGoGitRepository_ContextCancellation(t *testing.T) {
 
 func TestGoGitRepository_BranchHandling(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	// Create initial commit on main
 	addFileToRepo(t, repoPath, "README.md", "# Main Branch")
@@ -440,7 +432,7 @@ func TestGoGitRepository_BranchHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open repository: %v", err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	ctx := context.Background()
 
@@ -479,7 +471,7 @@ func TestGoGitRepository_BranchHandling(t *testing.T) {
 
 func TestGoGitRepository_Close(t *testing.T) {
 	repoPath := createTestRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	addFileToRepo(t, repoPath, "README.md", "# Test")
 	commitRepo(t, repoPath, "Initial commit")
