@@ -9,7 +9,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 GOFMT=gofmt
-GOLINT=golangci-lint
+GOLINT=$$(go env GOPATH)/bin/golangci-lint
 
 # Project parameters
 BINARY_NAME=git-executor
@@ -227,7 +227,7 @@ install-tools: ## Install local tools
 	@echo "$(BLUE)🛠️  Installing local tools...$(NC)"
 	@command -v $(GOLINT) >/dev/null 2>&1 || { \
 		echo "Installing golangci-lint..."; \
-		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin v1.54.2; \
+		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin; \
 	}
 	@echo "$(GREEN)✅ Local tools installed!$(NC)"
 
