@@ -430,22 +430,6 @@ func TestValidateRepoPath_RelativePaths(t *testing.T) {
 	config, err := NewPathConfig(tempDir)
 	require.NoError(t, err)
 
-	tests := []struct {
-		name        string
-		repoPath    string
-		expectErr   bool
-		errContains string
-	}{
-		{
-			name:     "relative path that resolves within root",
-			repoPath: filepath.Join(tempDir, "user", "project.git"),
-		},
-		{
-			name:     "relative path with current directory",
-			repoPath: "./user/project.git",
-		},
-	}
-
 	// Change to temp directory for relative path testing
 	originalWd, err := os.Getwd()
 	require.NoError(t, err)
@@ -456,6 +440,28 @@ func TestValidateRepoPath_RelativePaths(t *testing.T) {
 
 	err = os.Chdir(tempDir)
 	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		repoPath    string
+		expectErr   bool
+		errContains string
+	}{
+		{
+			name:     "absolute path that resolves within root",
+			repoPath: filepath.Join(tempDir, "user", "project.git"),
+		},
+		{
+			name:     "relative path with current directory that resolves within root",
+			repoPath: "./user/project.git",
+		},
+		{
+			name:        "relative path that tries to escape root",
+			repoPath:    "../outside/project.git",
+			expectErr:   true,
+			errContains: "outside the allowed repository root",
+		},
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

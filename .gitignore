@@ -18,7 +18,8 @@
 go.work
 
 # Build artifacts
-/bin/
+/bin/*
+!/bin/.gitkeep
 /dist/
 /build/
 
