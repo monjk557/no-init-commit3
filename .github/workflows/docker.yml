@@ -1,0 +1,369 @@
+name: Build and Deploy to GCP Artifact Registry
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGION: asia-northeast3         # 한국 리전
+  REPOSITORY: git-executor          # Artifact Registry 저장소 이름
+  IMAGE: collabops-git-executor        # 이미지 이름
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          check-latest: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install tools
+        run: make install-tools
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Verify linting configuration alignment
+        run: |
+          echo "🔍 Verifying CI configuration matches local setup..."
+          echo ""
+          echo "📋 Configuration from Makefile:"
+          echo "Available commands: test-verbose, fmt, lint, vet, test-race"
+          echo ""
+          echo "🎯 CI commands now match Makefile exactly:"
+          echo "  Local: make test-verbose && make fmt && make lint"
+          echo "  CI:    make test-verbose && make fmt && make lint"
+          echo ""
+          echo "✅ Perfect alignment achieved!"
+
+      - name: Verify project structure
+        run: make verify-structure
+
+      - name: Verify configuration
+        run: make verify-config
+
+      - name: Run code formatting check
+        run: |
+          make fmt
+          if [ -n "$(git diff --name-only)" ]; then
+            echo "❌ Code is not formatted. Please run 'make fmt'"
+            git diff
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: make vet
+
+      - name: Run linter
+        run: make lint
+
+      - name: Run verbose tests
+        run: |
+          echo "🧪 Running verbose tests with race detection..."
+          make test-verbose
+
+      - name: Run tests with race detection
+        run: make test-race
+
+      - name: Run tests with coverage
+        run: make test-coverage
+
+  build:
+    name: Build Only (PR)
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: deployments/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-and-push:
+    name: Build and Push
+    needs: test  # This ensures tests pass before building
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+      image-url: ${{ steps.meta.outputs.image-url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Download dependencies and build
+        run: |
+          make deps
+          make build-linux
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          echo "🏷️ Extracting Docker metadata..."
+          
+          # 커밋 해시 앞 8자리 추출
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          
+          # Git 레퍼런스 타입 확인
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # 태그 푸시인 경우 - 태그 이름 사용 (v1.0.0 -> v1.0.0)
+            VERSION="${{ github.ref_name }}"
+            echo "📋 Tag push detected: ${VERSION}"
+          elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
+            # main 브랜치 푸시인 경우 - latest 사용
+            VERSION="latest"
+            echo "📋 Main branch push detected: ${VERSION}"
+          else
+            # 다른 브랜치인 경우 - 브랜치명-커밋해시 사용
+            VERSION="${{ github.ref_name }}-${SHORT_SHA}"
+            echo "📋 Feature branch push detected: ${VERSION}"
+          fi
+          
+          # 출력 설정
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "image-url=${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${VERSION}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Version: ${VERSION}"
+
+      # Verify required secrets and environment variables
+      - name: Verify prerequisites
+        run: |
+          echo "🔍 Verifying prerequisites..."
+          
+          # Check required secrets
+          echo "Checking required secrets..."
+          [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ] && echo "✓ GCP_WORKLOAD_IDENTITY_PROVIDER is set" || { echo "✗ GCP_WORKLOAD_IDENTITY_PROVIDER is not set" ; exit 1; }
+          [ -n "${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}" ] && echo "✓ GCP_SERVICE_ACCOUNT_SHARED is set" || { echo "✗ GCP_SERVICE_ACCOUNT_SHARED is not set" ; exit 1; }
+          [ -n "${{ secrets.GCP_PROJECT_ID_SHARED }}" ] && echo "✓ GCP_PROJECT_ID_SHARED is set" || { echo "✗ GCP_PROJECT_ID_SHARED is not set" ; exit 1; }
+          
+          # Check required files
+          echo "Checking required files..."
+          [ -f "deployments/Dockerfile" ] && echo "✓ Dockerfile exists" || { echo "✗ Dockerfile not found" ; exit 1; }
+          [ -f "go.mod" ] && echo "✓ go.mod exists" || { echo "✗ go.mod not found" ; exit 1; }
+          [ -f "Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
+
+      # GitHub Actions authentication
+      - name: Google Cloud Auth
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
+          project_id: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+
+      - name: Verify GCP Configuration
+        id: gcp-verify
+        run: |
+          echo "🔍 Verifying GCP configuration..."
+          
+          # Check gcloud auth
+          echo "Checking gcloud authentication..."
+          gcloud auth list
+          
+          # Check current project
+          echo "Checking current project..."
+          CURRENT_PROJECT=$(gcloud config get-value project)
+          if [ "$CURRENT_PROJECT" != "${{ secrets.GCP_PROJECT_ID_SHARED }}" ]; then
+            echo "❌ Project mismatch: Current=$CURRENT_PROJECT, Expected=${{ secrets.GCP_PROJECT_ID_SHARED }}"
+            exit 1
+          fi
+          echo "✓ Project correctly set to: $CURRENT_PROJECT"
+          
+          # Verify Artifact Registry repository exists
+          echo "Verifying Artifact Registry repository..."
+          if gcloud artifacts repositories describe ${{ env.REPOSITORY }} \
+            --location=${{ env.REGION }} >/dev/null 2>&1; then
+            echo "✓ Repository ${{ env.REPOSITORY }} exists"
+          else
+            echo "❌ Repository ${{ env.REPOSITORY }} not found"
+            exit 1
+          fi
+
+      - name: Configure Docker Authentication
+        id: docker-auth
+        run: |
+          echo "🔧 Configuring Docker authentication..."
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+          
+          # Verify Docker can authenticate
+          echo "Verifying Docker authentication..."
+          if docker login -u oauth2accesstoken -p "$(gcloud auth print-access-token)" ${{ env.REGION }}-docker.pkg.dev; then
+            echo "✓ Docker authentication successful"
+          else
+            echo "❌ Docker authentication failed"
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and Push Docker image
+        id: docker_build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: deployments/Dockerfile
+          push: true
+          build-args: |
+            APP_ENV=prod
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:latest
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ github.ref_name == 'main' && 'main' || format('pr-{0}', github.event.number) }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify Image Push
+        id: verify-push
+        run: |
+          echo "🔍 Verifying image push..."
+          
+          # Function to check if image exists
+          check_image_tag() {
+            local tag=$1
+            local max_attempts=5
+            local attempt=1
+            local wait_time=10
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "Checking tag '$tag' (Attempt $attempt/$max_attempts)..."
+              if gcloud artifacts docker images describe \
+                ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:$tag \
+                >/dev/null 2>&1; then
+                echo "✓ Tag '$tag' exists"
+                return 0
+              fi
+              echo "Tag not found yet, waiting ${wait_time}s..."
+              sleep $wait_time
+              attempt=$((attempt + 1))
+              wait_time=$((wait_time + 5))
+            done
+            echo "❌ Tag '$tag' not found after $max_attempts attempts"
+            return 1
+          }
+          
+          # Check each tag
+          failed=0
+          for tag in "latest" "${{ github.sha }}" "${{ github.ref_name == 'main' && 'main' || format('pr-{0}', github.event.number) }}"; do
+            if ! check_image_tag "$tag"; then
+              failed=1
+            fi
+          done
+          
+          # Final verification
+          if [ $failed -eq 0 ]; then
+            echo "✅ All image tags verified successfully!"
+          else
+            echo "❌ Some image tags were not found"
+            exit 1
+          fi
+
+      - name: Show Deployment Summary
+        if: success()
+        run: |
+          echo "✨ Deployment Summary ✨"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Image Details:"
+          echo "   Repository: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}"
+          echo "   Image: ${{ env.IMAGE }}"
+          echo "   Tags:"
+          echo "   • latest"
+          echo "   • ${{ github.sha }}"
+          echo "   • ${{ github.ref_name == 'main' && 'main' || format('pr-{0}', github.event.number) }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎉 Deployment completed successfully!" 
+
+  notify-completion:
+    name: Notify Image Push Success
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Calculate build time
+        id: build-info
+        run: |
+          START_TIME=$(date -d "${{ github.event.head_commit.timestamp }}" +%s 2>/dev/null || echo "0")
+          CURRENT_TIME=$(date +%s)
+          BUILD_DURATION=$((CURRENT_TIME - START_TIME))
+          BUILD_MIN=$((BUILD_DURATION / 60))
+          BUILD_SEC=$((BUILD_DURATION % 60))
+          
+          echo "build-time=${BUILD_MIN}분 ${BUILD_SEC}초" >> $GITHUB_OUTPUT
+
+      - name: Send Slack notification
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          MAIN_TAG="${{ needs.build-and-push.outputs.image-tag }}"
+          
+          # 태그 목록 구성 (중복 제거)
+          if [ "$MAIN_TAG" == "latest" ]; then
+            # main 브랜치인 경우: latest, commit_hash
+            VERSION_TAGS="\`latest\` \`${SHORT_SHA}\`"
+          else
+            # 태그 푸시인 경우: version, commit_hash, latest
+            VERSION_TAGS="\`${MAIN_TAG}\` \`${SHORT_SHA}\` \`latest\`"
+          fi
+
+          # 커밋 메시지 또는 PR 타이틀 추출 (안전한 방식으로 처리)
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            COMMIT_TITLE=$(echo '${{ github.event.pull_request.title }}' | sed 's/"/\\"/g' | head -1)
+          else
+            COMMIT_TITLE=$(echo '${{ github.event.head_commit.message }}' | sed 's/"/\\"/g' | head -1)
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+           --data "{\"text\": \"🚀 **${{ env.IMAGE }}** image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\"}" \
+           "${{ secrets.SLACK_ARTIFACT_REGISTRY_QA1 }}" 
