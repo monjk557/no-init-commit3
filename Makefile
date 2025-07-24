@@ -33,7 +33,7 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build clean test test-coverage test-race test-verbose test-race-verbose test-logging lint fmt format vet verify help local
+.PHONY: all build clean test test-coverage test-race test-verbose test-race-verbose test-logging lint fmt format fix vet verify help local
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
 .PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors
 
@@ -164,14 +164,32 @@ fmt: ## Format code (basic - use 'make format' for comprehensive)
 	@echo "$(YELLOW)💡 For comprehensive formatting including go.mod cleanup, use 'make format'$(NC)"
 	$(GOFMT) -s -w .
 
-format: ## Auto-format code and show lint results (COMPREHENSIVE)
+fix: ## COMPREHENSIVE: Auto-format, fix auto-fixable lint issues, and show remaining issues (alias for 'format')
+	@echo "$(BLUE)🎯 Running comprehensive fix (same as 'make format')...$(NC)"
+	@$(MAKE) format
+
+format: ## Auto-format code, fix lint issues, and show results (COMPREHENSIVE)
 	@echo "$(BLUE)🎨 COMPREHENSIVE Auto-formatting and organizing code...$(NC)"
 	@echo ""
-	@echo "$(YELLOW)1️⃣  Running gofmt (format Go source code)...$(NC)"
+	@echo "$(YELLOW)1️⃣  Running auto-fixable lint fixes...$(NC)"
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run --fix ./...; \
+		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved$(NC)"; \
+	elif command -v $$(go env GOPATH)/bin/golangci-lint >/dev/null 2>&1; then \
+		$$(go env GOPATH)/bin/golangci-lint run --fix ./...; \
+		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved$(NC)"; \
+	else \
+		echo "$(YELLOW)   📦 Installing golangci-lint for auto-fixes...$(NC)"; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		$$(go env GOPATH)/bin/golangci-lint run --fix ./...; \
+		echo "$(GREEN)   ✅ golangci-lint installed and auto-fixes applied$(NC)"; \
+	fi
+	@echo ""
+	@echo "$(YELLOW)2️⃣  Running gofmt (format Go source code)...$(NC)"
 	$(GOFMT) -s -w .
 	@echo "$(GREEN)   ✅ gofmt completed$(NC)"
 	@echo ""
-	@echo "$(YELLOW)2️⃣  Organizing imports with goimports...$(NC)"
+	@echo "$(YELLOW)3️⃣  Organizing imports with goimports...$(NC)"
 	@if command -v goimports >/dev/null 2>&1; then \
 		goimports -w .; \
 		echo "$(GREEN)   ✅ goimports completed$(NC)"; \
@@ -185,15 +203,15 @@ format: ## Auto-format code and show lint results (COMPREHENSIVE)
 		echo "$(GREEN)   ✅ goimports installed and completed$(NC)"; \
 	fi
 	@echo ""
-	@echo "$(YELLOW)3️⃣  Cleaning up go.mod with go mod tidy...$(NC)"
+	@echo "$(YELLOW)4️⃣  Cleaning up go.mod with go mod tidy...$(NC)"
 	go mod tidy
 	@echo "$(GREEN)   ✅ go mod tidy completed$(NC)"
 	@echo ""
-	@echo "$(YELLOW)4️⃣  Verifying go.mod integrity...$(NC)"
+	@echo "$(YELLOW)5️⃣  Verifying go.mod integrity...$(NC)"
 	go mod verify
 	@echo "$(GREEN)   ✅ go mod verify completed$(NC)"
 	@echo ""
-	@echo "$(YELLOW)5️⃣  Running final formatting check...$(NC)"
+	@echo "$(YELLOW)6️⃣  Running final formatting check...$(NC)"
 	@if [ "$$($(GOFMT) -l . | wc -l)" -gt 0 ]; then \
 		echo "$(RED)   ❌ Files still need formatting:$(NC)"; \
 		$(GOFMT) -l .; \
@@ -362,7 +380,7 @@ qa-check: ## Run comprehensive quality checks (lint, vet, fmt, test)
 	@$(MAKE) test-race
 	@echo "$(GREEN)✅ All quality checks passed!$(NC)"
 
-qa-fix: ## Auto-fix formatting and show remaining issues
+qa-fix: ## Auto-fix formatting, linting, and show remaining issues (COMPREHENSIVE)
 	@echo "$(BLUE)🔧 COMPREHENSIVE Auto-fixing code quality issues...$(NC)"
 	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
 	@$(MAKE) format

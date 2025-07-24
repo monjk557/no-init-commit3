@@ -178,7 +178,7 @@ func TestUploadPackHandler_HandleInfoRefs(t *testing.T) {
 			// Create temporary directory for test
 			tempDir, err := os.MkdirTemp("", "git-protocol-test-")
 			require.NoError(t, err)
-			defer os.RemoveAll(tempDir)
+			defer func() { _ = os.RemoveAll(tempDir) }()
 
 			// Create test configuration
 			cfg := &config.Config{
@@ -247,7 +247,7 @@ func TestUploadPackHandler_HandleUploadPack(t *testing.T) {
 	// Create temporary directory for test
 	tempDir, err := os.MkdirTemp("", "git-protocol-test-")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Create test configuration
 	cfg := &config.Config{
@@ -291,7 +291,7 @@ func TestUploadPackHandler_writeReferences(t *testing.T) {
 	// Create temporary directory for test
 	tempDir, err := os.MkdirTemp("", "git-protocol-test-")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Create test configuration
 	cfg := &config.Config{

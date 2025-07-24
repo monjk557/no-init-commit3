@@ -109,15 +109,15 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
 		return
 	}
-	defer gitRepo.Close()
+	defer func() { _ = gitRepo.Close() }()
 
 	// Set response headers for Git Smart HTTP protocol
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Write service advertisement
-	fmt.Fprintf(w, "001e# service=git-upload-pack\n")
-	fmt.Fprintf(w, "0000") // flush packet
+	_, _ = fmt.Fprintf(w, "001e# service=git-upload-pack\n")
+	_, _ = fmt.Fprintf(w, "0000") // flush packet
 
 	// Get repository references using our git package
 	// For now, we'll implement a basic version that gets HEAD and branches
@@ -125,12 +125,12 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		// If we've already started writing, we can't send an HTTP error
 		// Log the error and write an error packet instead
-		fmt.Fprintf(w, "0000") // end packet
+		_, _ = fmt.Fprintf(w, "0000") // end packet
 		return
 	}
 
 	// End with null packet
-	fmt.Fprintf(w, "0000")
+	_, _ = fmt.Fprintf(w, "0000")
 }
 
 // writeReferences writes Git references in the Smart HTTP protocol format
@@ -147,9 +147,9 @@ func (h *UploadPackHandler) writeReferences(ctx context.Context, w http.Response
 	if err != nil {
 		// Repository might be empty or HEAD might not exist
 		// Write a dummy reference to satisfy the protocol
-		line := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor\n")
+		line := "0000000000000000000000000000000000000000 capabilities^{}\x00multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor\n"
 		pktLine := fmt.Sprintf("%04x%s", len(line)+4, line)
-		w.Write([]byte(pktLine))
+		_, _ = w.Write([]byte(pktLine))
 		return nil
 	}
 
@@ -158,12 +158,12 @@ func (h *UploadPackHandler) writeReferences(ctx context.Context, w http.Response
 		headHash := commits[0].Hash
 		line := fmt.Sprintf("%s HEAD\x00multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor\n", headHash)
 		pktLine := fmt.Sprintf("%04x%s", len(line)+4, line)
-		w.Write([]byte(pktLine))
+		_, _ = w.Write([]byte(pktLine))
 
 		// Write main branch reference (without capabilities)
 		line = fmt.Sprintf("%s refs/heads/main\n", headHash)
 		pktLine = fmt.Sprintf("%04x%s", len(line)+4, line)
-		w.Write([]byte(pktLine))
+		_, _ = w.Write([]byte(pktLine))
 	}
 
 	return nil
@@ -237,7 +237,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		// If we've started writing, we can't send HTTP error anymore
 		// Write an error packet instead
-		pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 }

@@ -83,10 +83,31 @@ defer func() {
 
 ## Quick Reference Commands
 ```bash
-# Always run before committing
-make lint
+# 🚀 BEST: Auto-fix formatting AND lint issues (COMPREHENSIVE)
 make format
+
+# 🎯 Alternative comprehensive fix (same as format)
+make fix
+
+# 🔍 Check for issues without fixing
+make lint
+
+# 🏥 Fix what's possible, then check remaining issues
+make qa-fix
 
 # Check specific files
 golangci-lint run ./internal/...
-``` 
+```
+
+## Updated: `make format` Now Includes Lint Fixes! ✅
+
+**GOOD NEWS**: `make format` now handles **BOTH formatting AND linting**!
+
+- ✅ **`make format` NOW fixes**:
+  - Auto-fixable lint issues (errcheck, staticcheck, unused)
+  - Code formatting (gofmt, goimports)
+  - Module cleanup (go mod tidy, go mod verify)
+- 🎯 **`make fix`**: Now just an alias for `make format`
+- 🔍 **`make lint`**: Check for issues without fixing
+
+**Perfect! Now `make format` is truly comprehensive as expected!**

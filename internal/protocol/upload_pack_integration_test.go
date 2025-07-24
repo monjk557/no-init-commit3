@@ -34,7 +34,7 @@ func TestUploadPackIntegration_RealGitProtocol(t *testing.T) {
 	// Create a temporary directory for test repositories
 	tempDir, err := os.MkdirTemp("", "upload-pack-integration-test")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Create a real Git repository with commits
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
@@ -82,7 +82,7 @@ func createTestRepositoryWithHistory(t *testing.T, repoPath string) []string {
 	// Create a temporary working directory to add files first
 	workDir, err := os.MkdirTemp("", "work-repo")
 	require.NoError(t, err)
-	defer os.RemoveAll(workDir)
+	defer func() { _ = os.RemoveAll(workDir) }()
 
 	// Initialize a regular repository first (not bare)
 	workRepo, err := gogit.PlainInit(workDir, false)
@@ -306,7 +306,7 @@ func createLargeTestRepository(t *testing.T, repoPath string) []string {
 	// Create a temporary working directory to add files first
 	workDir, err := os.MkdirTemp("", "large-work-repo")
 	require.NoError(t, err)
-	defer os.RemoveAll(workDir)
+	defer func() { _ = os.RemoveAll(workDir) }()
 
 	// Initialize a regular repository first (not bare)
 	workRepo, err := gogit.PlainInit(workDir, false)
@@ -363,7 +363,7 @@ func createLargeTestRepository(t *testing.T, repoPath string) []string {
 // writePktLine writes a Git protocol packet line
 func writePktLine(w io.Writer, data string) {
 	line := fmt.Sprintf("%04x%s\n", len(data)+5, data)
-	w.Write([]byte(line))
+	_, _ = w.Write([]byte(line))
 }
 
 // TestProtocolParsing_RealGitFormats tests our parsing with real Git client formats

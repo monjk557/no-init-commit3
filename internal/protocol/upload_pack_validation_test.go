@@ -177,20 +177,3 @@ func formatPktLine(data string) string {
 	length := len(data) + 5 // +4 for length header, +1 for newline
 	return fmt.Sprintf("%04x%s\n", length, data)
 }
-
-// isValidPktLineFormat checks if a string follows Git pkt-line format
-func isValidPktLineFormat(data string) bool {
-	if len(data) < 4 {
-		return false
-	}
-
-	// Check if first 4 characters are hex
-	for i := 0; i < 4; i++ {
-		c := data[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-
-	return true
-}

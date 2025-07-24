@@ -107,6 +107,43 @@ func getCurrentBranch(t *testing.T, repoPath string) string {
 - Use dynamic branch detection or generic references like "HEAD"
 - Test with multiple Git versions locally when possible
 
+### **Issue 3: Lint Errors After `git pull` - \"make format didn't catch this!\"**
+
+**Problem Description**
+After pulling new code, lint errors appear despite running `make format`:
+```
+Error: internal/protocol/upload_pack.go:112:21: Error return value of `gitRepo.Close` is not checked (errcheck)
+        defer gitRepo.Close()
+                           ^
+14 issues: errcheck: 11, staticcheck: 2, unused: 1
+```
+
+**Root Cause**
+**Common Misconception**: `make format` should fix all code issues
+**Reality**: `make format` only handles **formatting**, not **linting**
+
+- ✅ **`make format` fixes**: Code formatting (gofmt), import organization (goimports), module cleanup (go mod tidy)
+- ❌ **`make format` CANNOT fix**: Error handling, unused variables, staticcheck issues
+- 🚀 **Solution**: Use `make fix` for BOTH formatting AND auto-fixable lint issues
+
+**Solution Applied**
+Enhanced `make format` with comprehensive auto-fix capabilities:
+
+```makefile
+format: ## Auto-format code, fix lint issues, and show results (COMPREHENSIVE)
+	@echo "🎨 COMPREHENSIVE Auto-formatting and organizing code..."
+	golangci-lint run --fix ./...  # Auto-fix lint issues FIRST
+	gofmt -s -w .                  # Then do formatting
+	goimports -w .                 # Then organize imports
+	go mod tidy                    # Then clean modules
+```
+
+**Prevention Strategy**
+- **`make format` now fixes EVERYTHING** - no more confusion!
+- **`make fix`** is now just an alias for `make format`
+- **`make qa-fix`** still works for fix + verification
+- **No more split between formatting and linting** - it's all in `make format`
+
 ## 🛠️ **Future CI Issue Prevention**
 
 ### **Best Practices**
