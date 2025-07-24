@@ -462,7 +462,7 @@ func (h *IntegrationTestHarness) AssertEndToEndFlow(t *testing.T, userID, owner,
 	resp, err := client.SimulateGitClone(owner, repo)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Validate protocol compliance
 	err = client.ValidateProtocolResponse(resp, "application/x-git-upload-pack-advertisement")
@@ -498,7 +498,7 @@ func (h *IntegrationTestHarness) BenchmarkEndToEndPerformance(b *testing.B, oper
 				b.Errorf("Benchmark failed: %v", err)
 				return
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 	})
 }
