@@ -1,6 +1,8 @@
 # CollabOps Git Executor
 
-The `collabops-git-executor` is a backend component in the CollabOps platform responsible for executing actual Git operations. It interacts with `collabops-git-http` and `collabops-git-ssh` gateways to perform commands like `clone`, `fetch`, `push`, and returns either structured JSON responses or Git-specific packfile streams.
+The `collabops-git-executor` is a backend component in the CollabOps platform responsible for executing actual Git operations. It serves as the **Git Logic Worker** in the CollabOps architecture, receiving requests from the `collabops-git-http` gateway and implementing the core Git Smart HTTP protocol logic.
+
+> 📋 **Architecture Documentation:** See [docs/architecture/component-separation.md](docs/architecture/component-separation.md) for the complete architectural overview and component responsibilities.
 
 ## Architecture
 
@@ -9,10 +11,22 @@ Git Client (SSH/HTTP)
     ↓
 Gateway Layer: collabops-git-ssh / collabops-git-http
     ↓ (REST / RPC)
-collabops-git-executor
+collabops-git-executor  ← This repository (Git Logic Worker)
     ↓ (go-git)
 Filesystem (e.g., /var/lib/git/repos/{user}/{repo}.git)
 ```
+
+### Component Role
+
+**collabops-git-executor** serves as the **Git Logic Worker** that:
+- ✅ Implements Git Smart HTTP protocol (executor side)
+- ✅ Handles all go-git operations and .git object processing
+- ✅ Performs JWT decoding and permission verification
+- ✅ Manages repository caching and streaming
+- ✅ Processes packfiles and reference updates
+- ❌ Does NOT directly accept Git client requests (gateway handles routing)
+
+For complete architectural details and component separation, see the [Component Separation Documentation](docs/architecture/component-separation.md).
 
 ## Features
 

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/permissions"
+	"github.com/collabops/git-executor/internal/protocol"
 	chi "github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -81,14 +83,50 @@ func (s *Server) setupRouter() *chi.Mux {
 func (s *Server) setupAPIRoutes() *chi.Mux {
 	apiRouter := chi.NewRouter()
 
-	// Placeholder for future API routes
+	// Basic API info endpoint
 	apiRouter.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"message": "CollabOps Git Executor API", "version": "1.0.0", "status": "ready"}`)
 	})
 
+	// Git Smart HTTP Protocol routes
+	s.setupGitRoutes(apiRouter)
+
 	return apiRouter
+}
+
+// setupGitRoutes configures Git Smart HTTP protocol routes
+func (s *Server) setupGitRoutes(router *chi.Mux) {
+	// Initialize permission client (for now, we'll create a basic config)
+	// TODO: This should be properly configured with actual API service URL
+	permConfig := &permissions.Config{
+		APIServiceURL: "http://api-service.local", // Default from architecture docs
+		Timeout:       10 * time.Second,
+	}
+	permClient, err := permissions.NewPermissionClient(permConfig)
+	if err != nil {
+		// For now, log the error and continue without Smart HTTP
+		fmt.Printf("⚠️  Warning: Failed to initialize permission client: %v\n", err)
+		return
+	}
+
+	// Initialize upload-pack handler
+	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config, permClient)
+	if err != nil {
+		// For now, log the error and continue without Smart HTTP
+		fmt.Printf("⚠️  Warning: Failed to initialize upload-pack handler: %v\n", err)
+		return
+	}
+
+	// Git Smart HTTP routes for fetch operations (executor endpoints)
+	router.Route("/{owner}/{repo}", func(r chi.Router) {
+		// GET /repos/{owner}/{repo}/info/refs?service=git-upload-pack
+		r.Get("/info/refs", uploadPackHandler.HandleInfoRefs)
+
+		// POST /repos/{owner}/{repo}/git-upload-pack (to be implemented in subtask 9.2)
+		r.Post("/git-upload-pack", uploadPackHandler.HandleUploadPack)
+	})
 }
 
 // healthCheck handles the health check endpoint

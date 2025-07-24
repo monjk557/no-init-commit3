@@ -1,0 +1,27 @@
+# Test Configuration for Smart HTTP Protocol
+# This file is used for manual testing of the Smart HTTP implementation
+
+server:
+  host: "localhost"
+  port: 9090
+  read_timeout: "30s"
+  write_timeout: "30s"
+  base_path: "/"
+
+git:
+  repo_root: "./test-repos"  # Will be created by test script
+
+logging:
+  level: "debug"
+  format: "text"
+  file: ""
+
+jwt:
+  algorithm: "HS256"
+  secret_key: "test-secret-key-for-development-only"
+  public_key_path: ""
+  issuer: "collabops-test"
+  audience: "collabops-executor"
+
+# Note: For testing, we use a simple secret key
+# In production, use RS256 with proper key management 

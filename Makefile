@@ -139,6 +139,14 @@ test-manual-server: ## Run manual server test (requires separate terminal for te
 	@echo "$(YELLOW)💡 Press Ctrl+C to stop the server$(NC)"
 	$(GOCMD) run ./cmd/git-executor/main.go
 
+test-manual-smart-http: ## Run Smart HTTP Protocol tests (requires server to be running)
+	@echo "$(BLUE)🧪 Running Smart HTTP Protocol tests...$(NC)"
+	@./scripts/test-smart-http.sh
+
+test-manual-smart-http-setup: ## Create test repositories for Smart HTTP testing
+	@echo "$(BLUE)🧪 Setting up test repositories for Smart HTTP...$(NC)"
+	@./scripts/test-smart-http.sh --create-repo
+
 test-manual-all: ## Run all available manual tests
 	@echo "$(BLUE)🧪 Running all manual tests...$(NC)"
 	@echo ""
@@ -148,6 +156,7 @@ test-manual-all: ## Run all available manual tests
 	@echo ""
 	@echo "$(GREEN)🎉 All manual component tests completed!$(NC)"
 	@echo "$(YELLOW)💡 To test the HTTP server, run: make test-manual-server$(NC)"
+	@echo "$(YELLOW)💡 To test Smart HTTP protocol, run: make test-manual-smart-http$(NC)"
 
 # Code quality commands
 fmt: ## Format code (basic - use 'make format' for comprehensive)

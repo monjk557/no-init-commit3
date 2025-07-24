@@ -17,6 +17,70 @@ collabops-git-executor
     ↓ (go-git)
 Filesystem (e.g., /var/lib/git/repos/{user}/{repo}.git)
 
+🔧 **OFFICIAL ARCHITECTURE CLARIFICATION** (Architecture Team)
+==============================================================
+
+**1. collabops-git-http (HTTP Gateway)**
+---------------------------------------
+Responsibilities:
+- Accept Git Smart HTTP requests over HTTP (e.g. clone, push)
+- Route requests to collabops-git-executor
+- Extract and optionally decode JWT (Authorization: Bearer <JWT>)
+- Forward headers like X-USER-ID to executor
+- Stateless gateway layer
+- Does NOT handle Git logic or touch .git files
+
+Supported Endpoints:
+- GET /info/refs?service=git-upload-pack
+- POST /git-upload-pack  
+- POST /git-receive-pack
+
+**2. collabops-git-executor (Git Logic Worker)**
+----------------------------------------------
+Responsibilities:
+- Core Git logic using go-git
+- Handles Smart HTTP protocol implementation:
+  - git-upload-pack (clone/fetch)
+  - git-receive-pack (push)
+- Decode JWT (if gateway does not)
+- Check permissions via API metadata service
+- Read/write Git objects from/to bare .git repos
+- Stream valid Git responses to client
+
+Smart HTTP Behaviors:
+- Ref negotiation
+- Capability declaration
+- Packfile parsing
+- Reference updates
+
+JWT Handling:
+- Typically decoded here using K8s Secret (public key)
+- If decoded in gateway, only X-USER-ID passed here
+- Responsible for validating access and acting as Git worker
+
+**Smart HTTP Flow Examples:**
+
+Git Clone Flow:
+1. Client: GET /info/refs?service=git-upload-pack → Gateway → Executor
+2. Executor: Returns refs and capabilities
+3. Client: POST /git-upload-pack → Gateway → Executor  
+4. Executor: Streams packfile
+
+Git Push Flow:
+1. Client: POST /git-receive-pack → Gateway → Executor
+2. Executor: Decodes JWT or uses X-USER-ID, validates permission, parses packfile, updates .git store
+
+**Component Responsibility Matrix:**
+| Responsibility             | collabops-git-http | collabops-git-executor |
+|----------------------------|--------------------|-------------------------|
+| Accept Git HTTP Requests  | ✅                 | ❌                      |
+| Smart HTTP Logic           | ❌                 | ✅                      |
+| JWT Decoding               | 🚫 (optional)      | ✅ (default)            |
+| Repo Access Check          | ❌                 | ✅                      |
+| .git Object Handling       | ❌                 | ✅                      |
+| Stateless Component        | ✅                 | ❌                      |
+| Handles Packfile           | ❌                 | ✅                      |
+
 Git Executor handles:
 - Tree and blob queries
 - Push/pull operations
