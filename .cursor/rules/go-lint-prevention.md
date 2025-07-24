@@ -1,89 +1,199 @@
-# Go Lint Prevention Rules
+# Go Lint Prevention and Code Quality Rules
 
-## Error Handling Requirements
+This rule guides AI assistants to generate lint-free, test-passing Go code that works both locally and in CI/CD pipelines.
 
-### CRITICAL: Always Handle Error Returns
+## 🚨 CRITICAL: Pre-Generation Checklist
+
+**BEFORE writing ANY Go code, verify:**
+1. ✅ All struct fields in tests match the actual struct definition
+2. ✅ All required config fields have default values in `setDefaults()`
+3. ✅ Error returns are handled (use `_ =` if intentionally ignoring)
+4. ✅ No empty strings for required fields (especially paths in router configurations)
+5. ✅ Test configurations are complete and valid
+
+## 🎯 Configuration Management
+
+### Required Config Defaults
+**ALWAYS check `internal/config/config.go` setDefaults() when using configs:**
 ```go
-// ✅ CORRECT - Handle errors properly
-if err := someFunction(); err != nil {
-    return fmt.Errorf("operation failed: %w", err)
+// ❌ BAD: Missing required field in test
+cfg := &config.Config{
+    Server: config.ServerConfig{
+        Host: "localhost",
+        Port: 0,
+        // Missing HealthCheckPath!
+    },
 }
 
-// ✅ CORRECT - Explicitly ignore errors when appropriate
-_ = file.Close()                    // Single return value
-_, _ = w.Write([]byte("data"))      // Multiple return values
-
-// ❌ NEVER DO - Ignore error returns without explicit assignment
-someFunction()     // errcheck violation
-file.Close()       // errcheck violation
+// ✅ GOOD: All required fields included
+cfg := &config.Config{
+    Server: config.ServerConfig{
+        Host:            "localhost",
+        Port:            0,
+        BasePath:        "/api/repos",
+        HealthCheckPath: "/health",  // REQUIRED for chi router
+        ReadTimeout:     30 * time.Second,
+        WriteTimeout:    30 * time.Second,
+    },
+}
 ```
 
-### Test Files - Use Explicit Ignore Pattern
+### Router Path Requirements
+**Chi router REQUIRES all paths to start with '/':**
 ```go
-// ✅ In test files, always use explicit error ignoring:
-defer func() { _ = repo.Close() }()
-defer func() { _ = os.RemoveAll(tempDir) }()
-_ = json.NewEncoder(w).Encode(response)
-_, _ = w.Write([]byte("test data"))
+// ❌ WILL PANIC: empty string
+router.Get(s.config.Server.HealthCheckPath, handler) // panic if HealthCheckPath is ""
+
+// ✅ GOOD: Always validate or provide defaults
+if s.config.Server.HealthCheckPath == "" {
+    s.config.Server.HealthCheckPath = "/health"
+}
+router.Get(s.config.Server.HealthCheckPath, handler)
 ```
 
-### Variable Declarations
-```go
-// ✅ CORRECT - Avoid unnecessary type declarations
-var _ = client              // Instead of: var _ SomeInterface = client
+## 🧪 Test Completeness
 
-// ✅ CORRECT - Use explicit type only when needed
-var config *Config         // When nil initialization is important
+### Always Match Struct Definitions
+```go
+// If ServerConfig has these fields:
+type ServerConfig struct {
+    Host            string
+    Port            int
+    BasePath        string
+    HealthCheckPath string  // <-- Don't forget this!
+    ReadTimeout     time.Duration
+    WriteTimeout    time.Duration
+}
+
+// Then tests MUST include ALL required fields
 ```
 
-### Import Organization
+### Cross-Platform Test Compatibility
 ```go
-// ✅ Always use explicit import aliases for clarity
+// ❌ BAD: Hardcoded branch names
+mainTree, err := repo.GetTree(ctx, "main") // Fails on older Git
+
+// ✅ GOOD: Dynamic branch detection
+defaultBranch := getCurrentBranch(t, repoPath)
+defaultTree, err := repo.GetTree(ctx, defaultBranch)
+```
+
+## 🔧 Error Handling Patterns
+
+### Explicit Error Ignoring
+```go
+// ❌ BAD: Unhandled error
+defer resp.Body.Close()
+defer gitRepo.Close()
+
+// ✅ GOOD: Explicitly ignore if intentional
+defer func() { _ = resp.Body.Close() }()
+defer func() { _ = gitRepo.Close() }()
+```
+
+### Test Cleanup
+```go
+// ✅ ALWAYS in tests:
+tempDir, err := os.MkdirTemp("", "test-")
+require.NoError(t, err)
+defer func() { _ = os.RemoveAll(tempDir) }()  // Always ignore cleanup errors
+```
+
+## 📦 Import Organization
+
+```go
 import (
+    // Standard library
+    "context"
+    "fmt"
+    "net/http"
+
+    // External packages with explicit aliases when needed
     chi "github.com/go-chi/chi/v5"
     lumberjack "gopkg.in/natefinch/lumberjack.v2"
+
+    // Internal packages
+    "github.com/collabops/git-executor/internal/config"
 )
 ```
 
-### Context Keys
-```go
-// ✅ Use typed constants for context keys to avoid collisions
-type ContextKey string
-const SkipLoggingKey ContextKey = "skip_logging"
+## 🚀 CI/CD Awareness
 
-// ❌ NEVER use raw strings as context keys
-ctx.Value("skip_logging") // Potential collision
+### GitHub Actions Configuration
+**NEVER change repository-specific settings without verification:**
+```yaml
+# ❌ BAD: Changing to generic names
+REPOSITORY: web  # DON'T change to generic names
+
+# ✅ GOOD: Keep project-specific names
+REPOSITORY: git-executor  # Specific to this project
 ```
 
-### Resource Cleanup
+### Environment-Specific Code
 ```go
-// ✅ ALWAYS use defer with explicit error handling
-defer func() { _ = resource.Close() }()
-
-// ✅ For critical cleanup, handle errors appropriately
-defer func() {
-    if err := criticalResource.Close(); err != nil {
-        log.Printf("Failed to close critical resource: %v", err)
-    }
-}()
+// ✅ Handle CI vs local differences
+if os.Getenv("CI") == "true" {
+    // CI-specific behavior
+} else {
+    // Local development behavior
+}
 ```
 
-### Mandatory Checks Before Code Generation
-1. **Check if function returns error** - If yes, handle or explicitly ignore
-2. **Check if in test file** - If yes, use `_ =` pattern for non-critical errors
-3. **Check for resource management** - Always defer cleanup with error handling
-4. **Avoid raw interface assertions** - Use explicit variable declarations
+## 🛡️ Defensive Programming
 
-### Pre-Generation Checklist
-- [ ] All error returns are handled or explicitly ignored with `_ =`
-- [ ] All `defer` statements use proper cleanup patterns
-- [ ] No raw string context keys
-- [ ] Import aliases are explicit when needed
-- [ ] No unnecessary type declarations (use `var _ =` instead of `var _ Type =`)
+### Validate Before Use
+```go
+// ❌ BAD: Assume config is valid
+router.Mount(s.config.Server.BasePath, routes)
 
-## Quick Reference Commands
+// ✅ GOOD: Validate first
+if s.config.Server.BasePath == "" {
+    s.config.Server.BasePath = "/"
+}
+router.Mount(s.config.Server.BasePath, routes)
+```
+
+### Struct Initialization
+```go
+// ❌ BAD: Partial initialization
+cfg := &config.Config{
+    Server: config.ServerConfig{
+        Port: 8080,
+    },
+}
+
+// ✅ GOOD: Complete initialization or use defaults
+cfg := &config.Config{}
+config.SetDefaults(cfg)  // If such method exists
+cfg.Server.Port = 8080   // Then override specifics
+```
+
+## 🔍 Common Pitfalls to Avoid
+
+1. **Missing Config Fields in Tests**
+   - Always check the struct definition
+   - Include ALL required fields, not just the ones you're testing
+
+2. **Empty String Router Paths**
+   - Chi router panics on empty paths
+   - Always provide defaults or validate
+
+3. **Hardcoded Git References**
+   - Don't assume "main" branch exists
+   - Use dynamic detection or HEAD
+
+4. **Unhandled Errors in Defers**
+   - Always use `defer func() { _ = ... }()` pattern
+   - Especially for Close() operations
+
+5. **CI/CD Config Changes**
+   - Don't change project-specific values to generic ones
+   - Verify with the team before changing deployment configs
+
+## 📝 Quick Reference Commands
+
 ```bash
-# 🚀 BEST: Auto-fix formatting AND lint issues (COMPREHENSIVE)
+# 🎯 MAIN COMMAND: Does EVERYTHING (lint fixes + formatting)
 make format
 
 # 🎯 Alternative comprehensive fix (same as format)
@@ -98,6 +208,26 @@ make qa-fix
 # Check specific files
 golangci-lint run ./internal/...
 ```
+
+## 🤖 AI Assistant Guidelines
+
+**BEFORE generating code:**
+1. Check struct definitions for ALL required fields
+2. Verify config defaults exist in setDefaults()
+3. Ensure router paths are never empty strings
+4. Plan error handling strategy (handle or explicitly ignore)
+
+**AFTER generating code:**
+1. Would `make lint` pass?
+2. Are all config fields properly initialized?
+3. Are all errors handled or explicitly ignored?
+4. Would this work in both local and CI environments?
+
+**When modifying existing code:**
+1. Don't change project-specific configurations without verification
+2. Maintain consistency with existing patterns
+3. Ensure changes work across different environments
+4. Test with `make test-race` before committing
 
 ## Updated: `make format` Now Includes Lint Fixes! ✅
 

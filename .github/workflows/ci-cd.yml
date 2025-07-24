@@ -9,7 +9,7 @@ on:
 
 env:
   REGION: asia-northeast3         # 한국 리전
-  REPOSITORY: web                   # Artifact Registry 저장소 이름 (existing repository)
+  REPOSITORY: git-executor          # Artifact Registry 저장소 이름
   IMAGE: collabops-git-executor        # 이미지 이름
 
 jobs:
