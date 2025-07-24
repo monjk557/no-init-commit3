@@ -13,6 +13,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// Context key types to avoid collisions
+type contextKey string
+
+const (
+	userIDKey     contextKey = "user_id"
+	repositoryKey contextKey = "repository"
+	operationKey  contextKey = "operation"
+)
+
 // GitOperationLogger provides comprehensive logging for Git operations with gateway context
 type GitOperationLogger struct {
 	logger *logging.Logger
@@ -94,9 +103,9 @@ func ExtractRequestContext(r *http.Request, operation string) *RequestContext {
 // ToContext adds request context to Go context
 func (rc *RequestContext) ToContext(ctx context.Context) context.Context {
 	ctx = context.WithValue(ctx, logging.RequestIDKey, rc.RequestID)
-	ctx = context.WithValue(ctx, "user_id", rc.UserID)
-	ctx = context.WithValue(ctx, "repository", rc.Repository)
-	ctx = context.WithValue(ctx, "operation", rc.Operation)
+	ctx = context.WithValue(ctx, userIDKey, rc.UserID)
+	ctx = context.WithValue(ctx, repositoryKey, rc.Repository)
+	ctx = context.WithValue(ctx, operationKey, rc.Operation)
 	return ctx
 }
 

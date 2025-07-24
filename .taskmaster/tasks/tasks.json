@@ -345,7 +345,8 @@
         "priority": "medium",
         "dependencies": [
           4,
-          5
+          5,
+          "15"
         ],
         "status": "pending",
         "subtasks": [
@@ -416,7 +417,8 @@
         "priority": "medium",
         "dependencies": [
           4,
-          5
+          5,
+          "15"
         ],
         "status": "pending",
         "subtasks": [
@@ -487,7 +489,8 @@
         "priority": "medium",
         "dependencies": [
           4,
-          5
+          5,
+          "15"
         ],
         "status": "pending",
         "subtasks": [
@@ -627,7 +630,8 @@
         "status": "pending",
         "dependencies": [
           4,
-          5
+          5,
+          "15"
         ],
         "priority": "high",
         "details": "Implement HTTP handlers for Git Smart HTTP protocol executor logic:\n- GET /repos/:owner/:repo/info/refs?service=git-receive-pack\n- POST /repos/:owner/:repo/git-receive-pack\n\nThese endpoints serve as the EXECUTOR side of the Smart HTTP protocol, receiving requests forwarded from the collabops-git-http gateway. They should:\n1. Validate the request parameters forwarded by the gateway\n2. Check user permissions (write access) based on gateway-provided context\n3. Execute the appropriate Git commands using go-git or shell commands\n4. Process the incoming packfile and update references\n5. Send the response back to the gateway (which forwards to the client)\n\nUse proper content type headers:\n- application/x-git-receive-pack-advertisement\n- application/x-git-receive-pack-result\n\nImplement a locking mechanism to prevent concurrent pushes to the same repository using sync.Mutex or a distributed lock if running multiple instances. Consider using a per-repository lock rather than a global lock for better concurrency.\n\nImplement proper error handling for reference update failures, packfile parsing errors, and permission denied errors. The executor should return appropriate responses that the gateway can forward to Git clients.",
@@ -885,11 +889,118 @@
             "testStrategy": ""
           }
         ]
+      },
+      {
+        "id": 14,
+        "title": "Implement REST API Endpoints for Git Diff Operations",
+        "description": "Create REST API endpoints that provide structured JSON responses for Git diff operations including commit comparisons, branch comparisons, file diffs, and patch generation.",
+        "details": "Implement HTTP handlers for Git diff operations that are separate from the Smart HTTP protocol:\n\n1. **Commit Diff Endpoint**: GET /repos/:owner/:repo/diff/commits/:base/:head\n   - Compare two commits and return structured diff information\n   - Include file changes, additions, deletions, and modifications\n   - Support query parameters for context lines and diff format\n\n2. **Branch Diff Endpoint**: GET /repos/:owner/:repo/diff/branches/:base/:head\n   - Compare two branches and return comprehensive diff data\n   - Handle merge base calculation for accurate comparisons\n   - Include commit count differences and file changes\n\n3. **File Diff Endpoint**: GET /repos/:owner/:repo/diff/file?path=:path&base=:base&head=:head\n   - Generate diff for a specific file between two references\n   - Return line-by-line changes with context\n   - Support unified and split diff formats via query parameter\n\n4. **Patch Generation Endpoint**: GET /repos/:owner/:repo/patch/:base/:head\n   - Generate Git patch format output for commit ranges\n   - Include proper patch headers and metadata\n   - Support both single commit and range patches\n\nEach endpoint should:\n- Validate request parameters and repository access\n- Check user permissions using the permission client\n- Use the Git repository interface to perform diff operations\n- Return structured JSON responses with consistent error handling\n- Support pagination for large diffs via limit/offset parameters\n\nImplement proper diff algorithms using go-git's diff capabilities. Handle binary files appropriately by indicating their presence without content. Include file metadata such as mode changes, renames, and copies.\n\nResponse format example:\n```json\n{\n  \"base\": \"abc123\",\n  \"head\": \"def456\", \n  \"files\": [\n    {\n      \"path\": \"src/main.go\",\n      \"status\": \"modified\",\n      \"additions\": 5,\n      \"deletions\": 2,\n      \"changes\": [\n        {\"type\": \"add\", \"line\": 10, \"content\": \"+ new line\"},\n        {\"type\": \"del\", \"line\": 15, \"content\": \"- old line\"}\n      ]\n    }\n  ],\n  \"stats\": {\n    \"total_additions\": 5,\n    \"total_deletions\": 2,\n    \"files_changed\": 1\n  }\n}\n```",
+        "testStrategy": "Write comprehensive unit and integration tests for all diff endpoints using httptest package. Test scenarios include:\n\n1. **Commit Diff Tests**:\n   - Valid commit comparison with file changes\n   - Non-existent commits handling\n   - Empty diff scenarios\n   - Large diff pagination\n\n2. **Branch Diff Tests**:\n   - Branch comparison with merge base calculation\n   - Non-existent branch handling\n   - Fast-forward vs merge scenarios\n   - Identical branch comparison\n\n3. **File Diff Tests**:\n   - Single file modifications between references\n   - File creation and deletion scenarios\n   - Binary file handling\n   - Non-existent file paths\n\n4. **Patch Generation Tests**:\n   - Single commit patch generation\n   - Commit range patches\n   - Patch format validation\n   - Large patch handling\n\n5. **Common Test Scenarios**:\n   - Permission denied responses\n   - Invalid repository paths\n   - Malformed request parameters\n   - Concurrent diff operations\n   - Performance with large repositories\n\nMock the Git repository interface and permission client for unit tests. Create test repositories with known commit history for integration tests. Verify JSON response structure matches the defined schema. Test error handling and appropriate HTTP status codes for all failure scenarios.",
+        "status": "pending",
+        "dependencies": [
+          4,
+          5,
+          "15"
+        ],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Commit Diff Endpoint",
+            "description": "Create GET /repos/:owner/:repo/diff/commits/:base/:head endpoint to compare two commits and return structured diff information including file changes, additions, deletions, and modifications.",
+            "dependencies": [],
+            "details": "Implement HTTP handler that validates commit parameters, checks user permissions, uses go-git to perform commit comparison, and returns JSON response with file-level changes. Support query parameters for context lines and diff format. Handle edge cases like non-existent commits and empty diffs.",
+            "status": "pending",
+            "testStrategy": "Write unit tests using httptest package covering valid commit comparisons, non-existent commits, empty diffs, permission denied scenarios, and query parameter validation. Mock Git repository interface and permission client."
+          },
+          {
+            "id": 2,
+            "title": "Implement Branch Diff Endpoint",
+            "description": "Create GET /repos/:owner/:repo/diff/branches/:base/:head endpoint to compare two branches and return comprehensive diff data including merge base calculation and commit count differences.",
+            "dependencies": [],
+            "details": "Implement HTTP handler that validates branch parameters, calculates merge base for accurate comparisons, uses go-git to perform branch comparison, and returns JSON response with file changes and commit statistics. Handle branch resolution and merge base edge cases.",
+            "status": "pending",
+            "testStrategy": "Write unit tests covering valid branch comparisons, non-existent branches, merge base calculation, fast-forward scenarios, and permission validation. Test with different branch states and merge scenarios."
+          },
+          {
+            "id": 3,
+            "title": "Implement File Diff Endpoint",
+            "description": "Create GET /repos/:owner/:repo/diff/file endpoint to generate diff for a specific file between two references with line-by-line changes and context support.",
+            "dependencies": [],
+            "details": "Implement HTTP handler that accepts path, base, and head query parameters, validates file existence, uses go-git to generate file-specific diff, and returns JSON response with line-by-line changes. Support unified and split diff formats via query parameter.",
+            "status": "pending",
+            "testStrategy": "Write unit tests covering file diff generation, non-existent files, binary file handling, different diff formats, and context line variations. Test with renamed, moved, and mode-changed files."
+          },
+          {
+            "id": 4,
+            "title": "Implement Patch Generation Endpoint",
+            "description": "Create GET /repos/:owner/:repo/patch/:base/:head endpoint to generate Git patch format output for commit ranges with proper patch headers and metadata.",
+            "dependencies": [],
+            "details": "Implement HTTP handler that validates commit range parameters, uses go-git to generate patch format output, includes proper patch headers and metadata, and supports both single commit and range patches. Return patch content with appropriate Content-Type header.",
+            "status": "pending",
+            "testStrategy": "Write unit tests covering patch generation for single commits, commit ranges, empty ranges, and invalid commit references. Validate patch format compliance and header correctness."
+          },
+          {
+            "id": 5,
+            "title": "Implement Common Diff Response Structures and Utilities",
+            "description": "Create shared data structures, response formatters, and utility functions for consistent JSON responses across all diff endpoints including pagination support.",
+            "dependencies": [],
+            "details": "Define common structs for diff responses, file changes, and statistics. Implement utility functions for diff processing, binary file detection, file metadata extraction, and pagination. Create consistent error handling and response formatting functions used by all diff endpoints.",
+            "status": "pending",
+            "testStrategy": "Write unit tests for response structure serialization, pagination logic, binary file detection, and error response formatting. Test with various diff scenarios and edge cases."
+          },
+          {
+            "id": 6,
+            "title": "Integrate Diff Endpoints with Router and Middleware",
+            "description": "Register all diff endpoints with the HTTP router, apply necessary middleware for authentication, logging, and error handling, and implement comprehensive integration tests.",
+            "dependencies": [
+              "14.1",
+              "14.2",
+              "14.3",
+              "14.4",
+              "14.5"
+            ],
+            "details": "Register diff endpoints with HTTP router, apply authentication middleware, permission checking, request logging, and error handling middleware. Implement route parameter validation and ensure consistent error responses across all endpoints.",
+            "status": "pending",
+            "testStrategy": "Write integration tests covering end-to-end functionality of all diff endpoints, middleware application, authentication flows, and error scenarios. Test with real Git repositories and various user permission levels."
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "title": "Implement Endpoint Access Control Middleware",
+        "description": "Create middleware that validates X-Source header and enforces access control matrix to ensure HTTP/SSH gateways can only access Git protocol endpoints while orchestrator can only access REST API endpoints. This middleware must be implemented as a prerequisite before any endpoint implementations to prevent unauthorized access.",
+        "status": "pending",
+        "dependencies": [
+          1,
+          3,
+          12
+        ],
+        "priority": "critical",
+        "details": "Implement HTTP middleware that enforces endpoint access control based on the X-Source header. This is a critical security component that must be implemented early in the development cycle, before any endpoints are exposed:\n\n1. **Header Validation**: Extract and validate the X-Source header from incoming requests. Expected values:\n   - \"http-gateway\" for HTTP Git gateway\n   - \"ssh-gateway\" for SSH Git gateway  \n   - \"orchestrator\" for orchestrator service\n\n2. **Access Control Matrix Implementation**:\n   - HTTP/SSH gateways: Allow access only to Git Smart HTTP protocol endpoints:\n     - GET /repos/:owner/:repo/info/refs (with service parameter)\n     - POST /repos/:owner/:repo/git-upload-pack\n     - POST /repos/:owner/:repo/git-receive-pack\n     - POST /ssh/upload-pack\n     - POST /ssh/receive-pack\n   - Orchestrator: Allow access only to REST API endpoints:\n     - GET /repos/:owner/:repo/tree\n     - GET /repos/:owner/:repo/blob\n     - GET /repos/:owner/:repo/commits\n     - Health check and metrics endpoints\n\n3. **Security Logging**: Implement structured logging using zap for:\n   - All access attempts with source, endpoint, and result\n   - Unauthorized access attempts with detailed context\n   - Missing or invalid X-Source headers\n   - Include correlation IDs for request tracing\n\n4. **Error Handling**: Return HTTP 403 Forbidden for unauthorized access attempts with appropriate error messages. Use consistent error response format.\n\n5. **Configuration**: Make the access control rules configurable through the existing config system, allowing for future flexibility.\n\n6. **Early Integration**: The middleware should be designed to be applied early in the request chain, after authentication but before any endpoint-specific handlers. It must be ready before tasks 9, 10, and 16 begin implementation.\n\nUse regex patterns or route matching to efficiently categorize endpoints. The middleware should fail securely - denying access by default if rules are unclear.",
+        "testStrategy": "Write comprehensive unit tests for the access control middleware using httptest package. Test scenarios:\n- Valid X-Source header with authorized endpoint access (all combinations including SSH endpoints)\n- Invalid X-Source header values\n- Missing X-Source header\n- Unauthorized access attempts (gateway accessing REST API, orchestrator accessing Git endpoints)\n- Security logging verification for all scenarios\n- Edge cases with malformed requests\n- Default deny behavior when access rules are ambiguous\n\nCreate integration tests that verify the middleware works correctly as a foundation for future endpoint implementations. Mock the logging system to verify security events are properly recorded. Test concurrent access scenarios to ensure thread safety. Use table-driven tests to cover all access control matrix combinations efficiently.\n\nInclude tests that simulate the middleware being applied before endpoint handlers to ensure proper request flow and security enforcement.",
+        "subtasks": []
+      },
+      {
+        "id": 16,
+        "title": "Implement SSH Protocol Endpoints for Git Operations",
+        "description": "Implement SSH protocol endpoints POST /ssh/upload-pack and POST /ssh/receive-pack that handle SSH-specific Git operations forwarded from the collabops-git-ssh gateway.",
+        "details": "Implement HTTP handlers for SSH-forwarded Git operations that serve as the EXECUTOR side of the SSH protocol:\n\n1. POST /ssh/upload-pack endpoint:\n   - Accepts SSH-forwarded git-upload-pack requests from the gateway\n   - Validates request parameters including repository path and user context\n   - Checks user permissions (read access) using the permission client\n   - Executes git-upload-pack command using go-git or exec.Command\n   - Streams packfile data back to the gateway\n   - Handles SSH-specific protocol nuances (capability negotiation, want/have refs)\n\n2. POST /ssh/receive-pack endpoint:\n   - Accepts SSH-forwarded git-receive-pack requests from the gateway\n   - Validates request parameters and user context from gateway headers\n   - Checks user permissions (write access) using the permission client\n   - Executes git-receive-pack command to process incoming packfile\n   - Handles pre-receive and post-receive hooks if configured\n   - Returns appropriate status codes and messages to the gateway\n\nKey implementation considerations:\n- Use the authentication middleware to extract user context from gateway headers\n- Implement proper streaming for large packfiles using io.Copy or bufio\n- Handle SSH protocol-specific error messages and status codes\n- Ensure compatibility with standard Git SSH operations (clone, fetch, push)\n- Implement proper cleanup of temporary resources and connections\n- Add request correlation IDs for tracing SSH operations across gateway and executor\n- Use the repository caching layer for improved performance on repeated operations\n\nError handling should cover:\n- Invalid repository paths or non-existent repositories\n- Permission denied scenarios\n- Malformed packfile data\n- Git command execution failures\n- Network interruptions during streaming",
+        "testStrategy": "Write comprehensive integration tests for SSH protocol endpoints using httptest package. Test scenarios:\n\n1. Upload-pack endpoint tests:\n   - Valid SSH-forwarded fetch request with proper capability negotiation\n   - Fetch with different want/have combinations\n   - Large repository fetch with packfile streaming\n   - Permission denied for read access\n   - Invalid repository path handling\n   - Gateway header validation\n\n2. Receive-pack endpoint tests:\n   - Valid SSH-forwarded push request with packfile processing\n   - Push with multiple refs and commits\n   - Large push operations with streaming\n   - Permission denied for write access\n   - Concurrent push attempts to same repository\n   - Invalid packfile data handling\n\n3. Protocol compatibility tests:\n   - Test with actual Git SSH client operations (if possible in test environment)\n   - Verify compatibility with standard Git SSH protocol flow\n   - Test error message format compatibility\n\nMock the Git repository interface, permission client, and gateway requests. Use test repositories with known commit history for predictable test outcomes. Implement benchmarks for packfile streaming performance and memory usage during large operations.",
+        "status": "pending",
+        "dependencies": [
+          3,
+          4,
+          5,
+          "15"
+        ],
+        "priority": "high",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2025-07-23T07:08:52.675Z",
-      "updated": "2025-07-24T06:51:44.195Z",
+      "updated": "2025-07-24T07:10:45.564Z",
       "description": "Tasks for master context"
     }
   }

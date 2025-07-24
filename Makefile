@@ -135,9 +135,9 @@ test-manual-config: ## Run manual configuration loading test
 
 test-manual-server: ## Run manual server test (requires separate terminal for testing)
 	@echo "$(BLUE)🧪 Starting server for manual testing...$(NC)"
-	@echo "$(YELLOW)💡 Use another terminal to test with: curl http://localhost:9090/health$(NC)"
+	@echo "$(YELLOW)💡 Use another terminal to test with: curl http://localhost:9091/health$(NC)"
 	@echo "$(YELLOW)💡 Press Ctrl+C to stop the server$(NC)"
-	$(GOCMD) run ./cmd/git-executor/main.go
+	$(GOCMD) run ./cmd/git-executor/main.go --config=config/test-config.yaml
 
 test-manual-smart-http: ## Run Smart HTTP Protocol tests (requires server to be running)
 	@echo "$(BLUE)🧪 Running Smart HTTP Protocol tests...$(NC)"
