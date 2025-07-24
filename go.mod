@@ -7,10 +7,7 @@ toolchain go1.24.5
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/go-chi/chi/v5 v5.2.2
-<<<<<<< Updated upstream
 	github.com/go-git/go-billy/v5 v5.6.2
-=======
->>>>>>> Stashed changes
 	github.com/go-git/go-git/v5 v5.16.2
 	github.com/spf13/viper v1.18.2
 	github.com/stretchr/testify v1.10.0
@@ -28,10 +25,6 @@ require (
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
-<<<<<<< Updated upstream
-=======
-	github.com/go-git/go-billy/v5 v5.6.2 // indirect
->>>>>>> Stashed changes
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect

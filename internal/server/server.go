@@ -11,12 +11,9 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
-<<<<<<< Updated upstream
+	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
-=======
-	"github.com/collabops/git-executor/internal/logging"
->>>>>>> Stashed changes
 	chi "github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
