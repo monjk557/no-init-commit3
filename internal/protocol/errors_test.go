@@ -161,7 +161,8 @@ func TestPktLineWriter(t *testing.T) {
 		require.NoError(t, err)
 
 		result := buf.Bytes()
-		expected := "0000"
+		// Empty string gets newline added, so length is 4 + 1 = 5
+		expected := "0005\n"
 		assert.Equal(t, expected, string(result))
 	})
 
