@@ -146,7 +146,10 @@ test-manual-smart-http: ## Run Smart HTTP Protocol tests (requires server to be 
 test-manual-smart-http-setup: ## Create test repositories for Smart HTTP testing
 
 test-manual-streaming: ## Test Git streaming mechanism functionality (requires server running)
-	@echo "$(BLUE)🧪 Running Git streaming mechanism tests...$(NC)"
+
+setup-test-repos: ## Set up test repositories with sample data
+	@echo "$(BLUE)🏗️  Setting up test repositories...$(NC)"
+	@./scripts/setup-test-repo.sh	@echo "$(BLUE)🧪 Running Git streaming mechanism tests...$(NC)"
 	@./scripts/test-streaming.sh	@echo "$(BLUE)🧪 Setting up test repositories for Smart HTTP...$(NC)"
 	@./scripts/test-smart-http.sh --create-repo
 
