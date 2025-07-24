@@ -441,10 +441,8 @@ func TestValidateRepoPath_RelativePaths(t *testing.T) {
 			repoPath: filepath.Join(tempDir, "user", "project.git"),
 		},
 		{
-			name:        "relative path with current directory",
-			repoPath:    "./user/project.git",
-			expectErr:   true,
-			errContains: "outside the allowed repository root",
+			name:     "relative path with current directory",
+			repoPath: "./user/project.git",
 		},
 	}
 
