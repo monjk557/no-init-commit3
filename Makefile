@@ -36,6 +36,7 @@ NC=\033[0m # No Color
 .PHONY: all build clean test test-coverage test-race test-verbose test-race-verbose test-logging lint fmt format fix vet verify help local
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
 .PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors setup-lint-prevention enforce-quality
+.PHONY: test-unit test-integration test-regression test-coverage-detailed test-benchmark test-security test-watch test-failure-only
 
 # Default target
 all: clean deps fmt vet lint test build
@@ -439,6 +440,80 @@ quick-test: ## Run quick tests (verification scripts only, no Go required)
 
 # Full test suite (requires Go)
 full-test: check-go test test-coverage lint vet ## Run full test suite (requires Go)
+
+# 🧪 Enhanced Testing Targets
+test-unit: ## Run unit tests only (fast)
+	@echo "$(BLUE)🧪 Running unit tests only...$(NC)"
+	$(GOTEST) -short -v ./...
+
+test-integration: ## Run integration tests only (slower)
+	@echo "$(BLUE)🧪 Running integration tests...$(NC)"
+	$(GOTEST) -run Integration -v ./...
+
+test-regression: ## Run regression tests only
+	@echo "$(BLUE)🧪 Running regression tests...$(NC)"
+	$(GOTEST) -run Regression -v ./...
+
+test-coverage-detailed: ## Run tests with detailed coverage analysis
+	@echo "$(BLUE)🧪 Running detailed coverage analysis...$(NC)"
+	@mkdir -p coverage
+	$(GOTEST) -v -coverprofile=coverage/coverage.out ./...
+	@echo ""
+	@echo "$(BLUE)📊 Coverage by package:$(NC)"
+	go tool cover -func=coverage/coverage.out | sort -k3 -nr
+	@echo ""
+	@echo "$(BLUE)📊 Generating HTML coverage report...$(NC)"
+	go tool cover -html=coverage/coverage.out -o coverage/coverage.html
+	@echo "$(GREEN)✅ Detailed coverage report: coverage/coverage.html$(NC)"
+
+test-benchmark: ## Run performance benchmarks
+	@echo "$(BLUE)🧪 Running performance benchmarks...$(NC)"
+	$(GOTEST) -bench=. -benchmem ./...
+
+test-security: ## Run security-focused tests
+	@echo "$(BLUE)🧪 Running security tests...$(NC)"
+	$(GOTEST) -run Security -v ./...
+	@echo "$(BLUE)🔍 Running gosec security scanner...$(NC)"
+	@if command -v gosec >/dev/null 2>&1; then \
+		gosec ./...; \
+	else \
+		echo "$(YELLOW)⚠️  gosec not installed. Install with: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest$(NC)"; \
+	fi
+
+test-watch: ## Watch for changes and run tests automatically
+	@echo "$(BLUE)🧪 Watching for changes... (Ctrl+C to stop)$(NC)"
+	@if command -v fswatch >/dev/null 2>&1; then \
+		fswatch -o . --exclude='.*\.git.*' --exclude='.*coverage.*' | xargs -n1 -I{} make test-unit; \
+	elif command -v inotifywait >/dev/null 2>&1; then \
+		while inotifywait -r -e modify,create,delete --exclude='.*\.git.*' .; do make test-unit; done; \
+	else \
+		echo "$(YELLOW)⚠️  File watcher not available. Install fswatch (macOS) or inotify-tools (Linux)$(NC)"; \
+		echo "$(BLUE)💡 Falling back to manual test run...$(NC)"; \
+		make test-unit; \
+	fi
+
+test-failure-only: ## Run only previously failed tests
+	@echo "$(BLUE)🧪 Running only failed tests...$(NC)"
+	@if [ -f .test_failures ]; then \
+		$(GOTEST) -v $$(cat .test_failures); \
+	else \
+		echo "$(YELLOW)⚠️  No previous test failures recorded$(NC)"; \
+		make test-unit; \
+	fi
+
+# TDD Helper: Write failing test first
+test-tdd: ## TDD helper: Run tests and create failure log for quick iteration
+	@echo "$(BLUE)🧪 TDD Mode: Running tests and logging failures...$(NC)"
+	@$(GOTEST) -v ./... 2>&1 | tee test_output.log || true
+	@grep "FAIL" test_output.log | awk '{print $$2}' | sort -u > .test_failures || true
+	@if [ -s .test_failures ]; then \
+		echo "$(RED)❌ Failed tests logged to .test_failures$(NC)"; \
+		echo "$(BLUE)💡 Run 'make test-failure-only' to re-run just the failures$(NC)"; \
+	else \
+		echo "$(GREEN)✅ All tests passed!$(NC)"; \
+		rm -f .test_failures; \
+	fi
+	@rm -f test_output.log
 	@echo "$(GREEN)🎉 Full test suite completed!$(NC)"
 
 # Production build
