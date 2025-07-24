@@ -24,7 +24,7 @@ func NewStreamingUploadPackHandler(base *UploadPackHandler) *StreamingUploadPack
 // HandleUploadPackStreaming processes upload-pack requests with efficient streaming
 func (h *StreamingUploadPackHandler) HandleUploadPackStreaming(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	// Extract path parameters from gateway-forwarded request
 	owner := chi.URLParam(r, "owner")
 	repo := chi.URLParam(r, "repo")
@@ -93,7 +93,7 @@ func (h *StreamingUploadPackHandler) HandleUploadPackStreaming(w http.ResponseWr
 // HandleInfoRefsStreaming provides streaming-optimized info/refs functionality
 func (h *StreamingUploadPackHandler) HandleInfoRefsStreaming(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	// Extract path parameters from gateway-forwarded request
 	owner := chi.URLParam(r, "owner")
 	repo := chi.URLParam(r, "repo")
@@ -142,13 +142,13 @@ func (h *StreamingUploadPackHandler) HandleInfoRefsStreaming(w http.ResponseWrit
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Write service advertisement
-	fmt.Fprintf(w, "001e# service=git-upload-pack\n")
-	fmt.Fprintf(w, "0000") // flush packet
+	_, _ = fmt.Fprintf(w, "001e# service=git-upload-pack\n")
+	_, _ = fmt.Fprintf(w, "0000") // flush packet
 
 	// Create Git streamer and stream references
 	streamer := streaming.NewGitStreamer(gitRepo)
 	capabilities := []string{"multi_ack", "thin-pack", "side-band", "side-band-64k", "ofs-delta", "shallow", "no-progress", "include-tag", "multi_ack_detailed", "no-done", "symref=HEAD:refs/heads/main", "agent=git/collabops-git-executor"}
-	
+
 	err = streamer.StreamRefs(ctx, w, capabilities)
 	if err != nil {
 		// If we've already started writing, we can't send HTTP error anymore
@@ -157,7 +157,7 @@ func (h *StreamingUploadPackHandler) HandleInfoRefsStreaming(w http.ResponseWrit
 	}
 
 	// End with null packet
-	fmt.Fprintf(w, "0000")
+	_, _ = fmt.Fprintf(w, "0000")
 }
 
 // getValidatedRepoPath gets and validates the repository path (helper method)

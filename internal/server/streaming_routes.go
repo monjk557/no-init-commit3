@@ -37,7 +37,7 @@ func (s *Server) setupStreamingGitRoutes(router *chi.Mux) {
 	router.Route("/streaming/{owner}/{repo}", func(r chi.Router) {
 		// GET /repos/streaming/{owner}/{repo}/info/refs?service=git-upload-pack
 		r.Get("/info/refs", streamingHandler.HandleInfoRefsStreaming)
-		
+
 		// POST /repos/streaming/{owner}/{repo}/git-upload-pack
 		r.Post("/git-upload-pack", streamingHandler.HandleUploadPackStreaming)
 	})
