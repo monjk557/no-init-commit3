@@ -278,12 +278,12 @@ func TestServer_APIRoutesResponse(t *testing.T) {
 func TestServer_Shutdown(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         0, // Use random port for testing
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
-			HealthCheckPath: "/health",		},
+			Host:            "localhost",
+			Port:            0, // Use random port for testing
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			HealthCheckPath: "/health"},
 	}
 
 	server := New(cfg)
@@ -397,12 +397,12 @@ func TestServer_StartAndShutdown(t *testing.T) {
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         0, // Use random available port
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
-			HealthCheckPath: "/health",		},
+			Host:            "localhost",
+			Port:            0, // Use random available port
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			HealthCheckPath: "/health"},
 	}
 
 	server := New(cfg)

@@ -37,7 +37,6 @@ COPY --from=builder /app/bin/git-executor /git-executor
 
 # Copy default configuration files
 COPY --from=builder /app/config/config.yaml.example /config/config.yaml.example
-COPY --from=builder /app/config/config.yaml /config/config.yaml.default
 
 # Create directories for repositories and configuration
 # Note: We'll create these as volumes in docker-compose
@@ -56,5 +55,5 @@ USER 65534:65534
 # Set entrypoint
 ENTRYPOINT ["/git-executor"]
 
-# Default command
-CMD ["--config", "/config/config.yaml"] 
+# Default command (will use built-in defaults if no config file is provided)
+CMD []
