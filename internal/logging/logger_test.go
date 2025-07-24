@@ -301,8 +301,8 @@ func TestLoggerFileOutput(t *testing.T) {
 	// Create temporary file
 	tmpFile, err := os.CreateTemp("", "test-log-*.log")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_ = tmpFile.Close()
 
 	cfg := &config.Config{
 		Log: config.LogConfig{
@@ -443,8 +443,8 @@ func TestLoggerSync(t *testing.T) {
 	// Create temporary file for testing sync
 	tmpFile, err := os.CreateTemp("", "test-sync-*.log")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_ = tmpFile.Close()
 
 	cfg := &config.Config{
 		Log: config.LogConfig{

@@ -335,11 +335,11 @@ func TestValidate_RequiredFields(t *testing.T) {
 
 func TestLoad_EnvironmentVariables(t *testing.T) {
 	// Set environment variables
-	os.Setenv("COLLABOPS_SERVER_PORT", "9999")
-	os.Setenv("COLLABOPS_GIT_REPO_ROOT", "/tmp/env-repos")
+	require.NoError(t, os.Setenv("COLLABOPS_SERVER_PORT", "9999"))
+	require.NoError(t, os.Setenv("COLLABOPS_GIT_REPO_ROOT", "/tmp/env-repos"))
 	defer func() {
-		os.Unsetenv("COLLABOPS_SERVER_PORT")
-		os.Unsetenv("COLLABOPS_GIT_REPO_ROOT")
+		_ = os.Unsetenv("COLLABOPS_SERVER_PORT")
+		_ = os.Unsetenv("COLLABOPS_GIT_REPO_ROOT")
 	}()
 
 	// Load configuration (no file, should use env vars and defaults)

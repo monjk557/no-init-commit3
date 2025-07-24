@@ -38,8 +38,15 @@ func NewPathConfig(repoRoot string) (*PathConfig, error) {
 		return nil, fmt.Errorf("repository root path must be absolute: %s", cleanRoot)
 	}
 
+	// Resolve symlinks to ensure consistent path comparison (fixes macOS /var -> /private/var issue)
+	realRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		// If symlink resolution fails, use the original clean path
+		realRoot = cleanRoot
+	}
+
 	return &PathConfig{
-		RepoRoot: cleanRoot,
+		RepoRoot: realRoot,
 	}, nil
 }
 
@@ -99,21 +106,25 @@ func ValidateRepoPath(pathConfig *PathConfig, repoPath string) error {
 		return fmt.Errorf("failed to resolve absolute path for %s: %w", repoPath, err)
 	}
 
-	// Ensure the repository root is also absolute for comparison
-	absRepoRoot, err := filepath.Abs(pathConfig.RepoRoot)
+	// Resolve symlinks to ensure consistent path comparison (fixes macOS /var -> /private/var issue)
+	realPath, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
-		return fmt.Errorf("failed to resolve absolute repository root path %s: %w", pathConfig.RepoRoot, err)
+		// If symlink resolution fails, use the original absolute path
+		realPath = absPath
 	}
 
+	// The repository root should already be resolved to real path by NewPathConfig
+	absRepoRoot := pathConfig.RepoRoot
+
 	// Normalize paths for consistent comparison (handles case sensitivity on Windows)
-	absPath = filepath.Clean(absPath)
+	realPath = filepath.Clean(realPath)
 	absRepoRoot = filepath.Clean(absRepoRoot)
 
 	// Check if the path is within the repository root
 	// Use filepath.Rel to check if the path is a subdirectory
-	relPath, err := filepath.Rel(absRepoRoot, absPath)
+	relPath, err := filepath.Rel(absRepoRoot, realPath)
 	if err != nil {
-		return fmt.Errorf("failed to determine relative path from %s to %s: %w", absRepoRoot, absPath, err)
+		return fmt.Errorf("failed to determine relative path from %s to %s: %w", absRepoRoot, realPath, err)
 	}
 
 	// If the relative path starts with ".." or is ".", it's outside or equal to the root
@@ -134,7 +145,7 @@ func ValidateRepoPath(pathConfig *PathConfig, repoPath string) error {
 	}
 
 	// Validate that the path ends with .git extension
-	if !strings.HasSuffix(absPath, RepoExtension) {
+	if !strings.HasSuffix(realPath, RepoExtension) {
 		return fmt.Errorf("repository path %s must end with %s extension", repoPath, RepoExtension)
 	}
 

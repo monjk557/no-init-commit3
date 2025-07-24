@@ -127,7 +127,7 @@ func HealthCheckMiddleware(healthPaths ...string) func(http.Handler) http.Handle
 			// Skip logging for health check endpoints
 			if healthMap[r.URL.Path] {
 				// Add a marker to context to skip logging
-				ctx := context.WithValue(r.Context(), "skip_logging", true)
+				ctx := context.WithValue(r.Context(), SkipLoggingKey, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
 			} else {
 				next.ServeHTTP(w, r)
@@ -149,7 +149,7 @@ func ConditionalLoggingMiddleware(logger *Logger) func(http.Handler) http.Handle
 			next.ServeHTTP(ww, r)
 
 			// Only log if not marked to skip
-			if skip, ok := r.Context().Value("skip_logging").(bool); !ok || !skip {
+			if skip, ok := r.Context().Value(SkipLoggingKey).(bool); !ok || !skip {
 				duration := time.Since(start)
 				logger.HTTPRequest(
 					r.Context(),

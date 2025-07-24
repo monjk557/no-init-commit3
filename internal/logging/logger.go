@@ -27,6 +27,8 @@ const (
 	RequestIDKey ContextKey = "request_id"
 	// CorrelationIDKey is the context key for correlation IDs
 	CorrelationIDKey ContextKey = "correlation_id"
+	// SkipLoggingKey is the context key for skipping logging
+	SkipLoggingKey ContextKey = "skip_logging"
 )
 
 // RequestIDGenerator generates unique request IDs
@@ -121,12 +123,12 @@ func NewLogger(cfg *config.Config) (*Logger, error) {
 
 // WithRequestID returns a logger with request ID context
 func (l *Logger) WithRequestID(requestID string) *zap.Logger {
-	return l.Logger.With(zap.String("request_id", requestID))
+	return l.With(zap.String("request_id", requestID))
 }
 
 // WithCorrelationID returns a logger with correlation ID context
 func (l *Logger) WithCorrelationID(correlationID string) *zap.Logger {
-	return l.Logger.With(zap.String("correlation_id", correlationID))
+	return l.With(zap.String("correlation_id", correlationID))
 }
 
 // WithContext returns a logger with context values

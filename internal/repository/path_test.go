@@ -285,7 +285,7 @@ func TestGetRepoPathWithDefault(t *testing.T) {
 func TestGetRepoPath_NilConfig(t *testing.T) {
 	// Test that passing a nil config panics (which is expected behavior)
 	assert.Panics(t, func() {
-		GetRepoPath(nil, "user", "project")
+		_, _ = GetRepoPath(nil, "user", "project")
 	}, "GetRepoPath should panic with nil config")
 }
 
@@ -427,7 +427,14 @@ func TestValidateRepoPathWithDefault(t *testing.T) {
 func TestValidateRepoPath_RelativePaths(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir := t.TempDir()
-	config, err := NewPathConfig(tempDir)
+	
+	// Resolve symlinks for consistent path handling (fixes macOS /var -> /private/var issue)
+	realTempDir, err := filepath.EvalSymlinks(tempDir)
+	if err != nil {
+		realTempDir = tempDir // fallback to original if symlink resolution fails
+	}
+	
+	config, err := NewPathConfig(realTempDir)
 	require.NoError(t, err)
 
 	// Change to temp directory for relative path testing
@@ -438,7 +445,7 @@ func TestValidateRepoPath_RelativePaths(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	err = os.Chdir(tempDir)
+	err = os.Chdir(realTempDir)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -449,11 +456,11 @@ func TestValidateRepoPath_RelativePaths(t *testing.T) {
 	}{
 		{
 			name:     "absolute path that resolves within root",
-			repoPath: filepath.Join(tempDir, "user", "project.git"),
+			repoPath: filepath.Join(realTempDir, "user", "project.git"),
 		},
 		{
 			name:     "relative path with current directory that resolves within root",
-			repoPath: "./user/project.git",
+			repoPath: "user/project.git",
 		},
 		{
 			name:        "relative path that tries to escape root",
@@ -628,7 +635,11 @@ func TestValidatePathComponents_ReservedNames(t *testing.T) {
 			assert.Contains(t, err.Error(), "reserved system name")
 
 			// Test mixed case
-			err = ValidatePathComponents(strings.Title(strings.ToLower(reserved)), "project")
+			mixedCase := strings.ToLower(reserved)
+			if len(mixedCase) > 0 {
+				mixedCase = strings.ToUpper(string(mixedCase[0])) + mixedCase[1:]
+			}
+			err = ValidatePathComponents(mixedCase, "project")
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "reserved system name")
 		})
