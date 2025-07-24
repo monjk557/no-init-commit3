@@ -1,0 +1,149 @@
+---
+description: Always identify and fix root causes rather than applying superficial fixes to symptoms.
+globs: **/*.go, **/*.ts, **/*.js, **/*.py, **/*.md
+alwaysApply: true
+---
+
+# Root Cause Analysis & Problem Solving
+
+**CRITICAL PRINCIPLE: Fix Root Causes, Not Symptoms**
+
+- **Always identify and address the underlying problem** rather than applying superficial fixes
+- **Investigate thoroughly** before implementing solutions  
+- **Ask "why" multiple times** to get to the root cause
+- **Consider architectural implications** of your fixes
+
+## Problem-Solving Methodology
+
+- **Surface Issue Investigation:**
+  - Don't immediately patch the visible error
+  - Trace the problem back to its origin
+  - Look for patterns across similar issues
+  - Question assumptions about "normal" behavior
+
+- **Root Cause Identification:**
+  - Use the "5 Whys" technique
+  - Examine data flow and dependencies
+  - Review recent changes and their impacts
+  - Consider environmental factors
+
+- **Solution Architecture:**
+  - Design fixes that prevent future occurrences
+  - Address systemic issues, not isolated incidents
+  - Validate solutions don't introduce new problems
+  - Document the root cause for future reference
+
+## Examples from CollabOps Git Executor
+
+```go
+// ❌ DON'T: Symptom fix - just catch the error
+func GetRepoPath(owner, repo string) (string, error) {
+    path := fmt.Sprintf("/repos/%s/%s", owner, repo)
+    if _, err := os.Stat(path); err != nil {
+        return "", fmt.Errorf("repo not found: %w", err)
+    }
+    return path, nil
+}
+
+// ✅ DO: Root cause fix - prevent path traversal attacks
+func GetRepoPath(config *PathConfig, owner, repo string) (string, error) {
+    // Address root cause: validate input to prevent security vulnerabilities
+    if err := ValidatePathComponents(owner, repo); err != nil {
+        return "", fmt.Errorf("invalid path components: %w", err)
+    }
+    
+    path := config.FormatRepoPath(owner, repo)
+    
+    // Validate the constructed path is safe
+    if err := ValidateRepoPath(config, path); err != nil {
+        return "", fmt.Errorf("unsafe repository path: %w", err)
+    }
+    
+    return path, nil
+}
+```
+
+```go
+// ❌ DON'T: Symptom fix - add more logging
+func ProcessRequest(w http.ResponseWriter, r *http.Request) {
+    log.Printf("Processing request: %s", r.URL.Path)
+    // ... processing logic
+    if err != nil {
+        log.Printf("ERROR: %v", err)  // Just log the symptom
+        http.Error(w, "Internal error", 500)
+        return
+    }
+}
+
+// ✅ DO: Root cause fix - proper input validation and error handling
+func ProcessRequest(w http.ResponseWriter, r *http.Request) {
+    // Address root cause: validate inputs before processing
+    if err := validateRequest(r); err != nil {
+        log.Printf("Invalid request: %v", err)
+        http.Error(w, "Bad request", 400)
+        return
+    }
+    
+    // Structured error handling with context
+    if err := processBusinessLogic(r); err != nil {
+        log.Printf("Business logic error for %s: %v", r.URL.Path, err)
+        handleBusinessError(w, err)
+        return
+    }
+}
+```
+
+## Anti-Patterns to Avoid
+
+- **Band-aid Solutions:**
+  - Adding try-catch blocks without understanding why errors occur
+  - Increasing timeouts instead of fixing performance issues
+  - Adding more logs instead of fixing the underlying issue
+
+- **Cargo Cult Programming:**
+  - Copying solutions without understanding the problem they solve
+  - Applying patterns from other contexts without validation
+  - Following outdated practices without questioning their relevance
+
+- **Quick Fixes:**
+  - "It works on my machine" without investigating environment differences
+  - Hardcoding values instead of making them configurable
+  - Disabling warnings instead of fixing the underlying issues
+
+## Implementation Guidelines
+
+- **Before Writing Code:**
+  1. Understand the complete problem domain
+  2. Identify all stakeholders and their needs
+  3. Research existing solutions and their limitations
+  4. Design for the root problem, not just current symptoms
+
+- **During Implementation:**
+  1. Write tests that validate the root cause is fixed
+  2. Consider edge cases that reveal deeper issues
+  3. Document your understanding of the problem
+  4. Validate with stakeholders that you're solving the right problem
+
+- **After Implementation:**
+  1. Monitor for similar issues in other areas
+  2. Share learnings with the team
+  3. Update documentation to prevent future occurrences
+  4. Refactor related code that might have similar root causes
+
+## Security-Specific Root Cause Analysis
+
+- **Path Traversal Example:** [internal/repository/path.go](mdc:internal/repository/path.go)
+  - **Symptom:** Files accessed outside intended directory
+  - **Root Cause:** Insufficient input validation and path sanitization
+  - **Solution:** Comprehensive validation at multiple layers
+
+- **Authentication Issues:**
+  - **Symptom:** Unauthorized access attempts
+  - **Root Cause:** Missing or weak authentication validation
+  - **Solution:** Robust authentication middleware with proper token validation
+
+## References
+
+- See [internal/repository/path.go](mdc:internal/repository/path.go) for comprehensive security validation
+- Follow patterns in [internal/config/config.go](mdc:internal/config/config.go) for configuration validation
+- Reference [cursor_rules.mdc](mdc:.cursor/rules/cursor_rules.mdc) for rule creation guidelines

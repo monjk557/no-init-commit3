@@ -290,10 +290,6 @@ func TestServer_StartAndShutdown(t *testing.T) {
 	// Start server in background
 	startErr := make(chan error, 1)
 	go func() {
-		// Temporarily redirect stdout to avoid output during tests
-		oldStdout := os.Stdout
-		defer func() { os.Stdout = oldStdout }()
-
 		err := server.Start()
 		startErr <- err
 	}()

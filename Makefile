@@ -116,6 +116,14 @@ test-logging: ## Run logging package tests specifically
 	@echo "$(BLUE)🧪 Running logging package tests...$(NC)"
 	$(GOTEST) -v ./internal/logging/...
 
+test-repository: ## Run repository package tests specifically
+	@echo "$(BLUE)🧪 Running repository package tests...$(NC)"
+	$(GOTEST) -v ./internal/repository/...
+
+test-manual-paths: ## Run manual repository path management test
+	@echo "$(BLUE)🧪 Running manual repository path management test...$(NC)"
+	$(GOCMD) run ./cmd/test-repo-paths/main.go
+
 # Code quality commands
 fmt: ## Format code
 	@echo "$(BLUE)🎨 Formatting code...$(NC)"
