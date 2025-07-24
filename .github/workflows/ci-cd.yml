@@ -149,7 +149,8 @@ jobs:
           echo "🏷️ Extracting Docker metadata..."
 
           # 커밋 해시 앞 8자리 추출
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          GITHUB_SHA="${{ github.sha }}"
+          SHORT_SHA="${GITHUB_SHA:0:8}"
 
           # Git 레퍼런스 타입 확인
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -344,7 +345,9 @@ jobs:
 
       - name: Send Slack notification
         run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          # Fix: Use proper variable assignment instead of command substitution
+          GITHUB_SHA="${{ github.sha }}"
+          SHORT_SHA="${GITHUB_SHA:0:8}"
           MAIN_TAG="${{ needs.build-and-push.outputs.image-tag }}"
 
           # 태그 목록 구성 (중복 제거)
