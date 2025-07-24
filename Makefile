@@ -124,6 +124,26 @@ test-manual-paths: ## Run manual repository path management test
 	@echo "$(BLUE)🧪 Running manual repository path management test...$(NC)"
 	$(GOCMD) run ./cmd/test-repo-paths/main.go
 
+test-manual-config: ## Run manual configuration loading test
+	@echo "$(BLUE)🧪 Running manual configuration loading test...$(NC)"
+	$(GOCMD) run ./cmd/test-config/main.go
+
+test-manual-server: ## Run manual server test (requires separate terminal for testing)
+	@echo "$(BLUE)🧪 Starting server for manual testing...$(NC)"
+	@echo "$(YELLOW)💡 Use another terminal to test with: curl http://localhost:9090/health$(NC)"
+	@echo "$(YELLOW)💡 Press Ctrl+C to stop the server$(NC)"
+	$(GOCMD) run ./cmd/git-executor/main.go
+
+test-manual-all: ## Run all available manual tests
+	@echo "$(BLUE)🧪 Running all manual tests...$(NC)"
+	@echo ""
+	@$(MAKE) test-manual-config
+	@echo ""
+	@$(MAKE) test-manual-paths
+	@echo ""
+	@echo "$(GREEN)🎉 All manual component tests completed!$(NC)"
+	@echo "$(YELLOW)💡 To test the HTTP server, run: make test-manual-server$(NC)"
+
 # Code quality commands
 fmt: ## Format code
 	@echo "$(BLUE)🎨 Formatting code...$(NC)"

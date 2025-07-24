@@ -1,10 +1,175 @@
+// Package repository provides secure path management for Git repositories.
+//
+// This package implements a comprehensive repository path management system
+// with multi-layered security validation to prevent path traversal attacks,
+// invalid repository access, and unauthorized filesystem operations.
+//
+// Key Features:
+//   - Secure path generation and validation
+//   - Git repository structure verification
+//   - Cross-platform compatibility
+//   - Thread-safe operations
+//   - Comprehensive error handling
+//
+// Basic Usage:
+//
+//	// Create configuration
+//	config, err := repository.NewPathConfig("/var/lib/git/repos")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Generate and validate repository path
+//	path, err := repository.GetRepoPath(config, "user", "project")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Verify repository exists
+//	err = repository.EnsureRepoExists(config, path)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+// Thread Safety:
+//
+// All functions in this package are thread-safe and can be used concurrently.
+// The PathConfig struct is immutable after creation, making it safe for
+// concurrent access across multiple goroutines.
+//
+// Security:
+//
+// This package implements comprehensive security measures including:
+//   - Path traversal prevention (../ attacks)
+//   - Absolute path injection prevention
+//   - Invalid character filtering
+//   - Windows reserved name validation
+//   - Repository boundary enforcement
+//   - Git structure verification
 package repository
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// Custom error types for better error handling and classification
+
+// PathError represents path-related errors with additional context
+type PathError struct {
+	Op   string // Operation that caused the error (e.g., "validate", "generate", "check")
+	Path string // The path that caused the error
+	Err  error  // The underlying error
+}
+
+func (e *PathError) Error() string {
+	if e.Path != "" {
+		return fmt.Sprintf("repository %s failed for path %s: %v", e.Op, e.Path, e.Err)
+	}
+	return fmt.Sprintf("repository %s failed: %v", e.Op, e.Err)
+}
+
+func (e *PathError) Unwrap() error {
+	return e.Err
+}
+
+// ValidationError represents validation-specific errors
+type ValidationError struct {
+	Component string // Component being validated (e.g., "owner", "repo", "path")
+	Value     string // The value that failed validation
+	Reason    string // Human-readable reason for failure
+}
+
+func (e *ValidationError) Error() string {
+	if e.Value != "" {
+		return fmt.Sprintf("validation failed for %s '%s': %s", e.Component, e.Value, e.Reason)
+	}
+	return fmt.Sprintf("validation failed for %s: %s", e.Component, e.Reason)
+}
+
+// RepositoryError represents repository structure-related errors
+type RepositoryError struct {
+	Path   string // Repository path
+	Type   string // Type of repository error (e.g., "not_found", "invalid_structure", "permission_denied")
+	Detail string // Additional error details
+}
+
+func (e *RepositoryError) Error() string {
+	return fmt.Sprintf("repository error at %s (%s): %s", e.Path, e.Type, e.Detail)
+}
+
+// Global configuration management with thread safety
+
+var (
+	// globalConfig holds the global default configuration
+	globalConfig     *PathConfig
+	globalConfigOnce sync.Once
+	globalConfigMux  sync.RWMutex
+)
+
+// SetGlobalConfig sets the global default configuration for the package.
+// This function is thread-safe and can be called from multiple goroutines.
+// The configuration will be used by all *WithDefault functions.
+func SetGlobalConfig(config *PathConfig) error {
+	if config == nil {
+		return &ValidationError{
+			Component: "global_config",
+			Reason:    "configuration cannot be nil",
+		}
+	}
+
+	globalConfigMux.Lock()
+	defer globalConfigMux.Unlock()
+	globalConfig = config
+	return nil
+}
+
+// GetGlobalConfig returns the current global configuration.
+// This function is thread-safe and returns a copy to prevent modification.
+// If no global configuration has been set, it returns the default configuration.
+func GetGlobalConfig() (*PathConfig, error) {
+	globalConfigMux.RLock()
+	defer globalConfigMux.RUnlock()
+
+	if globalConfig != nil {
+		// Return a copy to prevent external modification
+		return &PathConfig{RepoRoot: globalConfig.RepoRoot}, nil
+	}
+
+	// Initialize default configuration lazily
+	var err error
+	globalConfigOnce.Do(func() {
+		defaultConfig, configErr := NewPathConfig(DefaultRepoRoot)
+		if configErr != nil {
+			err = &PathError{
+				Op:  "initialize_global_config",
+				Err: configErr,
+			}
+			return
+		}
+		globalConfig = defaultConfig
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Return a copy of the default configuration
+	return &PathConfig{RepoRoot: globalConfig.RepoRoot}, nil
+}
+
+// ResetGlobalConfig resets the global configuration to nil.
+// This is primarily useful for testing scenarios.
+// This function is thread-safe.
+func ResetGlobalConfig() {
+	globalConfigMux.Lock()
+	defer globalConfigMux.Unlock()
+	globalConfig = nil
+	globalConfigOnce = sync.Once{}
+}
 
 // Path management constants
 const (
@@ -199,4 +364,402 @@ func validateComponent(component, componentType string) error {
 	}
 
 	return nil
+}
+
+// EnsureRepoExists checks if a Git repository exists at the given path
+// This function validates the path and checks for repository structure
+func EnsureRepoExists(pathConfig *PathConfig, repoPath string) error {
+	// First validate the path using our security validation
+	if err := ValidateRepoPath(pathConfig, repoPath); err != nil {
+		return fmt.Errorf("path validation failed: %w", err)
+	}
+
+	// Check if the path exists
+	if err := checkPathExists(repoPath); err != nil {
+		return err
+	}
+
+	// Check if it's a valid Git repository
+	if err := validateGitRepository(repoPath); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// EnsureRepoExistsWithDefault is a convenience function that uses the default configuration
+func EnsureRepoExistsWithDefault(repoPath string) error {
+	defaultConfig, err := NewPathConfig(DefaultRepoRoot)
+	if err != nil {
+		return fmt.Errorf("failed to create default path config: %w", err)
+	}
+
+	return EnsureRepoExists(defaultConfig, repoPath)
+}
+
+// checkPathExists verifies that the given path exists and is accessible
+func checkPathExists(path string) error {
+	if path == "" {
+		return fmt.Errorf("repository path cannot be empty")
+	}
+
+	// Use os.Stat to check if path exists and get file info
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("repository does not exist at path: %s", path)
+		}
+		if os.IsPermission(err) {
+			return fmt.Errorf("permission denied accessing repository at path: %s", path)
+		}
+		return fmt.Errorf("failed to access repository at path %s: %w", path, err)
+	}
+
+	// Ensure the path is a directory
+	if !info.IsDir() {
+		return fmt.Errorf("repository path is not a directory: %s", path)
+	}
+
+	return nil
+}
+
+// validateGitRepository checks if the path contains a valid Git repository structure
+func validateGitRepository(repoPath string) error {
+	// Check for bare repository (common for server-side repositories)
+	if isBareRepository(repoPath) {
+		return nil // Valid bare repository
+	}
+
+	// Check for non-bare repository (.git subdirectory)
+	if isNonBareRepository(repoPath) {
+		return nil // Valid non-bare repository
+	}
+
+	// Path exists but doesn't appear to be a Git repository
+	return fmt.Errorf("path exists but does not contain a valid Git repository structure: %s", repoPath)
+}
+
+// isBareRepository checks if the given path is a bare Git repository
+func isBareRepository(repoPath string) bool {
+	// Bare repositories contain Git files directly in the root directory
+	// Key indicators: HEAD file, refs/ directory, objects/ directory
+
+	// Check for HEAD file
+	headPath := filepath.Join(repoPath, "HEAD")
+	if _, err := os.Stat(headPath); err != nil {
+		return false
+	}
+
+	// Check for refs directory
+	refsPath := filepath.Join(repoPath, "refs")
+	if info, err := os.Stat(refsPath); err != nil || !info.IsDir() {
+		return false
+	}
+
+	// Check for objects directory
+	objectsPath := filepath.Join(repoPath, "objects")
+	if info, err := os.Stat(objectsPath); err != nil || !info.IsDir() {
+		return false
+	}
+
+	// Additional check: config file should exist
+	configPath := filepath.Join(repoPath, "config")
+	if _, err := os.Stat(configPath); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// isNonBareRepository checks if the given path contains a .git subdirectory
+func isNonBareRepository(repoPath string) bool {
+	// Non-bare repositories have a .git subdirectory containing Git metadata
+	gitPath := filepath.Join(repoPath, ".git")
+
+	if info, err := os.Stat(gitPath); err != nil {
+		return false
+	} else if info.IsDir() {
+		// .git is a directory - check for key Git files inside
+		return validateGitDirectory(gitPath)
+	} else {
+		// .git might be a file (worktree reference) - still valid but different structure
+		return validateGitFile(gitPath)
+	}
+}
+
+// validateGitDirectory checks if a .git directory contains required Git structure
+func validateGitDirectory(gitPath string) bool {
+	// Check for HEAD file
+	headPath := filepath.Join(gitPath, "HEAD")
+	if _, err := os.Stat(headPath); err != nil {
+		return false
+	}
+
+	// Check for refs directory
+	refsPath := filepath.Join(gitPath, "refs")
+	if info, err := os.Stat(refsPath); err != nil || !info.IsDir() {
+		return false
+	}
+
+	// Check for objects directory
+	objectsPath := filepath.Join(gitPath, "objects")
+	if info, err := os.Stat(objectsPath); err != nil || !info.IsDir() {
+		return false
+	}
+
+	return true
+}
+
+// validateGitFile checks if a .git file contains a valid worktree reference
+func validateGitFile(gitPath string) bool {
+	// Read the .git file content
+	content, err := os.ReadFile(gitPath)
+	if err != nil {
+		return false
+	}
+
+	// .git file should contain "gitdir: <path>" for worktrees
+	contentStr := strings.TrimSpace(string(content))
+	if !strings.HasPrefix(contentStr, "gitdir: ") {
+		return false
+	}
+
+	// Extract the referenced git directory path
+	gitDir := strings.TrimPrefix(contentStr, "gitdir: ")
+	gitDir = strings.TrimSpace(gitDir)
+
+	// If path is relative, make it relative to the .git file location
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(filepath.Dir(gitPath), gitDir)
+	}
+
+	// Validate that the referenced directory exists and is a valid Git directory
+	if info, err := os.Stat(gitDir); err != nil || !info.IsDir() {
+		return false
+	}
+
+	return validateGitDirectory(gitDir)
+}
+
+// High-level integration functions for common workflows
+
+// GetAndValidateRepoPath is a convenience function that generates and validates
+// a repository path in a single operation. This is the most common workflow
+// and combines GetRepoPath with ValidateRepoPath.
+func GetAndValidateRepoPath(pathConfig *PathConfig, owner, repo string) (string, error) {
+	// Generate the repository path
+	repoPath, err := GetRepoPath(pathConfig, owner, repo)
+	if err != nil {
+		return "", &PathError{
+			Op:  "generate_and_validate",
+			Err: err,
+		}
+	}
+
+	// Validate the generated path
+	if err := ValidateRepoPath(pathConfig, repoPath); err != nil {
+		return "", &PathError{
+			Op:   "generate_and_validate",
+			Path: repoPath,
+			Err:  err,
+		}
+	}
+
+	return repoPath, nil
+}
+
+// GetAndValidateRepoPathWithDefault uses the global configuration to generate
+// and validate a repository path.
+func GetAndValidateRepoPathWithDefault(owner, repo string) (string, error) {
+	config, err := GetGlobalConfig()
+	if err != nil {
+		return "", &PathError{
+			Op:  "get_global_config",
+			Err: err,
+		}
+	}
+
+	return GetAndValidateRepoPath(config, owner, repo)
+}
+
+// VerifyRepositoryAccess performs a complete repository access verification.
+// This function combines path generation, validation, and existence checking
+// to ensure a repository is accessible and valid.
+func VerifyRepositoryAccess(pathConfig *PathConfig, owner, repo string) (string, error) {
+	// Generate and validate the path
+	repoPath, err := GetAndValidateRepoPath(pathConfig, owner, repo)
+	if err != nil {
+		return "", err
+	}
+
+	// Verify the repository exists and is valid
+	if err := EnsureRepoExists(pathConfig, repoPath); err != nil {
+		return "", &PathError{
+			Op:   "verify_access",
+			Path: repoPath,
+			Err:  err,
+		}
+	}
+
+	return repoPath, nil
+}
+
+// VerifyRepositoryAccessWithDefault uses the global configuration to perform
+// complete repository access verification.
+func VerifyRepositoryAccessWithDefault(owner, repo string) (string, error) {
+	config, err := GetGlobalConfig()
+	if err != nil {
+		return "", &PathError{
+			Op:  "get_global_config",
+			Err: err,
+		}
+	}
+
+	return VerifyRepositoryAccess(config, owner, repo)
+}
+
+// RepositoryInfo holds metadata about a repository
+type RepositoryInfo struct {
+	Owner        string // Repository owner
+	Name         string // Repository name
+	Path         string // Full filesystem path
+	Type         string // Repository type ("bare", "non-bare", "worktree")
+	Exists       bool   // Whether the repository exists
+	IsValid      bool   // Whether the repository structure is valid
+	IsAccessible bool   // Whether the repository is accessible (no permission issues)
+}
+
+// GetRepositoryInfo returns comprehensive information about a repository.
+// This function performs all repository checks and returns detailed metadata.
+func GetRepositoryInfo(pathConfig *PathConfig, owner, repo string) (*RepositoryInfo, error) {
+	info := &RepositoryInfo{
+		Owner: owner,
+		Name:  repo,
+	}
+
+	// Generate repository path
+	repoPath, err := GetRepoPath(pathConfig, owner, repo)
+	if err != nil {
+		return info, &PathError{
+			Op:  "get_repository_info",
+			Err: err,
+		}
+	}
+	info.Path = repoPath
+
+	// Validate path
+	if err := ValidateRepoPath(pathConfig, repoPath); err != nil {
+		return info, &PathError{
+			Op:   "get_repository_info",
+			Path: repoPath,
+			Err:  err,
+		}
+	}
+
+	// Check repository existence and structure
+	if err := EnsureRepoExists(pathConfig, repoPath); err != nil {
+		// Check what kind of error this is by examining the error message or unwrapping
+		errStr := err.Error()
+
+		if strings.Contains(errStr, "repository does not exist at path") {
+			info.Exists = false
+			info.IsAccessible = false
+			info.IsValid = false
+		} else if strings.Contains(errStr, "permission denied") {
+			info.Exists = true
+			info.IsAccessible = false
+			info.IsValid = false
+		} else {
+			// Repository exists but structure is invalid
+			info.Exists = true
+			info.IsAccessible = true
+			info.IsValid = false
+		}
+		return info, nil
+	}
+
+	// Repository is fully valid and accessible
+	info.Exists = true
+	info.IsAccessible = true
+	info.IsValid = true
+
+	// Determine repository type
+	if isBareRepository(repoPath) {
+		info.Type = "bare"
+	} else if isNonBareRepository(repoPath) {
+		// Check if it's a worktree
+		gitPath := filepath.Join(repoPath, ".git")
+		if fileInfo, err := os.Stat(gitPath); err == nil && !fileInfo.IsDir() {
+			info.Type = "worktree"
+		} else {
+			info.Type = "non-bare"
+		}
+	}
+
+	return info, nil
+}
+
+// GetRepositoryInfoWithDefault uses the global configuration to get repository information.
+func GetRepositoryInfoWithDefault(owner, repo string) (*RepositoryInfo, error) {
+	config, err := GetGlobalConfig()
+	if err != nil {
+		return nil, &PathError{
+			Op:  "get_global_config",
+			Err: err,
+		}
+	}
+
+	return GetRepositoryInfo(config, owner, repo)
+}
+
+// BatchRepositoryInfo represents information about multiple repositories
+type BatchRepositoryInfo struct {
+	Repositories []*RepositoryInfo // Information for each repository
+	TotalCount   int               // Total number of repositories processed
+	ValidCount   int               // Number of valid repositories
+	ErrorCount   int               // Number of repositories with errors
+	Errors       []error           // Errors encountered during processing
+}
+
+// GetBatchRepositoryInfo retrieves information for multiple repositories in a single operation.
+// This function processes multiple owner/repo pairs and returns comprehensive information.
+func GetBatchRepositoryInfo(pathConfig *PathConfig, repos []struct{ Owner, Repo string }) *BatchRepositoryInfo {
+	result := &BatchRepositoryInfo{
+		Repositories: make([]*RepositoryInfo, 0, len(repos)),
+		TotalCount:   len(repos),
+	}
+
+	for _, repo := range repos {
+		info, err := GetRepositoryInfo(pathConfig, repo.Owner, repo.Repo)
+		if err != nil {
+			result.ErrorCount++
+			result.Errors = append(result.Errors, err)
+			// Add minimal info even on error
+			if info == nil {
+				info = &RepositoryInfo{
+					Owner: repo.Owner,
+					Name:  repo.Repo,
+				}
+			}
+		} else if info.IsValid && info.IsAccessible {
+			result.ValidCount++
+		}
+
+		result.Repositories = append(result.Repositories, info)
+	}
+
+	return result
+}
+
+// GetBatchRepositoryInfoWithDefault uses the global configuration for batch repository information.
+func GetBatchRepositoryInfoWithDefault(repos []struct{ Owner, Repo string }) (*BatchRepositoryInfo, error) {
+	config, err := GetGlobalConfig()
+	if err != nil {
+		return nil, &PathError{
+			Op:  "get_global_config",
+			Err: err,
+		}
+	}
+
+	return GetBatchRepositoryInfo(config, repos), nil
 }
