@@ -310,22 +310,36 @@ func (cn *CapabilityNegotiator) parsePacketLine(line string, clientCaps *ClientC
 	line = strings.TrimSuffix(line, "\n")
 
 	if strings.HasPrefix(line, "want ") {
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			return fmt.Errorf("invalid want line: %s", line)
-		}
+		// Handle capabilities that may be present after a null byte
+		var hash string
+		var capStr string
 
-		hash := parts[1]
-		clientCaps.WantedRefs = append(clientCaps.WantedRefs, hash)
-
-		// Check for capabilities (after null byte)
 		if strings.Contains(line, "\x00") {
 			capParts := strings.Split(line, "\x00")
+			wantPart := capParts[0]
 			if len(capParts) > 1 {
-				capStr := capParts[1]
-				if err := cn.parseCapabilityString(capStr, clientCaps); err != nil {
-					return fmt.Errorf("failed to parse capabilities: %w", err)
-				}
+				capStr = capParts[1]
+			}
+
+			parts := strings.Fields(wantPart)
+			if len(parts) < 2 {
+				return fmt.Errorf("invalid want line: %s", line)
+			}
+			hash = parts[1]
+		} else {
+			parts := strings.Fields(line)
+			if len(parts) < 2 {
+				return fmt.Errorf("invalid want line: %s", line)
+			}
+			hash = parts[1]
+		}
+
+		clientCaps.WantedRefs = append(clientCaps.WantedRefs, hash)
+
+		// Parse capabilities if present
+		if capStr != "" {
+			if err := cn.parseCapabilityString(capStr, clientCaps); err != nil {
+				return fmt.Errorf("failed to parse capabilities: %w", err)
 			}
 		}
 	} else if strings.HasPrefix(line, "have ") {
