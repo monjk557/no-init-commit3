@@ -35,7 +35,7 @@ check_content() {
     local file=$1
     local pattern=$2
     local description=$3
-    
+
     if [ -f "$file" ] && grep -q "$pattern" "$file"; then
         echo -e "${GREEN}✅ $description found in $file${NC}"
         return 0
@@ -75,7 +75,7 @@ config_elements=(
     "type ServerConfig struct"
     "type GitConfig struct"
     "type JWTConfig struct"
-    "type LogConfig struct"
+    "type LoggingConfig struct"
     "func Load("
     "func validate("
     "spf13/viper"
@@ -187,4 +187,4 @@ if [ $failures -eq 0 ]; then
 else
     echo -e "${RED}❌ $failures check(s) failed. Please review the output above.${NC}"
     exit 1
-fi 
+fi
