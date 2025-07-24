@@ -145,28 +145,52 @@ test-manual-all: ## Run all available manual tests
 	@echo "$(YELLOW)💡 To test the HTTP server, run: make test-manual-server$(NC)"
 
 # Code quality commands
-fmt: ## Format code
-	@echo "$(BLUE)🎨 Formatting code...$(NC)"
+fmt: ## Format code (basic - use 'make format' for comprehensive)
+	@echo "$(BLUE)🎨 Basic formatting (gofmt only)...$(NC)"
+	@echo "$(YELLOW)💡 For comprehensive formatting including go.mod cleanup, use 'make format'$(NC)"
 	$(GOFMT) -s -w .
 
-format: ## Auto-format code and show lint results
-	@echo "$(BLUE)🎨 Auto-formatting and organizing code...$(NC)"
-	@echo "$(YELLOW)📝 Running gofmt...$(NC)"
+format: ## Auto-format code and show lint results (COMPREHENSIVE)
+	@echo "$(BLUE)🎨 COMPREHENSIVE Auto-formatting and organizing code...$(NC)"
+	@echo ""
+	@echo "$(YELLOW)1️⃣  Running gofmt (format Go source code)...$(NC)"
 	$(GOFMT) -s -w .
-	@echo "$(YELLOW)📦 Organizing imports...$(NC)"
+	@echo "$(GREEN)   ✅ gofmt completed$(NC)"
+	@echo ""
+	@echo "$(YELLOW)2️⃣  Organizing imports with goimports...$(NC)"
 	@if command -v goimports >/dev/null 2>&1; then \
 		goimports -w .; \
+		echo "$(GREEN)   ✅ goimports completed$(NC)"; \
 	elif command -v $$(go env GOPATH)/bin/goimports >/dev/null 2>&1; then \
 		$$(go env GOPATH)/bin/goimports -w .; \
+		echo "$(GREEN)   ✅ goimports completed$(NC)"; \
 	else \
-		echo "$(YELLOW)⚠️  goimports not found, installing...$(NC)"; \
+		echo "$(YELLOW)   📦 Installing goimports...$(NC)"; \
 		go install golang.org/x/tools/cmd/goimports@latest; \
 		$$(go env GOPATH)/bin/goimports -w .; \
+		echo "$(GREEN)   ✅ goimports installed and completed$(NC)"; \
 	fi
-	@echo "$(YELLOW)🔧 Running go mod tidy...$(NC)"
-	go mod tidy
-	@echo "$(GREEN)✨ Formatting complete! Running lint check...$(NC)"
 	@echo ""
+	@echo "$(YELLOW)3️⃣  Cleaning up go.mod with go mod tidy...$(NC)"
+	go mod tidy
+	@echo "$(GREEN)   ✅ go mod tidy completed$(NC)"
+	@echo ""
+	@echo "$(YELLOW)4️⃣  Verifying go.mod integrity...$(NC)"
+	go mod verify
+	@echo "$(GREEN)   ✅ go mod verify completed$(NC)"
+	@echo ""
+	@echo "$(YELLOW)5️⃣  Running final formatting check...$(NC)"
+	@if [ "$$($(GOFMT) -l . | wc -l)" -gt 0 ]; then \
+		echo "$(RED)   ❌ Files still need formatting:$(NC)"; \
+		$(GOFMT) -l .; \
+		echo "$(RED)   This should not happen - please report this issue$(NC)"; \
+		exit 1; \
+	else \
+		echo "$(GREEN)   ✅ All files properly formatted$(NC)"; \
+	fi
+	@echo ""
+	@echo "$(GREEN)✨ COMPREHENSIVE formatting complete! Running lint check...$(NC)"
+	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
 	@$(MAKE) lint
 
 vet: ## Run go vet
@@ -325,9 +349,12 @@ qa-check: ## Run comprehensive quality checks (lint, vet, fmt, test)
 	@echo "$(GREEN)✅ All quality checks passed!$(NC)"
 
 qa-fix: ## Auto-fix formatting and show remaining issues
-	@echo "$(BLUE)🔧 Auto-fixing code quality issues...$(NC)"
+	@echo "$(BLUE)🔧 COMPREHENSIVE Auto-fixing code quality issues...$(NC)"
+	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
 	@$(MAKE) format
-	@echo "$(GREEN)✨ Auto-fixes applied! Running final checks...$(NC)"
+	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
+	@echo "$(GREEN)✨ All auto-fixes applied! Running final verification...$(NC)"
+	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
 	@$(MAKE) qa-check
 
 fmt-check: ## Check if code is formatted (without fixing)
