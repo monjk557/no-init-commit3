@@ -93,6 +93,16 @@ func createBranch(t *testing.T, repoPath, branchName string) {
 	}
 }
 
+func getCurrentBranch(t *testing.T, repoPath string) string {
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to get current branch: %v", err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
 // OpenRepository tests
 
 func TestOpenRepository_Success(t *testing.T) {
@@ -419,9 +429,12 @@ func TestGoGitRepository_BranchHandling(t *testing.T) {
 	repoPath := createTestRepo(t)
 	defer func() { _ = os.RemoveAll(repoPath) }()
 
-	// Create initial commit on main
-	addFileToRepo(t, repoPath, "README.md", "# Main Branch")
-	commitRepo(t, repoPath, "Initial commit on main")
+	// Create initial commit on default branch
+	addFileToRepo(t, repoPath, "README.md", "# Default Branch")
+	commitRepo(t, repoPath, "Initial commit on default branch")
+
+	// Get the default branch name (could be "main" or "master" depending on Git version)
+	defaultBranch := getCurrentBranch(t, repoPath)
 
 	// Create and switch to feature branch
 	createBranch(t, repoPath, "feature/test")
@@ -436,10 +449,10 @@ func TestGoGitRepository_BranchHandling(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Test accessing different branches
-	mainTree, err := repo.GetTree(ctx, "main")
+	// Test accessing different branches using the detected default branch
+	defaultTree, err := repo.GetTree(ctx, defaultBranch)
 	if err != nil {
-		t.Fatalf("Failed to get main tree: %v", err)
+		t.Fatalf("Failed to get default branch (%s) tree: %v", defaultBranch, err)
 	}
 
 	featureTree, err := repo.GetTree(ctx, "feature/test")
@@ -448,14 +461,14 @@ func TestGoGitRepository_BranchHandling(t *testing.T) {
 	}
 
 	// Feature branch should have one more file
-	if len(featureTree) != len(mainTree)+1 {
-		t.Errorf("Expected feature branch to have %d files, got %d", len(mainTree)+1, len(featureTree))
+	if len(featureTree) != len(defaultTree)+1 {
+		t.Errorf("Expected feature branch to have %d files, got %d", len(defaultTree)+1, len(featureTree))
 	}
 
 	// Test getting commits from different branches
-	mainCommits, err := repo.GetCommits(ctx, "main", 10, 0)
+	defaultCommits, err := repo.GetCommits(ctx, defaultBranch, 10, 0)
 	if err != nil {
-		t.Fatalf("Failed to get main commits: %v", err)
+		t.Fatalf("Failed to get default branch (%s) commits: %v", defaultBranch, err)
 	}
 
 	featureCommits, err := repo.GetCommits(ctx, "feature/test", 10, 0)
@@ -464,8 +477,8 @@ func TestGoGitRepository_BranchHandling(t *testing.T) {
 	}
 
 	// Feature branch should have one more commit
-	if len(featureCommits) != len(mainCommits)+1 {
-		t.Errorf("Expected feature branch to have %d commits, got %d", len(mainCommits)+1, len(featureCommits))
+	if len(featureCommits) != len(defaultCommits)+1 {
+		t.Errorf("Expected feature branch to have %d commits, got %d", len(defaultCommits)+1, len(featureCommits))
 	}
 }
 
