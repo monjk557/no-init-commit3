@@ -31,7 +31,7 @@ jwt:
   algorithm: "HS256"
   secret_key: "test-secret-key"
 
-log:
+logging:
   level: "debug"
   format: "text"
   output: "stderr"
@@ -65,11 +65,11 @@ log:
 	assert.Equal(t, "HS256", config.JWT.Algorithm)
 	assert.Equal(t, "test-secret-key", config.JWT.SecretKey)
 
-	// Verify log configuration
-	assert.Equal(t, "debug", config.Log.Level)
-	assert.Equal(t, "text", config.Log.Format)
-	assert.Equal(t, "stderr", config.Log.Output)
-	assert.True(t, config.Log.Development)
+	// Verify logging configuration
+	assert.Equal(t, "debug", config.Logging.Level)
+	assert.Equal(t, "text", config.Logging.Format)
+	assert.Equal(t, "stderr", config.Logging.Output)
+	assert.True(t, config.Logging.Development)
 }
 
 func TestLoad_Defaults(t *testing.T) {
@@ -92,10 +92,10 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, "RS256", config.JWT.Algorithm)
 	assert.Equal(t, "/etc/collabops/public.pem", config.JWT.PublicKeyPath)
 
-	assert.Equal(t, "info", config.Log.Level)
-	assert.Equal(t, "json", config.Log.Format)
-	assert.Equal(t, "stdout", config.Log.Output)
-	assert.False(t, config.Log.Development)
+	assert.Equal(t, "info", config.Logging.Level)
+	assert.Equal(t, "json", config.Logging.Format)
+	assert.Equal(t, "stdout", config.Logging.Output)
+	assert.False(t, config.Logging.Development)
 }
 
 func TestLoad_InvalidYAML(t *testing.T) {
@@ -142,7 +142,7 @@ func TestValidate_InvalidServerPort(t *testing.T) {
 					Algorithm:     "RS256",
 					PublicKeyPath: "/etc/collabops/public.pem",
 				},
-				Log: LogConfig{
+				Logging: LoggingConfig{
 					Level:  "info",
 					Format: "json",
 				},
@@ -178,7 +178,7 @@ func TestValidate_InvalidBasePath(t *testing.T) {
 					Algorithm:     "RS256",
 					PublicKeyPath: "/etc/collabops/public.pem",
 				},
-				Log: LogConfig{
+				Logging: LoggingConfig{
 					Level:  "info",
 					Format: "json",
 				},
@@ -246,7 +246,7 @@ func TestValidate_JWTAlgorithms(t *testing.T) {
 					PublicKeyPath: tt.publicKeyPath,
 					SecretKey:     tt.secretKey,
 				},
-				Log: LogConfig{
+				Logging: LoggingConfig{
 					Level:  "info",
 					Format: "json",
 				},
@@ -292,7 +292,7 @@ func TestValidate_LogConfiguration(t *testing.T) {
 					Algorithm:     "RS256",
 					PublicKeyPath: "/etc/collabops/public.pem",
 				},
-				Log: LogConfig{
+				Logging: LoggingConfig{
 					Level:  tt.level,
 					Format: tt.format,
 				},
@@ -322,7 +322,7 @@ func TestValidate_RequiredFields(t *testing.T) {
 			Algorithm:     "RS256",
 			PublicKeyPath: "/etc/collabops/public.pem",
 		},
-		Log: LogConfig{
+		Logging: LoggingConfig{
 			Level:  "info",
 			Format: "json",
 		},

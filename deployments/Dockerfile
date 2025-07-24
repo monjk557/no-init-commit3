@@ -35,8 +35,9 @@ COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 # Copy the binary
 COPY --from=builder /app/bin/git-executor /git-executor
 
-# Copy default configuration
+# Copy default configuration files
 COPY --from=builder /app/config/config.yaml.example /config/config.yaml.example
+COPY --from=builder /app/config/config.yaml /config/config.yaml.default
 
 # Create directories for repositories and configuration
 # Note: We'll create these as volumes in docker-compose

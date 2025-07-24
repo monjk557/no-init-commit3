@@ -16,7 +16,6 @@ import (
 // Logger wraps zap.Logger with additional functionality
 type Logger struct {
 	*zap.Logger
-	config *config.Config
 }
 
 // ContextKey is used for context keys to avoid collisions
@@ -45,7 +44,7 @@ func (g *DefaultRequestIDGenerator) Generate() string {
 }
 
 // NewLogger creates a new logger instance with the given configuration
-func NewLogger(cfg *config.Config) (*Logger, error) {
+func NewLogger(cfg config.LoggingConfig) (*Logger, error) {
 	// Create encoder config
 	encoderConfig := zapcore.EncoderConfig{
 		TimeKey:        "timestamp",
@@ -64,7 +63,7 @@ func NewLogger(cfg *config.Config) (*Logger, error) {
 
 	// Create encoder based on format
 	var encoder zapcore.Encoder
-	switch cfg.Log.Format {
+	switch cfg.Format {
 	case "json":
 		encoder = zapcore.NewJSONEncoder(encoderConfig)
 	case "text":
@@ -72,18 +71,18 @@ func NewLogger(cfg *config.Config) (*Logger, error) {
 		encoderConfig.EncodeTime = zapcore.RFC3339TimeEncoder
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	default:
-		return nil, fmt.Errorf("unsupported log format: %s", cfg.Log.Format)
+		return nil, fmt.Errorf("unsupported log format: %s", cfg.Format)
 	}
 
 	// Parse log level
-	level, err := zapcore.ParseLevel(cfg.Log.Level)
+	level, err := zapcore.ParseLevel(cfg.Level)
 	if err != nil {
-		return nil, fmt.Errorf("invalid log level %s: %w", cfg.Log.Level, err)
+		return nil, fmt.Errorf("invalid log level %s: %w", cfg.Level, err)
 	}
 
 	// Create output writers
 	var writeSyncer zapcore.WriteSyncer
-	switch cfg.Log.Output {
+	switch cfg.Output {
 	case "stdout":
 		writeSyncer = zapcore.AddSync(os.Stdout)
 	case "stderr":
@@ -91,7 +90,7 @@ func NewLogger(cfg *config.Config) (*Logger, error) {
 	default:
 		// File output with rotation
 		logRotator := &lumberjack.Logger{
-			Filename:   cfg.Log.Output,
+			Filename:   cfg.Output,
 			MaxSize:    100, // 100 MB
 			MaxBackups: 5,
 			MaxAge:     30, // 30 days
@@ -109,7 +108,7 @@ func NewLogger(cfg *config.Config) (*Logger, error) {
 		zap.AddStacktrace(zapcore.ErrorLevel),
 	}
 
-	if cfg.Log.Development {
+	if cfg.Development {
 		options = append(options, zap.Development())
 	}
 
@@ -117,7 +116,6 @@ func NewLogger(cfg *config.Config) (*Logger, error) {
 
 	return &Logger{
 		Logger: zapLogger,
-		config: cfg,
 	}, nil
 }
 
@@ -214,7 +212,7 @@ func (l *Logger) Close() error {
 var globalLogger *Logger
 
 // InitGlobalLogger initializes the global logger
-func InitGlobalLogger(cfg *config.Config) error {
+func InitGlobalLogger(cfg config.LoggingConfig) error {
 	logger, err := NewLogger(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize global logger: %w", err)
@@ -223,19 +221,27 @@ func InitGlobalLogger(cfg *config.Config) error {
 	return nil
 }
 
+// SetGlobal sets the global logger instance
+func SetGlobal(logger *Logger) {
+	globalLogger = logger
+}
+
+// GetGlobal returns the global logger instance (alias for GetGlobalLogger)
+func GetGlobal() *Logger {
+	return GetGlobalLogger()
+}
+
 // GetGlobalLogger returns the global logger instance
 func GetGlobalLogger() *Logger {
 	if globalLogger == nil {
 		// Fallback to development logger if not initialized
-		config := &config.Config{
-			Log: config.LogConfig{
-				Level:       "info",
-				Format:      "text",
-				Output:      "stdout",
-				Development: true,
-			},
+		cfg := config.LoggingConfig{
+			Level:       "info",
+			Format:      "text",
+			Output:      "stdout",
+			Development: true,
 		}
-		logger, _ := NewLogger(config)
+		logger, _ := NewLogger(cfg)
 		globalLogger = logger
 	}
 	return globalLogger

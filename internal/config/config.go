@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
@@ -10,20 +11,23 @@ import (
 
 // Config represents the complete application configuration
 type Config struct {
-	Server ServerConfig `mapstructure:"server" validate:"required"`
-	Git    GitConfig    `mapstructure:"git" validate:"required"`
-	JWT    JWTConfig    `mapstructure:"jwt" validate:"required"`
-	Log    LogConfig    `mapstructure:"log"`
+	Server  ServerConfig  `mapstructure:"server" validate:"required"`
+	Git     GitConfig     `mapstructure:"git" validate:"required"`
+	JWT     JWTConfig     `mapstructure:"jwt" validate:"required"`
+	Logging LoggingConfig `mapstructure:"logging"`
+	mu      sync.RWMutex
 }
 
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
-	Port         int           `mapstructure:"port" validate:"required,min=1,max=65535"`
-	BasePath     string        `mapstructure:"base_path" validate:"required"`
-	Host         string        `mapstructure:"host"`
-	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout time.Duration `mapstructure:"write_timeout"`
-	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`
+	Port            int           `mapstructure:"port" validate:"required,min=1,max=65535"`
+	BasePath        string        `mapstructure:"base_path" validate:"required"`
+	Host            string        `mapstructure:"host"`
+	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout    time.Duration `mapstructure:"write_timeout"`
+	IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	HealthCheckPath string        `mapstructure:"health_check_path"`
 }
 
 // GitConfig holds Git repository configuration
@@ -41,8 +45,8 @@ type JWTConfig struct {
 	SecretKey     string `mapstructure:"secret_key"`
 }
 
-// LogConfig holds logging configuration
-type LogConfig struct {
+// LoggingConfig holds logging configuration
+type LoggingConfig struct {
 	Level       string `mapstructure:"level"`
 	Format      string `mapstructure:"format"`
 	Output      string `mapstructure:"output"`
@@ -79,10 +83,10 @@ func Load(configPath string) (*Config, error) {
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			// Config file not found; use defaults
-			fmt.Printf("Warning: Config file not found, using defaults\n")
+			// Note: Can't use logger here as it's not initialized yet
 		} else if strings.Contains(err.Error(), "no such file or directory") {
 			// Specific file path doesn't exist; use defaults
-			fmt.Printf("Warning: Specified config file not found, using defaults\n")
+			// Note: Can't use logger here as it's not initialized yet
 		} else {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
@@ -122,11 +126,15 @@ func setDefaults() {
 	viper.SetDefault("jwt.algorithm", "RS256")
 	viper.SetDefault("jwt.public_key_path", "/etc/collabops/public.pem")
 
-	// Log defaults
-	viper.SetDefault("log.level", "info")
-	viper.SetDefault("log.format", "json")
-	viper.SetDefault("log.output", "stdout")
-	viper.SetDefault("log.development", false)
+	// Server additional defaults
+	viper.SetDefault("server.shutdown_timeout", "30s")
+	viper.SetDefault("server.health_check_path", "/health")
+
+	// Logging defaults
+	viper.SetDefault("logging.level", "info")
+	viper.SetDefault("logging.format", "json")
+	viper.SetDefault("logging.output", "stdout")
+	viper.SetDefault("logging.development", false)
 }
 
 // validate performs configuration validation
@@ -178,29 +186,29 @@ func validate(config *Config) error {
 		errors = append(errors, "jwt.secret_key is required for algorithm HS256")
 	}
 
-	// Validate log configuration
+	// Validate logging configuration
 	validLogLevels := []string{"debug", "info", "warn", "error", "fatal"}
 	logLevelValid := false
 	for _, level := range validLogLevels {
-		if config.Log.Level == level {
+		if config.Logging.Level == level {
 			logLevelValid = true
 			break
 		}
 	}
 	if !logLevelValid {
-		errors = append(errors, fmt.Sprintf("log.level must be one of: %v", validLogLevels))
+		errors = append(errors, fmt.Sprintf("logging.level must be one of: %v", validLogLevels))
 	}
 
 	validLogFormats := []string{"json", "text"}
 	logFormatValid := false
 	for _, format := range validLogFormats {
-		if config.Log.Format == format {
+		if config.Logging.Format == format {
 			logFormatValid = true
 			break
 		}
 	}
 	if !logFormatValid {
-		errors = append(errors, fmt.Sprintf("log.format must be one of: %v", validLogFormats))
+		errors = append(errors, fmt.Sprintf("logging.format must be one of: %v", validLogFormats))
 	}
 
 	if len(errors) > 0 {
@@ -213,4 +221,62 @@ func validate(config *Config) error {
 // GetConfigPath returns the path to the configuration file being used
 func GetConfigPath() string {
 	return viper.ConfigFileUsed()
+}
+
+// GetServer returns a copy of the server configuration (thread-safe)
+func (c *Config) GetServer() ServerConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Server
+}
+
+// GetGit returns a copy of the git configuration (thread-safe)
+func (c *Config) GetGit() GitConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Git
+}
+
+// GetJWT returns a copy of the JWT configuration (thread-safe)
+func (c *Config) GetJWT() JWTConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.JWT
+}
+
+// GetLogging returns a copy of the logging configuration (thread-safe)
+func (c *Config) GetLogging() LoggingConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Logging
+}
+
+// Reload reloads the configuration from file (thread-safe)
+func (c *Config) Reload() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Re-read configuration
+	if err := viper.ReadInConfig(); err != nil {
+		return fmt.Errorf("failed to reload config: %w", err)
+	}
+
+	// Create temporary config to validate
+	var newConfig Config
+	if err := viper.Unmarshal(&newConfig); err != nil {
+		return fmt.Errorf("failed to unmarshal reloaded config: %w", err)
+	}
+
+	// Validate new configuration
+	if err := validate(&newConfig); err != nil {
+		return fmt.Errorf("reloaded config validation failed: %w", err)
+	}
+
+	// Update fields
+	c.Server = newConfig.Server
+	c.Git = newConfig.Git
+	c.JWT = newConfig.JWT
+	c.Logging = newConfig.Logging
+
+	return nil
 }
