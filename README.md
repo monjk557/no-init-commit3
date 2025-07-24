@@ -13,12 +13,12 @@
 - **HTTP Endpoints:** Health check (`/health`) and API root (`/repos/`) responding
 - **Repository Setup:** 3 repositories configured:
   - `📦 CollabOps/collabops-api-service (1.6M)`
-  - `📦 bjm/collabops-api-orchestrator (1.2M)`  
+  - `📦 bjm/collabops-api-orchestrator (1.2M)`
   - `📦 testowner/testrepo (132K)`
 - **Streaming Package:** Complete io.Pipe() implementation for memory-efficient Git operations
 - **Protocol Compliance:** Enhanced error handling and Git Smart HTTP protocol compliance system
 - **Task 9.1 ✅:** Git info/refs endpoint implementation
-- **Task 9.2 ✅:** Git upload-pack endpoint implementation  
+- **Task 9.2 ✅:** Git upload-pack endpoint implementation
 - **Task 9.3 ✅:** Streaming response mechanism implementation
 - **Task 9.4 ✅:** Authentication and authorization for gateway requests
 - **Task 9.5 ✅:** Error handling and Smart HTTP protocol compliance
@@ -99,7 +99,37 @@ For complete architectural details and component separation, see the [Component 
 git clone https://github.com/collabops/git-executor.git
 cd git-executor
 go mod download
+
+# 🚨 MANDATORY: Set up lint prevention system for ALL developers
+make setup-lint-prevention
 ```
+
+### 🚨 Code Quality Enforcement
+
+This project uses **MANDATORY** lint prevention to ensure code quality. All developers MUST run the setup:
+
+```bash
+# Force setup quality control system (REQUIRED for all team members)
+make setup-lint-prevention
+# or shorter alias:
+make enforce-quality
+```
+
+**What this does:**
+- ✅ Installs golangci-lint automatically
+- ✅ Sets up pre-commit hooks that **BLOCK** commits with lint errors
+- ✅ Configures IDE settings for real-time lint checking
+- ✅ Runs initial code cleanup
+- ✅ Tests the entire setup
+
+**After setup, these commands are available:**
+```bash
+make format      # Fix all formatting and lint issues (use before every commit)
+make qa-check    # Check code quality without fixing
+make pre-commit  # Test what the commit hook will do
+```
+
+⚠️ **WARNING:** After running `setup-lint-prevention`, commits with lint/format issues will be automatically REJECTED by git hooks.
 
 ### Configuration
 
@@ -203,4 +233,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-For support and questions, please open an issue in the GitHub repository. 
+For support and questions, please open an issue in the GitHub repository.

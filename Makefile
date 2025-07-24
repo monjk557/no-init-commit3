@@ -35,7 +35,7 @@ NC=\033[0m # No Color
 
 .PHONY: all build clean test test-coverage test-race test-verbose test-race-verbose test-logging lint fmt format fix vet verify help local
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
-.PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors
+.PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors setup-lint-prevention enforce-quality
 
 # Default target
 all: clean deps fmt vet lint test build
@@ -52,6 +52,9 @@ help: ## Show this help message
 	@echo ""
 	@echo "$(GREEN)🔧 Development Commands:$(NC)"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(deps|fmt|format|lint|vet|local)"
+	@echo ""
+	@echo "$(RED)🚨 Quality Enforcement:$(NC)"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(setup-lint|enforce-quality)"
 	@echo ""
 	@echo "$(GREEN)🐳 Docker Commands:$(NC)"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(docker)"
@@ -325,6 +328,70 @@ docker-shell: ## Get shell access to Docker container
 # Local setup
 local-setup: install-tools deps ## Set up local environment
 	@echo "$(GREEN)🎉 Local environment setup complete!$(NC)"
+
+# 🚨 FORCE Quality Control Setup
+setup-lint-prevention: install-tools ## 🚨 FORCE setup lint prevention system for ALL developers
+	@echo "$(RED)🚨 FORCING lint prevention setup for ALL team members...$(NC)"
+	@echo "$(BLUE)📋 This will permanently configure:$(NC)"
+	@echo "  - Pre-commit hooks (MANDATORY)"
+	@echo "  - IDE settings (golangci-lint integration)"
+	@echo "  - Git hooks that BLOCK commits with lint errors"
+	@echo ""
+
+	# 1. Force install golangci-lint if not present
+	@echo "$(BLUE)1️⃣  Ensuring golangci-lint is installed...$(NC)"
+	@command -v $(GOLINT) >/dev/null 2>&1 || { \
+		echo "$(YELLOW)⚠️  golangci-lint missing. Installing...$(NC)"; \
+		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin; \
+	}
+	@echo "$(GREEN)✅ golangci-lint ready$(NC)"
+
+	# 2. Force setup git hooks
+	@echo "$(BLUE)2️⃣  Setting up MANDATORY pre-commit hooks...$(NC)"
+	@if [ ! -d ".git" ]; then \
+		echo "$(RED)❌ Not a git repository. Run 'git init' first.$(NC)"; \
+		exit 1; \
+	fi
+	@mkdir -p .git/hooks
+	@cp .githooks/pre-commit .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "$(GREEN)✅ Pre-commit hook installed - COMMITS WILL BE BLOCKED if lint fails$(NC)"
+
+	# 3. Force create/update IDE settings
+	@echo "$(BLUE)3️⃣  Configuring IDE settings...$(NC)"
+	@mkdir -p .vscode
+	@if [ ! -f ".vscode/settings.json" ]; then \
+		echo "$(YELLOW)⚠️  Creating .vscode/settings.json...$(NC)"; \
+		cp .vscode/settings.json.example .vscode/settings.json 2>/dev/null || echo '{}' > .vscode/settings.json; \
+	fi
+	@echo "$(GREEN)✅ IDE settings configured$(NC)"
+
+	# 4. Run initial cleanup
+	@echo "$(BLUE)4️⃣  Running initial code cleanup...$(NC)"
+	@$(MAKE) format || (echo "$(RED)❌ Initial cleanup failed. Fix these issues first.$(NC)" && exit 1)
+	@echo "$(GREEN)✅ Code cleaned up$(NC)"
+
+	# 5. Test the setup
+	@echo "$(BLUE)5️⃣  Testing the setup...$(NC)"
+	@$(MAKE) qa-check || (echo "$(RED)❌ Quality check failed. Fix these issues first.$(NC)" && exit 1)
+	@echo "$(GREEN)✅ Setup tested and working$(NC)"
+
+	@echo ""
+	@echo "$(GREEN)🎉 LINT PREVENTION SYSTEM ACTIVATED!$(NC)"
+	@echo "$(RED)⚠️  WARNING: From now on:$(NC)"
+	@echo "  - ALL commits will be checked for lint errors"
+	@echo "  - Commits with lint/format issues will be REJECTED"
+	@echo "  - Run 'make format' before every commit"
+	@echo "  - No more lint errors allowed!"
+	@echo ""
+	@echo "$(BLUE)💡 Quick commands for developers:$(NC)"
+	@echo "  - $(YELLOW)make format$(NC)     - Fix all formatting and lint issues"
+	@echo "  - $(YELLOW)make qa-check$(NC)   - Check code quality without fixing"
+	@echo "  - $(YELLOW)make pre-commit$(NC) - Test what the commit hook will do"
+	@echo ""
+
+enforce-quality: setup-lint-prevention ## 🚨 Alias for setup-lint-prevention (shorter command)
+	@echo "$(GREEN)🔒 Quality enforcement is now ACTIVE!$(NC)"
 
 install-tools: ## Install local tools
 	@echo "$(BLUE)🛠️  Installing local tools...$(NC)"
