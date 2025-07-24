@@ -2,7 +2,9 @@
 
 This document provides solutions to common CI/CD issues in the Go project.
 
-## 🚨 **SOLVED: "make: *** [test-verbose] Error 1" in GitHub Actions**
+## 🚨 **SOLVED Issues**
+
+### **Issue 1: "make: *** [test-verbose] Error 1" in GitHub Actions**
 
 ### **Problem Description**
 CI was failing with exit code 1 even though all individual tests were passing. The logs showed:
@@ -61,6 +63,50 @@ test-race-verbose: ## Run tests with race detection and verbose output (CI optim
 	$(GOTEST) -v -race -timeout=10m ./...
 ```
 
+### **Issue 2: Git Branch Reference Error - "reference 'main' not found"**
+
+**Problem Description**
+Test failure in CI with error:
+```
+=== RUN   TestGoGitRepository_BranchHandling
+    gogit_repository_test.go:442: Failed to get main tree: reference "main" not found in repository
+--- FAIL: TestGoGitRepository_BranchHandling (0.03s)
+```
+
+**Root Cause**
+Git version differences between local development and CI environments:
+- **Git 2.28+**: Creates "main" as default branch
+- **Git 2.23-2.27**: Creates "master" as default branch
+- **CI Environment**: Often uses older Git versions
+- **Test Issue**: Hardcoded branch name expectations
+
+**Solution Applied**
+Made the test robust to different Git versions by dynamically detecting the default branch:
+
+```go
+// Before (Problematic):
+mainTree, err := repo.GetTree(ctx, "main")  // Hardcoded "main"
+
+// After (Fixed):
+defaultBranch := getCurrentBranch(t, repoPath)  // Dynamic detection
+defaultTree, err := repo.GetTree(ctx, defaultBranch)
+
+func getCurrentBranch(t *testing.T, repoPath string) string {
+    cmd := exec.Command("git", "branch", "--show-current")
+    cmd.Dir = repoPath
+    output, err := cmd.Output()
+    if err != nil {
+        t.Fatalf("Failed to get current branch: %v", err)
+    }
+    return strings.TrimSpace(string(output))
+}
+```
+
+**Prevention Strategy**
+- Avoid hardcoding Git branch names in tests
+- Use dynamic branch detection or generic references like "HEAD"
+- Test with multiple Git versions locally when possible
+
 ## 🛠️ **Future CI Issue Prevention**
 
 ### **Best Practices**
@@ -116,6 +162,23 @@ The `-race` flag can increase:
 - CPU usage significantly
 - Test execution time by 2-4x
 
+### **Step 5: Check Git Version Compatibility**
+For Git-related test failures:
+```bash
+# Check Git version locally vs CI
+git --version
+
+# Check default branch behavior
+git init test-repo && cd test-repo
+git config user.name "Test" && git config user.email "test@example.com"
+echo "test" > README.md && git add README.md && git commit -m "Initial"
+git branch --show-current  # Shows "main" or "master"
+cd .. && rm -rf test-repo
+
+# Test with both branch names
+go test -v ./internal/git -run TestGoGitRepository_BranchHandling
+```
+
 ## 📋 **CI Performance Optimization**
 
 ### **Resource Management**
@@ -148,6 +211,10 @@ timeout 600 make test-race-verbose
 
 # 4. Check for race conditions locally
 go test -race -v ./internal/...
+
+# 5. For Git-related failures, check version compatibility
+git --version
+go test -v ./internal/git -run TestGoGitRepository_BranchHandling
 ```
 
 ## 📞 **Getting Help**
