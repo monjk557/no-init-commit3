@@ -27,8 +27,8 @@ func main() {
 	fmt.Printf("Server Port: %d\n", cfg.Server.Port)
 	fmt.Printf("Server Base Path: %s\n", cfg.Server.BasePath)
 	fmt.Printf("Git Repo Root: %s\n", cfg.Git.RepoRoot)
-	fmt.Printf("Log Level: %s\n", cfg.Log.Level)
-	fmt.Printf("Log Format: %s\n", cfg.Log.Format)
+	fmt.Printf("Log Level: %s\n", cfg.Logging.Level)
+	fmt.Printf("Log Format: %s\n", cfg.Logging.Format)
 
 	// Test 3: JSON representation
 	fmt.Println("\n📄 Test 3: Full Configuration (JSON)")

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,22 +11,29 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+<<<<<<< Updated upstream
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
+=======
+	"github.com/collabops/git-executor/internal/logging"
+>>>>>>> Stashed changes
 	chi "github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.uber.org/zap"
 )
 
 // Server represents the HTTP server
 type Server struct {
 	server *http.Server
 	config *config.Config
+	logger *logging.Logger
 }
 
 // New creates a new HTTP server instance
 func New(cfg *config.Config) *Server {
 	return &Server{
 		config: cfg,
+		logger: logging.GetGlobal(),
 	}
 }
 
@@ -40,14 +48,26 @@ func (s *Server) Start() error {
 		Handler:      router,
 		ReadTimeout:  s.config.Server.ReadTimeout,
 		WriteTimeout: s.config.Server.WriteTimeout,
-		IdleTimeout:  30 * time.Second,
+		IdleTimeout:  s.config.Server.IdleTimeout,
 	}
+
+	// Check if port is available
+	listener, err := net.Listen("tcp", s.server.Addr)
+	if err != nil {
+		s.logger.Error("Failed to bind to address",
+			zap.String("address", s.server.Addr),
+			zap.Error(err))
+		return fmt.Errorf("failed to bind to address %s: %w", s.server.Addr, err)
+	}
+	listener.Close()
 
 	// Start server in a goroutine
 	go func() {
-		fmt.Printf("🚀 Server starting on %s%s\n", s.server.Addr, s.config.Server.BasePath)
+		s.logger.Info("Server starting",
+			zap.String("address", s.server.Addr),
+			zap.String("basePath", s.config.Server.BasePath))
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("❌ Server failed to start: %v\n", err)
+			s.logger.Error("Server failed to start", zap.Error(err))
 		}
 	}()
 
@@ -62,12 +82,12 @@ func (s *Server) setupRouter() *chi.Mux {
 	// Add middleware
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
-	router.Use(middleware.Logger)
+	router.Use(s.loggingMiddleware)
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Timeout(60 * time.Second))
 
 	// Health check endpoint
-	router.Get("/health", s.healthCheck)
+	router.Get(s.config.Server.HealthCheckPath, s.healthCheck)
 
 	// Mount API routes under base path if configured
 	if s.config.Server.BasePath != "/" {
@@ -144,20 +164,20 @@ func (s *Server) waitForShutdown() error {
 
 	// Block until a signal is received
 	sig := <-quit
-	fmt.Printf("\n🛑 Received signal: %v\n", sig)
+	s.logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
 
 	// Create shutdown context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), s.config.Server.ShutdownTimeout)
 	defer cancel()
 
 	// Attempt graceful shutdown
-	fmt.Println("🔄 Shutting down server gracefully...")
+	s.logger.Info("Shutting down server gracefully")
 	if err := s.server.Shutdown(ctx); err != nil {
-		fmt.Printf("❌ Server forced to shutdown: %v\n", err)
+		s.logger.Error("Server forced to shutdown", zap.Error(err))
 		return err
 	}
 
-	fmt.Println("✅ Server shutdown complete")
+	s.logger.Info("Server shutdown complete")
 	return nil
 }
 
@@ -175,4 +195,23 @@ func (s *Server) GetAddr() string {
 		return ""
 	}
 	return s.server.Addr
+}
+
+// loggingMiddleware logs HTTP requests
+func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+
+		next.ServeHTTP(ww, r)
+
+		s.logger.Info("HTTP request",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", ww.Status()),
+			zap.Int("bytes", ww.BytesWritten()),
+			zap.Duration("duration", time.Since(start)),
+			zap.String("remote", r.RemoteAddr),
+		)
+	})
 }

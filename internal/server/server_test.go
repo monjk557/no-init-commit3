@@ -18,11 +18,26 @@ import (
 func TestNew(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -36,11 +51,26 @@ func TestNew(t *testing.T) {
 func TestServer_SetupRouter(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -53,11 +83,26 @@ func TestServer_SetupRouter(t *testing.T) {
 func TestServer_HealthCheck(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -80,11 +125,26 @@ func TestServer_HealthCheck(t *testing.T) {
 func TestServer_HealthCheckEndpoint(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -129,11 +189,26 @@ func TestServer_BasePath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
 				Server: config.ServerConfig{
-					Host:         "localhost",
-					Port:         8080,
-					BasePath:     tt.basePath,
-					ReadTimeout:  30 * time.Second,
-					WriteTimeout: 45 * time.Second,
+					Host:            "localhost",
+					Port:            8080,
+					BasePath:        tt.basePath,
+					ReadTimeout:     30 * time.Second,
+					WriteTimeout:    45 * time.Second,
+					IdleTimeout:     120 * time.Second,
+					ShutdownTimeout: 30 * time.Second,
+					HealthCheckPath: "/health",
+				},
+				Git: config.GitConfig{
+					RepoRoot: "/var/lib/git/repos",
+				},
+				JWT: config.JWTConfig{
+					Algorithm:     "RS256",
+					PublicKeyPath: "/etc/collabops/public.pem",
+				},
+				Logging: config.LoggingConfig{
+					Level:  "info",
+					Format: "json",
+					Output: "stdout",
 				},
 			}
 
@@ -159,11 +234,26 @@ func TestServer_BasePath(t *testing.T) {
 func TestServer_APIRoutesResponse(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -209,11 +299,26 @@ func TestServer_Shutdown(t *testing.T) {
 func TestServer_GetAddr(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -234,11 +339,26 @@ func TestServer_GetAddr(t *testing.T) {
 func TestServer_ConfigurationRespected(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "0.0.0.0",
-			Port:         9090,
-			BasePath:     "/custom/path",
-			ReadTimeout:  60 * time.Second,
-			WriteTimeout: 90 * time.Second,
+			Host:            "0.0.0.0",
+			Port:            9090,
+			BasePath:        "/custom/path",
+			ReadTimeout:     60 * time.Second,
+			WriteTimeout:    90 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -315,11 +435,26 @@ func TestServer_StartAndShutdown(t *testing.T) {
 func TestServer_Middleware(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 
@@ -347,11 +482,26 @@ func TestServer_Middleware(t *testing.T) {
 func TestServer_InvalidRoute(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         8080,
-			BasePath:     "/api/repos",
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 45 * time.Second,
+			Host:            "localhost",
+			Port:            8080,
+			BasePath:        "/api/repos",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    45 * time.Second,
+			IdleTimeout:     120 * time.Second,
+			ShutdownTimeout: 30 * time.Second,
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
 		},
 	}
 

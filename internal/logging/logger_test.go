@@ -25,48 +25,40 @@ func TestNewLogger(t *testing.T) {
 	}{
 		{
 			name: "valid JSON format",
-			config: &config.Config{
-				Log: config.LogConfig{
-					Level:       "info",
-					Format:      "json",
-					Output:      "stdout",
-					Development: false,
-				},
+			config: config.LoggingConfig{
+				Level:       "info",
+				Format:      "json",
+				Output:      "stdout",
+				Development: false,
 			},
 			wantErr: false,
 		},
 		{
 			name: "valid text format",
-			config: &config.Config{
-				Log: config.LogConfig{
-					Level:       "debug",
-					Format:      "text",
-					Output:      "stderr",
-					Development: true,
-				},
+			config: config.LoggingConfig{
+				Level:       "debug",
+				Format:      "text",
+				Output:      "stderr",
+				Development: true,
 			},
 			wantErr: false,
 		},
 		{
 			name: "invalid log level",
-			config: &config.Config{
-				Log: config.LogConfig{
-					Level:  "invalid",
-					Format: "json",
-					Output: "stdout",
-				},
+			config: config.LoggingConfig{
+				Level:  "invalid",
+				Format: "json",
+				Output: "stdout",
 			},
 			wantErr:     true,
 			errContains: "invalid log level",
 		},
 		{
 			name: "invalid log format",
-			config: &config.Config{
-				Log: config.LogConfig{
-					Level:  "info",
-					Format: "invalid",
-					Output: "stdout",
-				},
+			config: config.LoggingConfig{
+				Level:  "info",
+				Format: "invalid",
+				Output: "stdout",
 			},
 			wantErr:     true,
 			errContains: "unsupported log format",
@@ -92,12 +84,10 @@ func TestNewLogger(t *testing.T) {
 }
 
 func TestLogger_WithContext(t *testing.T) {
-	cfg := &config.Config{
-		Log: config.LogConfig{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		},
+	cfg := config.LoggingConfig{
+		Level:  "info",
+		Format: "json",
+		Output: "stdout",
 	}
 
 	tests := []struct {
@@ -191,7 +181,11 @@ func TestLogger_HTTPRequest(t *testing.T) {
 
 	logger := &Logger{
 		Logger: zap.New(core),
-		config: &config.Config{},
+		config: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
+		},
 	}
 
 	tests := []struct {
@@ -257,12 +251,10 @@ func TestInitGlobalLogger(t *testing.T) {
 	// Reset global logger
 	globalLogger = nil
 
-	cfg := &config.Config{
-		Log: config.LogConfig{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		},
+	cfg := config.LoggingConfig{
+		Level:  "info",
+		Format: "json",
+		Output: "stdout",
 	}
 
 	err := InitGlobalLogger(cfg)
@@ -345,7 +337,11 @@ func TestLogLevels(t *testing.T) {
 
 	logger := &Logger{
 		Logger: zap.New(core),
-		config: &config.Config{},
+		config: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
+		},
 	}
 
 	ctx := context.Background()
@@ -413,7 +409,11 @@ func TestGlobalLoggerFunctions(t *testing.T) {
 
 	globalLogger = &Logger{
 		Logger: zap.New(core),
-		config: &config.Config{},
+		config: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
+		},
 	}
 
 	ctx := context.Background()
