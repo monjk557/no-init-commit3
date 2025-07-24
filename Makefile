@@ -144,7 +144,10 @@ test-manual-smart-http: ## Run Smart HTTP Protocol tests (requires server to be 
 	@./scripts/test-smart-http.sh
 
 test-manual-smart-http-setup: ## Create test repositories for Smart HTTP testing
-	@echo "$(BLUE)🧪 Setting up test repositories for Smart HTTP...$(NC)"
+
+test-manual-streaming: ## Test Git streaming mechanism functionality (requires server running)
+	@echo "$(BLUE)🧪 Running Git streaming mechanism tests...$(NC)"
+	@./scripts/test-streaming.sh	@echo "$(BLUE)🧪 Setting up test repositories for Smart HTTP...$(NC)"
 	@./scripts/test-smart-http.sh --create-repo
 
 test-manual-all: ## Run all available manual tests
@@ -156,7 +159,8 @@ test-manual-all: ## Run all available manual tests
 	@echo ""
 	@echo "$(GREEN)🎉 All manual component tests completed!$(NC)"
 	@echo "$(YELLOW)💡 To test the HTTP server, run: make test-manual-server$(NC)"
-	@echo "$(YELLOW)💡 To test Smart HTTP protocol, run: make test-manual-smart-http$(NC)"
+	@echo "$(YELLOW)💡 To test Smart HTTP protocol, run: make test-manual-smart-http
+	@echo "$(YELLOW)💡 To test streaming optimization, run: make test-manual-streaming$(NC)"$(NC)"
 
 # Code quality commands
 fmt: ## Format code (basic - use 'make format' for comprehensive)

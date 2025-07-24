@@ -110,6 +110,8 @@ func (s *Server) setupAPIRoutes() *chi.Mux {
 	// Git Smart HTTP Protocol routes
 	s.setupGitRoutes(apiRouter)
 
+	// Enable streaming optimization for large repository operations
+	s.enableStreamingOptimization(apiRouter)
 	return apiRouter
 }
 
