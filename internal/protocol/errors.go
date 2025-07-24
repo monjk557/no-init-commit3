@@ -152,7 +152,7 @@ func (eh *ErrorHandler) HandleError(w http.ResponseWriter, r *http.Request, err 
 func (eh *ErrorHandler) writeHTTPError(w http.ResponseWriter, err *GitProtocolError) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(err.HTTPStatus)
-	fmt.Fprintf(w, "%s\n", err.Message)
+	_, _ = fmt.Fprintf(w, "%s\n", err.Message)
 }
 
 // writeProtocolError writes a Git protocol-compliant error response

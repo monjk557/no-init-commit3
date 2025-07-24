@@ -463,8 +463,10 @@ func (p *pktLineWriter) writeLine(data string) error {
 
 	// Calculate packet length (4 bytes for length + data)
 	length := len(data) + 4
-	if length > 65520 { // Max pkt-line length per Git protocol
-		return fmt.Errorf("packet line too long: %d bytes", length)
+
+	// Check maximum packet line length (Git protocol limit)
+	if length > 65520 {
+		return fmt.Errorf("packet line too long: %d bytes (max 65520)", length)
 	}
 
 	line := fmt.Sprintf("%04x%s", length, data)
