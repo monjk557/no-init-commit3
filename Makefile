@@ -178,7 +178,7 @@ fix: ## COMPREHENSIVE: Auto-format, fix auto-fixable lint issues, and show remai
 	@echo "$(BLUE)🎯 Running comprehensive fix (same as 'make format')...$(NC)"
 	@$(MAKE) format
 
-format: ## Auto-format code, fix lint issues, and show results (COMPREHENSIVE)
+format: ## Auto-format code, fix lint issues, run tests, and show results (COMPREHENSIVE)
 	@echo "$(BLUE)🎨 COMPREHENSIVE Auto-formatting and organizing code...$(NC)"
 	@echo ""
 	@echo "$(YELLOW)1️⃣  Running auto-fixable lint fixes...$(NC)"
@@ -231,9 +231,13 @@ format: ## Auto-format code, fix lint issues, and show results (COMPREHENSIVE)
 		echo "$(GREEN)   ✅ All files properly formatted$(NC)"; \
 	fi
 	@echo ""
-	@echo "$(GREEN)✨ COMPREHENSIVE formatting complete! Running lint check...$(NC)"
+	@echo "$(GREEN)✨ COMPREHENSIVE formatting complete! Running final validation...$(NC)"
 	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
+	@echo "$(YELLOW)7️⃣  Running lint check...$(NC)"
 	@$(MAKE) lint
+	@echo ""
+	@echo "$(YELLOW)8️⃣  Running quick tests to catch breaking changes...$(NC)"
+	@$(GOTEST) -short ./... && echo "$(GREEN)   ✅ All tests pass$(NC)" || (echo "$(RED)   ❌ Tests failed - please fix issues before committing$(NC)" && exit 1)
 
 vet: ## Run go vet
 	@echo "$(BLUE)🔍 Running go vet...$(NC)"
@@ -385,7 +389,7 @@ setup-lint-prevention: install-tools ## 🚨 FORCE setup lint prevention system 
 	@echo "  - No more lint errors allowed!"
 	@echo ""
 	@echo "$(BLUE)💡 Quick commands for developers:$(NC)"
-	@echo "  - $(YELLOW)make format$(NC)     - Fix all formatting and lint issues"
+	@echo "  - $(YELLOW)make format$(NC)     - Fix all formatting, lint issues, AND run tests"
 	@echo "  - $(YELLOW)make qa-check$(NC)   - Check code quality without fixing"
 	@echo "  - $(YELLOW)make pre-commit$(NC) - Test what the commit hook will do"
 	@echo ""
