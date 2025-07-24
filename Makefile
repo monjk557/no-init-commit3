@@ -470,15 +470,59 @@ test-benchmark: ## Run performance benchmarks
 	@echo "$(BLUE)🧪 Running performance benchmarks...$(NC)"
 	$(GOTEST) -bench=. -benchmem ./...
 
-test-security: ## Run security-focused tests
-	@echo "$(BLUE)🧪 Running security tests...$(NC)"
-	$(GOTEST) -run Security -v ./...
-	@echo "$(BLUE)🔍 Running gosec security scanner...$(NC)"
-	@if command -v gosec >/dev/null 2>&1; then \
-		gosec ./...; \
-	else \
-		echo "$(YELLOW)⚠️  gosec not installed. Install with: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest$(NC)"; \
-	fi
+test-security: ## Run security logging tests specifically
+	@echo "$(BLUE)🔒 Running security logging tests...$(NC)"
+	$(GOTEST) -v ./internal/logging -run TestSecurity
+
+test-compliance: ## Run protocol compliance tests specifically
+	@echo "$(BLUE)📋 Running protocol compliance tests...$(NC)"
+	$(GOTEST) -v ./internal/protocol -run "Test.*Compliance|TestCapabilityNegotiation|TestProtocolEdgeCases|TestProtocolPerformance"
+
+test-protocol: ## Run all protocol tests
+	@echo "$(BLUE)🌐 Running protocol package tests...$(NC)"
+	$(GOTEST) -v ./internal/protocol/...
+
+test-security-coverage: ## Run security tests with coverage analysis
+	@echo "$(BLUE)🔒📊 Running security tests with coverage analysis...$(NC)"
+	$(GOTEST) -v -coverprofile=coverage-security.out ./internal/logging -run TestSecurity
+	$(GOCMD) tool cover -html=coverage-security.out -o coverage-security.html
+	@echo "$(GREEN)🔒📊 Security test coverage report: coverage-security.html$(NC)"
+
+test-protocol-coverage: ## Run protocol tests with coverage analysis
+	@echo "$(BLUE)🌐📊 Running protocol tests with coverage analysis...$(NC)"
+	$(GOTEST) -v -coverprofile=coverage-protocol.out ./internal/protocol/...
+	$(GOCMD) tool cover -html=coverage-protocol.out -o coverage-protocol.html
+	@echo "$(GREEN)🌐📊 Protocol test coverage report: coverage-protocol.html$(NC)"
+
+test-enhanced: ## Run enhanced test suite with security and compliance tests
+	@echo "$(BLUE)🚀 Running enhanced test suite...$(NC)"
+	@echo "$(YELLOW)Running security logging tests...$(NC)"
+	@$(MAKE) test-security
+	@echo "$(YELLOW)Running protocol compliance tests...$(NC)"
+	@$(MAKE) test-compliance
+	@echo "$(YELLOW)Running all protocol tests...$(NC)"
+	@$(MAKE) test-protocol
+	@echo "$(GREEN)✅ Enhanced test suite completed!$(NC)"
+
+test-coverage-by-package: ## Generate detailed coverage report by package
+	@echo "$(BLUE)📊 Generating detailed coverage by package...$(NC)"
+	@mkdir -p coverage
+	@echo "Testing logging package..."
+	@$(GOTEST) -coverprofile=coverage/logging.out ./internal/logging/... || true
+	@echo "Testing protocol package..."
+	@$(GOTEST) -coverprofile=coverage/protocol.out ./internal/protocol/... || true
+	@echo "Testing middleware package..."
+	@$(GOTEST) -coverprofile=coverage/middleware.out ./internal/middleware/... || true
+	@echo "Testing server package..."
+	@$(GOTEST) -coverprofile=coverage/server.out ./internal/server/... || true
+	@echo ""
+	@echo "$(BLUE)📊 Coverage summary by package:$(NC)"
+	@for f in coverage/*.out; do \
+		if [ -f "$$f" ] && [ -s "$$f" ]; then \
+			echo "$(GREEN)$$(basename $$f .out):$(NC)"; \
+			go tool cover -func="$$f" | tail -1; \
+		fi; \
+	done
 
 test-watch: ## Watch for changes and run tests automatically
 	@echo "$(BLUE)🧪 Watching for changes... (Ctrl+C to stop)$(NC)"

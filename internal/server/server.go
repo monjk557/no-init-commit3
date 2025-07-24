@@ -37,7 +37,7 @@ func New(cfg *config.Config) *Server {
 // Start initializes and starts the HTTP server
 func (s *Server) Start() error {
 	// Create router
-	router := s.setupRouter()
+	router := s.SetupRouter()
 
 	// Create HTTP server
 	s.server = &http.Server{
@@ -72,8 +72,8 @@ func (s *Server) Start() error {
 	return s.waitForShutdown()
 }
 
-// setupRouter configures the HTTP router with middleware and routes
-func (s *Server) setupRouter() *chi.Mux {
+// SetupRouter configures the HTTP router with middleware and routes
+func (s *Server) SetupRouter() *chi.Mux {
 	router := chi.NewRouter()
 
 	// Add middleware
