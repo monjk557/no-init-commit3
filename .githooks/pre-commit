@@ -39,11 +39,26 @@ else
     echo "⚠️  golangci-lint not found, skipping advanced linting"
 fi
 
-# 4. Run tests
-echo "🧪 Running tests..."
-if ! go test ./...; then
-    echo "❌ Tests failed"
-    exit 1
+# 4. Run tests with timeout protection (cross-platform)
+echo "🧪 Running tests with race detection..."
+if command -v timeout >/dev/null 2>&1; then
+    # Linux/GNU timeout
+    if ! timeout 300 go test -race -short ./...; then
+        echo "❌ Tests failed or timed out"
+        exit 1
+    fi
+elif command -v gtimeout >/dev/null 2>&1; then
+    # macOS with GNU coreutils (brew install coreutils)
+    if ! gtimeout 300 go test -race -short ./...; then
+        echo "❌ Tests failed or timed out"
+        exit 1
+    fi
+else
+    # Fallback without timeout (macOS default)
+    if ! go test -race -short ./...; then
+        echo "❌ Tests failed"
+        exit 1
+    fi
 fi
 
-echo "✅ All pre-commit checks passed!" 
+echo "✅ All pre-commit checks passed!"

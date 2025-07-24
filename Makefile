@@ -33,7 +33,7 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m # No Color
 
-.PHONY: all build clean test test-coverage test-race test-verbose test-logging lint fmt format vet verify help local
+.PHONY: all build clean test test-coverage test-race test-verbose test-race-verbose test-logging lint fmt format vet verify help local
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
 .PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors
 
@@ -97,6 +97,11 @@ test-race: ## Run tests with race detection
 test-verbose: ## Run tests with verbose output
 	@echo "$(BLUE)🧪 Running verbose tests...$(NC)"
 	$(GOTEST) -v -race ./...
+
+test-race-verbose: ## Run tests with race detection and verbose output (CI optimized)
+	@echo "$(BLUE)🧪 Running comprehensive tests with race detection and verbose output...$(NC)"
+	@echo "$(YELLOW)🔍 Race detection enabled for CI reliability$(NC)"
+	$(GOTEST) -v -race -timeout=10m ./...
 
 test-coverage: ## Run tests with coverage
 	@echo "$(BLUE)🧪 Running tests with coverage...$(NC)"
@@ -345,7 +350,7 @@ qa-check: ## Run comprehensive quality checks (lint, vet, fmt, test)
 	@$(MAKE) fmt-check
 	@$(MAKE) vet
 	@$(MAKE) lint
-	@$(MAKE) test-short
+	@$(MAKE) test-race
 	@echo "$(GREEN)✅ All quality checks passed!$(NC)"
 
 qa-fix: ## Auto-fix formatting and show remaining issues
