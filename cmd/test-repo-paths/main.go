@@ -20,7 +20,7 @@ func testPackageIntegration() {
 		fmt.Printf("❌ Failed to create temp dir: %v\n", err)
 		return
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Create test config
 	testConfig, err := repository.NewPathConfig(tempDir)
@@ -92,7 +92,7 @@ func testPackageIntegration() {
 	fmt.Println("\n📦 Batch Operations:")
 
 	// Create multiple test repositories
-	createMockNonBareRepo(filepath.Join(tempDir, "batch", "repo1.git"))
+	_ = createMockNonBareRepo(filepath.Join(tempDir, "batch", "repo1.git"))
 
 	repos := []struct{ Owner, Repo string }{
 		{"integration", "valid-repo"},
@@ -241,7 +241,7 @@ func main() {
 	if err != nil {
 		fmt.Printf("❌ Failed to create temp dir: %v\n", err)
 	} else {
-		defer os.RemoveAll(tempDir)
+		defer func() { _ = os.RemoveAll(tempDir) }()
 
 		// Create test config
 		testConfig, err := repository.NewPathConfig(tempDir)
@@ -287,7 +287,7 @@ func main() {
 
 			// Test invalid repository (empty directory)
 			invalidRepoPath := filepath.Join(tempDir, "user", "invalid.git")
-			os.MkdirAll(invalidRepoPath, 0755)
+			_ = os.MkdirAll(invalidRepoPath, 0755)
 			err = repository.EnsureRepoExists(testConfig, invalidRepoPath)
 			if err != nil {
 				fmt.Printf("✅ CORRECTLY BLOCKED invalid repo: %v\n", err)

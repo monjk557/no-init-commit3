@@ -146,7 +146,7 @@ func TestNewPermissionClient(t *testing.T) {
 		require.NotNil(t, client)
 
 		// Verify that the client satisfies the interface
-		var _ PermissionClient = client
+		var _ = client
 
 		// Clean up
 		err = client.Close()
@@ -230,7 +230,7 @@ func TestPermissionResult(t *testing.T) {
 func TestClientInputValidation(t *testing.T) {
 	client, err := NewPermissionClient(DefaultConfig())
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 
@@ -281,7 +281,7 @@ func TestClientInputValidation(t *testing.T) {
 func TestClientCacheOperations(t *testing.T) {
 	client, err := NewPermissionClient(DefaultConfig())
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Test cache invalidation (should not panic)
 	client.InvalidateCache("user123", "owner", "repo")

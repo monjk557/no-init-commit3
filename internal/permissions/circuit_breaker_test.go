@@ -65,7 +65,7 @@ func TestCircuitBreaker_Recovery(t *testing.T) {
 
 	// Open the circuit
 	for i := 0; i < 2; i++ {
-		cb.Execute(ctx, func(context.Context) error { return fmt.Errorf("test error") })
+		_ = cb.Execute(ctx, func(context.Context) error { return fmt.Errorf("test error") })
 	}
 	assert.Equal(t, StateOpen, cb.getState())
 
@@ -93,7 +93,7 @@ func TestCircuitBreaker_HalfOpenFailure(t *testing.T) {
 
 	// Open the circuit
 	for i := 0; i < 2; i++ {
-		cb.Execute(ctx, func(context.Context) error { return fmt.Errorf("test error") })
+		_ = cb.Execute(ctx, func(context.Context) error { return fmt.Errorf("test error") })
 	}
 
 	// Wait for recovery timeout
@@ -125,12 +125,12 @@ func TestCircuitBreaker_Metrics(t *testing.T) {
 	assert.True(t, metrics.LastSuccessTime.IsZero())
 
 	// Successful execution
-	cb.Execute(ctx, func(context.Context) error { return nil })
+	_ = cb.Execute(ctx, func(context.Context) error { return nil })
 	metrics = cb.GetMetrics()
 	assert.False(t, metrics.LastSuccessTime.IsZero())
 
 	// Failed execution
-	cb.Execute(ctx, func(context.Context) error { return fmt.Errorf("test error") })
+	_ = cb.Execute(ctx, func(context.Context) error { return fmt.Errorf("test error") })
 	metrics = cb.GetMetrics()
 	assert.Equal(t, 1, metrics.FailureCount)
 	assert.False(t, metrics.LastFailureTime.IsZero())
@@ -227,7 +227,7 @@ func TestClient_CircuitBreakerIntegration(t *testing.T) {
 		// Later requests succeed
 		response := APIResponse{Allowed: true}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -250,7 +250,7 @@ func TestClient_CircuitBreakerIntegration(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 
@@ -341,7 +341,7 @@ func TestClient_FallbackPolicies(t *testing.T) {
 
 			client, err := NewPermissionClient(config)
 			require.NoError(t, err)
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 
 			ctx := context.Background()
 
@@ -411,7 +411,7 @@ func TestClient_DisabledCircuitBreaker(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 
@@ -450,7 +450,7 @@ func TestClient_CachedResultDuringServiceUnavailability(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Pre-populate cache with allowed access
 	result := &PermissionResult{

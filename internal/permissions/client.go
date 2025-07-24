@@ -134,7 +134,7 @@ func (c *Config) Validate() error {
 		return errors.New("APIServiceURL is required")
 	}
 	if c.Timeout <= 0 {
-		return errors.New("Timeout must be positive")
+		return errors.New("timeout must be positive")
 	}
 	if c.MaxRetries < 0 {
 		return errors.New("MaxRetries must be non-negative")
@@ -452,7 +452,7 @@ func (c *Client) makeHTTPRequest(ctx context.Context, userID, repoOwner, repoNam
 		return false, NewPermissionError(operation, userID, repoOwner, repoName,
 			fmt.Errorf("HTTP request failed: %w", err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)

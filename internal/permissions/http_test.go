@@ -30,7 +30,7 @@ func TestClient_makeHTTPRequest_Success(t *testing.T) {
 		response := APIResponse{Allowed: true}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -46,7 +46,7 @@ func TestClient_makeHTTPRequest_Success(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "repo")
@@ -60,7 +60,7 @@ func TestClient_makeHTTPRequest_PermissionDenied(t *testing.T) {
 		response := APIResponse{Allowed: false, Reason: "Insufficient permissions"}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -76,7 +76,7 @@ func TestClient_makeHTTPRequest_PermissionDenied(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	hasAccess, err := client.CheckWriteAccess(ctx, "user123", "owner", "repo")
@@ -229,7 +229,7 @@ func TestClient_HTTPRequestErrors(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requestCount++
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			}))
 			defer server.Close()
 
@@ -245,7 +245,7 @@ func TestClient_HTTPRequestErrors(t *testing.T) {
 
 			client, err := NewPermissionClient(config)
 			require.NoError(t, err)
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 
 			ctx := context.Background()
 			hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "repo")
@@ -277,7 +277,7 @@ func TestClient_RequestTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond) // Delay longer than client timeout
 		response := APIResponse{Allowed: true}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -293,7 +293,7 @@ func TestClient_RequestTimeout(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "repo")
@@ -308,7 +308,7 @@ func TestClient_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		response := APIResponse{Allowed: true}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -324,7 +324,7 @@ func TestClient_ContextCancellation(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create context that cancels quickly
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
@@ -341,7 +341,7 @@ func TestClient_MalformedJSONResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"invalid": json`)) // Malformed JSON
+		_, _ = w.Write([]byte(`{"invalid": json`)) // Malformed JSON
 	}))
 	defer server.Close()
 
@@ -357,7 +357,7 @@ func TestClient_MalformedJSONResponse(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "repo")
@@ -374,14 +374,14 @@ func TestClient_RetryLogic(t *testing.T) {
 		if requestCount < 3 {
 			// First two requests fail with retryable error
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("Internal server error"))
+			_, _ = w.Write([]byte("Internal server error"))
 			return
 		}
 		// Third request succeeds
 		response := APIResponse{Allowed: true}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -397,7 +397,7 @@ func TestClient_RetryLogic(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "repo")
@@ -413,7 +413,7 @@ func TestClient_RetryExhaustion(t *testing.T) {
 		requestCount++
 		// Always return retryable error
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Internal server error"))
+		_, _ = w.Write([]byte("Internal server error"))
 	}))
 	defer server.Close()
 
@@ -429,7 +429,7 @@ func TestClient_RetryExhaustion(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "repo")
@@ -447,7 +447,7 @@ func TestClient_CacheIntegrationWithHTTP(t *testing.T) {
 		response := APIResponse{Allowed: true}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -463,7 +463,7 @@ func TestClient_CacheIntegrationWithHTTP(t *testing.T) {
 
 	client, err := NewPermissionClient(config)
 	require.NoError(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 

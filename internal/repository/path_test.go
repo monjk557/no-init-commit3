@@ -755,7 +755,7 @@ func BenchmarkGetRepoPathWithDefault(b *testing.B) {
 func BenchmarkValidateRepoPath(b *testing.B) {
 	config, _ := NewPathConfig("/var/lib/git/repos")
 	for i := 0; i < b.N; i++ {
-		ValidateRepoPath(config, "/var/lib/git/repos/user/project.git")
+		_ = ValidateRepoPath(config, "/var/lib/git/repos/user/project.git")
 	}
 }
 
@@ -948,8 +948,8 @@ func TestIsBareRepository(t *testing.T) {
 			name: "incomplete bare repository (missing HEAD)",
 			setup: func(base string) string {
 				repoPath := filepath.Join(base, "incomplete.git")
-				os.MkdirAll(filepath.Join(repoPath, "refs"), 0755)
-				os.MkdirAll(filepath.Join(repoPath, "objects"), 0755)
+				_ = os.MkdirAll(filepath.Join(repoPath, "refs"), 0755)
+				_ = os.MkdirAll(filepath.Join(repoPath, "objects"), 0755)
 				// Missing HEAD file
 				return repoPath
 			},
@@ -968,7 +968,7 @@ func TestIsBareRepository(t *testing.T) {
 			name: "empty directory",
 			setup: func(base string) string {
 				repoPath := filepath.Join(base, "empty")
-				os.MkdirAll(repoPath, 0755)
+				_ = os.MkdirAll(repoPath, 0755)
 				return repoPath
 			},
 			expected: false,
@@ -1019,10 +1019,10 @@ func TestIsNonBareRepository(t *testing.T) {
 
 				// Create worktree
 				worktreePath := filepath.Join(base, "worktree")
-				os.MkdirAll(worktreePath, 0755)
+				_ = os.MkdirAll(worktreePath, 0755)
 				gitFilePath := filepath.Join(worktreePath, ".git")
 				gitDirRef := fmt.Sprintf("gitdir: %s/.git", mainRepoPath)
-				os.WriteFile(gitFilePath, []byte(gitDirRef), 0644)
+				_ = os.WriteFile(gitFilePath, []byte(gitDirRef), 0644)
 				return worktreePath
 			},
 			expected: true,
@@ -1031,9 +1031,9 @@ func TestIsNonBareRepository(t *testing.T) {
 			name: "invalid .git file",
 			setup: func(base string) string {
 				repoPath := filepath.Join(base, "invalid")
-				os.MkdirAll(repoPath, 0755)
+				_ = os.MkdirAll(repoPath, 0755)
 				gitFilePath := filepath.Join(repoPath, ".git")
-				os.WriteFile(gitFilePath, []byte("invalid content"), 0644)
+				_ = os.WriteFile(gitFilePath, []byte("invalid content"), 0644)
 				return repoPath
 			},
 			expected: false,
@@ -1042,7 +1042,7 @@ func TestIsNonBareRepository(t *testing.T) {
 			name: "empty directory",
 			setup: func(base string) string {
 				repoPath := filepath.Join(base, "empty")
-				os.MkdirAll(repoPath, 0755)
+				_ = os.MkdirAll(repoPath, 0755)
 				return repoPath
 			},
 			expected: false,
@@ -1352,10 +1352,10 @@ func TestGetRepositoryInfo(t *testing.T) {
 
 		// Create worktree
 		worktreePath := filepath.Join(tempDir, "user", "worktree-repo.git")
-		os.MkdirAll(worktreePath, 0755)
+		_ = os.MkdirAll(worktreePath, 0755)
 		gitFilePath := filepath.Join(worktreePath, ".git")
 		gitDirRef := fmt.Sprintf("gitdir: %s/.git", mainRepoPath)
-		os.WriteFile(gitFilePath, []byte(gitDirRef), 0644)
+		_ = os.WriteFile(gitFilePath, []byte(gitDirRef), 0644)
 
 		info, err := GetRepositoryInfo(config, "user", "worktree-repo")
 		require.NoError(t, err)
@@ -1378,7 +1378,7 @@ func TestGetRepositoryInfo(t *testing.T) {
 	t.Run("InvalidRepository", func(t *testing.T) {
 		// Create empty directory
 		repoPath := filepath.Join(tempDir, "user", "invalid-repo.git")
-		os.MkdirAll(repoPath, 0755)
+		_ = os.MkdirAll(repoPath, 0755)
 
 		info, err := GetRepositoryInfo(config, "user", "invalid-repo")
 		require.NoError(t, err)
@@ -1403,7 +1403,7 @@ func TestGetBatchRepositoryInfo(t *testing.T) {
 
 	// Create invalid repo (empty directory)
 	invalidRepoPath := filepath.Join(tempDir, "user3", "invalid-repo.git")
-	os.MkdirAll(invalidRepoPath, 0755)
+	_ = os.MkdirAll(invalidRepoPath, 0755)
 
 	repos := []struct{ Owner, Repo string }{
 		{"user1", "bare-repo"},
@@ -1486,7 +1486,7 @@ func BenchmarkGetAndValidateRepoPath(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		GetAndValidateRepoPath(config, "user", "project")
+		_, _ = GetAndValidateRepoPath(config, "user", "project")
 	}
 }
 
@@ -1529,17 +1529,17 @@ func BenchmarkGetRepositoryInfo(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		GetRepositoryInfo(config, "user", "benchmark")
+		_, _ = GetRepositoryInfo(config, "user", "benchmark")
 	}
 }
 
 func BenchmarkGlobalConfigAccess(b *testing.B) {
 	config, _ := NewPathConfig("/var/lib/git/repos")
-	SetGlobalConfig(config)
+	_ = SetGlobalConfig(config)
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		GetGlobalConfig()
+		_, _ = GetGlobalConfig()
 	}
 }
