@@ -78,6 +78,8 @@ IMAGE: collabops-git-executor
 - Cache settings
 - Build arguments (that aren't identifiers)
 - Step names and descriptions
+- Docker build optimization
+- Health check intervals
 
 ### ❌ UNSAFE to Change Without Verification:
 - Repository names
@@ -86,6 +88,7 @@ IMAGE: collabops-git-executor
 - Service account names
 - Registry URLs
 - Region settings (without checking requirements)
+- File paths in Docker COPY commands (verify files exist!)
 
 ## 🤖 AI Assistant Guidelines
 
@@ -107,6 +110,28 @@ User: "The CI is failing, I saw collabops-api uses 'web' repository"
    the actual error instead of changing project-specific settings."
 ```
 
+## 🐳 Docker Configuration
+
+### File Existence Verification
+**Always verify files exist before adding COPY commands:**
+```dockerfile
+# ❌ WRONG: Copying non-existent file
+COPY --from=builder /app/config/config.yaml /config/config.yaml.default
+
+# ✅ CORRECT: Only copy files that exist
+COPY --from=builder /app/config/config.yaml.example /config/config.yaml.example
+```
+
+### Application Defaults
+**Leverage application's built-in defaults:**
+```dockerfile
+# ❌ WRONG: Hardcoding config paths that may not exist
+CMD ["--config", "/config/config.yaml"]
+
+# ✅ CORRECT: Let app use defaults if designed to do so
+CMD []
+```
+
 ## 🚀 Remember
 
 **Project-specific !== Broken**
@@ -115,5 +140,6 @@ Just because a setting is different from another project doesn't mean it's wrong
 - GCP Artifact Registry repository
 - Docker image names
 - Deployment configurations
+- File structures and dependencies
 
 These differences are **intentional** and **required**.
