@@ -117,10 +117,8 @@ func (s *Server) setupAPIRoutes() *chi.Mux {
 func (s *Server) setupGitRoutes(router *chi.Mux) {
 	// Initialize permission client (for now, we'll create a basic config)
 	// TODO: This should be properly configured with actual API service URL
-	permConfig := &permissions.Config{
-		APIServiceURL: "http://api-service.local", // Default from architecture docs
-		Timeout:       10 * time.Second,
-	}
+	permConfig := permissions.DefaultConfig()
+	permConfig.APIServiceURL = "http://api-service.local" // Override with specific URL
 	permClient, err := permissions.NewPermissionClient(permConfig)
 	if err != nil {
 		// For now, log the error and continue without Smart HTTP

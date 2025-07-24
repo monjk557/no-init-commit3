@@ -283,7 +283,7 @@ func TestServer_Shutdown(t *testing.T) {
 			BasePath:     "/api/repos",
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 45 * time.Second,
-		},
+			HealthCheckPath: "/health",		},
 	}
 
 	server := New(cfg)
@@ -402,7 +402,7 @@ func TestServer_StartAndShutdown(t *testing.T) {
 			BasePath:     "/api/repos",
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 45 * time.Second,
-		},
+			HealthCheckPath: "/health",		},
 	}
 
 	server := New(cfg)

@@ -1,0 +1,31 @@
+// setupGitRoutes configures Git Smart HTTP protocol routes
+func (s *Server) setupGitRoutes(router *chi.Mux) {
+	// Initialize permission client with default configuration
+	// TODO: This should be properly configured with actual API service URL from config
+	permConfig := permissions.DefaultConfig()
+	permConfig.APIServiceURL = "http://api-service.local" // Override with specific URL
+	
+	permClient, err := permissions.NewPermissionClient(permConfig)
+	if err != nil {
+		// For now, log the error and continue without Smart HTTP
+		fmt.Printf("⚠️  Warning: Failed to initialize permission client: %v\n", err)
+		return
+	}
+
+	// Initialize upload-pack handler
+	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config, permClient)
+	if err != nil {
+		// For now, log the error and continue without Smart HTTP
+		fmt.Printf("⚠️  Warning: Failed to initialize upload-pack handler: %v\n", err)
+		return
+	}
+
+	// Git Smart HTTP routes for fetch operations (executor endpoints)
+	router.Route("/{owner}/{repo}", func(r chi.Router) {
+		// GET /repos/{owner}/{repo}/info/refs?service=git-upload-pack
+		r.Get("/info/refs", uploadPackHandler.HandleInfoRefs)
+
+		// POST /repos/{owner}/{repo}/git-upload-pack (to be implemented in subtask 9.2)
+		r.Post("/git-upload-pack", uploadPackHandler.HandleUploadPack)
+	})
+}
