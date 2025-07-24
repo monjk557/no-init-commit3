@@ -155,7 +155,7 @@ make enforce-quality
 
 **After setup, these commands are available:**
 ```bash
-make format      # Fix all formatting and lint issues (use before every commit)
+make format      # Fix all formatting, lint issues, AND run tests (use before every commit)
 make qa-check    # Check code quality without fixing
 make pre-commit  # Test what the commit hook will do
 ```
@@ -272,18 +272,18 @@ graph TB
         GitCLI[Git CLI]
         WebUI[Web UI]
     end
-    
+
     subgraph "Gateway Layer"
         HTTPGateway[git-http<br/>Gateway]
         SSHGateway[git-ssh<br/>Gateway]
         Orchestrator[Orchestrator<br/>FastAPI]
     end
-    
+
     subgraph "Git Executor"
         subgraph "Access Control"
             Middleware[Source Validation<br/>Middleware]
         end
-        
+
         subgraph "Git Protocol Endpoints"
             InfoRefs[GET /info/refs]
             UploadPack[POST /upload-pack]
@@ -291,7 +291,7 @@ graph TB
             SSHUpload[POST /ssh/upload-pack]
             SSHReceive[POST /ssh/receive-pack]
         end
-        
+
         subgraph "REST API Endpoints"
             Tree[GET /repos/.../tree]
             Blob[GET /repos/.../blob]
@@ -301,36 +301,36 @@ graph TB
             FileDiff[GET /repos/.../file-diff]
         end
     end
-    
+
     GitCLI -->|HTTPS| HTTPGateway
     GitCLI -->|SSH| SSHGateway
     WebUI --> Orchestrator
-    
+
     HTTPGateway -->|X-Source: http-gateway| Middleware
     SSHGateway -->|X-Source: ssh-gateway| Middleware
     Orchestrator -->|X-Source: orchestrator| Middleware
-    
+
     Middleware -->|✅ Allowed| InfoRefs
     Middleware -->|✅ Allowed| UploadPack
     Middleware -->|✅ Allowed| ReceivePack
     Middleware -->|✅ Allowed| SSHUpload
     Middleware -->|✅ Allowed| SSHReceive
-    
+
     Middleware -->|✅ Allowed| Tree
     Middleware -->|✅ Allowed| Blob
     Middleware -->|✅ Allowed| Commits
     Middleware -->|✅ Allowed| Diff
     Middleware -->|✅ Allowed| CommitDiff
     Middleware -->|✅ Allowed| FileDiff
-    
+
     style HTTPGateway fill:#e1f5e1
     style SSHGateway fill:#e1f5e1
     style Orchestrator fill:#e1e5f5
     style Middleware fill:#f5e1e1
-    
+
     classDef gitProtocol fill:#f9f,stroke:#333,stroke-width:2px
     classDef restApi fill:#bbf,stroke:#333,stroke-width:2px
-    
+
     class InfoRefs,UploadPack,ReceivePack,SSHUpload,SSHReceive gitProtocol
     class Tree,Blob,Commits,Diff,CommitDiff,FileDiff restApi
 ```

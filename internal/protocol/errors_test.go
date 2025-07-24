@@ -161,8 +161,8 @@ func TestPktLineWriter(t *testing.T) {
 		require.NoError(t, err)
 
 		result := buf.Bytes()
-		// Empty string gets newline added, so length is 4 + 1 = 5
-		expected := "0005\n"
+		// Empty string is treated as flush packet (Git protocol compliance)
+		expected := "0000"
 		assert.Equal(t, expected, string(result))
 	})
 
