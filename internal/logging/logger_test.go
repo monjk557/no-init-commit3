@@ -316,7 +316,7 @@ func TestLoggerFileOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	// Log a message
-	logger.Info("test file output")
+	logger.LogInfo(context.Background(), "test file output")
 
 	// Sync to ensure write
 	err = logger.Sync()
@@ -458,7 +458,7 @@ func TestLoggerSync(t *testing.T) {
 	require.NoError(t, err)
 
 	// Log something
-	logger.Info("test sync")
+	logger.LogInfo(context.Background(), "test sync")
 
 	// Should not error
 	err = logger.Sync()
