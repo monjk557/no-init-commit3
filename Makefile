@@ -35,7 +35,7 @@ NC=\033[0m # No Color
 
 .PHONY: all build clean test test-coverage test-race test-verbose test-logging lint fmt format vet verify help local
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
-.PHONY: verify-structure verify-config verify-all local-setup install-tools
+.PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors
 
 # Default target
 all: clean deps fmt vet lint test build
@@ -315,6 +315,47 @@ production-build: clean deps fmt vet lint test build-linux ## Full production bu
 local: fmt vet test-short ## Quick local workflow
 	@echo "$(GREEN)⚡ Local workflow completed!$(NC)"
 
+# Quality Assurance targets to prevent lint errors
+qa-check: ## Run comprehensive quality checks (lint, vet, fmt, test)
+	@echo "$(BLUE)🔍 Running comprehensive quality checks...$(NC)"
+	@$(MAKE) fmt-check
+	@$(MAKE) vet
+	@$(MAKE) lint
+	@$(MAKE) test-short
+	@echo "$(GREEN)✅ All quality checks passed!$(NC)"
+
+qa-fix: ## Auto-fix formatting and show remaining issues
+	@echo "$(BLUE)🔧 Auto-fixing code quality issues...$(NC)"
+	@$(MAKE) format
+	@echo "$(GREEN)✨ Auto-fixes applied! Running final checks...$(NC)"
+	@$(MAKE) qa-check
+
+fmt-check: ## Check if code is formatted (without fixing)
+	@echo "$(BLUE)📝 Checking Go formatting...$(NC)"
+	@if [ "$$($(GOFMT) -l . | wc -l)" -gt 0 ]; then \
+		echo "$(RED)❌ Code is not formatted. Files that need formatting:$(NC)"; \
+		$(GOFMT) -l .; \
+		echo "$(YELLOW)💡 Run 'make format' to fix formatting issues$(NC)"; \
+		exit 1; \
+	else \
+		echo "$(GREEN)✅ All files are properly formatted$(NC)"; \
+	fi
+
+pre-commit: ## Run all pre-commit checks (like git hook)
+	@echo "$(BLUE)🔒 Running pre-commit checks...$(NC)"
+	@$(MAKE) qa-check
+	@echo "$(GREEN)✅ Pre-commit checks passed! Safe to commit.$(NC)"
+
+lint-errors: ## Show detailed lint error explanations
+	@echo "$(BLUE)🔍 Running detailed lint analysis...$(NC)"
+	@echo "$(YELLOW)📋 Common Go lint errors and fixes:$(NC)"
+	@echo "$(NC)  • errcheck: Handle or explicitly ignore error returns with '_ = function()'"
+	@echo "$(NC)  • staticcheck: Follow Go conventions (e.g., avoid unnecessary type declarations)"
+	@echo "$(NC)  • unused: Remove unused variables, functions, and imports"
+	@echo "$(NC)  • See .cursor/rules/go-lint-prevention.md for complete guide"
+	@echo ""
+	@$(MAKE) lint
+
 # Show current Go environment (if Go is installed)
 go-env: ## Show Go environment
 	@if command -v $(GOCMD) >/dev/null 2>&1; then \
@@ -322,4 +363,4 @@ go-env: ## Show Go environment
 		$(GOCMD) env; \
 	else \
 		echo "$(RED)❌ Go is not installed$(NC)"; \
-	fi 
+	fi

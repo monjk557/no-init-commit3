@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# Pre-commit hook for Go lint and format checking
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Check if we're in a Go project
+if [ ! -f "go.mod" ]; then
+    echo "❌ Not a Go project, skipping Go checks"
+    exit 0
+fi
+
+# 1. Run go fmt check
+echo "📝 Checking Go formatting..."
+if [ "$(gofmt -l . | wc -l)" -gt 0 ]; then
+    echo "❌ Go files are not formatted. Run 'make format' to fix:"
+    gofmt -l .
+    exit 1
+fi
+
+# 2. Run go vet
+echo "🔍 Running go vet..."
+if ! go vet ./...; then
+    echo "❌ go vet failed"
+    exit 1
+fi
+
+# 3. Run golangci-lint if available
+if command -v golangci-lint >/dev/null 2>&1 || [ -f "$(go env GOPATH)/bin/golangci-lint" ]; then
+    echo "🔍 Running golangci-lint..."
+    if ! make lint; then
+        echo "❌ Linting failed. Fix the issues before committing."
+        echo "💡 Run 'make format' to auto-fix formatting issues"
+        echo "💡 Run 'make lint' to see detailed error reports"
+        exit 1
+    fi
+else
+    echo "⚠️  golangci-lint not found, skipping advanced linting"
+fi
+
+# 4. Run tests
+echo "🧪 Running tests..."
+if ! go test ./...; then
+    echo "❌ Tests failed"
+    exit 1
+fi
+
+echo "✅ All pre-commit checks passed!" 

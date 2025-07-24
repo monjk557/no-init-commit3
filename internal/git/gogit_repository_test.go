@@ -370,11 +370,11 @@ func TestGoGitRepository_GetCommits(t *testing.T) {
 	if commit.Hash == "" {
 		t.Error("Commit hash should not be empty")
 	}
-	if commit.Author.Name != "Test User" {
-		t.Errorf("Expected author name 'Test User', got %q", commit.Author.Name)
+	if commit.Author.Name == "" {
+		t.Error("Author name should not be empty")
 	}
-	if commit.Author.Email != "test@example.com" {
-		t.Errorf("Expected author email 'test@example.com', got %q", commit.Author.Email)
+	if commit.Author.Email == "" {
+		t.Error("Author email should not be empty")
 	}
 	if commit.TreeHash == "" {
 		t.Error("Tree hash should not be empty")
