@@ -206,10 +206,10 @@ func TestValidate_JWTAlgorithms(t *testing.T) {
 			shouldError:   false,
 		},
 		{
-			name:          "valid HS256 with secret key",
-			algorithm:     "HS256",
-			secretKey:     "secret",
-			shouldError:   false,
+			name:        "valid HS256 with secret key",
+			algorithm:   "HS256",
+			secretKey:   "secret",
+			shouldError: false,
 		},
 		{
 			name:          "invalid algorithm",
@@ -224,9 +224,9 @@ func TestValidate_JWTAlgorithms(t *testing.T) {
 			errorContains: "jwt.public_key_path is required for algorithm RS256",
 		},
 		{
-			name:        "HS256 without secret key",
-			algorithm:   "HS256",
-			shouldError: true,
+			name:          "HS256 without secret key",
+			algorithm:     "HS256",
+			shouldError:   true,
 			errorContains: "jwt.secret_key is required for algorithm HS256",
 		},
 	}
@@ -365,4 +365,4 @@ func TestGetConfigPath(t *testing.T) {
 	// Verify config path is returned
 	usedPath := GetConfigPath()
 	assert.Equal(t, configPath, usedPath)
-} 
+}

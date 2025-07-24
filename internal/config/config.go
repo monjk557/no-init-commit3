@@ -18,19 +18,19 @@ type Config struct {
 
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
-	Port        int           `mapstructure:"port" validate:"required,min=1,max=65535"`
-	BasePath    string        `mapstructure:"base_path" validate:"required"`
-	Host        string        `mapstructure:"host"`
-	ReadTimeout time.Duration `mapstructure:"read_timeout"`
+	Port         int           `mapstructure:"port" validate:"required,min=1,max=65535"`
+	BasePath     string        `mapstructure:"base_path" validate:"required"`
+	Host         string        `mapstructure:"host"`
+	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
-	IdleTimeout time.Duration `mapstructure:"idle_timeout"`
+	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`
 }
 
 // GitConfig holds Git repository configuration
 type GitConfig struct {
-	RepoRoot       string `mapstructure:"repo_root" validate:"required"`
-	EnablePackfile bool   `mapstructure:"enable_packfile"`
-	MaxCacheSize   int    `mapstructure:"max_cache_size"`
+	RepoRoot       string        `mapstructure:"repo_root" validate:"required"`
+	EnablePackfile bool          `mapstructure:"enable_packfile"`
+	MaxCacheSize   int           `mapstructure:"max_cache_size"`
 	CacheTTL       time.Duration `mapstructure:"cache_ttl"`
 }
 
@@ -51,13 +51,16 @@ type LogConfig struct {
 
 // Load loads configuration from file with Viper
 func Load(configPath string) (*Config, error) {
+	// Reset Viper to ensure clean state
+	viper.Reset()
+
 	// Set defaults first
 	setDefaults()
 
 	// Configure Viper
 	viper.SetConfigType("yaml")
 	viper.SetConfigName("config")
-	
+
 	if configPath != "" {
 		viper.SetConfigFile(configPath)
 	} else {
@@ -77,6 +80,9 @@ func Load(configPath string) (*Config, error) {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			// Config file not found; use defaults
 			fmt.Printf("Warning: Config file not found, using defaults\n")
+		} else if strings.Contains(err.Error(), "no such file or directory") {
+			// Specific file path doesn't exist; use defaults
+			fmt.Printf("Warning: Specified config file not found, using defaults\n")
 		} else {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
@@ -207,4 +213,4 @@ func validate(config *Config) error {
 // GetConfigPath returns the path to the configuration file being used
 func GetConfigPath() string {
 	return viper.ConfigFileUsed()
-} 
+}

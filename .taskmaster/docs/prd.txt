@@ -119,4 +119,4 @@ jwt:
 - Add repo caching layer (sync.Map or LRU)
 - Parallel push handler (per repo lock)
 - Move executor to gRPC if scaling
-- Explore protocol-level streaming with backpressure 
+- Explore protocol-level streaming with backpressure

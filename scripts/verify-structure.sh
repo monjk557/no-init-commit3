@@ -48,16 +48,16 @@ check_go_mod() {
         return 1
     fi
     
-    # Check Go version
-    if grep -q "go 1.21" go.mod; then
+    # Check Go version (1.21 or higher)
+    if grep -E "go 1\.(2[1-9]|[3-9][0-9])" go.mod; then
         echo -e "${GREEN}✅ Go version 1.21+ specified${NC}"
     else
         echo -e "${RED}❌ Go version 1.21+ not found${NC}"
         return 1
     fi
     
-    # Check key dependencies
-    dependencies=("go-git/go-git" "go-chi/chi" "spf13/viper" "uber.org/zap" "testify" "prometheus")
+    # Check key dependencies (currently needed)
+    dependencies=("spf13/viper" "testify")
     
     for dep in "${dependencies[@]}"; do
         if grep -q "$dep" go.mod; then
@@ -65,6 +65,17 @@ check_go_mod() {
         else
             echo -e "${RED}❌ Dependency missing: $dep${NC}"
             return 1
+        fi
+    done
+    
+    # Check planned dependencies (will be added in future tasks)
+    planned_deps=("go-git/go-git" "go-chi/chi" "uber.org/zap" "prometheus")
+    echo -e "${BLUE}📋 Planned dependencies (for future tasks):${NC}"
+    for dep in "${planned_deps[@]}"; do
+        if grep -q "$dep" go.mod; then
+            echo -e "${GREEN}✅ Already added: $dep${NC}"
+        else
+            echo -e "${YELLOW}⏳ Will be added later: $dep${NC}"
         fi
     done
     
