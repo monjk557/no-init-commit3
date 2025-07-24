@@ -56,7 +56,7 @@ func (s *Server) Start() error {
 			zap.Error(err))
 		return fmt.Errorf("failed to bind to address %s: %w", s.server.Addr, err)
 	}
-	listener.Close()
+	_ = listener.Close()
 
 	// Start server in a goroutine
 	go func() {
