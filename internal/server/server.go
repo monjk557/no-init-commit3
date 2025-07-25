@@ -144,6 +144,14 @@ func (s *Server) setupGitRoutes(router *chi.Mux) {
 		// Continue with upload-pack only
 	}
 
+	// Initialize SSH protocol handler (SSH-forwarded operations)
+	sshHandler, err := protocol.NewSSHProtocolHandler(s.config, permClient)
+	if err != nil {
+		// For now, log the error and continue without SSH support
+		fmt.Printf("⚠️  Warning: Failed to initialize SSH protocol handler: %v\n", err)
+		// Continue without SSH support
+	}
+
 	// Git Smart HTTP routes for both fetch and push operations (executor endpoints)
 	router.Route("/{owner}/{repo}", func(r chi.Router) {
 		// Fetch operations (git clone, git fetch)
@@ -173,6 +181,19 @@ func (s *Server) setupGitRoutes(router *chi.Mux) {
 			r.Post("/git-receive-pack", receivePackHandler.HandleReceivePack)
 		}
 	})
+
+	// SSH protocol routes for SSH-forwarded Git operations
+	if sshHandler != nil {
+		router.Route("/ssh/{owner}/{repo}", func(r chi.Router) {
+			// SSH-forwarded fetch operations
+			// POST /ssh/{owner}/{repo}/upload-pack
+			r.Post("/upload-pack", sshHandler.HandleSSHUploadPack)
+
+			// SSH-forwarded push operations
+			// POST /ssh/{owner}/{repo}/receive-pack
+			r.Post("/receive-pack", sshHandler.HandleSSHReceivePack)
+		})
+	}
 }
 
 // healthCheck handles the health check endpoint

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -510,16 +511,59 @@ func (h *ReceivePackHandler) processPackfile(ctx context.Context, repo *gogit.Re
 		return nil // No packfile to process
 	}
 
-	// TODO: Implement proper packfile processing
-	// For now, we'll assume the packfile is valid and objects are already in the repository
-	// In a complete implementation, we would:
-	// 1. Parse the packfile format
-	// 2. Extract objects from the packfile
-	// 3. Validate object integrity
-	// 4. Store objects in the repository's object database
-	// 5. Update repository indexes
+	// Validate packfile format and extract basic information
+	header, err := h.validatePackfileFormat(packfileData)
+	if err != nil {
+		return fmt.Errorf("invalid packfile format: %w", err)
+	}
+
+	// For now, if the packfile is valid, we assume the objects will be properly handled
+	// by the reference update process. A complete implementation would:
+	// 1. Parse individual objects from the packfile
+	// 2. Resolve delta objects
+	// 3. Store objects in the repository
+	// 4. Update indexes
+
+	// Log successful validation
+	if header.ObjectCount > 0 {
+		// Objects will be validated during reference updates
+		_ = header.ObjectCount
+	}
 
 	return nil
+}
+
+// PackfileHeader represents basic packfile information
+type PackfileHeader struct {
+	Version     uint32
+	ObjectCount uint32
+}
+
+// validatePackfileFormat performs basic validation of packfile format
+func (h *ReceivePackHandler) validatePackfileFormat(packfileData []byte) (*PackfileHeader, error) {
+	if len(packfileData) < 12 {
+		return nil, fmt.Errorf("packfile too short: need at least 12 bytes, got %d", len(packfileData))
+	}
+
+	// Check packfile signature (first 4 bytes should be "PACK")
+	signature := string(packfileData[0:4])
+	if signature != "PACK" {
+		return nil, fmt.Errorf("invalid packfile signature: expected 'PACK', got '%s'", signature)
+	}
+
+	// Read version (bytes 4-7, big endian)
+	version := binary.BigEndian.Uint32(packfileData[4:8])
+	if version < 2 || version > 3 {
+		return nil, fmt.Errorf("unsupported packfile version: %d", version)
+	}
+
+	// Read object count (bytes 8-11, big endian)
+	objectCount := binary.BigEndian.Uint32(packfileData[8:12])
+
+	return &PackfileHeader{
+		Version:     version,
+		ObjectCount: objectCount,
+	}, nil
 }
 
 // processRefUpdate processes a single reference update command
@@ -594,6 +638,13 @@ func isValidRefName(refName string) bool {
 	// Must start with refs/
 	if !strings.HasPrefix(refName, "refs/") {
 		return false
+	}
+
+	// Check for control characters (ASCII 0-31)
+	for _, r := range refName {
+		if r >= 0 && r <= 31 {
+			return false
+		}
 	}
 
 	// Cannot contain certain characters

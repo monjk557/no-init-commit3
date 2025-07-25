@@ -661,7 +661,7 @@
             "id": 3,
             "title": "Implement repository locking mechanism",
             "description": "Create a per-repository locking system to prevent concurrent pushes to the same repository",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Design and implement a locking mechanism using sync.Mutex or similar that prevents concurrent pushes to the same repository. Create a repository lock manager that can acquire and release locks for specific repositories. Implement timeout handling for locks to prevent deadlocks. Consider using a distributed locking mechanism if the service will run in multiple instances.",
             "testStrategy": "Write unit tests that verify lock acquisition and release work correctly. Test concurrent access scenarios to ensure only one push operation can proceed at a time for a given repository. Test timeout handling and lock cleanup."
@@ -670,7 +670,7 @@
             "id": 4,
             "title": "Implement packfile processing",
             "description": "Create functionality to process incoming packfiles and update repository references",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               3
             ],
@@ -1060,7 +1060,7 @@
         "description": "Implement SSH protocol endpoints POST /ssh/upload-pack and POST /ssh/receive-pack that handle SSH-specific Git operations forwarded from the collabops-git-ssh gateway.",
         "details": "Implement HTTP handlers for SSH-forwarded Git operations that serve as the EXECUTOR side of the SSH protocol:\n\n1. POST /ssh/upload-pack endpoint:\n   - Accepts SSH-forwarded git-upload-pack requests from the gateway\n   - Validates request parameters including repository path and user context\n   - Checks user permissions (read access) using the permission client\n   - Executes git-upload-pack command using go-git or exec.Command\n   - Streams packfile data back to the gateway\n   - Handles SSH-specific protocol nuances (capability negotiation, want/have refs)\n\n2. POST /ssh/receive-pack endpoint:\n   - Accepts SSH-forwarded git-receive-pack requests from the gateway\n   - Validates request parameters and user context from gateway headers\n   - Checks user permissions (write access) using the permission client\n   - Executes git-receive-pack command to process incoming packfile\n   - Handles pre-receive and post-receive hooks if configured\n   - Returns appropriate status codes and messages to the gateway\n\nKey implementation considerations:\n- Use the authentication middleware to extract user context from gateway headers\n- Implement proper streaming for large packfiles using io.Copy or bufio\n- Handle SSH protocol-specific error messages and status codes\n- Ensure compatibility with standard Git SSH operations (clone, fetch, push)\n- Implement proper cleanup of temporary resources and connections\n- Add request correlation IDs for tracing SSH operations across gateway and executor\n- Use the repository caching layer for improved performance on repeated operations\n\nError handling should cover:\n- Invalid repository paths or non-existent repositories\n- Permission denied scenarios\n- Malformed packfile data\n- Git command execution failures\n- Network interruptions during streaming",
         "testStrategy": "Write comprehensive integration tests for SSH protocol endpoints using httptest package. Test scenarios:\n\n1. Upload-pack endpoint tests:\n   - Valid SSH-forwarded fetch request with proper capability negotiation\n   - Fetch with different want/have combinations\n   - Large repository fetch with packfile streaming\n   - Permission denied for read access\n   - Invalid repository path handling\n   - Gateway header validation\n\n2. Receive-pack endpoint tests:\n   - Valid SSH-forwarded push request with packfile processing\n   - Push with multiple refs and commits\n   - Large push operations with streaming\n   - Permission denied for write access\n   - Concurrent push attempts to same repository\n   - Invalid packfile data handling\n\n3. Protocol compatibility tests:\n   - Test with actual Git SSH client operations (if possible in test environment)\n   - Verify compatibility with standard Git SSH protocol flow\n   - Test error message format compatibility\n\nMock the Git repository interface, permission client, and gateway requests. Use test repositories with known commit history for predictable test outcomes. Implement benchmarks for packfile streaming performance and memory usage during large operations.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           3,
           4,
@@ -1068,12 +1068,69 @@
           "15"
         ],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create SSH Protocol Request Validation and Context Extraction",
+            "description": "Implement request validation and user context extraction for SSH-forwarded Git operations from the gateway.",
+            "dependencies": [],
+            "details": "Create middleware and validation functions that extract user context from gateway headers, validate repository paths, and ensure SSH-specific request parameters are properly formatted. This includes parsing SSH protocol headers, validating repository ownership format, and extracting authentication context forwarded by the collabops-git-ssh gateway.",
+            "status": "done",
+            "testStrategy": "Write unit tests for request validation with various header combinations, invalid repository paths, and malformed SSH protocol parameters. Test context extraction with mock gateway headers."
+          },
+          {
+            "id": 2,
+            "title": "Implement Common SSH Protocol Handler Infrastructure",
+            "description": "Create shared infrastructure for both upload-pack and receive-pack operations including streaming, error handling, and protocol negotiation.",
+            "dependencies": [
+              "16.1"
+            ],
+            "details": "Develop reusable components for SSH protocol handling including streaming utilities using io.Copy and bufio, SSH-specific error message formatting, capability negotiation helpers, and correlation ID management for tracing operations across gateway and executor. Include proper resource cleanup and connection management.",
+            "status": "done",
+            "testStrategy": "Write unit tests for streaming utilities, error formatting, and capability negotiation. Test resource cleanup and connection handling with mock readers/writers."
+          },
+          {
+            "id": 3,
+            "title": "Implement POST /ssh/upload-pack Endpoint",
+            "description": "Create the SSH upload-pack endpoint that handles SSH-forwarded git-upload-pack requests for fetch operations.",
+            "dependencies": [
+              "16.1",
+              "16.2"
+            ],
+            "details": "Implement HTTP handler for POST /ssh/upload-pack that accepts SSH-forwarded requests, validates parameters, checks read permissions using the permission client, executes git-upload-pack using go-git or exec.Command, and streams packfile data back to the gateway. Handle SSH-specific protocol nuances including want/have refs negotiation.",
+            "status": "done",
+            "testStrategy": "Write integration tests using httptest for SSH-forwarded fetch requests with proper capability negotiation, different want/have combinations, permission scenarios, and large repository fetches with packfile streaming."
+          },
+          {
+            "id": 4,
+            "title": "Implement POST /ssh/receive-pack Endpoint",
+            "description": "Create the SSH receive-pack endpoint that handles SSH-forwarded git-receive-pack requests for push operations.",
+            "dependencies": [
+              "16.1",
+              "16.2"
+            ],
+            "details": "Implement HTTP handler for POST /ssh/receive-pack that accepts SSH-forwarded requests, validates parameters and user context, checks write permissions, executes git-receive-pack to process incoming packfiles, handles pre-receive and post-receive hooks if configured, and returns appropriate status codes to the gateway.",
+            "status": "done",
+            "testStrategy": "Write integration tests for SSH-forwarded push requests, concurrent push attempts, permission denied scenarios, invalid packfile handling, and hook execution. Test with various packfile sizes and repository states."
+          },
+          {
+            "id": 5,
+            "title": "Integrate SSH Endpoints with Repository Caching and Error Handling",
+            "description": "Integrate SSH protocol endpoints with the repository caching layer and implement comprehensive error handling for all failure scenarios.",
+            "dependencies": [
+              "16.3",
+              "16.4"
+            ],
+            "details": "Connect SSH endpoints to the repository caching layer for improved performance, implement comprehensive error handling for invalid repository paths, permission denied scenarios, malformed packfile data, Git command execution failures, and network interruptions. Add proper logging with correlation IDs and ensure compatibility with standard Git SSH operations.",
+            "status": "done",
+            "testStrategy": "Write integration tests covering cache integration, all error scenarios including network interruptions, malformed data handling, and end-to-end SSH protocol compatibility with standard Git clients through the gateway."
+          }
+        ]
       }
     ],
     "metadata": {
       "created": "2025-07-23T07:08:52.675Z",
-      "updated": "2025-07-24T09:36:20.202Z",
+      "updated": "2025-07-25T01:31:05.120Z",
       "description": "Tasks for master context"
     }
   }

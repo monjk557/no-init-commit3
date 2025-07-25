@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # Git Executor service
+  git-executor:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      - GIT_REPO_ROOT=/repos
+      - LOG_LEVEL=debug
+      - PORT=8080
+      - PERMISSION_SERVICE_URL=http://permission-mock:8081
+    volumes:
+      - git-repos:/repos
+      - ./test-config.yaml:/app/config.yaml:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      - permission-mock
+
+  # Mock permission service
+  permission-mock:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./mock-permission-service:/app
+    command: |
+      sh -c "
+        npm install express body-parser
+        node server.js
+      "
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # SSH Gateway simulator
+  ssh-gateway-simulator:
+    image: alpine:latest
+    depends_on:
+      git-executor:
+        condition: service_healthy
+    volumes:
+      - ./ssh-test-scripts:/scripts
+      - test-results:/results
+    command: |
+      sh -c "
+        apk add --no-cache curl git openssh-client bash jq
+        chmod +x /scripts/*.sh
+        /scripts/run-ssh-tests.sh
+      "
+    environment:
+      - EXECUTOR_URL=http://git-executor:8080
+      - TEST_OUTPUT=/results
+
+  # Integration test runner
+  test-runner:
+    image: golang:1.21-alpine
+    working_dir: /app
+    volumes:
+      - ..:/app
+      - test-results:/results
+    depends_on:
+      git-executor:
+        condition: service_healthy
+    command: |
+      sh -c "
+        apk add --no-cache git curl
+        go test -v ./test/integration/... -tags=integration
+      "
+    environment:
+      - EXECUTOR_URL=http://git-executor:8080
+      - PERMISSION_SERVICE_URL=http://permission-mock:8081
+      - TEST_RESULTS_DIR=/results
+
+  # Performance test runner
+  performance-tester:
+    image: alpine:latest
+    depends_on:
+      git-executor:
+        condition: service_healthy
+    volumes:
+      - ./performance-tests:/tests
+      - test-results:/results
+    command: |
+      sh -c "
+        apk add --no-cache apache2-utils curl
+        /tests/run-performance-tests.sh
+      "
+    environment:
+      - EXECUTOR_URL=http://git-executor:8080
+      - RESULTS_DIR=/results
+
+volumes:
+  git-repos:
+  test-results: 

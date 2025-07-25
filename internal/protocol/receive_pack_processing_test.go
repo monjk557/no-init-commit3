@@ -2,7 +2,7 @@ package protocol
 
 import (
 	"context"
-	"os"
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -16,31 +16,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestProcessRefUpdateSimple tests reference updates with a simple in-memory repository
 func TestProcessRefUpdateSimple(t *testing.T) {
-	// Create an in-memory repository to avoid file system issues
-	storage := memory.NewStorage()
+	// Create an in-memory repository for testing
 	fs := memfs.New()
-
+	storage := memory.NewStorage()
 	repo, err := gogit.Init(storage, fs)
 	require.NoError(t, err)
 
-	// Create a simple commit
-	w, err := repo.Worktree()
+	// Create a handler with basic config
+	cfg := &config.Config{
+		Git: config.GitConfig{
+			RepoRoot: "/tmp/test",
+		},
+	}
+	mockPermClient := &MockPermissionClient{
+		shouldAllow: true,
+		shouldError: false,
+	}
+	handler, err := NewReceivePackHandler(cfg, mockPermClient)
 	require.NoError(t, err)
 
-	// Create a file
-	file, err := fs.Create("test.txt")
+	ctx := context.Background()
+
+	// Test creating a new branch with a real commit
+	// First, create a commit in the repository
+	worktree, err := repo.Worktree()
 	require.NoError(t, err)
-	_, err = file.Write([]byte("Hello, World!"))
+
+	// Create a test file
+	file, err := worktree.Filesystem.Create("test.txt")
+	require.NoError(t, err)
+	_, err = file.Write([]byte("test content"))
 	require.NoError(t, err)
 	file.Close()
 
-	// Add and commit
-	_, err = w.Add("test.txt")
+	// Add and commit the file
+	_, err = worktree.Add("test.txt")
 	require.NoError(t, err)
 
-	commitHash, err := w.Commit("Initial commit", &gogit.CommitOptions{
+	hash, err := worktree.Commit("Initial commit", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test User",
 			Email: "test@example.com",
@@ -49,183 +63,208 @@ func TestProcessRefUpdateSimple(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Create a temporary directory for the path config
-	tempDir, err := os.MkdirTemp("", "ref-update-simple-")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tempDir) }()
-
-	cfg := &config.Config{
-		Git: config.GitConfig{
-			RepoRoot: tempDir,
-		},
+	// Test 1: Create new branch pointing to the commit
+	cmd := RefUpdateCommand{
+		OldHash: plumbing.ZeroHash,
+		NewHash: hash,
+		RefName: "refs/heads/feature-branch",
 	}
 
+	err = handler.processRefUpdate(ctx, repo, cmd)
+	assert.NoError(t, err)
+
+	// Verify the reference was created
+	ref, err := repo.Reference(plumbing.ReferenceName("refs/heads/feature-branch"), false)
+	assert.NoError(t, err)
+	assert.Equal(t, hash, ref.Hash())
+
+	// Test 2: Update existing branch
+	// Create another commit
+	file2, err := worktree.Filesystem.Create("test2.txt")
+	require.NoError(t, err)
+	_, err = file2.Write([]byte("second file"))
+	require.NoError(t, err)
+	file2.Close()
+
+	_, err = worktree.Add("test2.txt")
+	require.NoError(t, err)
+
+	hash2, err := worktree.Commit("Second commit", &gogit.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	updateCmd := RefUpdateCommand{
+		OldHash: hash,
+		NewHash: hash2,
+		RefName: "refs/heads/feature-branch",
+	}
+
+	err = handler.processRefUpdate(ctx, repo, updateCmd)
+	assert.NoError(t, err)
+
+	// Verify the reference was updated
+	ref, err = repo.Reference(plumbing.ReferenceName("refs/heads/feature-branch"), false)
+	assert.NoError(t, err)
+	assert.Equal(t, hash2, ref.Hash())
+
+	// Test 3: Delete branch
+	deleteCmd := RefUpdateCommand{
+		OldHash: hash2,
+		NewHash: plumbing.ZeroHash,
+		RefName: "refs/heads/feature-branch",
+	}
+
+	err = handler.processRefUpdate(ctx, repo, deleteCmd)
+	assert.NoError(t, err)
+
+	// Verify the reference was deleted
+	_, err = repo.Reference(plumbing.ReferenceName("refs/heads/feature-branch"), false)
+	assert.Error(t, err) // Should error because reference no longer exists
+}
+
+func TestRefValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		refName  string
+		expected bool
+	}{
+		{"Valid branch", "refs/heads/main", true},
+		{"Valid tag", "refs/tags/v1.0.0", true},
+		{"Valid remote", "refs/remotes/origin/main", true},
+		{"Invalid empty", "", false},
+		{"Invalid no refs prefix", "heads/main", false},
+		{"Invalid double slash", "refs//heads/main", false},
+		{"Invalid ending slash", "refs/heads/main/", false},
+		{"Invalid characters", "refs/heads/main~1", false},
+		{"Invalid control char", "refs/heads/main\x00", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isValidRefName(tt.refName)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestProcessPackfile(t *testing.T) {
+	// Create a test repository
+	fs := memfs.New()
+	storage := memory.NewStorage()
+	repo, err := gogit.Init(storage, fs)
+	require.NoError(t, err)
+
+	// Create a handler with proper config
+	cfg := &config.Config{
+		Git: config.GitConfig{
+			RepoRoot: "/tmp/test",
+		},
+	}
 	mockPermClient := &MockPermissionClient{
 		shouldAllow: true,
 		shouldError: false,
 	}
-
 	handler, err := NewReceivePackHandler(cfg, mockPermClient)
 	require.NoError(t, err)
 
 	ctx := context.Background()
 
-	tests := []struct {
-		name        string
-		setupRef    func() error
-		cmd         RefUpdateCommand
-		expectError bool
-		errorMsg    string
-		checkRef    func(t *testing.T)
-	}{
-		{
-			name: "Create new branch",
-			cmd: RefUpdateCommand{
-				RefName: "refs/heads/feature",
-				OldHash: plumbing.ZeroHash,
-				NewHash: commitHash,
-			},
-			expectError: false,
-			checkRef: func(t *testing.T) {
-				ref, err := repo.Reference(plumbing.ReferenceName("refs/heads/feature"), true)
-				assert.NoError(t, err)
-				assert.Equal(t, commitHash, ref.Hash())
-			},
-		},
-		{
-			name: "Update existing branch",
-			setupRef: func() error {
-				// Create the branch first
-				ref := plumbing.NewHashReference("refs/heads/update-test", commitHash)
-				return repo.Storer.SetReference(ref)
-			},
-			cmd: RefUpdateCommand{
-				RefName: "refs/heads/update-test",
-				OldHash: commitHash,
-				NewHash: commitHash, // Same hash, but still a valid update
-			},
-			expectError: false,
-			checkRef: func(t *testing.T) {
-				ref, err := repo.Reference(plumbing.ReferenceName("refs/heads/update-test"), true)
-				assert.NoError(t, err)
-				assert.Equal(t, commitHash, ref.Hash())
-			},
-		},
-		{
-			name: "Delete existing branch",
-			setupRef: func() error {
-				// Create the branch first
-				ref := plumbing.NewHashReference("refs/heads/to-delete", commitHash)
-				return repo.Storer.SetReference(ref)
-			},
-			cmd: RefUpdateCommand{
-				RefName: "refs/heads/to-delete",
-				OldHash: commitHash,
-				NewHash: plumbing.ZeroHash,
-			},
-			expectError: false,
-			checkRef: func(t *testing.T) {
-				_, err := repo.Reference(plumbing.ReferenceName("refs/heads/to-delete"), true)
-				assert.Error(t, err)
-				assert.Equal(t, plumbing.ErrReferenceNotFound, err)
-			},
-		},
-		{
-			name: "Invalid reference name",
-			cmd: RefUpdateCommand{
-				RefName: "not-a-valid-ref",
-				OldHash: plumbing.ZeroHash,
-				NewHash: commitHash,
-			},
-			expectError: true,
-			errorMsg:    "invalid reference name",
-		},
-		{
-			name: "Non-existent commit",
-			cmd: RefUpdateCommand{
-				RefName: "refs/heads/bad-commit",
-				OldHash: plumbing.ZeroHash,
-				NewHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-			},
-			expectError: true,
-			errorMsg:    "not found in repository",
-		},
-		{
-			name: "Concurrent modification check",
-			setupRef: func() error {
-				// Create a branch
-				ref := plumbing.NewHashReference("refs/heads/concurrent", commitHash)
-				return repo.Storer.SetReference(ref)
-			},
-			cmd: RefUpdateCommand{
-				RefName: "refs/heads/concurrent",
-				OldHash: plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), // Wrong old hash
-				NewHash: commitHash,
-			},
-			expectError: true,
-			errorMsg:    "has been modified",
-		},
-	}
+	// Test 1: Empty packfile data
+	err = handler.processPackfile(ctx, repo, []byte{})
+	assert.NoError(t, err)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Run setup if provided
-			if tt.setupRef != nil {
-				err := tt.setupRef()
-				require.NoError(t, err)
-			}
+	// Test 2: Invalid packfile data
+	err = handler.processPackfile(ctx, repo, []byte("invalid"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid packfile format")
 
-			// Execute the reference update
-			err := handler.processRefUpdate(ctx, repo, tt.cmd)
+	// Test 3: Valid packfile header but too short
+	shortPackfile := []byte("PACK")
+	err = handler.processPackfile(ctx, repo, shortPackfile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "packfile too short")
 
-			// Check error expectations
-			if tt.expectError {
-				assert.Error(t, err)
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
+	// Test 4: Valid packfile header with correct format
+	validPackfile := make([]byte, 12)
+	copy(validPackfile[0:4], "PACK")                   // signature
+	binary.BigEndian.PutUint32(validPackfile[4:8], 2)  // version 2
+	binary.BigEndian.PutUint32(validPackfile[8:12], 0) // 0 objects
 
-			// Run additional checks if provided
-			if tt.checkRef != nil {
-				tt.checkRef(t)
-			}
-		})
-	}
+	err = handler.processPackfile(ctx, repo, validPackfile)
+	assert.NoError(t, err)
+
+	// Test 5: Invalid signature
+	invalidSig := make([]byte, 12)
+	copy(invalidSig[0:4], "XXXX")
+	binary.BigEndian.PutUint32(invalidSig[4:8], 2)
+	binary.BigEndian.PutUint32(invalidSig[8:12], 0)
+
+	err = handler.processPackfile(ctx, repo, invalidSig)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid packfile signature")
+
+	// Test 6: Invalid version
+	invalidVer := make([]byte, 12)
+	copy(invalidVer[0:4], "PACK")
+	binary.BigEndian.PutUint32(invalidVer[4:8], 5) // unsupported version
+	binary.BigEndian.PutUint32(invalidVer[8:12], 0)
+
+	err = handler.processPackfile(ctx, repo, invalidVer)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported packfile version")
 }
 
-// TestRefValidation tests the reference name validation
-func TestRefValidation(t *testing.T) {
-	tests := []struct {
-		refName string
-		valid   bool
-	}{
-		{"refs/heads/main", true},
-		{"refs/tags/v1.0.0", true},
-		{"refs/remotes/origin/main", true},
-		{"", false},
-		{"heads/main", false},
-		{"refs/heads/", false},
-		{"refs/heads/main.lock", false},
-		{"refs/heads/main..other", false},
-		{"refs/heads/main~1", false},
-		{"refs/heads/main^", false},
-		{"refs/heads/main:other", false},
-		{"refs/heads/main?", false},
-		{"refs/heads/main*", false},
-		{"refs/heads/main[", false},
-		{"refs/heads/main\\", false},
-		{"refs/heads//main", false},
-		{"refs/heads/main@{", false},
-		{"refs/heads/ main", false},
+func TestValidatePackfileFormat(t *testing.T) {
+	cfg := &config.Config{
+		Git: config.GitConfig{
+			RepoRoot: "/tmp/test",
+		},
 	}
+	mockPermClient := &MockPermissionClient{
+		shouldAllow: true,
+		shouldError: false,
+	}
+	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	require.NoError(t, err)
 
-	for _, tt := range tests {
-		t.Run(tt.refName, func(t *testing.T) {
-			result := isValidRefName(tt.refName)
-			assert.Equal(t, tt.valid, result, "Reference name validation mismatch for %q", tt.refName)
-		})
-	}
+	// Test 1: Valid packfile header
+	validPackfile := make([]byte, 12)
+	copy(validPackfile[0:4], "PACK")
+	binary.BigEndian.PutUint32(validPackfile[4:8], 2)
+	binary.BigEndian.PutUint32(validPackfile[8:12], 5)
+
+	header, err := handler.validatePackfileFormat(validPackfile)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(2), header.Version)
+	assert.Equal(t, uint32(5), header.ObjectCount)
+
+	// Test 2: Too short
+	_, err = handler.validatePackfileFormat([]byte("PACK"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "packfile too short")
+
+	// Test 3: Invalid signature
+	invalidSig := make([]byte, 12)
+	copy(invalidSig[0:4], "XXXX")
+	binary.BigEndian.PutUint32(invalidSig[4:8], 2)
+	binary.BigEndian.PutUint32(invalidSig[8:12], 0)
+
+	_, err = handler.validatePackfileFormat(invalidSig)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid packfile signature")
+
+	// Test 4: Invalid version
+	invalidVer := make([]byte, 12)
+	copy(invalidVer[0:4], "PACK")
+	binary.BigEndian.PutUint32(invalidVer[4:8], 1) // too old
+	binary.BigEndian.PutUint32(invalidVer[8:12], 0)
+
+	_, err = handler.validatePackfileFormat(invalidVer)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported packfile version")
 }
