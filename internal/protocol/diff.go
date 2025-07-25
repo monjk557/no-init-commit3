@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/go-chi/chi/v5"
@@ -351,11 +352,12 @@ func (h *DiffHandler) generatePatch(ctx context.Context, repoPath, base, head st
 
 // calculateCommitDiff performs the actual diff calculation between two commits
 func (h *DiffHandler) calculateCommitDiff(ctx context.Context, repoPath, base, head string, contextLines int) (*DiffResponse, error) {
-	// Open repository using go-git
-	gitRepo, err := gogit.PlainOpen(repoPath)
+	// Open repository using cached approach
+	gitRepo, cleanup, err := h.getGitRepository(repoPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %w", err)
+		return nil, err
 	}
+	defer cleanup()
 
 	// Get commit objects
 	baseCommit, err := gitRepo.CommitObject(plumbing.NewHash(base))
@@ -562,11 +564,12 @@ func isCommitNotFoundError(err error) bool {
 
 // calculateBranchDiff performs diff calculation between two branches with merge base analysis
 func (h *DiffHandler) calculateBranchDiff(ctx context.Context, repoPath, baseBranch, headBranch string, contextLines int) (*DiffResponse, error) {
-	// Open repository using go-git
-	gitRepo, err := gogit.PlainOpen(repoPath)
+	// Open repository using cached approach
+	gitRepo, cleanup, err := h.getGitRepository(repoPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %w", err)
+		return nil, err
 	}
+	defer cleanup()
 
 	// Resolve branch names to commits
 	baseCommit, err := h.resolveBranchToCommit(gitRepo, baseBranch)
@@ -737,11 +740,12 @@ func isFileNotFoundError(err error) bool {
 
 // calculateFileDiff performs diff calculation for a specific file between two references
 func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath, base, head string, contextLines int, format string) (*DiffResponse, error) {
-	// Open repository using go-git
-	gitRepo, err := gogit.PlainOpen(repoPath)
+	// Open repository using cached approach
+	gitRepo, cleanup, err := h.getGitRepository(repoPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %w", err)
+		return nil, err
 	}
+	defer cleanup()
 
 	// Resolve base and head to commit objects (support both commit hashes and branch names)
 	baseCommit, err := h.resolveReferenceToCommit(gitRepo, base)
@@ -1243,4 +1247,26 @@ func getFileMetadata(change *object.Change) map[string]interface{} {
 	}
 
 	return metadata
+}
+
+// getGitRepository opens a Git repository using the cache and returns the underlying go-git repository
+func (h *DiffHandler) getGitRepository(repoPath string) (*gogit.Repository, func(), error) {
+	repo, err := git.OpenRepositoryWithNewCache(repoPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// Create cleanup function
+	cleanup := func() {
+		_ = repo.Close()
+	}
+
+	// Get the underlying go-git repository
+	goGitRepo, ok := repo.(*git.GoGitRepository)
+	if !ok {
+		cleanup()
+		return nil, nil, fmt.Errorf("unexpected repository type")
+	}
+
+	return goGitRepo.GetGoGitRepo(), cleanup, nil
 }

@@ -1,0 +1,22 @@
+# pack-refs with: peeled fully-peeled sorted 
+0744dee15b0eeba260f9c390d2d5b8c45532167b refs/heads/chore/CP-123-cursor-rule
+81b46003c93c7a788d219ef73f30e1f0afe0e080 refs/heads/feat-user-profile-2
+21abffc6d5d5b84e990c5afd66b6ce53c9f47bf1 refs/heads/feat-userprofile
+4310335642b5090bec4998f59615ab1ee55e5f64 refs/heads/feat/openapi-schema-improvements
+6eb105e37ce764bfcb612cd0854c1686934eb167 refs/heads/feature/drf-error-boundary
+2069c5a3cfb276e5539ac8f0451033afee50adc5 refs/heads/feature/memberships
+7dc460a7411b969eb70cd2068e04c74177dacfa7 refs/heads/feature/mock-fixture
+a4f7175aa31bd2c0b5163b2b96ef5c10eee7e70c refs/heads/feature/organizations
+caa66dfbcd7b4c169944fea19c6656d3c413da7f refs/heads/feature/project
+996d257adff94d317053bd3c4cd08f1691ae1d26 refs/heads/feature/repositories
+dc350be3030a6a747fd8161c3f5516b91fb4f547 refs/heads/feature/workspaces
+f1fb462d327c401cfdb47f0e61acbb62f8577ca7 refs/heads/fix/CP-124-create-project-error
+77576a0555d822d0a51f6bce37c4319cbb50b818 refs/heads/fix/CP-126-project-api-debugging
+e8f3f54eb5fca742b9c50dc51d829da13f1c59b7 refs/heads/fix/CP-129-project-member
+a0966b6a29598c644c2569a717fcb14c085897f9 refs/heads/main
+68f413cda83e831d2660b530cad4dd4fdb5d1aa0 refs/heads/refactor/CP-102-standardize-id-params
+3bae5d2e2f6506236b47939a17cb6f69ddea9da0 refs/heads/refactor/CP-92-change-issuse-domain
+d6183a06809c234668c53c7978499d461a346dcf refs/heads/refactor/CP-93-repository-schema
+42bb7c7aa3fa923ee3bf9d0f8cf180c82b6ebcdc refs/heads/refactor/api-endpoint-simplification
+abfb91b66506e6dfe7fe7fe7975952b81d809ac0 refs/heads/refactor/mock-fixture
+9e7be41ff17a33ef667cefa008feb1cbee0f9231 refs/tags/v0.0.0

@@ -98,7 +98,7 @@ Thumbs.db
 /tmp/
 
 # Git repositories (if testing with real repos)
-/test-repos/
+# /test-repos/
 /repos/
 
 # Certificate files (security)

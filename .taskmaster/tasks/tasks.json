@@ -698,7 +698,7 @@
         "dependencies": [
           5
         ],
-        "status": "in-progress",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -749,8 +749,8 @@
             "dependencies": [
               "11.4"
             ],
-            "details": "Define RepositoryCache interface with methods: GetRepository(path), InvalidateRepository(path), Close(). Implement cache key generation using absolute filesystem paths. Handle repository updates by invalidating cache entries when repositories change. Integrate with existing Git operations.",
-            "status": "pending",
+            "details": "Define RepositoryCache interface with methods: GetRepository(path), InvalidateRepository(path), Close(). Implement cache key generation using absolute filesystem paths. Handle repository updates by invalidating cache entries when repositories change. Integrate with existing Git operations.\n<info added on 2025-07-25T10:23:01.081Z>\nTASK COMPLETED - Repository cache successfully integrated with Git operations!\n\nImplementation completed with RepositoryCache interface definition, LRU cache adapter implementation, factory functions, and full integration with Git operations via cached_repository.go. All protocol handlers updated to use cached repositories.\n\nKey files implemented:\n- internal/cache/interface.go - RepositoryCache interface\n- internal/cache/factory.go - Cache factory functions  \n- internal/cache/lru.go - Interface implementation\n- internal/git/cached_repository.go - Global cache integration\n- internal/protocol/diff.go - Updated for cached repositories\n\nInterface methods implemented: GetRepository(), SetRepository(), InvalidateRepository(), InvalidateAll(), GetMetrics(), Close()\n\nCache features: Global thread-safe cache, 100 repos/30min TTL/512MB defaults, path-based keys, automatic population on miss, manual invalidation support.\n\nAll tests passing including unit tests, integration tests, TTL expiration, LRU eviction, path normalization, concurrent access, and metrics verification.\n\nPerformance benefits achieved: Reduced filesystem I/O, faster Git operations for frequently accessed repositories, memory-efficient with configurable limits, observable via Prometheus metrics.\n</info added on 2025-07-25T10:23:01.081Z>",
+            "status": "done",
             "testStrategy": "Write integration tests for cache integration with Git operations. Test repository invalidation on updates, proper key generation, and performance improvement measurements comparing cached vs non-cached operations."
           }
         ]
@@ -1130,7 +1130,7 @@
     ],
     "metadata": {
       "created": "2025-07-23T07:08:52.675Z",
-      "updated": "2025-07-25T10:02:38.215Z",
+      "updated": "2025-07-25T10:23:27.595Z",
       "description": "Tasks for master context"
     }
   }

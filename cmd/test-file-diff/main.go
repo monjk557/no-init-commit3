@@ -33,6 +33,7 @@ func main() {
 	// Create config
 	cfg := &config.Config{
 		Git: config.GitConfig{
+			// TODO: Use a temp directory for testing
 			RepoRoot: "/Users/johnbaek/collabops-git-executor/test-repos",
 		},
 	}
@@ -48,6 +49,7 @@ func main() {
 
 	// Test file diff calculation directly
 	ctx := context.Background()
+	// TODO: Use a temp directory for testing
 	repoPath := "/Users/johnbaek/collabops-git-executor/test-repos/testowner/testrepo.git"
 
 	fmt.Println("Testing file diff endpoint functionality...")

@@ -562,3 +562,59 @@ func (c *LRUCache) estimateMemoryUsageWithEntries(entries int64) int64 {
 	const avgRepoSize = 11 * 1024 // 11KB per repository (conservative estimate)
 	return entries * avgRepoSize
 }
+
+// RepositoryCache interface implementation
+
+// GetRepository retrieves a cached repository by its filesystem path.
+// Returns the repository and true if found, or nil and false if not cached.
+func (c *LRUCache) GetRepository(path string) (*gogit.Repository, bool) {
+	// Use the existing Get method
+	repo, exists := c.Get(path)
+	if !exists || repo == nil {
+		return nil, false
+	}
+
+	// Extract the git repository from our Repository wrapper
+	return repo.GitRepo, true
+}
+
+// SetRepository stores a repository in the cache with its filesystem path as the key.
+// The cache implementation handles eviction according to its policy.
+func (c *LRUCache) SetRepository(path string, repo *gogit.Repository) error {
+	// Use the existing Set method which handles the Repository wrapper creation
+	return c.Set(path, repo)
+}
+
+// InvalidateRepository removes a repository from the cache.
+// This should be called when a repository is modified (e.g., after a push).
+func (c *LRUCache) InvalidateRepository(path string) bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if !c.config.Enabled {
+		return false
+	}
+
+	// Check if it exists
+	if _, exists := c.cache.Get(path); !exists {
+		return false
+	}
+
+	// Remove from cache
+	removed := c.cache.Remove(path)
+	if removed {
+		c.decrementEntries()
+	}
+
+	return removed
+}
+
+// InvalidateAll removes all repositories from the cache.
+// Useful for cache maintenance or when global repository changes occur.
+func (c *LRUCache) InvalidateAll() {
+	// Use the existing Purge method
+	c.Purge()
+}
+
+// Ensure LRUCache implements RepositoryCache interface
+var _ RepositoryCache = (*LRUCache)(nil)
