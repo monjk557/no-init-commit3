@@ -7,6 +7,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Repository represents a cached Git repository with its metadata
@@ -81,6 +82,9 @@ type LRUCache struct {
 
 	// metrics holds cache statistics
 	metrics *CacheMetrics
+
+	// prometheusMetrics holds Prometheus metrics (optional)
+	prometheusMetrics *PrometheusMetrics
 
 	// onEvicted is called when a repository is evicted from the cache
 	onEvicted func(key string, repository *Repository)
@@ -237,6 +241,13 @@ func (c *LRUCache) Set(path string, gitRepo *gogit.Repository) error {
 		c.incrementEntries()
 	}
 
+	// Record Prometheus metrics if enabled
+	if c.prometheusMetrics != nil {
+		c.prometheusMetrics.RecordSet()
+		// Update current entry count and memory usage
+		c.updatePrometheusMetrics()
+	}
+
 	return nil
 }
 
@@ -331,9 +342,15 @@ func (c *LRUCache) removeExpiredEntries() {
 	}
 
 	// Remove expired entries
+	cleanupCount := len(expiredKeys)
 	for _, key := range expiredKeys {
 		c.cache.Remove(key)
 		c.decrementEntries()
+	}
+
+	// Record cleanup metrics if enabled and entries were cleaned up
+	if c.prometheusMetrics != nil && cleanupCount > 0 {
+		c.prometheusMetrics.RecordCleanup()
 	}
 }
 
@@ -421,24 +438,47 @@ func (c *LRUCache) recordHit() {
 	c.metrics.mutex.Lock()
 	defer c.metrics.mutex.Unlock()
 	c.metrics.Hits++
+
+	// Record Prometheus metric if enabled
+	if c.prometheusMetrics != nil {
+		c.prometheusMetrics.RecordHit()
+	}
 }
 
 func (c *LRUCache) recordMiss() {
 	c.metrics.mutex.Lock()
 	defer c.metrics.mutex.Unlock()
 	c.metrics.Misses++
+
+	// Record Prometheus metric if enabled
+	if c.prometheusMetrics != nil {
+		c.prometheusMetrics.RecordMiss()
+	}
 }
 
 func (c *LRUCache) recordEviction() {
 	c.metrics.mutex.Lock()
 	defer c.metrics.mutex.Unlock()
 	c.metrics.Evictions++
+
+	// Record Prometheus metric if enabled
+	if c.prometheusMetrics != nil {
+		c.prometheusMetrics.RecordEviction()
+	}
 }
 
 func (c *LRUCache) incrementEntries() {
 	c.metrics.mutex.Lock()
 	defer c.metrics.mutex.Unlock()
 	c.metrics.Entries++
+
+	// Update Prometheus metrics if enabled
+	if c.prometheusMetrics != nil {
+		c.prometheusMetrics.UpdateEntries(c.metrics.Entries)
+		// Update memory usage estimate using the internal version to avoid recursive locking
+		memoryBytes := c.estimateMemoryUsageWithEntries(c.metrics.Entries)
+		c.prometheusMetrics.UpdateMemoryUsage(memoryBytes)
+	}
 }
 
 func (c *LRUCache) decrementEntries() {
@@ -447,10 +487,78 @@ func (c *LRUCache) decrementEntries() {
 	if c.metrics.Entries > 0 {
 		c.metrics.Entries--
 	}
+
+	// Update Prometheus metrics if enabled
+	if c.prometheusMetrics != nil {
+		c.prometheusMetrics.UpdateEntries(c.metrics.Entries)
+		// Update memory usage estimate using the internal version to avoid recursive locking
+		memoryBytes := c.estimateMemoryUsageWithEntries(c.metrics.Entries)
+		c.prometheusMetrics.UpdateMemoryUsage(memoryBytes)
+	}
 }
 
 func (c *LRUCache) resetEntries() {
 	c.metrics.mutex.Lock()
 	defer c.metrics.mutex.Unlock()
 	c.metrics.Entries = 0
+}
+
+// EnablePrometheusMetrics enables Prometheus metrics collection for this cache
+// This uses the default Prometheus registry via promauto
+func (c *LRUCache) EnablePrometheusMetrics() {
+	if c.prometheusMetrics == nil {
+		// NewPrometheusMetrics uses promauto which automatically registers with default registry
+		c.prometheusMetrics = NewPrometheusMetrics()
+		// Update current state
+		c.updatePrometheusMetrics()
+	}
+}
+
+// EnablePrometheusMetricsWithRegistry enables Prometheus metrics with a custom registry
+func (c *LRUCache) EnablePrometheusMetricsWithRegistry(registry prometheus.Registerer) error {
+	if c.prometheusMetrics == nil {
+		c.prometheusMetrics = NewPrometheusMetricsWithRegistry(registry)
+		if err := c.prometheusMetrics.RegisterMetrics(registry); err != nil {
+			return fmt.Errorf("failed to register metrics: %w", err)
+		}
+		// Update current state
+		c.updatePrometheusMetrics()
+	}
+	return nil
+}
+
+// updatePrometheusMetrics synchronizes current cache state with Prometheus metrics
+func (c *LRUCache) updatePrometheusMetrics() {
+	if c.prometheusMetrics == nil {
+		return
+	}
+
+	metrics := c.GetMetrics()
+
+	// Update all current metrics
+	c.prometheusMetrics.UpdateEntries(metrics.Entries)
+
+	// Calculate estimated memory usage
+	memoryBytes := c.estimateMemoryUsage()
+	c.prometheusMetrics.UpdateMemoryUsage(memoryBytes)
+}
+
+// estimateMemoryUsage provides a rough estimate of cache memory usage
+func (c *LRUCache) estimateMemoryUsage() int64 {
+	// Rough estimation:
+	// - Each entry has repository object overhead (~1KB)
+	// - Git repo objects are harder to estimate, use conservative 10KB average
+	// - Repository metadata ~500 bytes
+	// This is a simplified estimation for monitoring purposes
+	const avgRepoSize = 11 * 1024 // 11KB per repository (conservative estimate)
+
+	metrics := c.GetMetrics()
+	return metrics.Entries * avgRepoSize
+}
+
+// estimateMemoryUsageWithEntries provides memory estimate with given entry count
+// This version is used internally when we already have the entry count to avoid recursive locking
+func (c *LRUCache) estimateMemoryUsageWithEntries(entries int64) int64 {
+	const avgRepoSize = 11 * 1024 // 11KB per repository (conservative estimate)
+	return entries * avgRepoSize
 }

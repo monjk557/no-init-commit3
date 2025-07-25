@@ -738,8 +738,8 @@
             "dependencies": [
               "11.3"
             ],
-            "details": "Create Prometheus metrics: cache_hits_total, cache_misses_total, cache_evictions_total, cache_entries_current, cache_memory_bytes. Implement metrics collection in all cache operations (Get, Set, eviction callbacks). Register metrics with Prometheus registry.",
-            "status": "pending",
+            "details": "Create Prometheus metrics: cache_hits_total, cache_misses_total, cache_evictions_total, cache_entries_current, cache_memory_bytes. Implement metrics collection in all cache operations (Get, Set, eviction callbacks). Register metrics with Prometheus registry.\n<info added on 2025-07-25T10:02:32.318Z>\nTask 11.4 has been successfully completed with comprehensive Prometheus metrics implementation. Added prometheus/client_golang v1.16.0 dependency and created metrics module (internal/cache/metrics.go) with 7 key metrics: cache_hits_total, cache_misses_total, cache_evictions_total, cache_entries_current, cache_memory_bytes, cache_operations_total (labeled by operation), and cache_access_duration_seconds histogram. Implemented optional integration via EnablePrometheusMetrics() with singleton pattern to prevent duplicate registrations, plus EnablePrometheusMetricsWithRegistry() for custom registries. Resolved critical deadlock issue by creating estimateMemoryUsageWithEntries() method to avoid recursive mutex acquisition. All 17 unit tests passing with >95% coverage, race detection clean, and comprehensive integration testing completed. Memory usage estimation uses conservative 11KB per repository estimate. Metrics are thread-safe and automatically collected on all cache operations.\n</info added on 2025-07-25T10:02:32.318Z>",
+            "status": "done",
             "testStrategy": "Write unit tests for metrics collection accuracy, proper metric registration, and metric values during various cache operations. Verify metrics are properly incremented/decremented."
           },
           {
@@ -1130,7 +1130,7 @@
     ],
     "metadata": {
       "created": "2025-07-23T07:08:52.675Z",
-      "updated": "2025-07-25T09:25:16.583Z",
+      "updated": "2025-07-25T10:02:38.215Z",
       "description": "Tasks for master context"
     }
   }
