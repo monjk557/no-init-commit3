@@ -34,7 +34,8 @@ func TestProcessRefUpdateSimple(t *testing.T) {
 	require.NoError(t, err)
 	_, err = file.Write([]byte("Hello, World!"))
 	require.NoError(t, err)
-	file.Close()
+	err = file.Close()
+	require.NoError(t, err)
 
 	// Add and commit
 	_, err = w.Add("test.txt")

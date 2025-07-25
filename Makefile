@@ -187,18 +187,18 @@ fix: ## COMPREHENSIVE: Auto-format, fix auto-fixable lint issues, and show remai
 format: ## Auto-format code, fix lint issues, run tests, and show results (COMPREHENSIVE)
 	@echo "$(BLUE)🎨 COMPREHENSIVE Auto-formatting and organizing code...$(NC)"
 	@echo ""
-	@echo "$(YELLOW)1️⃣  Running auto-fixable lint fixes...$(NC)"
+	@echo "$(YELLOW)1️⃣  Running auto-fixable lint fixes (manual issues checked later)...$(NC)"
 	@if command -v golangci-lint >/dev/null 2>&1; then \
 		golangci-lint run --fix ./...; \
-		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved$(NC)"; \
+		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved (manual fixes checked in step 7)$(NC)"; \
 	elif command -v $$(go env GOPATH)/bin/golangci-lint >/dev/null 2>&1; then \
 		$$(go env GOPATH)/bin/golangci-lint run --fix ./...; \
-		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved$(NC)"; \
+		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved (manual fixes checked in step 7)$(NC)"; \
 	else \
 		echo "$(YELLOW)   📦 Installing golangci-lint for auto-fixes...$(NC)"; \
 		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
 		$$(go env GOPATH)/bin/golangci-lint run --fix ./...; \
-		echo "$(GREEN)   ✅ golangci-lint installed and auto-fixes applied$(NC)"; \
+		echo "$(GREEN)   ✅ golangci-lint installed and auto-fixes applied (manual fixes checked in step 7)$(NC)"; \
 	fi
 	@echo ""
 	@echo "$(YELLOW)2️⃣  Running gofmt (format Go source code)...$(NC)"
@@ -239,8 +239,8 @@ format: ## Auto-format code, fix lint issues, run tests, and show results (COMPR
 	@echo ""
 	@echo "$(GREEN)✨ COMPREHENSIVE formatting complete! Running final validation...$(NC)"
 	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
-	@echo "$(YELLOW)7️⃣  Running lint check...$(NC)"
-	@$(MAKE) lint
+	@echo "$(YELLOW)7️⃣  Running lint check (ALL issues, including manual fixes)...$(NC)"
+	@$(MAKE) lint && echo "$(GREEN)   ✅ All lint checks pass$(NC)" || (echo "$(RED)   ❌ Lint issues found - please fix before committing$(NC)" && exit 1)
 	@echo ""
 	@echo "$(YELLOW)8️⃣  Running quick tests to catch breaking changes...$(NC)"
 	@$(GOTEST) -short ./... && echo "$(GREEN)   ✅ All tests pass$(NC)" || (echo "$(RED)   ❌ Tests failed - please fix issues before committing$(NC)" && exit 1)
