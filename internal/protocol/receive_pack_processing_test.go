@@ -85,7 +85,7 @@ func TestProcessRefUpdateSimple(t *testing.T) {
 	require.NoError(t, err)
 	_, err = file2.Write([]byte("second file"))
 	require.NoError(t, err)
-	file2.Close()
+	_ = file2.Close()
 
 	_, err = worktree.Add("test2.txt")
 	require.NoError(t, err)

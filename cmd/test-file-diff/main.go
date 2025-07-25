@@ -86,7 +86,7 @@ func main() {
 func testCalculateFileDiff(handler *protocol.DiffHandler, ctx context.Context, repoPath, filePath, base, head string, contextLines int, format string) (*protocol.DiffResponse, error) {
 	// Since calculateFileDiff is not exported, we'll need to test through the HTTP handler
 	// For now, let's just test that the handler was created successfully
-	return nil, fmt.Errorf("Direct access to calculateFileDiff method is not available (private method)")
+	return nil, fmt.Errorf("direct access to calculateFileDiff method is not available (private method)")
 }
 
 func printDiffResult(result *protocol.DiffResponse) {

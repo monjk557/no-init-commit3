@@ -25,7 +25,7 @@ import (
 func TestDiffEndpointsIntegration(t *testing.T) {
 	// Setup test environment
 	testDir, commit1Hash, commit2Hash := setupIntegrationTestRepoWithCommits(t)
-	defer os.RemoveAll(testDir)
+	defer func() { _ = os.RemoveAll(testDir) }()
 
 	// Create test config
 	cfg := &config.Config{

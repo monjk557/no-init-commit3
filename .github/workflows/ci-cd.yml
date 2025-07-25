@@ -47,13 +47,13 @@ jobs:
           echo "🔍 Verifying CI configuration matches local setup..."
           echo ""
           echo "📋 Configuration from Makefile:"
-          echo "Available commands: test-verbose, fmt, lint, vet, test-race"
+          echo "Available commands: test-verbose, format (comprehensive), vet, test-race"
           echo ""
-          echo "🎯 CI commands now match Makefile exactly:"
-          echo "  Local: make test-verbose && make fmt && make lint"
-          echo "  CI:    make test-verbose && make fmt && make lint"
+          echo "🎯 CI commands now match local development exactly:"
+          echo "  Local: make format (includes fmt + lint + tests)"
+          echo "  CI:    make format (includes fmt + lint + tests)"
           echo ""
-          echo "✅ Perfect alignment achieved!"
+          echo "✅ Perfect alignment - no more CI/local discrepancies!"
 
       - name: Verify project structure
         run: make verify-structure
@@ -61,20 +61,18 @@ jobs:
       - name: Verify configuration
         run: make verify-config
 
-      - name: Run code formatting check
+      - name: Run comprehensive formatting and linting
         run: |
-          make fmt
+          echo "🎨 Running comprehensive formatting (includes linting)..."
+          make format
           if [ -n "$(git diff --name-only)" ]; then
-            echo "❌ Code is not formatted. Please run 'make fmt'"
+            echo "❌ Code formatting/linting produced changes. Please run 'make format' locally"
             git diff
             exit 1
           fi
 
-      - name: Run go vet
+      - name: Run go vet  
         run: make vet
-
-      - name: Run linter
-        run: make lint
 
       - name: Run tests with race detection
         timeout-minutes: 10

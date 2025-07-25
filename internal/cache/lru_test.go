@@ -77,7 +77,7 @@ func TestLRUCache_BasicOperations(t *testing.T) {
 	config.MaxRepositories = 3
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	// Test Set and Get
 	repoPath1, gitRepo1 := createTestRepository(t)
@@ -113,7 +113,7 @@ func TestLRUCache_LRUEviction(t *testing.T) {
 	config.MaxRepositories = 2
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	// Add two repositories
 	repoPath1, gitRepo1 := createTestRepository(t)
@@ -148,7 +148,7 @@ func TestLRUCache_EvictionCallback(t *testing.T) {
 	config.MaxRepositories = 1
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	// Set up eviction callback
 	var evictedKeys []string
@@ -180,7 +180,7 @@ func TestLRUCache_ConcurrentAccess(t *testing.T) {
 	config.MaxRepositories = 100
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	const numGoroutines = 20
 	const opsPerGoroutine = 50
@@ -236,7 +236,7 @@ func TestLRUCache_Metrics(t *testing.T) {
 	config.MaxRepositories = 2
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	// Initial metrics
 	metrics := cache.GetMetrics()
@@ -300,7 +300,7 @@ func TestLRUCache_DisabledCache(t *testing.T) {
 	config.Enabled = false
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	repoPath, gitRepo := createTestRepository(t)
 
@@ -326,7 +326,7 @@ func TestLRUCache_ValidationErrors(t *testing.T) {
 	config := NewCacheConfig()
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	repoPath, gitRepo := createTestRepository(t)
 
@@ -414,7 +414,7 @@ func TestLRUCache_ConcurrentEviction(t *testing.T) {
 	config.MaxRepositories = 5
 	cache, err := NewLRUCache(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	var evictionMutex sync.Mutex
 	var evictedCount int
@@ -469,7 +469,7 @@ func BenchmarkLRUCache_Set(b *testing.B) {
 	config.MaxRepositories = 1000
 	cache, err := NewLRUCache(config)
 	require.NoError(b, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	repos := make([]*gogit.Repository, b.N)
 	paths := make([]string, b.N)
@@ -494,7 +494,7 @@ func BenchmarkLRUCache_Get(b *testing.B) {
 	config.MaxRepositories = 1000
 	cache, err := NewLRUCache(config)
 	require.NoError(b, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	// Pre-populate cache
 	const numRepos = 100
@@ -579,7 +579,7 @@ func TestLRUCache_TTLExpiration(t *testing.T) {
 
 	cache, err := NewLRUCacheForTesting(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	repoPath, gitRepo := createTestRepository(t)
 
@@ -615,7 +615,7 @@ func TestLRUCache_BackgroundCleanup(t *testing.T) {
 
 	cache, err := NewLRUCacheForTesting(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	// Add multiple repositories
 	repoPaths := make([]string, 3)
@@ -653,7 +653,7 @@ func TestLRUCache_TTLWithAccessUpdates(t *testing.T) {
 
 	cache, err := NewLRUCacheForTesting(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	repoPath, gitRepo := createTestRepository(t)
 
@@ -687,7 +687,7 @@ func TestLRUCache_TTLIntegrationWithLRUEviction(t *testing.T) {
 
 	cache, err := NewLRUCacheForTesting(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	// Add 3 repositories (will trigger LRU eviction)
 	repoPaths := make([]string, 3)
@@ -727,7 +727,7 @@ func TestLRUCache_TTLDisabled(t *testing.T) {
 
 	cache, err := NewLRUCacheForTesting(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	repoPath, gitRepo := createTestRepository(t)
 
@@ -754,7 +754,7 @@ func TestLRUCache_VeryShortTTL(t *testing.T) {
 
 	cache, err := NewLRUCacheForTesting(config)
 	require.NoError(t, err)
-	defer cache.Close()
+	defer func() { _ = cache.Close() }()
 
 	repoPath, gitRepo := createTestRepository(t)
 

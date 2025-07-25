@@ -208,7 +208,7 @@ func (w *SSHProtocolWriter) Flush() error {
 // WriteSSHError writes an SSH protocol error message
 func (w *SSHProtocolWriter) WriteSSHError(errorMsg string) error {
 	// SSH protocol error format: ERR <message>\n
-	_, err := w.buffer.WriteString(fmt.Sprintf("ERR %s\n", errorMsg))
+	_, err := fmt.Fprintf(w.buffer, "ERR %s\n", errorMsg)
 	if err != nil {
 		return err
 	}
@@ -339,7 +339,7 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 
 	// Create SSH protocol writer for streaming
 	writer := NewSSHProtocolWriter(w, opts.BufferSize)
-	defer writer.Flush()
+	defer func() { _ = writer.Flush() }()
 
 	// Parse SSH protocol headers
 	protocolHeaders := ParseSSHGitProtocolHeaders(r)
@@ -354,7 +354,7 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 	if opts.MaxRequestSize > 0 {
 		requestBody = http.MaxBytesReader(w, r.Body, opts.MaxRequestSize)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	// For now, delegate to the existing upload-pack logic
 	// This is a simplified implementation - in production, you'd implement full SSH protocol negotiation
@@ -376,7 +376,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 
 	// Create SSH protocol writer for streaming
 	writer := NewSSHProtocolWriter(w, opts.BufferSize)
-	defer writer.Flush()
+	defer func() { _ = writer.Flush() }()
 
 	// Parse SSH protocol headers
 	protocolHeaders := ParseSSHGitProtocolHeaders(r)
@@ -386,7 +386,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	if opts.MaxRequestSize > 0 {
 		requestBody = http.MaxBytesReader(w, r.Body, opts.MaxRequestSize)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	// For SSH receive-pack, we need to:
 	// 1. Read the packfile from the request body
