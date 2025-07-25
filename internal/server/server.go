@@ -110,9 +110,50 @@ func (s *Server) setupAPIRoutes() *chi.Mux {
 	// Git Smart HTTP Protocol routes
 	s.setupGitRoutes(apiRouter)
 
+	// REST API routes for Git operations
+	s.setupRestAPIRoutes(apiRouter)
+
 	// Enable streaming optimization for large repository operations
 	s.enableStreamingOptimization(apiRouter)
 	return apiRouter
+}
+
+// setupRestAPIRoutes configures REST API routes for Git operations
+func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
+	// Initialize permission client for REST API routes
+	permConfig := permissions.DefaultConfig()
+	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing
+	permClient, err := permissions.NewPermissionClient(permConfig)
+	if err != nil {
+		// Log error and skip REST API routes
+		fmt.Printf("⚠️  Warning: Failed to initialize permission client for REST API: %v\n", err)
+		return
+	}
+
+	// Create diff handler
+	diffHandler, err := protocol.NewDiffHandler(s.config, permClient)
+	if err != nil {
+		// Log error and skip diff routes
+		fmt.Printf("Failed to create diff handler: %v\n", err)
+		return
+	}
+
+	// Git diff endpoints
+	router.Route("/repos", func(r chi.Router) {
+		r.Route("/{owner}", func(r chi.Router) {
+			r.Route("/{repo}", func(r chi.Router) {
+				// Diff endpoints
+				r.Route("/diff", func(r chi.Router) {
+					// Compare two commits
+					r.Get("/commits/{base}/{head}", diffHandler.HandleCommitDiff)
+					// Compare two branches
+					r.Get("/branches/{base}/{head}", diffHandler.HandleBranchDiff)
+					// Compare specific file between two references
+					r.Get("/file", diffHandler.HandleFileDiff)
+				})
+			})
+		})
+	})
 }
 
 // setupGitRoutes configures Git Smart HTTP protocol routes
@@ -120,7 +161,7 @@ func (s *Server) setupGitRoutes(router *chi.Mux) {
 	// Initialize permission client (for now, we'll create a basic config)
 	// TODO: This should be properly configured with actual API service URL
 	permConfig := permissions.DefaultConfig()
-	permConfig.APIServiceURL = "http://api-service.local" // Override with specific URL
+	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing
 	permClient, err := permissions.NewPermissionClient(permConfig)
 	if err != nil {
 		// For now, log the error and continue without Smart HTTP
