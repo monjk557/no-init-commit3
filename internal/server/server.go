@@ -128,7 +128,7 @@ func (s *Server) setupGitRoutes(router *chi.Mux) {
 		return
 	}
 
-	// Initialize upload-pack handler
+	// Initialize upload-pack handler (fetch operations)
 	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config, permClient)
 	if err != nil {
 		// For now, log the error and continue without Smart HTTP
@@ -136,13 +136,42 @@ func (s *Server) setupGitRoutes(router *chi.Mux) {
 		return
 	}
 
-	// Git Smart HTTP routes for fetch operations (executor endpoints)
-	router.Route("/{owner}/{repo}", func(r chi.Router) {
-		// GET /repos/{owner}/{repo}/info/refs?service=git-upload-pack
-		r.Get("/info/refs", uploadPackHandler.HandleInfoRefs)
+	// Initialize receive-pack handler (push operations)
+	receivePackHandler, err := protocol.NewReceivePackHandler(s.config, permClient)
+	if err != nil {
+		// For now, log the error and continue without receive-pack
+		fmt.Printf("⚠️  Warning: Failed to initialize receive-pack handler: %v\n", err)
+		// Continue with upload-pack only
+	}
 
-		// POST /repos/{owner}/{repo}/git-upload-pack (to be implemented in subtask 9.2)
+	// Git Smart HTTP routes for both fetch and push operations (executor endpoints)
+	router.Route("/{owner}/{repo}", func(r chi.Router) {
+		// Fetch operations (git clone, git fetch)
+		// GET /repos/{owner}/{repo}/info/refs?service=git-upload-pack
+		r.Get("/info/refs", func(w http.ResponseWriter, req *http.Request) {
+			service := req.URL.Query().Get("service")
+			switch service {
+			case "git-upload-pack":
+				uploadPackHandler.HandleInfoRefs(w, req)
+			case "git-receive-pack":
+				if receivePackHandler != nil {
+					receivePackHandler.HandleInfoRefs(w, req)
+				} else {
+					http.Error(w, "Receive-pack service not available", http.StatusServiceUnavailable)
+				}
+			default:
+				http.Error(w, "Invalid service parameter", http.StatusBadRequest)
+			}
+		})
+
+		// POST /repos/{owner}/{repo}/git-upload-pack
 		r.Post("/git-upload-pack", uploadPackHandler.HandleUploadPack)
+
+		// Push operations (git push)
+		// POST /repos/{owner}/{repo}/git-receive-pack
+		if receivePackHandler != nil {
+			r.Post("/git-receive-pack", receivePackHandler.HandleReceivePack)
+		}
 	})
 }
 

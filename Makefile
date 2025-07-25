@@ -147,6 +147,11 @@ test-manual-smart-http: ## Run Smart HTTP Protocol tests (requires server to be 
 	@echo "$(BLUE)🧪 Running Smart HTTP Protocol tests...$(NC)"
 	@./scripts/test-smart-http.sh
 
+test-manual-receive-pack: ## Run comprehensive receive-pack (push) tests (requires server to be running)
+	@echo "$(BLUE)🧪 Running Git Receive-Pack (Push) tests...$(NC)"
+	@echo "$(YELLOW)💡 Server must be running: go run ./cmd/git-executor/main.go --config=config/test-config.yaml$(NC)"
+	@./scripts/test-receive-pack.sh
+
 test-manual-smart-http-setup: ## Create test repositories for Smart HTTP testing
 
 test-manual-streaming: ## Test Git streaming mechanism functionality (requires server running)
