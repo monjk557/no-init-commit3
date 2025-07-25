@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -43,13 +44,14 @@ type CommitStats struct {
 
 // FileDiff represents changes to a single file
 type FileDiff struct {
-	Path      string       `json:"path"`
-	Status    string       `json:"status"` // "added", "deleted", "modified", "renamed"
-	Additions int          `json:"additions"`
-	Deletions int          `json:"deletions"`
-	Changes   []LineChange `json:"changes,omitempty"`
-	IsBinary  bool         `json:"is_binary"`
-	OldPath   string       `json:"old_path,omitempty"` // For renames
+	Path      string                 `json:"path"`
+	Status    string                 `json:"status"` // "added", "deleted", "modified", "renamed"
+	Additions int                    `json:"additions"`
+	Deletions int                    `json:"deletions"`
+	Changes   []LineChange           `json:"changes,omitempty"`
+	IsBinary  bool                   `json:"is_binary"`
+	OldPath   string                 `json:"old_path,omitempty"` // For renames
+	Metadata  map[string]interface{} `json:"metadata,omitempty"` // File metadata (hashes, modes)
 }
 
 // LineChange represents a single line change in a diff
@@ -92,77 +94,62 @@ func NewDiffHandler(cfg *config.Config, permClient permissions.PermissionClient)
 func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
-	base := chi.URLParam(r, "base")
-	head := chi.URLParam(r, "head")
-
-	// Validate required parameters
-	if owner == "" || repo == "" || base == "" || head == "" {
-		http.Error(w, "Missing required parameters: owner, repo, base, or head", http.StatusBadRequest)
-		return
-	}
-
-	// Get user ID from header for permission checking
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		http.Error(w, "Missing user authentication", http.StatusUnauthorized)
-		return
-	}
-
-	// Check user permissions (read access for diff operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, userID, owner, repo)
+	// Extract and validate common parameters
+	params, err := h.validateAndExtractParams(r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if !hasAccess {
-		http.Error(w, "Access denied to repository", http.StatusForbidden)
+		handleDiffError(w, err, "extract parameters")
 		return
 	}
 
-	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	// Validate base and head parameters are required for commit diff
+	if params.Base == "" || params.Head == "" {
+		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate commit parameters")
+		return
+	}
+
+	// Validate permissions and get repository path
+	repoPath, err := h.validateRequestAndPermissions(ctx, params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
+		handleDiffError(w, err, "validate permissions")
 		return
 	}
 
-	// Ensure repository exists
-	if err := repository.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
-		http.Error(w, "Repository not found or inaccessible", http.StatusNotFound)
-		return
-	}
-
-	// Parse query parameters for context lines (default: 3)
-	contextLines := 3
-	if ctxStr := r.URL.Query().Get("context"); ctxStr != "" {
-		if parsed, err := strconv.Atoi(ctxStr); err == nil && parsed >= 0 {
-			contextLines = parsed
+	// Get context lines from query parameter
+	contextLines := 3 // default
+	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
+			contextLines = ctx
 		}
 	}
 
-	// Calculate diff between commits
-	diffResp, err := h.calculateCommitDiff(ctx, repoPath, base, head, contextLines)
+	// Calculate diff
+	diffResp, err := h.calculateCommitDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		// Check if it's a commit not found error
-		if isCommitNotFoundError(err) {
-			http.Error(w, fmt.Sprintf("Commit not found: %v", err), http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("Failed to calculate diff: %v", err), http.StatusInternalServerError)
+		handleDiffError(w, err, "calculate commit diff")
 		return
 	}
 
-	// Set response headers
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	// Check for pagination request
+	if r.URL.Query().Get("page") != "" || r.URL.Query().Get("page_size") != "" {
+		pagination := extractPaginationParams(r)
+		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
-	// Encode and send response
-	if err := json.NewEncoder(w).Encode(diffResp); err != nil {
-		// Log error but can't change response at this point
-		fmt.Printf("Failed to encode diff response: %v\n", err)
+		response := &PaginatedDiffResponse{
+			DiffResponse: &DiffResponse{
+				Base:  diffResp.Base,
+				Head:  diffResp.Head,
+				Files: paginatedFiles,
+				Stats: DiffStats{
+					TotalAdditions: diffResp.Stats.TotalAdditions,
+					TotalDeletions: diffResp.Stats.TotalDeletions,
+					FilesChanged:   len(paginatedFiles), // Updated for paginated response
+				},
+			},
+			Pagination: &updatedPagination,
+		}
+		sendJSONResponse(w, response, http.StatusOK)
+	} else {
+		sendJSONResponse(w, diffResp, http.StatusOK)
 	}
 }
 
@@ -170,77 +157,64 @@ func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 func (h *DiffHandler) HandleBranchDiff(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
-	baseBranch := chi.URLParam(r, "base")
-	headBranch := chi.URLParam(r, "head")
-
-	// Validate required parameters
-	if owner == "" || repo == "" || baseBranch == "" || headBranch == "" {
-		http.Error(w, "Missing required parameters: owner, repo, base, or head", http.StatusBadRequest)
-		return
-	}
-
-	// Get user ID from header for permission checking
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		http.Error(w, "Missing user authentication", http.StatusUnauthorized)
-		return
-	}
-
-	// Check user permissions (read access for diff operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, userID, owner, repo)
+	// Extract and validate common parameters
+	params, err := h.validateAndExtractParams(r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if !hasAccess {
-		http.Error(w, "Access denied to repository", http.StatusForbidden)
+		handleDiffError(w, err, "extract parameters")
 		return
 	}
 
-	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	// Validate base and head parameters are required for branch diff
+	if params.Base == "" || params.Head == "" {
+		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate branch parameters")
+		return
+	}
+
+	// Validate permissions and get repository path
+	repoPath, err := h.validateRequestAndPermissions(ctx, params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
+		handleDiffError(w, err, "validate permissions")
 		return
 	}
 
-	// Ensure repository exists
-	if err := repository.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
-		http.Error(w, "Repository not found or inaccessible", http.StatusNotFound)
-		return
-	}
-
-	// Parse query parameters for context lines (default: 3)
-	contextLines := 3
-	if ctxStr := r.URL.Query().Get("context"); ctxStr != "" {
-		if parsed, err := strconv.Atoi(ctxStr); err == nil && parsed >= 0 {
-			contextLines = parsed
+	// Get context lines from query parameter
+	contextLines := 3 // default
+	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
+			contextLines = ctx
 		}
 	}
 
-	// Calculate diff between branches
-	diffResp, err := h.calculateBranchDiff(ctx, repoPath, baseBranch, headBranch, contextLines)
+	// Calculate branch diff
+	diffResp, err := h.calculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		// Check if it's a branch not found error
-		if isBranchNotFoundError(err) {
-			http.Error(w, fmt.Sprintf("Branch not found: %v", err), http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("Failed to calculate branch diff: %v", err), http.StatusInternalServerError)
+		handleDiffError(w, err, "calculate branch diff")
 		return
 	}
 
-	// Set response headers
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	// Check for pagination request
+	if r.URL.Query().Get("page") != "" || r.URL.Query().Get("page_size") != "" {
+		pagination := extractPaginationParams(r)
+		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
-	// Encode and send response
-	if err := json.NewEncoder(w).Encode(diffResp); err != nil {
-		// Log error but can't change response at this point
-		fmt.Printf("Failed to encode branch diff response: %v\n", err)
+		response := &PaginatedDiffResponse{
+			DiffResponse: &DiffResponse{
+				Base:  diffResp.Base,
+				Head:  diffResp.Head,
+				Files: paginatedFiles,
+				Stats: DiffStats{
+					TotalAdditions: diffResp.Stats.TotalAdditions,
+					TotalDeletions: diffResp.Stats.TotalDeletions,
+					FilesChanged:   len(paginatedFiles), // Updated for paginated response
+				},
+				Commits:   diffResp.Commits,
+				MergeBase: diffResp.MergeBase,
+			},
+			Pagination: &updatedPagination,
+		}
+		sendJSONResponse(w, response, http.StatusOK)
+	} else {
+		sendJSONResponse(w, diffResp, http.StatusOK)
 	}
 }
 
@@ -248,153 +222,95 @@ func (h *DiffHandler) HandleBranchDiff(w http.ResponseWriter, r *http.Request) {
 func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	// Extract and validate common parameters
+	params, err := h.validateAndExtractParams(r)
+	if err != nil {
+		handleDiffError(w, err, "extract parameters")
+		return
+	}
 
-	// Extract query parameters
+	// Extract file-specific parameters from query string
 	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		handleDiffError(w, fmt.Errorf("missing required parameter: path"), "validate file parameters")
+		return
+	}
+
 	base := r.URL.Query().Get("base")
 	head := r.URL.Query().Get("head")
-
-	// Validate required parameters
-	if owner == "" || repo == "" {
-		http.Error(w, "Missing required path parameters: owner or repo", http.StatusBadRequest)
+	if base == "" || head == "" {
+		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate file diff parameters")
 		return
 	}
 
-	if filePath == "" || base == "" || head == "" {
-		http.Error(w, "Missing required query parameters: path, base, or head", http.StatusBadRequest)
-		return
-	}
+	// Override params with query parameters for file diff
+	params.Base = base
+	params.Head = head
 
-	// Get user ID from header for permission checking
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		http.Error(w, "Missing user authentication", http.StatusUnauthorized)
-		return
-	}
-
-	// Check user permissions (read access for diff operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, userID, owner, repo)
+	// Validate permissions and get repository path
+	repoPath, err := h.validateRequestAndPermissions(ctx, params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if !hasAccess {
-		http.Error(w, "Access denied to repository", http.StatusForbidden)
+		handleDiffError(w, err, "validate permissions")
 		return
 	}
 
-	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Ensure repository exists
-	if err := repository.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
-		http.Error(w, "Repository not found or inaccessible", http.StatusNotFound)
-		return
-	}
-
-	// Parse query parameters for context lines (default: 3)
-	contextLines := 3
-	if ctxStr := r.URL.Query().Get("context"); ctxStr != "" {
-		if parsed, err := strconv.Atoi(ctxStr); err == nil && parsed >= 0 {
-			contextLines = parsed
+	// Get context lines and format from query parameters
+	contextLines := 3 // default
+	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
+			contextLines = ctx
 		}
 	}
 
-	// Parse diff format (default: unified)
-	diffFormat := r.URL.Query().Get("format")
-	if diffFormat == "" {
-		diffFormat = "unified"
-	}
-	if diffFormat != "unified" && diffFormat != "split" {
-		http.Error(w, "Invalid format parameter: must be 'unified' or 'split'", http.StatusBadRequest)
-		return
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "unified" // default
 	}
 
-	// Calculate diff for the specific file
-	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, base, head, contextLines, diffFormat)
+	// Calculate file diff
+	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, params.Base, params.Head, contextLines, format)
 	if err != nil {
-		// Check if it's a file/reference not found error
-		if isFileNotFoundError(err) || isCommitNotFoundError(err) {
-			http.Error(w, fmt.Sprintf("File or reference not found: %v", err), http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("Failed to calculate file diff: %v", err), http.StatusInternalServerError)
+		handleDiffError(w, err, "calculate file diff")
 		return
 	}
 
-	// Set response headers
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	// Encode and send response
-	if err := json.NewEncoder(w).Encode(diffResp); err != nil {
-		// Log error but can't change response at this point
-		fmt.Printf("Failed to encode file diff response: %v\n", err)
-	}
+	sendJSONResponse(w, diffResp, http.StatusOK)
 }
 
 // HandlePatch handles GET /repos/:owner/:repo/patch/:base/:head
 func (h *DiffHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
-	base := chi.URLParam(r, "base")
-	head := chi.URLParam(r, "head")
-
-	// Validate required parameters
-	if owner == "" || repo == "" || base == "" || head == "" {
-		http.Error(w, "Missing required parameters: owner, repo, base, or head", http.StatusBadRequest)
-		return
-	}
-
-	// Get user ID from header for permission checking
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		http.Error(w, "Missing user authentication", http.StatusUnauthorized)
-		return
-	}
-
-	// Check user permissions (read access for patch operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, userID, owner, repo)
+	// Extract and validate common parameters
+	params, err := h.validateAndExtractParams(r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if !hasAccess {
-		http.Error(w, "Access denied to repository", http.StatusForbidden)
+		handleDiffError(w, err, "extract parameters")
 		return
 	}
 
-	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	// Validate base and head parameters are required for patch
+	if params.Base == "" || params.Head == "" {
+		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate patch parameters")
+		return
+	}
+
+	// Validate permissions and get repository path
+	repoPath, err := h.validateRequestAndPermissions(ctx, params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
+		handleDiffError(w, err, "validate permissions")
 		return
 	}
 
 	// Generate patch content
-	patchContent, err := h.generatePatch(ctx, repoPath, base, head)
+	patchContent, err := h.generatePatch(ctx, repoPath, params.Base, params.Head)
 	if err != nil {
-		if isCommitNotFoundError(err) {
-			http.Error(w, fmt.Sprintf("Commit not found: %v", err), http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("Failed to generate patch: %v", err), http.StatusInternalServerError)
+		handleDiffError(w, err, "generate patch")
 		return
 	}
 
 	// Set appropriate headers for patch content
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.patch\"", base, head))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.patch\"", params.Base, params.Head))
 
 	// Write patch content
 	w.WriteHeader(http.StatusOK)
@@ -509,8 +425,10 @@ func (h *DiffHandler) processChanges(changes object.Changes, contextLines int) (
 
 // processChange processes a single file change
 func (h *DiffHandler) processChange(change *object.Change, contextLines int) (FileDiff, error) {
+	fileName := getFileName(change)
 	fileDiff := FileDiff{
-		Path: getFileName(change),
+		Path:     fileName,
+		Metadata: getFileMetadata(change),
 	}
 
 	// Determine change status
@@ -547,8 +465,8 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 		}
 	}
 
-	// Check if this is a binary file change (simple heuristic)
-	fileDiff.IsBinary = isBinaryPatch(patchText)
+	// Enhanced binary file detection using both patch content and filename
+	fileDiff.IsBinary = isBinaryFile(patchText, fileName)
 
 	// Generate line-level changes if not binary and contextLines > 0
 	if !fileDiff.IsBinary && contextLines > 0 {
@@ -1114,4 +1032,215 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 func isBinaryContent(content string) bool {
 	// Simple heuristic: if content contains null bytes, consider it binary
 	return strings.Contains(content, "\x00")
+}
+
+// Common request validation and response utilities
+
+// RequestParams holds common request parameters for diff endpoints
+type RequestParams struct {
+	Owner  string
+	Repo   string
+	Base   string
+	Head   string
+	UserID string
+}
+
+// PaginationParams holds pagination parameters
+type PaginationParams struct {
+	Page     int  `json:"page"`
+	PageSize int  `json:"page_size"`
+	Total    int  `json:"total"`
+	HasMore  bool `json:"has_more"`
+}
+
+// ErrorResponse represents a standardized error response
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Code    string `json:"code,omitempty"`
+	Details string `json:"details,omitempty"`
+}
+
+// PaginatedDiffResponse extends DiffResponse with pagination
+type PaginatedDiffResponse struct {
+	*DiffResponse
+	Pagination *PaginationParams `json:"pagination,omitempty"`
+}
+
+// validateAndExtractParams extracts and validates common parameters from request
+func (h *DiffHandler) validateAndExtractParams(r *http.Request) (*RequestParams, error) {
+	// Extract path parameters
+	owner := chi.URLParam(r, "owner")
+	repo := chi.URLParam(r, "repo")
+	base := chi.URLParam(r, "base")
+	head := chi.URLParam(r, "head")
+
+	// Validate required parameters
+	if owner == "" || repo == "" {
+		return nil, fmt.Errorf("missing required parameters: owner or repo")
+	}
+
+	// Get user ID from header for permission checking
+	userID := r.Header.Get("X-USER-ID")
+	if userID == "" {
+		return nil, fmt.Errorf("missing user authentication")
+	}
+
+	return &RequestParams{
+		Owner:  owner,
+		Repo:   repo,
+		Base:   base,
+		Head:   head,
+		UserID: userID,
+	}, nil
+}
+
+// validateRequestAndPermissions performs common validation and permission checking
+func (h *DiffHandler) validateRequestAndPermissions(ctx context.Context, params *RequestParams) (string, error) {
+	// Check user permissions (read access for diff operations)
+	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
+	if err != nil {
+		return "", fmt.Errorf("permission check failed: %w", err)
+	}
+	if !hasAccess {
+		return "", fmt.Errorf("access denied to repository")
+	}
+
+	// Get repository path and validate
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
+	if err != nil {
+		return "", fmt.Errorf("invalid repository path: %w", err)
+	}
+
+	return repoPath, nil
+}
+
+// sendJSONResponse sends a standardized JSON response
+func sendJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		// Log error but can't change response at this point
+		fmt.Printf("Failed to encode JSON response: %v\n", err)
+	}
+}
+
+// sendErrorResponse sends a standardized error response
+func sendErrorResponse(w http.ResponseWriter, message string, statusCode int) {
+	errorResp := ErrorResponse{
+		Error: message,
+	}
+	sendJSONResponse(w, errorResp, statusCode)
+}
+
+// handleDiffError categorizes errors and sends appropriate HTTP responses
+func handleDiffError(w http.ResponseWriter, err error, operation string) {
+	if isCommitNotFoundError(err) {
+		sendErrorResponse(w, fmt.Sprintf("Commit not found: %v", err), http.StatusNotFound)
+	} else if isBranchNotFoundError(err) {
+		sendErrorResponse(w, fmt.Sprintf("Branch not found: %v", err), http.StatusNotFound)
+	} else if isFileNotFoundError(err) {
+		sendErrorResponse(w, fmt.Sprintf("File not found: %v", err), http.StatusNotFound)
+	} else if strings.Contains(err.Error(), "permission") {
+		sendErrorResponse(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
+	} else if strings.Contains(err.Error(), "access denied") {
+		sendErrorResponse(w, "Access denied to repository", http.StatusForbidden)
+	} else if strings.Contains(err.Error(), "authentication") {
+		sendErrorResponse(w, err.Error(), http.StatusUnauthorized)
+	} else if strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "invalid") {
+		sendErrorResponse(w, err.Error(), http.StatusBadRequest)
+	} else {
+		sendErrorResponse(w, fmt.Sprintf("Failed to %s: %v", operation, err), http.StatusInternalServerError)
+	}
+}
+
+// extractPaginationParams extracts pagination parameters from query string
+func extractPaginationParams(r *http.Request) PaginationParams {
+	params := PaginationParams{
+		Page:     1,  // Default to page 1
+		PageSize: 50, // Default page size
+	}
+
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if page, err := strconv.Atoi(pageStr); err == nil && page > 0 {
+			params.Page = page
+		}
+	}
+
+	if sizeStr := r.URL.Query().Get("page_size"); sizeStr != "" {
+		if size, err := strconv.Atoi(sizeStr); err == nil && size > 0 && size <= 200 {
+			params.PageSize = size
+		}
+	}
+
+	return params
+}
+
+// paginateFiles applies pagination to file diffs
+func paginateFiles(files []FileDiff, pagination PaginationParams) ([]FileDiff, PaginationParams) {
+	total := len(files)
+	pagination.Total = total
+
+	// Calculate start and end indices
+	start := (pagination.Page - 1) * pagination.PageSize
+	if start >= total {
+		pagination.HasMore = false
+		return []FileDiff{}, pagination
+	}
+
+	end := start + pagination.PageSize
+	if end > total {
+		end = total
+		pagination.HasMore = false
+	} else {
+		pagination.HasMore = true
+	}
+
+	return files[start:end], pagination
+}
+
+// Enhanced binary detection utilities
+
+// isBinaryFile checks if a file is binary based on its content and extension
+func isBinaryFile(content string, filename string) bool {
+	// First check content for binary indicators
+	if isBinaryContent(content) {
+		return true
+	}
+
+	// Check file extension for known binary types
+	ext := strings.ToLower(filepath.Ext(filename))
+	binaryExtensions := map[string]bool{
+		".exe": true, ".dll": true, ".so": true, ".dylib": true,
+		".zip": true, ".tar": true, ".gz": true, ".bz2": true,
+		".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".bmp": true,
+		".pdf": true, ".doc": true, ".docx": true, ".xls": true, ".xlsx": true,
+		".mp3": true, ".mp4": true, ".avi": true, ".mov": true,
+		".bin": true, ".dat": true, ".db": true,
+	}
+
+	return binaryExtensions[ext]
+}
+
+// getFileMetadata extracts metadata about a file change
+func getFileMetadata(change *object.Change) map[string]interface{} {
+	metadata := make(map[string]interface{})
+
+	// Extract file mode information
+	if change.From.TreeEntry.Mode != 0 {
+		metadata["old_mode"] = change.From.TreeEntry.Mode.String()
+	}
+	if change.To.TreeEntry.Mode != 0 {
+		metadata["new_mode"] = change.To.TreeEntry.Mode.String()
+	}
+
+	// Extract file hash information
+	if !change.From.TreeEntry.Hash.IsZero() {
+		metadata["old_hash"] = change.From.TreeEntry.Hash.String()
+	}
+	if !change.To.TreeEntry.Hash.IsZero() {
+		metadata["new_hash"] = change.To.TreeEntry.Hash.String()
+	}
+
+	return metadata
 }
