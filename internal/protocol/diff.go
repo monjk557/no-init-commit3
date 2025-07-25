@@ -340,6 +340,99 @@ func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandlePatch handles GET /repos/:owner/:repo/patch/:base/:head
+func (h *DiffHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract path parameters
+	owner := chi.URLParam(r, "owner")
+	repo := chi.URLParam(r, "repo")
+	base := chi.URLParam(r, "base")
+	head := chi.URLParam(r, "head")
+
+	// Validate required parameters
+	if owner == "" || repo == "" || base == "" || head == "" {
+		http.Error(w, "Missing required parameters: owner, repo, base, or head", http.StatusBadRequest)
+		return
+	}
+
+	// Get user ID from header for permission checking
+	userID := r.Header.Get("X-USER-ID")
+	if userID == "" {
+		http.Error(w, "Missing user authentication", http.StatusUnauthorized)
+		return
+	}
+
+	// Check user permissions (read access for patch operations)
+	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, userID, owner, repo)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if !hasAccess {
+		http.Error(w, "Access denied to repository", http.StatusForbidden)
+		return
+	}
+
+	// Get repository path and validate
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Generate patch content
+	patchContent, err := h.generatePatch(ctx, repoPath, base, head)
+	if err != nil {
+		if isCommitNotFoundError(err) {
+			http.Error(w, fmt.Sprintf("Commit not found: %v", err), http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to generate patch: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Set appropriate headers for patch content
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.patch\"", base, head))
+
+	// Write patch content
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write([]byte(patchContent))
+	if err != nil {
+		// Log error but can't send HTTP error at this point
+		fmt.Printf("Error writing patch response: %v\n", err)
+	}
+}
+
+// generatePatch creates Git patch format output for commit range
+func (h *DiffHandler) generatePatch(ctx context.Context, repoPath, base, head string) (string, error) {
+	// Open repository
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// Resolve base and head references to commit objects
+	baseCommit, err := h.resolveReferenceToCommit(repo, base)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve base reference %s: %w", base, err)
+	}
+
+	headCommit, err := h.resolveReferenceToCommit(repo, head)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve head reference %s: %w", head, err)
+	}
+
+	// Generate patch using go-git's built-in patch functionality
+	patch, err := baseCommit.Patch(headCommit)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate patch: %w", err)
+	}
+
+	return patch.String(), nil
+}
+
 // calculateCommitDiff performs the actual diff calculation between two commits
 func (h *DiffHandler) calculateCommitDiff(ctx context.Context, repoPath, base, head string, contextLines int) (*DiffResponse, error) {
 	// Open repository using go-git

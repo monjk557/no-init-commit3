@@ -151,6 +151,11 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 					// Compare specific file between two references
 					r.Get("/file", diffHandler.HandleFileDiff)
 				})
+				// Patch endpoints
+				r.Route("/patch", func(r chi.Router) {
+					// Generate Git patch format for commit range
+					r.Get("/{base}/{head}", diffHandler.HandlePatch)
+				})
 			})
 		})
 	})
