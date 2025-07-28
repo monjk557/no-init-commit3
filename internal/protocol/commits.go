@@ -221,8 +221,8 @@ func (h *CommitsHandler) validateCommitsRequestAndPermissions(ctx context.Contex
 
 // getCommitHistory retrieves commit history using the Git repository interface
 func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, params *CommitsRequestParams) ([]git.Commit, bool, error) {
-	// Open repository using cached approach
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	// Open repository using the simple cache
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to open repository: %w", err)
 	}

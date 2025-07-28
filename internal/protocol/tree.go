@@ -162,8 +162,8 @@ func (h *TreeHandler) validateTreeRequestAndPermissions(ctx context.Context, par
 
 // getTreeStructure retrieves the tree structure using the Git repository interface
 func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref string) ([]TreeEntryResponse, error) {
-	// Open repository using cached approach
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	// Open repository using the simple cache
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}

@@ -30,6 +30,8 @@ type Server struct {
 
 // New creates a new HTTP server instance with observability
 func New(cfg *config.Config) (*Server, error) {
+	// Note: Simple cache initializes itself automatically on first use
+
 	// Create permission client
 	permConfig := permissions.DefaultConfig()
 	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing

@@ -126,7 +126,7 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Open repository using go-git with caching
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		wrappedErr := fmt.Errorf("failed to open repository: %w", err)
 		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack_info_refs")

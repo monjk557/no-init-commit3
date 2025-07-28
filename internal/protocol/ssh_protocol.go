@@ -453,8 +453,8 @@ func (h *SSHProtocolHandler) parseGitProtocolRequest(input io.ReadCloser) (map[s
 
 // handleSSHUploadPackCommand handles git-upload-pack commands for SSH
 func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
-	// Open repository
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	// Open repository with simple caching
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
@@ -474,8 +474,8 @@ func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, rep
 
 // handleSSHReceivePackCommand handles git-receive-pack commands for SSH
 func (h *SSHProtocolHandler) handleSSHReceivePackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
-	// Open repository
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	// Open repository with simple caching
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}

@@ -33,9 +33,10 @@ type Repository struct {
 
 // Close properly closes the repository and releases resources
 func (r *Repository) Close() error {
-	// go-git repositories don't require explicit closing in most cases,
-	// but we should at least clear the reference
-	r.GitRepo = nil
+	// go-git repositories don't require explicit closing in most cases.
+	// We don't set GitRepo to nil here because there might be active
+	// references to this repository that would fail with "repository is closed".
+	// The Go garbage collector will clean up when there are no more references.
 	return nil
 }
 

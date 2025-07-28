@@ -85,13 +85,19 @@ func OpenRepositoryWithNewCache(path string) (Repository, error) {
 
 	// Try to get from cache first
 	if gitRepo, found := cache.GetRepository(path); found {
-		return &GoGitRepository{
-			path: path,
-			repo: gitRepo,
-		}, nil
+		// Check if the cached repository is still valid (not nil)
+		if gitRepo != nil {
+			// Return a properly initialized GoGitRepository
+			return &GoGitRepository{
+				path: path,
+				repo: gitRepo,
+				mu:   sync.RWMutex{}, // Important: Initialize the mutex!
+			}, nil
+		}
+		// If gitRepo is nil, the repository was closed, so we'll re-open it below
 	}
 
-	// Not in cache, open the repository
+	// Not in cache or was closed, open the repository
 	gitRepo, err := gogit.PlainOpen(path)
 	if err != nil {
 		if err == gogit.ErrRepositoryNotExists {
@@ -112,6 +118,7 @@ func OpenRepositoryWithNewCache(path string) (Repository, error) {
 	return &GoGitRepository{
 		path: path,
 		repo: gitRepo,
+		mu:   sync.RWMutex{}, // Initialize the mutex!
 	}, nil
 }
 

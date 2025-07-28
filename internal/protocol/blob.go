@@ -199,8 +199,8 @@ func (h *BlobHandler) validateBlobRequestAndPermissions(ctx context.Context, par
 
 // getBlobContent retrieves the blob content using the Git repository interface
 func (h *BlobHandler) getBlobContent(ctx context.Context, repoPath, path, ref string) ([]byte, error) {
-	// Open repository using cached approach
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	// Open repository using the simple cache
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
