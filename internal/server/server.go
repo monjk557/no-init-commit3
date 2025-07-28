@@ -160,6 +160,14 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 		return
 	}
 
+	// Create blob handler
+	blobHandler, err := protocol.NewBlobHandler(s.config, permClient)
+	if err != nil {
+		// Log error and skip blob routes
+		fmt.Printf("Failed to create blob handler: %v\n", err)
+		return
+	}
+
 	// Initialize access control middleware for REST API endpoints
 	accessControl, err := custommiddleware.NewAccessControlMiddleware(
 		custommiddleware.DefaultAccessControlConfig(),
@@ -197,6 +205,8 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 			r.Route("/{repo}", func(r chi.Router) {
 				// Tree endpoint
 				r.Get("/tree", treeHandler.HandleTreeAPI)
+				// Blob endpoint
+				r.Get("/blob", blobHandler.HandleBlobAPI)
 
 				// Diff endpoints
 				r.Route("/diff", func(r chi.Router) {
