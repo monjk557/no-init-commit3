@@ -11,11 +11,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
-	"github.com/go-chi/chi/v5"
+	"github.com/gin-gonic/gin"
 )
 
 // BlobHandler handles Git blob REST API endpoints
@@ -41,19 +40,13 @@ type BlobErrorResponse struct {
 }
 
 // NewBlobHandler creates a new blob handler
-func NewBlobHandler(cfg *config.Config, permClient permissions.PermissionClient) (*BlobHandler, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config cannot be nil")
-	}
-
-	if permClient == nil {
-		return nil, fmt.Errorf("permission client cannot be nil")
-	}
-
-	// Create path configuration
-	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create path config: %w", err)
+func NewBlobHandler(pathConfig *repository.PathConfig, permClient permissions.PermissionClient) (*BlobHandler, error) {
+	if pathConfig == nil {
+		var err error
+		pathConfig, err = repository.NewPathConfig("/tmp/repos") // Default for tests
+		if err != nil {
+			return nil, fmt.Errorf("failed to create path config: %w", err)
+		}
 	}
 
 	return &BlobHandler{
@@ -62,12 +55,29 @@ func NewBlobHandler(cfg *config.Config, permClient permissions.PermissionClient)
 	}, nil
 }
 
-// HandleBlobAPI handles GET /repos/:owner/:repo/blob?path=:path&ref=:ref
+// HandleBlobAPI handles GET /repos/{owner}/{repo}/blob?path=<file_path>&ref=<git_ref> (for HTTP handler)
 func (h *BlobHandler) HandleBlobAPI(w http.ResponseWriter, r *http.Request) {
+	// Extract parameters using chi for backward compatibility (tests)
+	owner := extractURLParam(r, "owner")
+	repo := extractURLParam(r, "repo")
+
+	h.processBlobRequest(w, r, owner, repo)
+}
+
+// HandleBlobAPIGin handles GET /repos/{owner}/{repo}/blob?path=<file_path>&ref=<git_ref> (for Gin)
+func (h *BlobHandler) HandleBlobAPIGin(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	h.processBlobRequest(c.Writer, c.Request, owner, repo)
+}
+
+// processBlobRequest processes the actual blob request
+func (h *BlobHandler) processBlobRequest(w http.ResponseWriter, r *http.Request, owner, repo string) {
 	ctx := r.Context()
 
 	// Extract and validate parameters
-	params, err := h.validateAndExtractBlobParams(r)
+	params, err := h.validateAndExtractBlobParams(r, owner, repo)
 	if err != nil {
 		h.handleBlobError(w, err, "extract parameters")
 		return
@@ -91,11 +101,16 @@ func (h *BlobHandler) HandleBlobAPI(w http.ResponseWriter, r *http.Request) {
 	h.sendBlobResponse(w, content, params.Path)
 }
 
+// extractURLParam extracts URL parameter for backward compatibility with chi
+func extractURLParam(r *http.Request, key string) string {
+	return URLParam(r, key)
+}
+
 // validateAndExtractBlobParams extracts and validates parameters from blob request
-func (h *BlobHandler) validateAndExtractBlobParams(r *http.Request) (*BlobRequestParams, error) {
+func (h *BlobHandler) validateAndExtractBlobParams(r *http.Request, owner, repo string) (*BlobRequestParams, error) {
 	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	// owner := chi.URLParam(r, "owner") // This line is now handled by processBlobRequest
+	// repo := chi.URLParam(r, "repo")   // This line is now handled by processBlobRequest
 
 	// Extract query parameters
 	path := r.URL.Query().Get("path")

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/go-git/go-git/v5"
@@ -337,9 +338,14 @@ func convertCommit(c *object.Commit) Commit {
 		parentHashes = append(parentHashes, parent.String())
 	}
 
+	// Clean commit message by removing trailing newlines and replacing internal newlines with spaces
+	message := strings.TrimSpace(c.Message)
+	message = strings.ReplaceAll(message, "\n", " ")
+	message = strings.ReplaceAll(message, "\r", " ")
+
 	return Commit{
 		Hash:    c.Hash.String(),
-		Message: c.Message,
+		Message: message,
 		Author: CommitAuthor{
 			Name:  c.Author.Name,
 			Email: c.Author.Email,

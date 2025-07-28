@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -97,7 +98,13 @@ func TestServer_HealthCheck(t *testing.T) {
 	require.NoError(t, err)
 
 	rr := httptest.NewRecorder()
-	server.healthCheck(rr, req)
+
+	// Create Gin context for the test
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+
+	server.healthCheck(c)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))

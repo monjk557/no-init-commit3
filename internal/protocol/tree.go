@@ -13,7 +13,6 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
-	"github.com/go-chi/chi/v5"
 )
 
 // TreeHandler handles Git tree REST API endpoints
@@ -98,8 +97,8 @@ func (h *TreeHandler) HandleTreeAPI(w http.ResponseWriter, r *http.Request) {
 // validateAndExtractTreeParams extracts and validates parameters from tree request
 func (h *TreeHandler) validateAndExtractTreeParams(r *http.Request) (*TreeRequestParams, error) {
 	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
 
 	// Extract ref query parameter
 	ref := r.URL.Query().Get("ref")

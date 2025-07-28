@@ -8,12 +8,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
-
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // ObservabilityConfig holds configuration for all observability components
@@ -116,32 +115,64 @@ func NewManager(cfg *config.Config, permClient permissions.PermissionClient, ver
 	}, nil
 }
 
-// SetupMiddleware configures all observability middleware for the given router
-func (m *Manager) SetupMiddleware(router chi.Router) {
-	// Add metrics middleware first (tracks all requests)
-	router.Use(m.metricsMiddleware.Handler())
+// SetupMiddleware configures observability middleware for the router
+func (m *Manager) SetupMiddleware(router *gin.Engine) {
+	// Add metrics middleware
+	router.Use(m.ginMetricsMiddleware())
 
-	// Add tracing middleware (creates spans for all requests)
-	if m.tracingManager != nil {
-		router.Use(m.tracingManager.HTTPMiddleware())
-	}
-
-	// Existing request ID and logging middleware can stay as-is
-	// They'll work together with our observability stack
+	// Add tracing middleware
+	router.Use(m.ginTracingMiddleware())
 }
 
-// SetupRoutes configures observability-related HTTP endpoints
-func (m *Manager) SetupRoutes(router chi.Router) {
-	if !m.config.Health.Enabled {
-		return
-	}
-
+// SetupRoutes configures observability routes (health checks, metrics)
+func (m *Manager) SetupRoutes(router *gin.Engine) {
 	// Health check endpoints
-	router.Get(m.config.Health.LivenessPath, m.healthChecker.LivenessHandler())
-	router.Get(m.config.Health.ReadinessPath, m.healthChecker.ReadinessHandler())
+	router.GET("/health/liveness", gin.WrapF(m.healthChecker.LivenessHandler()))
+	router.GET("/health/readiness", gin.WrapF(m.healthChecker.ReadinessHandler()))
 
 	// Metrics endpoint
-	router.Handle(m.config.Health.MetricsPath, MetricsHandler())
+	router.GET("/metrics", gin.WrapH(MetricsHandler()))
+}
+
+// ginMetricsMiddleware adapts the metrics middleware for Gin
+func (m *Manager) ginMetricsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+
+		// Increment active requests
+		m.metrics.IncrementActiveRequests()
+		defer m.metrics.DecrementActiveRequests()
+
+		// Process request
+		c.Next()
+
+		// Calculate metrics
+		duration := time.Since(start)
+		endpoint := normalizeEndpoint(c.Request.URL.Path)
+		method := c.Request.Method
+		statusCode := c.Writer.Status()
+		responseSize := int64(c.Writer.Size())
+		requestSize := getRequestSize(c.Request)
+
+		// Record HTTP metrics
+		m.metrics.RecordHTTPRequest(method, endpoint, statusCode, duration, requestSize, responseSize)
+	}
+}
+
+// ginTracingMiddleware adapts the tracing middleware for Gin
+func (m *Manager) ginTracingMiddleware() gin.HandlerFunc {
+	if m.tracingManager == nil {
+		return func(c *gin.Context) { c.Next() }
+	}
+
+	// Convert the standard HTTP middleware to Gin middleware
+	httpMiddleware := m.tracingManager.HTTPMiddleware()
+	return func(c *gin.Context) {
+		// Wrap the Gin context in a standard HTTP handler
+		httpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c.Next()
+		})).ServeHTTP(c.Writer, c.Request)
+	}
 }
 
 // GetLogger returns the observability logger

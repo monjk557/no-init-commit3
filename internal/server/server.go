@@ -11,14 +11,30 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
-	custommiddleware "github.com/collabops/git-executor/internal/middleware"
 	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/collabops/git-executor/internal/repository"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+// ginToChiMiddleware converts Gin URL parameters to chi-compatible context
+func ginToChiMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Extract all URL parameters from Gin
+		params := make(map[string]string)
+		for _, param := range c.Params {
+			params[param.Key] = param.Value
+		}
+
+		// Add chi-compatible route context to request using protocol types
+		rctx := &protocol.ChiRouteContext{URLParams: params}
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.ChiRouteCtxKey{}, rctx))
+
+		c.Next()
+	}
+}
 
 // Server represents the HTTP server with integrated observability
 type Server struct {
@@ -83,50 +99,45 @@ func (s *Server) Start() error {
 }
 
 // SetupRouter configures the HTTP router with observability middleware and routes
-func (s *Server) SetupRouter() *chi.Mux {
-	router := chi.NewRouter()
+func (s *Server) SetupRouter() *gin.Engine {
+	// Set Gin to release mode for production
+	gin.SetMode(gin.ReleaseMode)
+
+	router := gin.New()
 
 	// Add core middleware first
-	router.Use(middleware.RequestID)
-	router.Use(middleware.RealIP)
+	router.Use(gin.Logger())   // Request logging
+	router.Use(gin.Recovery()) // Panic recovery
 
-	// Add observability middleware (metrics and tracing)
+	// Setup observability middleware and routes
 	s.observabilityManager.SetupMiddleware(router)
-
-	// Add existing middleware
-	router.Use(s.loggingMiddleware)
-	router.Use(middleware.Recoverer)
-	router.Use(middleware.Timeout(60 * time.Second))
-
-	// Setup observability routes (health checks, metrics)
 	s.observabilityManager.SetupRoutes(router)
 
 	// Keep the original simple health check for backward compatibility
-	router.Get(s.config.Server.HealthCheckPath, s.healthCheck)
+	router.GET(s.config.Server.HealthCheckPath, s.healthCheck)
 
 	// Mount API routes under base path if configured
 	if s.config.Server.BasePath != "/" {
-		router.Mount(s.config.Server.BasePath, s.setupAPIRoutes())
+		apiGroup := router.Group(s.config.Server.BasePath)
+		s.setupAPIRoutesOnGroup(apiGroup)
 	} else {
-		router.Mount("/", s.setupAPIRoutes())
+		s.setupAPIRoutesOnGroup(router.Group("/"))
 	}
 
 	return router
 }
 
-// setupAPIRoutes configures the API-specific routes
-func (s *Server) setupAPIRoutes() *chi.Mux {
-	apiRouter := chi.NewRouter()
-
+// setupAPIRoutesOnGroup configures API routes on a router group
+func (s *Server) setupAPIRoutesOnGroup(group *gin.RouterGroup) {
 	// Basic API info endpoint
-	apiRouter.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+	group.GET("/", func(c *gin.Context) {
+		c.Header("Content-Type", "application/json")
+		c.Status(http.StatusOK)
 
 		// Record metrics for this request
 		s.observabilityManager.RecordHTTPRequest("GET", "/", 200, time.Since(time.Now()), 0, 0)
 
-		_, _ = fmt.Fprintf(w, `{
+		_, _ = fmt.Fprintf(c.Writer, `{
 			"service": "git-executor",
 			"version": "1.0.0",
 			"status": "running",
@@ -134,122 +145,95 @@ func (s *Server) setupAPIRoutes() *chi.Mux {
 		}`, time.Now().UTC().Format(time.RFC3339))
 	})
 
-	// Set up REST API routes
-	s.setupRestAPIRoutes(apiRouter)
+	// Setup REST API routes
+	s.setupRestAPIRoutes(group)
 
-	// Set up SSH and Smart HTTP protocol routes
-	s.setupProtocolRoutes(apiRouter)
-
-	return apiRouter
+	// Setup Git protocol routes
+	s.setupProtocolRoutes(group)
 }
 
 // setupRestAPIRoutes configures REST API routes for Git operations
-func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
+func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	// Initialize permission client for REST API routes
 	permConfig := permissions.DefaultConfig()
 	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing
 	permClient, err := permissions.NewPermissionClient(permConfig)
 	if err != nil {
-		// Log error and skip REST API routes
-		fmt.Printf("⚠️  Warning: Failed to initialize permission client for REST API: %v\n", err)
+		s.logger.Error("Failed to create permission client for REST API", zap.Error(err))
 		return
 	}
 
-	// Create diff handler
-	diffHandler, err := protocol.NewDiffHandler(s.config, permClient)
+	// Create path configuration for handlers
+	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
-		// Log error and skip diff routes
-		fmt.Printf("Failed to create diff handler: %v\n", err)
+		s.logger.Error("Failed to create path config", zap.Error(err))
 		return
 	}
 
-	// Create tree handler
+	// Initialize handlers for REST API endpoints
 	treeHandler, err := protocol.NewTreeHandler(s.config, permClient)
 	if err != nil {
-		// Log error and skip tree routes
-		fmt.Printf("Failed to create tree handler: %v\n", err)
+		s.logger.Error("Failed to create tree handler", zap.Error(err))
 		return
 	}
 
-	// Create blob handler
-	blobHandler, err := protocol.NewBlobHandler(s.config, permClient)
+	blobHandler, err := protocol.NewBlobHandler(pathConfig, permClient)
 	if err != nil {
-		// Log error and skip blob routes
-		fmt.Printf("Failed to create blob handler: %v\n", err)
+		s.logger.Error("Failed to create blob handler", zap.Error(err))
 		return
 	}
 
-	// Create commits handler
 	commitsHandler, err := protocol.NewCommitsHandler(s.config, permClient)
 	if err != nil {
-		// Log error and skip commits routes
-		fmt.Printf("Failed to create commits handler: %v\n", err)
+		s.logger.Error("Failed to create commits handler", zap.Error(err))
 		return
 	}
 
-	// Initialize access control middleware for REST API endpoints
-	accessControl, err := custommiddleware.NewAccessControlMiddleware(
-		custommiddleware.DefaultAccessControlConfig(),
-		s.logger,
-	)
+	// Initialize diff handler for enhanced Git operations
+	diffHandler, err := protocol.NewDiffHandler(s.config, permClient)
 	if err != nil {
-		s.logger.Warn("Failed to initialize access control middleware", zap.Error(err))
-		// Continue without access control middleware
-		accessControl = nil
+		s.logger.Error("Failed to create diff handler", zap.Error(err))
+		return
 	}
 
-	// Create authentication middleware for API endpoints
-	authMiddleware := s.createAPIAuthMiddleware()
-
-	// CORS middleware for API endpoints
-	corsMiddleware := s.createCORSMiddleware()
-
 	// Git diff endpoints with enhanced middleware
-	router.Route("/repos", func(r chi.Router) {
-		// Apply middleware stack for repo-level operations
-		if corsMiddleware != nil {
-			r.Use(corsMiddleware)
-		}
-		if accessControl != nil {
-			r.Use(accessControl.Middleware)
-		}
-		if authMiddleware != nil {
-			r.Use(authMiddleware)
-		}
-
-		// Apply rate limiting middleware
-		r.Use(middleware.Throttle(100)) // 100 concurrent requests max
-
-		r.Route("/{owner}", func(r chi.Router) {
-			r.Route("/{repo}", func(r chi.Router) {
+	reposGroup := router.Group("/repos")
+	reposGroup.Use(ginToChiMiddleware()) // Add chi compatibility middleware
+	{
+		ownerGroup := reposGroup.Group("/:owner")
+		{
+			repoGroup := ownerGroup.Group("/:repo")
+			{
 				// Tree endpoint
-				r.Get("/tree", treeHandler.HandleTreeAPI)
+				repoGroup.GET("/tree", gin.WrapF(treeHandler.HandleTreeAPI))
 				// Blob endpoint
-				r.Get("/blob", blobHandler.HandleBlobAPI)
+				repoGroup.GET("/blob", blobHandler.HandleBlobAPIGin)
 				// Commits endpoint
-				r.Get("/commits", commitsHandler.HandleCommitsAPI)
+				repoGroup.GET("/commits", gin.WrapF(commitsHandler.HandleCommitsAPI))
 
 				// Diff endpoints
-				r.Route("/diff", func(r chi.Router) {
+				diffGroup := repoGroup.Group("/diff")
+				{
 					// Compare two commits
-					r.Get("/commits/{base}/{head}", diffHandler.HandleCommitDiff)
+					diffGroup.GET("/commits/:base/:head", gin.WrapF(diffHandler.HandleCommitDiff))
 					// Compare two branches
-					r.Get("/branches/{base}/{head}", diffHandler.HandleBranchDiff)
+					diffGroup.GET("/branches/:base/:head", gin.WrapF(diffHandler.HandleBranchDiff))
 					// Compare specific file between two references
-					r.Get("/file", diffHandler.HandleFileDiff)
-				})
+					diffGroup.GET("/file", gin.WrapF(diffHandler.HandleFileDiff))
+				}
 				// Patch endpoints
-				r.Route("/patch", func(r chi.Router) {
+				patchGroup := repoGroup.Group("/patch")
+				{
 					// Generate Git patch format for commit range
-					r.Get("/{base}/{head}", diffHandler.HandlePatch)
-				})
-			})
-		})
-	})
+					patchGroup.GET("/:base/:head", gin.WrapF(diffHandler.HandlePatch))
+				}
+			}
+		}
+	}
 }
 
 // setupProtocolRoutes configures Git Smart HTTP protocol routes
-func (s *Server) setupProtocolRoutes(router *chi.Mux) {
+func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	// Initialize permission client (for now, we'll create a basic config)
 	// TODO: This should be properly configured with actual API service URL
 	permConfig := permissions.DefaultConfig()
@@ -286,54 +270,60 @@ func (s *Server) setupProtocolRoutes(router *chi.Mux) {
 	}
 
 	// Git Smart HTTP routes for both fetch and push operations (executor endpoints)
-	router.Route("/{owner}/{repo}", func(r chi.Router) {
+	ownerRepoGroup := router.Group("/:owner/:repo")
+	ownerRepoGroup.Use(ginToChiMiddleware()) // Add chi compatibility middleware
+	{
 		// Fetch operations (git clone, git fetch)
 		// GET /repos/{owner}/{repo}/info/refs?service=git-upload-pack
-		r.Get("/info/refs", func(w http.ResponseWriter, req *http.Request) {
-			service := req.URL.Query().Get("service")
+		ownerRepoGroup.GET("/info/refs", func(c *gin.Context) {
+			service := c.Query("service")
 			switch service {
 			case "git-upload-pack":
-				uploadPackHandler.HandleInfoRefs(w, req)
+				uploadPackHandler.HandleInfoRefs(c.Writer, c.Request)
 			case "git-receive-pack":
 				if receivePackHandler != nil {
-					receivePackHandler.HandleInfoRefs(w, req)
+					receivePackHandler.HandleInfoRefs(c.Writer, c.Request)
 				} else {
-					http.Error(w, "Receive-pack service not available", http.StatusServiceUnavailable)
+					c.Status(http.StatusServiceUnavailable)
+					_, _ = c.Writer.Write([]byte("Receive-pack service not available"))
 				}
 			default:
-				http.Error(w, "Invalid service parameter", http.StatusBadRequest)
+				c.Status(http.StatusBadRequest)
+				_, _ = c.Writer.Write([]byte("Invalid service parameter"))
 			}
 		})
 
 		// POST /repos/{owner}/{repo}/git-upload-pack
-		r.Post("/git-upload-pack", uploadPackHandler.HandleUploadPack)
+		ownerRepoGroup.POST("/git-upload-pack", gin.WrapF(uploadPackHandler.HandleUploadPack))
 
 		// Push operations (git push)
 		// POST /repos/{owner}/{repo}/git-receive-pack
 		if receivePackHandler != nil {
-			r.Post("/git-receive-pack", receivePackHandler.HandleReceivePack)
+			ownerRepoGroup.POST("/git-receive-pack", gin.WrapF(receivePackHandler.HandleReceivePack))
 		}
-	})
+	}
 
 	// SSH protocol routes for SSH-forwarded Git operations
 	if sshHandler != nil {
-		router.Route("/ssh/{owner}/{repo}", func(r chi.Router) {
+		sshGroup := router.Group("/ssh/:owner/:repo")
+		sshGroup.Use(ginToChiMiddleware()) // Add chi compatibility middleware
+		{
 			// SSH-forwarded fetch operations
 			// POST /ssh/{owner}/{repo}/upload-pack
-			r.Post("/upload-pack", sshHandler.HandleSSHUploadPack)
+			sshGroup.POST("/upload-pack", gin.WrapF(sshHandler.HandleSSHUploadPack))
 
 			// SSH-forwarded push operations
 			// POST /ssh/{owner}/{repo}/receive-pack
-			r.Post("/receive-pack", sshHandler.HandleSSHReceivePack)
-		})
+			sshGroup.POST("/receive-pack", gin.WrapF(sshHandler.HandleSSHReceivePack))
+		}
 	}
 }
 
 // healthCheck handles the health check endpoint
-func (s *Server) healthCheck(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, `{"status": "healthy", "timestamp": "%s"}`, time.Now().UTC().Format(time.RFC3339))
+func (s *Server) healthCheck(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+	c.Status(http.StatusOK)
+	_, _ = fmt.Fprintf(c.Writer, `{"status": "healthy", "timestamp": "%s"}`, time.Now().UTC().Format(time.RFC3339))
 }
 
 // waitForShutdown waits for shutdown signals and performs graceful shutdown
@@ -399,61 +389,4 @@ func (s *Server) GetAddr() string {
 		return ""
 	}
 	return s.server.Addr
-}
-
-// loggingMiddleware logs HTTP requests
-func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-
-		next.ServeHTTP(ww, r)
-
-		s.logger.Info("HTTP request",
-			zap.String("method", r.Method),
-			zap.String("path", r.URL.Path),
-			zap.Int("status", ww.Status()),
-			zap.Int("bytes", ww.BytesWritten()),
-			zap.Duration("duration", time.Since(start)),
-			zap.String("remote", r.RemoteAddr),
-		)
-	})
-}
-
-// createAPIAuthMiddleware creates middleware for API authentication
-func (s *Server) createAPIAuthMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// For REST API endpoints, we rely on the individual handlers
-			// to perform authentication (they check X-USER-ID header)
-			// This middleware can be enhanced later for JWT tokens, API keys, etc.
-
-			// Add API-specific headers
-			w.Header().Set("X-API-Version", "1.0")
-			w.Header().Set("X-Service", "collabops-git-executor")
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// createCORSMiddleware creates CORS middleware for API endpoints
-func (s *Server) createCORSMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Basic CORS headers for API access
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-USER-ID, X-Source")
-			w.Header().Set("Access-Control-Max-Age", "86400")
-
-			// Handle preflight requests
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
 }

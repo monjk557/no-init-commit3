@@ -14,7 +14,6 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
-	"github.com/go-chi/chi/v5"
 )
 
 // CommitsHandler handles Git commit log REST API endpoints
@@ -126,8 +125,8 @@ func (h *CommitsHandler) HandleCommitsAPI(w http.ResponseWriter, r *http.Request
 // validateAndExtractCommitsParams extracts and validates parameters from commit request
 func (h *CommitsHandler) validateAndExtractCommitsParams(r *http.Request) (*CommitsRequestParams, error) {
 	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
 
 	// Extract query parameters
 	ref := r.URL.Query().Get("ref")
