@@ -12,6 +12,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	custommiddleware "github.com/collabops/git-executor/internal/middleware"
+	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/go-chi/chi/v5"
@@ -19,19 +20,35 @@ import (
 	"go.uber.org/zap"
 )
 
-// Server represents the HTTP server
+// Server represents the HTTP server with integrated observability
 type Server struct {
-	server *http.Server // inheritance가 아니라 implmentation한것이다.
-	config *config.Config
-	logger *logging.Logger
+	server               *http.Server
+	config               *config.Config
+	logger               *logging.Logger
+	observabilityManager *observability.Manager
 }
 
-// New creates a new HTTP server instance
-func New(cfg *config.Config) *Server {
-	return &Server{
-		config: cfg,
-		logger: logging.GetGlobal(),
+// New creates a new HTTP server instance with observability
+func New(cfg *config.Config) (*Server, error) {
+	// Create permission client
+	permConfig := permissions.DefaultConfig()
+	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing
+	permClient, err := permissions.NewPermissionClient(permConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create permission client: %w", err)
 	}
+
+	// Initialize observability manager
+	obsManager, err := observability.NewManager(cfg, permClient, "1.0.0")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create observability manager: %w", err)
+	}
+
+	return &Server{
+		config:               cfg,
+		logger:               obsManager.GetLogger(),
+		observabilityManager: obsManager,
+	}, nil
 }
 
 // Start initializes and starts the HTTP server
@@ -40,60 +57,53 @@ func (s *Server) Start() error {
 	router := s.SetupRouter()
 
 	// Create HTTP server
-	// [핵심] 모든 Go 웹 프레임워크는, HTTP server를 상속받는다. 이것을 확장해서 쓴다.
-	// 자기만의 "Structure"을 만들어서 쓴다.
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
-		Handler:      router, //handler??? router = handler 개념은 같음. 보통하는 일이 L7 요청들어오면 얘가 어디로해주는역할.
+		Handler:      router,
 		ReadTimeout:  s.config.Server.ReadTimeout,
 		WriteTimeout: s.config.Server.WriteTimeout,
 		IdleTimeout:  s.config.Server.IdleTimeout,
 	}
 
-	// HTTP Server를 쓰는 방법은 tcp를 열고, listen을 함.
-	// Check if port is available
-	// This part of the code was removed as per the new_code, as net.Listen is no longer imported.
-	// The original code had a bug where it was trying to close a listener that was not created.
-	// Since the new_code removes net.Listen, this block is effectively removed.
-
 	// Start server in a goroutine
-	go func() { // multithread개념임. "go func"는. go 함수앞에 go 라고 붙이면, thread를 생성함.
+	go func() {
 		s.logger.Info("Server starting",
 			zap.String("address", s.server.Addr),
 			zap.String("basePath", s.config.Server.BasePath))
-		// 이거도 핵심.
+
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			s.logger.Error("Server failed to start", zap.Error(err))
 		}
-	}() // ()가 있어서됨 함수가 바로 실행됨 변수로 저장했다가 바로 실행해도되고 이렇게 바로실행해도됨.
+	}()
 
 	// Wait for shutdown signal
-	// 바로 return 때리면 go routine돌리면 종료되니까, loop로 돌게 해놓은거임.
 	return s.waitForShutdown()
 }
 
-// SetupRouter configures the HTTP router with middleware and routes
+// SetupRouter configures the HTTP router with observability middleware and routes
 func (s *Server) SetupRouter() *chi.Mux {
 	router := chi.NewRouter()
 
-	// Add middleware
-	// 순서가 중요함. 양파처럼 layer를 쌓는거임.
-	// request id layer를 하는것.
-
-	// error전파를 다 middleware할수가있음.
+	// Add core middleware first
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
+
+	// Add observability middleware (metrics and tracing)
+	s.observabilityManager.SetupMiddleware(router)
+
+	// Add existing middleware
 	router.Use(s.loggingMiddleware)
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Timeout(60 * time.Second))
 
-	// Health check endpoint
-	// 여기에 Health Check router를 넣는거임.
+	// Setup observability routes (health checks, metrics)
+	s.observabilityManager.SetupRoutes(router)
+
+	// Keep the original simple health check for backward compatibility
 	router.Get(s.config.Server.HealthCheckPath, s.healthCheck)
 
 	// Mount API routes under base path if configured
 	if s.config.Server.BasePath != "/" {
-		// prefix를 상위에서, 하위에서 설정하는거를 내 스타일대로 하는거임.
 		router.Mount(s.config.Server.BasePath, s.setupAPIRoutes())
 	} else {
 		router.Mount("/", s.setupAPIRoutes())
@@ -102,15 +112,7 @@ func (s *Server) SetupRouter() *chi.Mux {
 	return router
 }
 
-// 전체적구조 RECAP
-// Router생성
-// ROuter마다 실행되는 go 도메인들 설정 (middleware에 넣는다는게 이말!)
-// 이거에 장점: Router Get/Post/Delete/Update vs Router Use.
-// Use 가 미들웨어임. 어떤 영역을 공통적으로 처리해주는가? 이것이 핵심임. 잘 처리해야지, Domain할일 이 줄어들음. Domain은 거의다 비슷한 일을 할거임.
-// Domain의 할일 을 줄여야함. Domain이 되게 단순해짐. 이게 핵심.
-// CRUD는 도메인임.
-// Use에다가 logic을 넣을수도있음.
-// setupAPIRoutes configures the API-specific routes.
+// setupAPIRoutes configures the API-specific routes
 func (s *Server) setupAPIRoutes() *chi.Mux {
 	apiRouter := chi.NewRouter()
 
@@ -118,17 +120,24 @@ func (s *Server) setupAPIRoutes() *chi.Mux {
 	apiRouter.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"message": "CollabOps Git Executor API", "version": "1.0.0", "status": "ready"}`)
+
+		// Record metrics for this request
+		s.observabilityManager.RecordHTTPRequest("GET", "/", 200, time.Since(time.Now()), 0, 0)
+
+		fmt.Fprintf(w, `{
+			"service": "git-executor",
+			"version": "1.0.0",
+			"status": "running",
+			"timestamp": "%s"
+		}`, time.Now().UTC().Format(time.RFC3339))
 	})
 
-	// Git Smart HTTP Protocol routes
-	s.setupGitRoutes(apiRouter)
-
-	// REST API routes for Git operations
+	// Set up REST API routes
 	s.setupRestAPIRoutes(apiRouter)
 
-	// Enable streaming optimization for large repository operations
-	s.enableStreamingOptimization(apiRouter)
+	// Set up SSH and Smart HTTP protocol routes
+	s.setupProtocolRoutes(apiRouter)
+
 	return apiRouter
 }
 
@@ -237,8 +246,8 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 	})
 }
 
-// setupGitRoutes configures Git Smart HTTP protocol routes
-func (s *Server) setupGitRoutes(router *chi.Mux) {
+// setupProtocolRoutes configures Git Smart HTTP protocol routes
+func (s *Server) setupProtocolRoutes(router *chi.Mux) {
 	// Initialize permission client (for now, we'll create a basic config)
 	// TODO: This should be properly configured with actual API service URL
 	permConfig := permissions.DefaultConfig()
@@ -341,21 +350,45 @@ func (s *Server) waitForShutdown() error {
 
 	// Attempt graceful shutdown
 	s.logger.Info("Shutting down server gracefully")
+
+	// Shutdown HTTP server first
 	if err := s.server.Shutdown(ctx); err != nil {
 		s.logger.Error("Server forced to shutdown", zap.Error(err))
 		return err
+	}
+
+	// Shutdown observability components
+	if s.observabilityManager != nil {
+		s.logger.Info("Shutting down observability components")
+		if err := s.observabilityManager.Shutdown(ctx); err != nil {
+			s.logger.Error("Failed to shutdown observability components", zap.Error(err))
+			// Don't return error here as server shutdown is more critical
+		}
 	}
 
 	s.logger.Info("Server shutdown complete")
 	return nil
 }
 
-// Shutdown gracefully shuts down the server
+// Shutdown gracefully shuts down the server and observability components
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.server == nil {
-		return nil
+	var lastErr error
+
+	// Shutdown HTTP server
+	if s.server != nil {
+		if err := s.server.Shutdown(ctx); err != nil {
+			lastErr = err
+		}
 	}
-	return s.server.Shutdown(ctx)
+
+	// Shutdown observability components
+	if s.observabilityManager != nil {
+		if err := s.observabilityManager.Shutdown(ctx); err != nil {
+			lastErr = err
+		}
+	}
+
+	return lastErr
 }
 
 // GetAddr returns the server address

@@ -46,7 +46,12 @@ func main() {
 	}
 
 	// Create and start server
-	srv := server.New(cfg)
+	srv, err := server.New(cfg)
+	if err != nil {
+		logger.Error("Failed to create server", zap.Error(err))
+		os.Exit(1)
+	}
+
 	if err := srv.Start(); err != nil {
 		logger.Error("Server failed to start", zap.Error(err))
 		os.Exit(1)
