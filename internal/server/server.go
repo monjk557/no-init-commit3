@@ -168,6 +168,14 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 		return
 	}
 
+	// Create commits handler
+	commitsHandler, err := protocol.NewCommitsHandler(s.config, permClient)
+	if err != nil {
+		// Log error and skip commits routes
+		fmt.Printf("Failed to create commits handler: %v\n", err)
+		return
+	}
+
 	// Initialize access control middleware for REST API endpoints
 	accessControl, err := custommiddleware.NewAccessControlMiddleware(
 		custommiddleware.DefaultAccessControlConfig(),
@@ -207,6 +215,8 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 				r.Get("/tree", treeHandler.HandleTreeAPI)
 				// Blob endpoint
 				r.Get("/blob", blobHandler.HandleBlobAPI)
+				// Commits endpoint
+				r.Get("/commits", commitsHandler.HandleCommitsAPI)
 
 				// Diff endpoints
 				r.Route("/diff", func(r chi.Router) {
