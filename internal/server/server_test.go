@@ -402,7 +402,20 @@ func TestServer_StartAndShutdown(t *testing.T) {
 			BasePath:        "/api/repos",
 			ReadTimeout:     30 * time.Second,
 			WriteTimeout:    45 * time.Second,
-			HealthCheckPath: "/health"},
+			HealthCheckPath: "/health",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/var/lib/git/repos",
+		},
+		JWT: config.JWTConfig{
+			Algorithm:     "RS256",
+			PublicKeyPath: "/etc/collabops/public.pem",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
+		},
 	}
 
 	server := New(cfg)
