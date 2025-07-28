@@ -152,6 +152,14 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 		return
 	}
 
+	// Create tree handler
+	treeHandler, err := protocol.NewTreeHandler(s.config, permClient)
+	if err != nil {
+		// Log error and skip tree routes
+		fmt.Printf("Failed to create tree handler: %v\n", err)
+		return
+	}
+
 	// Initialize access control middleware for REST API endpoints
 	accessControl, err := custommiddleware.NewAccessControlMiddleware(
 		custommiddleware.DefaultAccessControlConfig(),
@@ -187,6 +195,9 @@ func (s *Server) setupRestAPIRoutes(router *chi.Mux) {
 
 		r.Route("/{owner}", func(r chi.Router) {
 			r.Route("/{repo}", func(r chi.Router) {
+				// Tree endpoint
+				r.Get("/tree", treeHandler.HandleTreeAPI)
+
 				// Diff endpoints
 				r.Route("/diff", func(r chi.Router) {
 					// Compare two commits
