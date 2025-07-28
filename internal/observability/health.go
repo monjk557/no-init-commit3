@@ -382,7 +382,7 @@ func (h *HealthChecker) sendHealthResponse(w http.ResponseWriter, response Healt
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		// Fallback to simple text response if JSON encoding fails
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "Health check failed: %v", err)
+		_, _ = fmt.Fprintf(w, "Health check failed: %v", err)
 	}
 }
 

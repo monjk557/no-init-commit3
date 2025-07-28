@@ -249,12 +249,13 @@ func isValidRepoIdentifier(identifier string) bool {
 		return false
 	}
 
-	// Basic validation: only allow alphanumeric characters, hyphens, underscores, and dots
+	// Basic validation for repository owner/name
+	// Allow alphanumeric, hyphens, underscores, dots
 	for _, char := range identifier {
-		if !((char >= 'a' && char <= 'z') ||
-			(char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') ||
-			char == '-' || char == '_' || char == '.') {
+		if (char < 'a' || char > 'z') &&
+			(char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') &&
+			char != '-' && char != '_' && char != '.' {
 			return false
 		}
 	}
@@ -271,10 +272,10 @@ func isValidGitRef(ref string) bool {
 	// Basic validation for Git references
 	// Allow alphanumeric, hyphens, underscores, dots, slashes (for branches like feature/xyz)
 	for _, char := range ref {
-		if !((char >= 'a' && char <= 'z') ||
-			(char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') ||
-			char == '-' || char == '_' || char == '.' || char == '/') {
+		if (char < 'a' || char > 'z') &&
+			(char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') &&
+			char != '-' && char != '_' && char != '.' && char != '/' {
 			return false
 		}
 	}

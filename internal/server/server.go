@@ -126,7 +126,7 @@ func (s *Server) setupAPIRoutes() *chi.Mux {
 		// Record metrics for this request
 		s.observabilityManager.RecordHTTPRequest("GET", "/", 200, time.Since(time.Now()), 0, 0)
 
-		fmt.Fprintf(w, `{
+		_, _ = fmt.Fprintf(w, `{
 			"service": "git-executor",
 			"version": "1.0.0",
 			"status": "running",
