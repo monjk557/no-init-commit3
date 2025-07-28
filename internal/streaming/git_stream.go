@@ -58,7 +58,12 @@ func (gs *GitStreamer) StreamPackfile(ctx context.Context, req *PackfileStreamRe
 
 	// Start packfile generation in a goroutine
 	go func() {
-		defer func() { _ = pipeWriter.Close() }()
+		// defer pipeWriter.Close()
+		// defer _ = pipeReader.Close()
+		defer func() {
+			_ = pipeWriter.Close() // 리턴값 무시. 함수에 넣어줘야함. defer 는 바로실행되는 function이어야함.
+		}()
+		// defer = 함수탈출할때 실행되는것.
 		err := gs.generatePackfileStream(ctx, req, pipeWriter)
 		errChan <- err
 	}()
@@ -251,9 +256,8 @@ func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities
 	refs, err := gs.repo.References()
 	if err != nil {
 		// Empty repository case - send dummy reference
-		line := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n",
-			fmt.Sprintf("%s agent=git/collabops-git-executor",
-				"multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main"))
+		capabilities := "multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor"
+		line := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n", capabilities)
 		return pktWriter.writeLine(line)
 	}
 
@@ -272,8 +276,8 @@ func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities
 		var line string
 		if firstRef {
 			// First reference includes capabilities
-			capString := "multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor"
-			line = fmt.Sprintf("%s %s\x00%s\n", ref.Hash().String(), ref.Name().String(), capString)
+			capabilities := "multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor"
+			line = fmt.Sprintf("%s %s\x00%s\n", ref.Hash().String(), ref.Name().String(), capabilities)
 			firstRef = false
 		} else {
 			// Subsequent references without capabilities
@@ -290,8 +294,8 @@ func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities
 
 	// If no refs were streamed (empty repo), send dummy reference
 	if refCount == 0 {
-		dummyLine := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n",
-			"multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor")
+		capabilities := "multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor"
+		dummyLine := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n", capabilities)
 		if err := pktWriter.writeLine(dummyLine); err != nil {
 			return err
 		}
