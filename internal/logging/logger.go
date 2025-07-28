@@ -15,6 +15,11 @@ import (
 
 // Logger wraps zap.Logger with additional functionality
 type Logger struct {
+	// library를 썼는데, 파이썬이나 Go나 Rust나 로깅패턴이 있음.
+	// 로그를 생성하는데 Create Or Get으로 생성함. 빈값으로 로그를 불러오면 Create가 됨.
+	// 예전에 생성했던거를 하면 Get을 함.
+	// Aspsect of Programming (AOP) 로거를 마치 전역함수처럼 씀. 전역으로 써도 안전함. 처음에 setting을 해두고 복잡하게 쓰지않는 이상 디버깅 용으로 로거를 쓰기때문에
+	// Create or Get할때 Project이름은 줌. 로거를 하나만 생성하는데, 그것을 전역으로 씀.
 	*zap.Logger
 }
 

@@ -13,6 +13,8 @@ import (
 
 func main() {
 	// Parse CLI flags
+	// Go실행할때 port를 준다던지, 읽어준다는지 하는 거를 cli option으로 줌.
+	// Viper가 다 해줌.
 	var (
 		configPath  = flag.String("config", "", "Path to configuration file")
 		healthCheck = flag.Bool("health-check", false, "Perform health check and exit")
@@ -32,6 +34,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
+	// 이 프로그램에서 이 로거를 전역으로 쓸것이다. 함수로 쓰면 불편하니까 어디서든 쓸수있게.
 	logging.SetGlobal(logger)
 
 	// Handle health check

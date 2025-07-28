@@ -28,8 +28,8 @@ func NewGitStreamer(repo *gogit.Repository) *GitStreamer {
 
 // PackfileStreamRequest represents a request for streaming a packfile
 type PackfileStreamRequest struct {
-	Wants []string // Object hashes that the client wants
-	Haves []string // Object hashes that the client already has
+	Wants        []string // Object hashes that the client wants
+	Haves        []string // Object hashes that the client already has
 	Capabilities []string // Client capabilities
 }
 
@@ -38,23 +38,28 @@ type PackfileStreamRequest struct {
 func (gs *GitStreamer) StreamPackfile(ctx context.Context, req *PackfileStreamRequest, w io.Writer) error {
 	// Create a pipe for streaming data
 	pipeReader, pipeWriter := io.Pipe()
-	
+
 	// Channel for error communication
 	errChan := make(chan error, 1)
-	
+
 	// Start packfile generation in a goroutine
 	go func() {
-		defer pipeWriter.Close()
+		// defer pipeWriter.Close()
+		// defer _ = pipeReader.Close()
+		defer func() {
+			_ = pipeWriter.Close() // 리턴값 무시. 함수에 넣어줘야함. defer 는 바로실행되는 function이어야함.
+		}()
+		// defer = 함수탈출할때 실행되는것.
 		err := gs.generatePackfileStream(ctx, req, pipeWriter)
 		errChan <- err
 	}()
-	
+
 	// Copy from pipe to destination writer (gateway response)
 	_, copyErr := io.Copy(w, pipeReader)
-	
+
 	// Wait for generation to complete and get any errors
 	generateErr := <-errChan
-	
+
 	// Return the first error encountered
 	if generateErr != nil {
 		return fmt.Errorf("packfile generation failed: %w", generateErr)
@@ -62,7 +67,7 @@ func (gs *GitStreamer) StreamPackfile(ctx context.Context, req *PackfileStreamRe
 	if copyErr != nil {
 		return fmt.Errorf("packfile streaming failed: %w", copyErr)
 	}
-	
+
 	return nil
 }
 
@@ -70,22 +75,22 @@ func (gs *GitStreamer) StreamPackfile(ctx context.Context, req *PackfileStreamRe
 func (gs *GitStreamer) generatePackfileStream(ctx context.Context, req *PackfileStreamRequest, w io.Writer) error {
 	// Create a packet line writer for the stream
 	pktWriter := &StreamingPktLineWriter{w: w}
-	
+
 	// Send negotiation response
 	if err := pktWriter.writeLine("NAK"); err != nil {
 		return fmt.Errorf("failed to write NAK: %w", err)
 	}
-	
+
 	// Send packfile start indicator
 	if err := pktWriter.writeLine("0008NAK\n"); err != nil {
 		return err
 	}
-	
+
 	// Flush negotiation phase
 	if err := pktWriter.flush(); err != nil {
 		return err
 	}
-	
+
 	// Stream objects without collecting them all in memory
 	return gs.streamObjects(ctx, req, pktWriter)
 }
@@ -95,27 +100,27 @@ func (gs *GitStreamer) streamObjects(ctx context.Context, req *PackfileStreamReq
 	// Track processed objects to avoid duplicates
 	processed := make(map[plumbing.Hash]bool)
 	objectCount := 0
-	
+
 	// Send simplified packfile header
 	if err := pktWriter.writeLine("# streaming pack\n"); err != nil {
 		return err
 	}
-	
+
 	// Stream each wanted object and its dependencies
 	for _, want := range req.Wants {
 		hash := plumbing.NewHash(want)
-		
+
 		// Check if client already has this object
 		if gs.clientHasObject(hash.String(), req.Haves) {
 			continue
 		}
-		
+
 		// Stream this object and its dependencies
 		err := gs.streamObjectTree(ctx, hash, processed, req.Haves, pktWriter, &objectCount)
 		if err != nil {
 			return fmt.Errorf("failed to stream object tree for %s: %w", want, err)
 		}
-		
+
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
@@ -124,13 +129,13 @@ func (gs *GitStreamer) streamObjects(ctx context.Context, req *PackfileStreamReq
 			// Continue processing
 		}
 	}
-	
+
 	// Send packfile summary
 	summary := fmt.Sprintf("# pack completed: %d objects streamed\n", objectCount)
 	if err := pktWriter.writeLine(summary); err != nil {
 		return err
 	}
-	
+
 	// End with flush packet
 	return pktWriter.flush()
 }
@@ -141,25 +146,25 @@ func (gs *GitStreamer) streamObjectTree(ctx context.Context, hash plumbing.Hash,
 	if processed[hash] || gs.clientHasObject(hash.String(), haves) {
 		return nil
 	}
-	
+
 	// Mark as processed
 	processed[hash] = true
-	
+
 	// Try to get the object
 	obj, err := gs.repo.Object(plumbing.AnyObject, hash)
 	if err != nil {
 		// Object not found - skip silently (might be a partial clone scenario)
 		return nil
 	}
-	
+
 	// Stream this object
 	objectInfo := fmt.Sprintf("object %s %s\n", hash.String(), obj.Type().String())
 	if err := pktWriter.writeLine(objectInfo); err != nil {
 		return err
 	}
-	
+
 	*objectCount++
-	
+
 	// For commits, recursively stream parent commits
 	if obj.Type() == plumbing.CommitObject {
 		commit, err := object.GetCommit(gs.repo.Storer, hash)
@@ -171,7 +176,7 @@ func (gs *GitStreamer) streamObjectTree(ctx context.Context, hash plumbing.Hash,
 				if err != nil {
 					return err
 				}
-				
+
 				// Check for context cancellation
 				select {
 				case <-ctx.Done():
@@ -179,7 +184,7 @@ func (gs *GitStreamer) streamObjectTree(ctx context.Context, hash plumbing.Hash,
 				default:
 					// Continue
 				}
-				
+
 				// Safety limit to prevent infinite recursion
 				if *objectCount > 10000 {
 					return fmt.Errorf("object count limit reached (10000) - stopping to prevent memory exhaustion")
@@ -187,7 +192,7 @@ func (gs *GitStreamer) streamObjectTree(ctx context.Context, hash plumbing.Hash,
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -203,19 +208,19 @@ func (gs *GitStreamer) clientHasObject(objectHash string, haves []string) bool {
 
 // StreamingPktLineWriter provides packet line writing for streaming operations
 type StreamingPktLineWriter struct {
-	w io.Writer
-	mu sync.Mutex  // Protect concurrent writes
+	w  io.Writer
+	mu sync.Mutex // Protect concurrent writes
 }
 
 // writeLine writes a Git protocol packet line
 func (p *StreamingPktLineWriter) writeLine(data string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	// Calculate packet length (4 bytes for length + data)
 	length := len(data) + 4
 	line := fmt.Sprintf("%04x%s", length, data)
-	
+
 	_, err := p.w.Write([]byte(line))
 	return err
 }
@@ -224,7 +229,7 @@ func (p *StreamingPktLineWriter) writeLine(data string) error {
 func (p *StreamingPktLineWriter) flush() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	_, err := p.w.Write([]byte("0000"))
 	return err
 }
@@ -232,20 +237,20 @@ func (p *StreamingPktLineWriter) flush() error {
 // StreamRefs streams repository references for info/refs endpoint
 func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities []string) error {
 	pktWriter := &StreamingPktLineWriter{w: w}
-	
+
 	// Get all references from the repository
 	refs, err := gs.repo.References()
 	if err != nil {
 		// Empty repository case - send dummy reference
-		line := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n", 
-			fmt.Sprintf("%s agent=git/collabops-git-executor", 
+		line := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n",
+			fmt.Sprintf("%s agent=git/collabops-git-executor",
 				fmt.Sprintf("%s", "multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main")))
 		return pktWriter.writeLine(line)
 	}
-	
+
 	firstRef := true
 	refCount := 0
-	
+
 	// Stream each reference
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		select {
@@ -253,7 +258,7 @@ func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities
 			return ctx.Err()
 		default:
 		}
-		
+
 		// Format reference line
 		var line string
 		if firstRef {
@@ -265,15 +270,15 @@ func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities
 			// Subsequent references without capabilities
 			line = fmt.Sprintf("%s %s\n", ref.Hash().String(), ref.Name().String())
 		}
-		
+
 		refCount++
 		return pktWriter.writeLine(line)
 	})
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to stream references: %w", err)
 	}
-	
+
 	// If no refs were streamed (empty repo), send dummy reference
 	if refCount == 0 {
 		dummyLine := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n",
@@ -282,7 +287,7 @@ func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities
 			return err
 		}
 	}
-	
+
 	// End with flush packet
 	return pktWriter.flush()
 }

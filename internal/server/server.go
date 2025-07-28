@@ -21,7 +21,7 @@ import (
 
 // Server represents the HTTP server
 type Server struct {
-	server *http.Server
+	server *http.Server // inheritance가 아니라 implmentation한것이다.
 	config *config.Config
 	logger *logging.Logger
 }
@@ -40,14 +40,17 @@ func (s *Server) Start() error {
 	router := s.setupRouter()
 
 	// Create HTTP server
+	// [핵심] 모든 Go 웹 프레임워크는, HTTP server를 상속받는다. 이것을 확장해서 쓴다.
+	// 자기만의 "Structure"을 만들어서 쓴다.
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
-		Handler:      router,
+		Handler:      router, //handler??? router = handler 개념은 같음. 보통하는 일이 L7 요청들어오면 얘가 어디로해주는역할.
 		ReadTimeout:  s.config.Server.ReadTimeout,
 		WriteTimeout: s.config.Server.WriteTimeout,
 		IdleTimeout:  s.config.Server.IdleTimeout,
 	}
 
+	// HTTP Server를 쓰는 방법은 tcp를 열고, listen을 함.
 	// Check if port is available
 	listener, err := net.Listen("tcp", s.server.Addr)
 	if err != nil {
@@ -59,16 +62,18 @@ func (s *Server) Start() error {
 	_ = listener.Close()
 
 	// Start server in a goroutine
-	go func() {
+	go func() { // multithread개념임. "go func"는. go 함수앞에 go 라고 붙이면, thread를 생성함.
 		s.logger.Info("Server starting",
 			zap.String("address", s.server.Addr),
 			zap.String("basePath", s.config.Server.BasePath))
+		// 이거도 핵심.
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			s.logger.Error("Server failed to start", zap.Error(err))
 		}
-	}()
+	}() // ()가 있어서됨 함수가 바로 실행됨 변수로 저장했다가 바로 실행해도되고 이렇게 바로실행해도됨.
 
 	// Wait for shutdown signal
+	// 바로 return 때리면 go routine돌리면 종료되니까, loop로 돌게 해놓은거임.
 	return s.waitForShutdown()
 }
 
@@ -77,6 +82,10 @@ func (s *Server) setupRouter() *chi.Mux {
 	router := chi.NewRouter()
 
 	// Add middleware
+	// 순서가 중요함. 양파처럼 layer를 쌓는거임.
+	// request id layer를 하는것.
+
+	// error전파를 다 middleware할수가있음.
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
 	router.Use(s.loggingMiddleware)
@@ -84,10 +93,12 @@ func (s *Server) setupRouter() *chi.Mux {
 	router.Use(middleware.Timeout(60 * time.Second))
 
 	// Health check endpoint
+	// 여기에 Health Check router를 넣는거임.
 	router.Get(s.config.Server.HealthCheckPath, s.healthCheck)
 
 	// Mount API routes under base path if configured
 	if s.config.Server.BasePath != "/" {
+		// prefix를 상위에서, 하위에서 설정하는거를 내 스타일대로 하는거임.
 		router.Mount(s.config.Server.BasePath, s.setupAPIRoutes())
 	} else {
 		router.Mount("/", s.setupAPIRoutes())
@@ -96,7 +107,15 @@ func (s *Server) setupRouter() *chi.Mux {
 	return router
 }
 
-// setupAPIRoutes configures the API-specific routes
+// 전체적구조 RECAP
+// Router생성
+// ROuter마다 실행되는 go 도메인들 설정 (middleware에 넣는다는게 이말!)
+// 이거에 장점: Router Get/Post/Delete/Update vs Router Use.
+// Use 가 미들웨어임. 어떤 영역을 공통적으로 처리해주는가? 이것이 핵심임. 잘 처리해야지, Domain할일 이 줄어들음. Domain은 거의다 비슷한 일을 할거임.
+// Domain의 할일 을 줄여야함. Domain이 되게 단순해짐. 이게 핵심.
+// CRUD는 도메인임.
+// Use에다가 logic을 넣을수도있음.
+// setupAPIRoutes configures the API-specific routes.
 func (s *Server) setupAPIRoutes() *chi.Mux {
 	apiRouter := chi.NewRouter()
 
