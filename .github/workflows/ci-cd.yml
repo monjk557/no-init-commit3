@@ -47,13 +47,13 @@ jobs:
           echo "🔍 Verifying CI configuration matches local setup..."
           echo ""
           echo "📋 Configuration from Makefile:"
-          echo "Available commands: test-verbose, fmt, lint, vet, test-race"
+          echo "Available commands: test-verbose, format (comprehensive), vet, test-race"
           echo ""
-          echo "🎯 CI commands now match Makefile exactly:"
-          echo "  Local: make test-verbose && make fmt && make lint"
-          echo "  CI:    make test-verbose && make fmt && make lint"
+          echo "🎯 CI commands now match local development exactly:"
+          echo "  Local: make format (includes fmt + lint + tests)"
+          echo "  CI:    make format (includes fmt + lint + tests)"
           echo ""
-          echo "✅ Perfect alignment achieved!"
+          echo "✅ Perfect alignment - no more CI/local discrepancies!"
 
       - name: Verify project structure
         run: make verify-structure
@@ -61,20 +61,18 @@ jobs:
       - name: Verify configuration
         run: make verify-config
 
-      - name: Run code formatting check
+      - name: Run comprehensive formatting and linting
         run: |
-          make fmt
+          echo "🎨 Running comprehensive formatting (includes linting)..."
+          make format
           if [ -n "$(git diff --name-only)" ]; then
-            echo "❌ Code is not formatted. Please run 'make fmt'"
+            echo "❌ Code formatting/linting produced changes. Please run 'make format' locally"
             git diff
             exit 1
           fi
 
-      - name: Run go vet
+      - name: Run go vet  
         run: make vet
-
-      - name: Run linter
-        run: make lint
 
       - name: Run tests with race detection
         timeout-minutes: 10
@@ -149,7 +147,8 @@ jobs:
           echo "🏷️ Extracting Docker metadata..."
 
           # 커밋 해시 앞 8자리 추출
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          GITHUB_SHA="${{ github.sha }}"
+          SHORT_SHA="${GITHUB_SHA:0:8}"
 
           # Git 레퍼런스 타입 확인
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -344,7 +343,9 @@ jobs:
 
       - name: Send Slack notification
         run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          # Fix: Use proper variable assignment instead of command substitution
+          GITHUB_SHA="${{ github.sha }}"
+          SHORT_SHA="${GITHUB_SHA:0:8}"
           MAIN_TAG="${{ needs.build-and-push.outputs.image-tag }}"
 
           # 태그 목록 구성 (중복 제거)

@@ -333,3 +333,9 @@ func convertCommit(c *object.Commit) Commit {
 		TreeHash:     c.TreeHash.String(),
 	}
 }
+
+// GetGoGitRepo returns the underlying go-git repository instance
+// This is useful for operations that need direct access to go-git APIs
+func (r *GoGitRepository) GetGoGitRepo() *git.Repository {
+	return r.repo
+}

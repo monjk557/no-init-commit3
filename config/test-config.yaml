@@ -1,27 +1,30 @@
-# Test Configuration for Smart HTTP Protocol
-# This file is used for manual testing of the Smart HTTP implementation
+# Test Configuration for CollabOps Git Executor
+# Used for testing the file diff endpoint
 
+# HTTP Server Configuration
 server:
+  port: 3000
   host: "localhost"
-  port: 9090
+  base_path: "/"
   read_timeout: "30s"
   write_timeout: "30s"
-  base_path: "/"
+  idle_timeout: "120s"
 
+# Git Repository Configuration
 git:
-  repo_root: "./test-repos"  # Will be created by test script
+  repo_root: "/Users/johnbaek/collabops-git-executor/test-repos"
+  enable_packfile: true
+  max_cache_size: 10
+  cache_ttl: "5m"
 
-logging:
-  level: "debug"
-  format: "text"
-  file: ""
-
+# JWT Configuration (using simple HS256 for testing)
 jwt:
   algorithm: "HS256"
-  secret_key: "test-secret-key-for-development-only"
-  public_key_path: ""
-  issuer: "collabops-test"
-  audience: "collabops-executor"
+  secret_key: "test-secret-key-for-development"
 
-# Note: For testing, we use a simple secret key
-# In production, use RS256 with proper key management 
+# Logging Configuration
+log:
+  level: "debug"
+  format: "text"
+  output: "stdout"
+  development: true 

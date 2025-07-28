@@ -75,7 +75,7 @@ func TestServer_SetupRouter(t *testing.T) {
 	}
 
 	server := New(cfg)
-	router := server.setupRouter()
+	router := server.SetupRouter()
 
 	assert.NotNil(t, router)
 }
@@ -149,7 +149,7 @@ func TestServer_HealthCheckEndpoint(t *testing.T) {
 	}
 
 	server := New(cfg)
-	router := server.setupRouter()
+	router := server.SetupRouter()
 
 	req, err := http.NewRequest("GET", "/health", nil)
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestServer_BasePath(t *testing.T) {
 			}
 
 			server := New(cfg)
-			router := server.setupRouter()
+			router := server.SetupRouter()
 
 			req, err := http.NewRequest("GET", tt.testPath, nil)
 			require.NoError(t, err)
@@ -258,7 +258,7 @@ func TestServer_APIRoutesResponse(t *testing.T) {
 	}
 
 	server := New(cfg)
-	router := server.setupRouter()
+	router := server.SetupRouter()
 
 	req, err := http.NewRequest("GET", "/api/repos/", nil)
 	require.NoError(t, err)
@@ -363,7 +363,7 @@ func TestServer_ConfigurationRespected(t *testing.T) {
 	}
 
 	server := New(cfg)
-	router := server.setupRouter()
+	router := server.SetupRouter()
 
 	// Create mock HTTP server to test configuration
 	server.server = &http.Server{
@@ -459,7 +459,7 @@ func TestServer_Middleware(t *testing.T) {
 	}
 
 	server := New(cfg)
-	router := server.setupRouter()
+	router := server.SetupRouter()
 
 	// Test that middleware is working - check for recovery middleware by testing a panic
 	req, err := http.NewRequest("GET", "/health", nil)
@@ -506,7 +506,7 @@ func TestServer_InvalidRoute(t *testing.T) {
 	}
 
 	server := New(cfg)
-	router := server.setupRouter()
+	router := server.SetupRouter()
 
 	req, err := http.NewRequest("GET", "/nonexistent", nil)
 	require.NoError(t, err)

@@ -451,13 +451,24 @@ func (h *UploadPackHandler) walkCommitHistory(repo *gogit.Repository, commit *ob
 
 // writeLine writes a packet line with the data
 func (p *pktLineWriter) writeLine(data string) error {
-	// Add newline if not present
+	// Handle empty data as flush packet (Git protocol compliance)
+	if data == "" {
+		return p.flush()
+	}
+
+	// Add newline if not present (for normal Git protocol lines)
 	if !strings.HasSuffix(data, "\n") {
 		data += "\n"
 	}
 
 	// Calculate packet length (4 bytes for length + data)
 	length := len(data) + 4
+
+	// Check maximum packet line length (Git protocol limit)
+	if length > 65520 {
+		return fmt.Errorf("packet line too long: %d bytes (max 65520)", length)
+	}
+
 	line := fmt.Sprintf("%04x%s", length, data)
 
 	_, err := p.w.Write([]byte(line))

@@ -36,6 +36,20 @@ type PackfileStreamRequest struct {
 // StreamPackfile streams a packfile to the provided writer using efficient streaming
 // without loading all objects into memory at once
 func (gs *GitStreamer) StreamPackfile(ctx context.Context, req *PackfileStreamRequest, w io.Writer) error {
+	// Validate inputs
+	if gs.repo == nil {
+		return fmt.Errorf("repository is nil")
+	}
+	if req == nil {
+		return fmt.Errorf("request is nil")
+	}
+	if w == nil {
+		return fmt.Errorf("writer is nil")
+	}
+	if len(req.Wants) == 0 {
+		return fmt.Errorf("no objects requested")
+	}
+
 	// Create a pipe for streaming data
 	pipeReader, pipeWriter := io.Pipe()
 
