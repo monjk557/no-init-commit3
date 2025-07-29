@@ -37,7 +37,7 @@ NC=\033[0m # No Color
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
 .PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors
 .PHONY: local-it local-it-bg local-it-status local-it-logs local-it-logs-git local-it-cleanup local-it-restart local-it-rebuild
-.PHONY: local-it-safe local-it-aggressive local-it-no-migration local-it-test local-it-test-git local-it-shell local-it-shell-api local-it-env-setup local-it-info setup-lint-prevention enforce-quality
+.PHONY: local-it-safe local-it-aggressive local-it-no-migration local-it-test local-it-test-git local-it-shell local-it-shell-api local-it-env-setup local-it-info setup-lint-prevention enforce-quality kill-ports
 .PHONY: test-unit test-integration test-regression test-coverage-detailed test-benchmark test-security test-watch test-failure-only
 
 # Default target
@@ -834,3 +834,29 @@ go-env: ## Show Go environment
 	else \
 		echo "$(RED)❌ Go is not installed$(NC)"; \
 	fi
+
+kill-ports: ## 🔧 Kill processes using common CollabOps ports (with confirmation)
+	@echo "$(YELLOW)🔧 Killing processes using common CollabOps ports...$(NC)"
+	@echo "$(RED)⚠️  This will forcefully terminate processes using ports 3000, 6379, 6380, 8000, 2345, 5432, 5433, 9090$(NC)"
+	@echo "$(BLUE)This is useful when ports are blocked before starting local-it environment$(NC)"
+	@echo ""
+	@read -p "Continue? (y/N): " confirm && [ "$$confirm" = "y" ] || (echo "$(GREEN)Cancelled.$(NC)" && exit 1)
+	@echo ""
+	@echo "$(BLUE)🔍 Checking and killing processes on port 3000 (Web Frontend)...$(NC)"
+	@if lsof -ti :3000 >/dev/null 2>&1; then lsof -ti :3000 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 3000$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 3000$(NC)"; else echo "$(GREEN)  ✅ No processes on port 3000$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 6379 (Redis - API Service)...$(NC)"
+	@if lsof -ti :6379 >/dev/null 2>&1; then lsof -ti :6379 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 6379$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 6379$(NC)"; else echo "$(GREEN)  ✅ No processes on port 6379$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 6380 (Redis - Orchestrator)...$(NC)"
+	@if lsof -ti :6380 >/dev/null 2>&1; then lsof -ti :6380 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 6380$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 6380$(NC)"; else echo "$(GREEN)  ✅ No processes on port 6380$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 8000 (API Service)...$(NC)"
+	@if lsof -ti :8000 >/dev/null 2>&1; then lsof -ti :8000 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 8000$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 8000$(NC)"; else echo "$(GREEN)  ✅ No processes on port 8000$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 2345 (API Orchestrator)...$(NC)"
+	@if lsof -ti :2345 >/dev/null 2>&1; then lsof -ti :2345 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 2345$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 2345$(NC)"; else echo "$(GREEN)  ✅ No processes on port 2345$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 5432 (PostgreSQL - API Service)...$(NC)"
+	@if lsof -ti :5432 >/dev/null 2>&1; then lsof -ti :5432 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 5432$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 5432$(NC)"; else echo "$(GREEN)  ✅ No processes on port 5432$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 5433 (PostgreSQL - Orchestrator)...$(NC)"
+	@if lsof -ti :5433 >/dev/null 2>&1; then lsof -ti :5433 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 5433$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 5433$(NC)"; else echo "$(GREEN)  ✅ No processes on port 5433$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 9090 (Git Executor)...$(NC)"
+	@if lsof -ti :9090 >/dev/null 2>&1; then lsof -ti :9090 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 9090$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 9090$(NC)"; else echo "$(GREEN)  ✅ No processes on port 9090$(NC)"; fi
+	@echo ""
+	@echo "$(GREEN)✅ Port cleanup completed! You can now run 'make local-it'$(NC)"

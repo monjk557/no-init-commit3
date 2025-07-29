@@ -130,7 +130,7 @@ services:
     # For local development, build from local source
     # For production/CI, use: asia-northeast3-docker.pkg.dev/collabops-shared/git-executor/collabops-git-executor:latest
     build:
-      context: ../../../collabops-git-executor
+      context: ../../..
       dockerfile: deployments/Dockerfile
     image: collabops/git-executor:latest
     container_name: collabops-git-executor
@@ -171,7 +171,7 @@ services:
       # Git repositories storage
       - git_executor_repos:/repos
       # Configuration volume (if using file-based config)
-      - ../../../collabops-git-executor/config:/config:ro
+      - ../../../config:/config:ro
       # Logs volume
       - git_executor_logs:/var/log/collabops
     networks:
