@@ -251,8 +251,8 @@ format: ## Auto-format code, fix lint issues, run tests, and show results (COMPR
 	@echo "$(YELLOW)8️⃣  Running lint check (ALL issues, including manual fixes)...$(NC)"
 	@$(MAKE) lint && echo "$(GREEN)   ✅ All lint checks pass$(NC)" || (echo "$(RED)   ❌ Lint issues found - please fix before committing$(NC)" && exit 1)
 	@echo ""
-	@echo "$(YELLOW)9️⃣  Running quick tests to catch breaking changes...$(NC)"
-	@$(GOTEST) -short ./... && echo "$(GREEN)   ✅ All tests pass$(NC)" || (echo "$(RED)   ❌ Tests failed - please fix issues before committing$(NC)" && exit 1)
+	@echo "$(YELLOW)9️⃣  Running tests with race detection to catch breaking changes and race conditions...$(NC)"
+	@$(GOTEST) -race -short ./... && echo "$(GREEN)   ✅ All tests pass (including race detection)$(NC)" || (echo "$(RED)   ❌ Tests failed or race conditions detected - please fix issues before committing$(NC)" && exit 1)
 
 vet: ## Run go vet
 	@echo "$(BLUE)🔍 Running go vet...$(NC)"

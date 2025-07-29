@@ -40,9 +40,17 @@ func GetSimpleCache() *SimpleRepoCache {
 func (c *SimpleRepoCache) Get(path string) (*git.Repository, error) {
 	c.mu.RLock()
 	if cached, exists := c.repos[path]; exists {
-		cached.lastUsed = time.Now()
+		repo := cached.repo
 		c.mu.RUnlock()
-		return cached.repo, nil
+
+		// Update lastUsed with a write lock
+		c.mu.Lock()
+		if cached, stillExists := c.repos[path]; stillExists {
+			cached.lastUsed = time.Now()
+		}
+		c.mu.Unlock()
+
+		return repo, nil
 	}
 	c.mu.RUnlock()
 

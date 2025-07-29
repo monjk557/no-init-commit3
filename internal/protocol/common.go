@@ -4,9 +4,21 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
+
+var (
+	ginTestModeOnce sync.Once
+)
+
+// ensureGinTestMode safely sets Gin to test mode only once
+func ensureGinTestMode() {
+	ginTestModeOnce.Do(func() {
+		gin.SetMode(gin.TestMode)
+	})
+}
 
 // GinContextKey for storing Gin context in request context
 type GinContextKey struct{}
@@ -30,7 +42,7 @@ func SetupTestRequestWithGinParams(method, url string, params map[string]string)
 	req := httptest.NewRequest(method, url, nil)
 
 	// Create a Gin context for testing
-	gin.SetMode(gin.TestMode)
+	ensureGinTestMode()
 	w := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(w)
 	ginCtx.Request = req
@@ -60,7 +72,7 @@ func SetupTestRequestWithOwnerRepo(method, url, owner, repo string) *http.Reques
 // This is useful for migrating existing test setups without recreating the request
 func AddGinParamsToRequest(req *http.Request, params map[string]string) *http.Request {
 	// Create a Gin context for testing
-	gin.SetMode(gin.TestMode)
+	ensureGinTestMode()
 	w := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(w)
 	ginCtx.Request = req
