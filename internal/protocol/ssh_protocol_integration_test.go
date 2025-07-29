@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -546,9 +547,12 @@ type mockPermissionClient struct {
 		read  bool
 		write bool
 	}
+	mu sync.RWMutex
 }
 
 func (m *mockPermissionClient) CheckReadAccess(ctx context.Context, userID, owner, repo string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if userPerms, ok := m.permissions[userID]; ok {
 		key := fmt.Sprintf("%s/%s", owner, repo)
 		if perm, ok := userPerms[key]; ok {
@@ -559,6 +563,8 @@ func (m *mockPermissionClient) CheckReadAccess(ctx context.Context, userID, owne
 }
 
 func (m *mockPermissionClient) CheckWriteAccess(ctx context.Context, userID, owner, repo string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if userPerms, ok := m.permissions[userID]; ok {
 		key := fmt.Sprintf("%s/%s", owner, repo)
 		if perm, ok := userPerms[key]; ok {

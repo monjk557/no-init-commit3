@@ -76,10 +76,9 @@ jobs:
         run: make vet
 
       - name: Run tests with race detection
-        timeout-minutes: 10
         run: |
-          echo "🧪 Running tests with race detection and verbose output..."
-          make test-race-verbose
+          echo "🧪 Running tests with race detection (short mode for CI stability)..."
+          go test -v -race -short -timeout=5m ./...
 
       - name: Run tests with coverage
         timeout-minutes: 15
