@@ -140,24 +140,28 @@ func (h *HealthChecker) performReadinessChecks(ctx context.Context) HealthRespon
 
 	// File system check
 	checks["filesystem"] = h.checkFilesystem(ctx)
-	if checks["filesystem"].Status == StatusUnhealthy {
+	switch checks["filesystem"].Status {
+	case StatusUnhealthy:
 		hasUnhealthy = true
-	} else if checks["filesystem"].Status == StatusDegraded {
+	case StatusDegraded:
 		hasDegraded = true
 	}
 
 	// Permission service check
 	checks["permission_service"] = h.checkPermissionService(ctx)
-	if checks["permission_service"].Status == StatusUnhealthy {
-		// Permission service failure is degraded, not unhealthy (graceful degradation)
+	switch checks["permission_service"].Status {
+	case StatusUnhealthy:
+		hasUnhealthy = true
+	case StatusDegraded:
 		hasDegraded = true
 	}
 
 	// Repository access check
 	checks["repository_access"] = h.checkRepositoryAccess(ctx)
-	if checks["repository_access"].Status == StatusUnhealthy {
+	switch checks["repository_access"].Status {
+	case StatusUnhealthy:
 		hasUnhealthy = true
-	} else if checks["repository_access"].Status == StatusDegraded {
+	case StatusDegraded:
 		hasDegraded = true
 	}
 

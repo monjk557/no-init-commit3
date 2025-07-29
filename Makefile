@@ -219,15 +219,19 @@ format: ## Auto-format code, fix lint issues, run tests, and show results (COMPR
 		echo "$(GREEN)   ✅ goimports installed and completed$(NC)"; \
 	fi
 	@echo ""
-	@echo "$(YELLOW)4️⃣  Cleaning up go.mod with go mod tidy...$(NC)"
+	@echo "$(YELLOW)4️⃣  Re-running gofmt after lint auto-fixes...$(NC)"
+	$(GOFMT) -s -w .
+	@echo "$(GREEN)   ✅ Final gofmt completed$(NC)"
+	@echo ""
+	@echo "$(YELLOW)5️⃣  Cleaning up go.mod with go mod tidy...$(NC)"
 	go mod tidy
 	@echo "$(GREEN)   ✅ go mod tidy completed$(NC)"
 	@echo ""
-	@echo "$(YELLOW)5️⃣  Verifying go.mod integrity...$(NC)"
+	@echo "$(YELLOW)6️⃣  Verifying go.mod integrity...$(NC)"
 	go mod verify
 	@echo "$(GREEN)   ✅ go mod verify completed$(NC)"
 	@echo ""
-	@echo "$(YELLOW)6️⃣  Running final formatting check...$(NC)"
+	@echo "$(YELLOW)7️⃣  Running final formatting check...$(NC)"
 	@if [ "$$($(GOFMT) -l . | wc -l)" -gt 0 ]; then \
 		echo "$(RED)   ❌ Files still need formatting:$(NC)"; \
 		$(GOFMT) -l .; \
@@ -239,10 +243,10 @@ format: ## Auto-format code, fix lint issues, run tests, and show results (COMPR
 	@echo ""
 	@echo "$(GREEN)✨ COMPREHENSIVE formatting complete! Running final validation...$(NC)"
 	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
-	@echo "$(YELLOW)7️⃣  Running lint check (ALL issues, including manual fixes)...$(NC)"
+	@echo "$(YELLOW)8️⃣  Running lint check (ALL issues, including manual fixes)...$(NC)"
 	@$(MAKE) lint && echo "$(GREEN)   ✅ All lint checks pass$(NC)" || (echo "$(RED)   ❌ Lint issues found - please fix before committing$(NC)" && exit 1)
 	@echo ""
-	@echo "$(YELLOW)8️⃣  Running quick tests to catch breaking changes...$(NC)"
+	@echo "$(YELLOW)9️⃣  Running quick tests to catch breaking changes...$(NC)"
 	@$(GOTEST) -short ./... && echo "$(GREEN)   ✅ All tests pass$(NC)" || (echo "$(RED)   ❌ Tests failed - please fix issues before committing$(NC)" && exit 1)
 
 vet: ## Run go vet
