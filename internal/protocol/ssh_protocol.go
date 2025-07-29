@@ -15,7 +15,6 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
-	"github.com/go-chi/chi/v5"
 )
 
 // SSHProtocolHandler handles SSH-forwarded Git operations
@@ -83,8 +82,8 @@ func (h *SSHProtocolHandler) ValidateSSHRequest(r *http.Request, operation strin
 	}
 
 	// Extract repository parameters from URL
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
 
 	if owner == "" || repo == "" {
 		return nil, NewGitProtocolError("invalid_request", "Missing required repository parameters (owner/repo)", http.StatusBadRequest, true)

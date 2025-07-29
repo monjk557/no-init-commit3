@@ -578,7 +578,11 @@ func TestSetupLoggingMiddleware_Integration(t *testing.T) {
 	logger := &Logger{Logger: zap.New(core)}
 
 	r := chi.NewRouter()
-	SetupLoggingMiddleware(r, logger)
+	// SetupLoggingMiddleware was removed during Chi migration - applying middleware manually
+	middlewares := LogMiddleware(logger)
+	for _, mw := range middlewares {
+		r.Use(mw)
+	}
 
 	r.Get("/test", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

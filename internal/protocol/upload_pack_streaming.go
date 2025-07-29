@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/collabops/git-executor/internal/streaming"
-	"github.com/go-chi/chi/v5"
 	gogit "github.com/go-git/go-git/v5"
 )
 
@@ -26,8 +25,8 @@ func (h *StreamingUploadPackHandler) HandleUploadPackStreaming(w http.ResponseWr
 	ctx := r.Context()
 
 	// Extract path parameters from gateway-forwarded request
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
 
 	// Get user ID from gateway context (forwarded header)
 	userID := r.Header.Get("X-USER-ID")
@@ -95,8 +94,8 @@ func (h *StreamingUploadPackHandler) HandleInfoRefsStreaming(w http.ResponseWrit
 	ctx := r.Context()
 
 	// Extract path parameters from gateway-forwarded request
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
 	service := r.URL.Query().Get("service")
 
 	// Validate service parameter

@@ -13,7 +13,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/permissions"
-	"github.com/go-chi/chi/v5"
+	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -99,18 +99,27 @@ func createTestRepositoryWithCommits(t *testing.T, repoPath string) (string, str
 }
 
 // Test helper to create test router with diff routes
-func createTestRouter(t *testing.T, handler *DiffHandler) *chi.Mux {
-	router := chi.NewRouter()
-	router.Route("/repos", func(r chi.Router) {
-		r.Route("/{owner}", func(r chi.Router) {
-			r.Route("/{repo}", func(r chi.Router) {
-				r.Route("/diff", func(r chi.Router) {
-					r.Get("/commits/{base}/{head}", handler.HandleCommitDiff)
-					r.Get("/branches/{base}/{head}", handler.HandleBranchDiff)
-				})
-			})
-		})
+func createTestRouter(t *testing.T, handler *DiffHandler) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	// Add the Gin context middleware that our handlers expect
+	router.Use(func(c *gin.Context) {
+		// Store Gin context in request context for our URLParam function
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), GinContextKey{}, c))
+		c.Next()
 	})
+
+	// Set up routes similar to the real server
+	repoGroup := router.Group("/repos/:owner/:repo")
+	{
+		diffGroup := repoGroup.Group("/diff")
+		{
+			diffGroup.GET("/commits/:base/:head", gin.WrapH(http.HandlerFunc(handler.HandleCommitDiff)))
+			diffGroup.GET("/branches/:base/:head", gin.WrapH(http.HandlerFunc(handler.HandleBranchDiff)))
+		}
+	}
+
 	return router
 }
 
@@ -651,17 +660,14 @@ func TestValidateAndExtractParams(t *testing.T) {
 		{
 			name: "Valid parameters",
 			setupRequest: func() *http.Request {
-				req := httptest.NewRequest("GET", "/repos/testowner/testrepo/diff/commits/abc/def", nil)
+				params := map[string]string{
+					"owner": "testowner",
+					"repo":  "testrepo",
+					"base":  "abc",
+					"head":  "def",
+				}
+				req := SetupTestRequestWithGinParams("GET", "/repos/testowner/testrepo/diff/commits/abc/def", params)
 				req.Header.Set("X-USER-ID", "test-user")
-
-				// Set up chi URL params
-				rctx := chi.NewRouteContext()
-				rctx.URLParams.Add("owner", "testowner")
-				rctx.URLParams.Add("repo", "testrepo")
-				rctx.URLParams.Add("base", "abc")
-				rctx.URLParams.Add("head", "def")
-				req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
 				return req
 			},
 			expectedParams: &RequestParams{
@@ -676,16 +682,14 @@ func TestValidateAndExtractParams(t *testing.T) {
 		{
 			name: "Missing owner parameter",
 			setupRequest: func() *http.Request {
-				req := httptest.NewRequest("GET", "/repos//testrepo/diff/commits/abc/def", nil)
+				params := map[string]string{
+					"owner": "",
+					"repo":  "testrepo",
+					"base":  "abc",
+					"head":  "def",
+				}
+				req := SetupTestRequestWithGinParams("GET", "/repos//testrepo/diff/commits/abc/def", params)
 				req.Header.Set("X-USER-ID", "test-user")
-
-				rctx := chi.NewRouteContext()
-				rctx.URLParams.Add("owner", "")
-				rctx.URLParams.Add("repo", "testrepo")
-				rctx.URLParams.Add("base", "abc")
-				rctx.URLParams.Add("head", "def")
-				req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
 				return req
 			},
 			expectedParams: nil,
@@ -694,16 +698,14 @@ func TestValidateAndExtractParams(t *testing.T) {
 		{
 			name: "Missing user authentication",
 			setupRequest: func() *http.Request {
-				req := httptest.NewRequest("GET", "/repos/testowner/testrepo/diff/commits/abc/def", nil)
+				params := map[string]string{
+					"owner": "testowner",
+					"repo":  "testrepo",
+					"base":  "abc",
+					"head":  "def",
+				}
+				req := SetupTestRequestWithGinParams("GET", "/repos/testowner/testrepo/diff/commits/abc/def", params)
 				// No X-USER-ID header
-
-				rctx := chi.NewRouteContext()
-				rctx.URLParams.Add("owner", "testowner")
-				rctx.URLParams.Add("repo", "testrepo")
-				rctx.URLParams.Add("base", "abc")
-				rctx.URLParams.Add("head", "def")
-				req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
 				return req
 			},
 			expectedParams: nil,

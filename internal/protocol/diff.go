@@ -15,7 +15,6 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
-	"github.com/go-chi/chi/v5"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -1073,10 +1072,10 @@ type PaginatedDiffResponse struct {
 // validateAndExtractParams extracts and validates common parameters from request
 func (h *DiffHandler) validateAndExtractParams(r *http.Request) (*RequestParams, error) {
 	// Extract path parameters
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
-	base := chi.URLParam(r, "base")
-	head := chi.URLParam(r, "head")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
+	base := URLParam(r, "base")
+	head := URLParam(r, "head")
 
 	// Validate required parameters
 	if owner == "" || repo == "" {

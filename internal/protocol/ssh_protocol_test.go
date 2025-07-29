@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
-	"github.com/go-chi/chi/v5"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
@@ -52,11 +51,9 @@ func TestNewSSHProtocolHandler(t *testing.T) {
 			expectError: true,
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler, err := NewSSHProtocolHandler(tt.config, tt.permClient)
-
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Nil(t, handler)
@@ -70,10 +67,8 @@ func TestNewSSHProtocolHandler(t *testing.T) {
 		})
 	}
 }
-
 func TestSSHProtocolHandler_ValidateSSHRequest(t *testing.T) {
 	handler := createTestSSHHandler(t)
-
 	tests := []struct {
 		name        string
 		request     *http.Request
@@ -122,11 +117,9 @@ func TestSSHProtocolHandler_ValidateSSHRequest(t *testing.T) {
 			errorMsg:    "Invalid Git operation",
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sshReq, err := handler.ValidateSSHRequest(tt.request, tt.operation)
-
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Nil(t, sshReq)
@@ -145,7 +138,6 @@ func TestSSHProtocolHandler_ValidateSSHRequest(t *testing.T) {
 		})
 	}
 }
-
 func TestSSHProtocolHandler_CheckSSHPermissions(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -197,25 +189,20 @@ func TestSSHProtocolHandler_CheckSSHPermissions(t *testing.T) {
 			expectError: true,
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockClient := &MockPermissionClient{
 				shouldAllow: tt.shouldAllow,
 				shouldError: tt.shouldError,
 			}
-
 			handler := createTestSSHHandlerWithClient(t, mockClient)
-
 			sshReq := &SSHRequest{
 				UserID:    "testuser",
 				Owner:     "testowner",
 				Repo:      "testrepo",
 				Operation: tt.operation,
 			}
-
 			err := handler.CheckSSHPermissions(context.Background(), sshReq)
-
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -224,7 +211,6 @@ func TestSSHProtocolHandler_CheckSSHPermissions(t *testing.T) {
 		})
 	}
 }
-
 func TestSSHProtocolHandler_HandleSSHUploadPack(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -258,23 +244,18 @@ func TestSSHProtocolHandler_HandleSSHUploadPack(t *testing.T) {
 			expectedStatus: http.StatusForbidden,
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := createTestSSHHandlerWithClient(t, tt.permissionMock)
-
 			w := httptest.NewRecorder()
 			handler.HandleSSHUploadPack(w, tt.request)
-
 			assert.Equal(t, tt.expectedStatus, w.Code)
-
 			if tt.expectedStatus == http.StatusOK {
 				assert.Equal(t, "application/x-git-upload-pack-result", w.Header().Get("Content-Type"))
 			}
 		})
 	}
 }
-
 func TestSSHProtocolHandler_HandleSSHReceivePack(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -301,23 +282,18 @@ func TestSSHProtocolHandler_HandleSSHReceivePack(t *testing.T) {
 			expectedStatus: http.StatusForbidden,
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := createTestSSHHandlerWithClient(t, tt.permissionMock)
-
 			w := httptest.NewRecorder()
 			handler.HandleSSHReceivePack(w, tt.request)
-
 			assert.Equal(t, tt.expectedStatus, w.Code)
-
 			if tt.expectedStatus == http.StatusOK {
 				assert.Equal(t, "application/x-git-receive-pack-result", w.Header().Get("Content-Type"))
 			}
 		})
 	}
 }
-
 func TestValidateSSHGitCommand(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -362,11 +338,9 @@ func TestValidateSSHGitCommand(t *testing.T) {
 			expectError: true,
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := ValidateSSHGitCommand(tt.command, tt.repoPath)
-
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -375,46 +349,36 @@ func TestValidateSSHGitCommand(t *testing.T) {
 		})
 	}
 }
-
 func TestParseSSHGitProtocolHeaders(t *testing.T) {
 	req := httptest.NewRequest("POST", "/ssh/owner/repo/upload-pack", nil)
 	req.Header.Set("Git-Protocol", "version=2")
 	req.Header.Set("SSH-Connection", "ssh-connection-id")
 	req.Header.Set("Git-Capabilities", "multi_ack thin-pack side-band")
-
 	headers := ParseSSHGitProtocolHeaders(req)
-
 	assert.Equal(t, "version=2", headers["protocol-version"])
 	assert.Equal(t, "ssh-connection-id", headers["ssh-connection"])
 	assert.Equal(t, "multi_ack thin-pack side-band", headers["capabilities"])
 }
-
 func TestSSHEndpointMetrics(t *testing.T) {
 	metrics := NewSSHEndpointMetrics()
-
 	assert.Equal(t, int64(0), metrics.RequestCount)
 	assert.Equal(t, int64(0), metrics.SuccessCount)
 	assert.Equal(t, int64(0), metrics.ErrorCount)
 	assert.Equal(t, int64(0), metrics.BytesTransferred)
-
 	metrics.RecordRequest()
 	metrics.RecordSuccess()
 	metrics.RecordBytes(1024)
-
 	assert.Equal(t, int64(1), metrics.RequestCount)
 	assert.Equal(t, int64(1), metrics.SuccessCount)
 	assert.Equal(t, int64(1024), metrics.BytesTransferred)
-
 	metrics.RecordError()
 	assert.Equal(t, int64(1), metrics.ErrorCount)
 }
 
 // Helper functions for testing
-
 func createTestSSHHandler(t *testing.T) *SSHProtocolHandler {
 	return createTestSSHHandlerWithClient(t, &MockPermissionClient{shouldAllow: true, shouldError: false})
 }
-
 func createTestSSHHandlerWithClient(t *testing.T, permClient *MockPermissionClient) *SSHProtocolHandler {
 	repoRoot := t.TempDir()
 	cfg := &config.Config{
@@ -422,30 +386,24 @@ func createTestSSHHandlerWithClient(t *testing.T, permClient *MockPermissionClie
 			RepoRoot: repoRoot,
 		},
 	}
-
 	// Create a test repository structure that the handler expects
 	// Note: Repository paths are expected to have .git extension
 	repoPath := filepath.Join(repoRoot, "testowner", "testrepo.git")
 	err := os.MkdirAll(repoPath, 0755)
 	require.NoError(t, err)
-
 	// Initialize a real Git repository
 	repo, err := gogit.PlainInit(repoPath, false)
 	require.NoError(t, err)
-
 	// Create initial commit so it's a valid repository
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
-
 	// Create test file
 	testFile := filepath.Join(repoPath, "README.md")
 	err = os.WriteFile(testFile, []byte("# Test Repository\n"), 0644)
 	require.NoError(t, err)
-
 	// Add and commit
 	_, err = wt.Add("README.md")
 	require.NoError(t, err)
-
 	_, err = wt.Commit("Initial commit", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test User",
@@ -454,17 +412,13 @@ func createTestSSHHandlerWithClient(t *testing.T, permClient *MockPermissionClie
 		},
 	})
 	require.NoError(t, err)
-
 	handler, err := NewSSHProtocolHandler(cfg, permClient)
 	require.NoError(t, err)
 	require.NotNil(t, handler)
-
 	return handler
 }
-
 func createSSHTestRequest(t *testing.T, userID, source, correlationID, owner, repo string) *http.Request {
 	req := httptest.NewRequest("POST", "/ssh/"+owner+"/"+repo+"/upload-pack", strings.NewReader("test body"))
-
 	if userID != "" {
 		req.Header.Set("X-USER-ID", userID)
 	}
@@ -474,12 +428,10 @@ func createSSHTestRequest(t *testing.T, userID, source, correlationID, owner, re
 	if correlationID != "" {
 		req.Header.Set("X-Correlation-ID", correlationID)
 	}
-
 	// Set URL parameters using chi context
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("owner", owner)
-	rctx.URLParams.Add("repo", repo)
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
+	params := map[string]string{}
+	params["owner"] = owner
+	params["repo"] = repo
+	req = AddGinParamsToRequest(req, params)
 	return req
 }

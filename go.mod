@@ -6,10 +6,8 @@ toolchain go1.24.5
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
-	// might need to update it to Gin?
-	// must be easy to migrate to Gin actually.
-	// Chi -> context one way;
-	// Gin -> context both ways.
+	// Chi is kept for compatibility with existing protocol handlers
+	// Main server now uses Gin with ginToChiMiddleware() for compatibility
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-git/go-billy/v5 v5.6.2
 	github.com/go-git/go-git/v5 v5.16.2
@@ -23,7 +21,7 @@ require (
 )
 
 require (
-	github.com/gin-gonic/gin v1.10.1
+	github.com/gin-gonic/gin v1.10.1 // Primary HTTP framework
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.62.0
 	go.opentelemetry.io/otel v1.37.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.37.0

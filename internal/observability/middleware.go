@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/collabops/git-executor/internal/logging"
 )
 
 // MetricsMiddleware provides automatic HTTP request instrumentation
@@ -32,7 +32,7 @@ func (m *MetricsMiddleware) Handler() func(http.Handler) http.Handler {
 			defer m.metrics.DecrementActiveRequests()
 
 			// Wrap response writer to capture response details
-			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			ww := logging.NewWrapResponseWriter(w)
 
 			// Get request size
 			requestSize := getRequestSize(r)

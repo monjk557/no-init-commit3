@@ -17,7 +17,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
-	"github.com/go-chi/chi/v5"
+	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -65,8 +65,17 @@ func TestSSHProtocolIntegration_FullUploadPack(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create router
-	router := chi.NewRouter()
-	router.Post("/ssh/{owner}/{repo}/upload-pack", handler.HandleSSHUploadPack)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	// Add Gin context middleware that our handlers expect
+	router.Use(func(c *gin.Context) {
+		// Store Gin context in request context for our URLParam function
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.GinContextKey{}, c))
+		c.Next()
+	})
+
+	router.POST("/ssh/:owner/:repo/upload-pack", gin.WrapH(http.HandlerFunc(handler.HandleSSHUploadPack)))
 
 	// Test cases
 	tests := []struct {
@@ -173,8 +182,17 @@ func TestSSHProtocolIntegration_FullReceivePack(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create router
-	router := chi.NewRouter()
-	router.Post("/ssh/{owner}/{repo}/receive-pack", handler.HandleSSHReceivePack)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	// Add Gin context middleware that our handlers expect
+	router.Use(func(c *gin.Context) {
+		// Store Gin context in request context for our URLParam function
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.GinContextKey{}, c))
+		c.Next()
+	})
+
+	router.POST("/ssh/:owner/:repo/receive-pack", gin.WrapH(http.HandlerFunc(handler.HandleSSHReceivePack)))
 
 	// Create a new commit to push
 	newCommit, packData := createTestCommitAndPackfile(t, repo)
@@ -290,8 +308,17 @@ func TestSSHProtocolIntegration_ConcurrentAccess(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create router
-	router := chi.NewRouter()
-	router.Post("/ssh/{owner}/{repo}/upload-pack", handler.HandleSSHUploadPack)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	// Add Gin context middleware that our handlers expect
+	router.Use(func(c *gin.Context) {
+		// Store Gin context in request context for our URLParam function
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.GinContextKey{}, c))
+		c.Next()
+	})
+
+	router.POST("/ssh/:owner/:repo/upload-pack", gin.WrapH(http.HandlerFunc(handler.HandleSSHUploadPack)))
 
 	// Run concurrent requests
 	concurrency := 10
@@ -363,8 +390,17 @@ func TestSSHProtocolIntegration_LargePackfile(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create router
-	router := chi.NewRouter()
-	router.Post("/ssh/{owner}/{repo}/receive-pack", handler.HandleSSHReceivePack)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	// Add Gin context middleware that our handlers expect
+	router.Use(func(c *gin.Context) {
+		// Store Gin context in request context for our URLParam function
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.GinContextKey{}, c))
+		c.Next()
+	})
+
+	router.POST("/ssh/:owner/:repo/receive-pack", gin.WrapH(http.HandlerFunc(handler.HandleSSHReceivePack)))
 
 	// Create a large commit with multiple files
 	largeCommit, largePackData := createLargeTestCommit(t, repo, 100) // 100 files

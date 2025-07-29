@@ -19,19 +19,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// ginToChiMiddleware converts Gin URL parameters to chi-compatible context
-func ginToChiMiddleware() gin.HandlerFunc {
+// ginContextMiddleware stores the Gin context in the request context for protocol handlers
+func ginContextMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Extract all URL parameters from Gin
-		params := make(map[string]string)
-		for _, param := range c.Params {
-			params[param.Key] = param.Value
-		}
-
-		// Add chi-compatible route context to request using protocol types
-		rctx := &protocol.ChiRouteContext{URLParams: params}
-		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.ChiRouteCtxKey{}, rctx))
-
+		// Store Gin context directly in request context for protocol handlers to access
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.GinContextKey{}, c))
 		c.Next()
 	}
 }
@@ -198,7 +190,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 	// Git diff endpoints with enhanced middleware
 	reposGroup := router.Group("/repos")
-	reposGroup.Use(ginToChiMiddleware()) // Add chi compatibility middleware
+	reposGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
 	{
 		ownerGroup := reposGroup.Group("/:owner")
 		{
@@ -271,7 +263,7 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 
 	// Git Smart HTTP routes for both fetch and push operations (executor endpoints)
 	ownerRepoGroup := router.Group("/:owner/:repo")
-	ownerRepoGroup.Use(ginToChiMiddleware()) // Add chi compatibility middleware
+	ownerRepoGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
 	{
 		// Fetch operations (git clone, git fetch)
 		// GET /repos/{owner}/{repo}/info/refs?service=git-upload-pack
@@ -306,7 +298,7 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	// SSH protocol routes for SSH-forwarded Git operations
 	if sshHandler != nil {
 		sshGroup := router.Group("/ssh/:owner/:repo")
-		sshGroup.Use(ginToChiMiddleware()) // Add chi compatibility middleware
+		sshGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
 		{
 			// SSH-forwarded fetch operations
 			// POST /ssh/{owner}/{repo}/upload-pack
