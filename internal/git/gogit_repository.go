@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"sync"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -16,6 +18,7 @@ import (
 type GoGitRepository struct {
 	path string
 	repo *git.Repository
+	mu   sync.RWMutex // Protects concurrent access to repo
 }
 
 // OpenRepository opens a Git repository at the specified path
@@ -184,8 +187,15 @@ func (r *GoGitRepository) GetCommits(ctx context.Context, ref string, limit, ski
 	default:
 	}
 
-	// Resolve the reference to a commit hash
-	hash, err := r.resolveReference(ref)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return nil, NewGitError("get_commits", r.path, ref, "repository is closed", nil)
+	}
+
+	// Resolve the reference to a commit hash (using unsafe version since we already hold the lock)
+	hash, err := r.resolveReferenceUnsafe(ref)
 	if err != nil {
 		return nil, err
 	}
@@ -216,14 +226,12 @@ func (r *GoGitRepository) GetCommits(ctx context.Context, ref string, limit, ski
 			return nil
 		}
 
-		// Stop if we've reached our limit
-		if len(commits) >= limit {
-			return io.EOF // Signal to stop iteration
+		// Check if we've reached the limit
+		if limit > 0 && len(commits) >= limit {
+			return io.EOF
 		}
 
-		// Convert to our commit format
-		commit := convertCommit(c)
-		commits = append(commits, commit)
+		commits = append(commits, convertCommit(c))
 		current++
 
 		return nil
@@ -238,6 +246,9 @@ func (r *GoGitRepository) GetCommits(ctx context.Context, ref string, limit, ski
 
 // Close releases any resources held by the repository
 func (r *GoGitRepository) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	// go-git repositories don't need explicit closing
 	// but we can set the repo to nil to help with garbage collection
 	r.repo = nil
@@ -248,7 +259,14 @@ func (r *GoGitRepository) Close() error {
 
 // resolveCommit resolves a reference string to a commit object
 func (r *GoGitRepository) resolveCommit(ref string) (*object.Commit, error) {
-	hash, err := r.resolveReference(ref)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return nil, NewGitError("resolve_commit", r.path, ref, "repository is closed", nil)
+	}
+
+	hash, err := r.resolveReferenceUnsafe(ref) // Use unsafe version since we already have the lock
 	if err != nil {
 		return nil, err
 	}
@@ -261,8 +279,12 @@ func (r *GoGitRepository) resolveCommit(ref string) (*object.Commit, error) {
 	return commit, nil
 }
 
-// resolveReference resolves a reference string to a hash
-func (r *GoGitRepository) resolveReference(ref string) (plumbing.Hash, error) {
+// resolveReferenceUnsafe is the same as resolveReference but without locking (for internal use)
+func (r *GoGitRepository) resolveReferenceUnsafe(ref string) (plumbing.Hash, error) {
+	if r.repo == nil {
+		return plumbing.ZeroHash, NewGitError("resolve_reference", r.path, ref, "repository is closed", nil)
+	}
+
 	// Try to parse as a direct hash first
 	if hash := plumbing.NewHash(ref); !hash.IsZero() && len(ref) >= 4 {
 		// Verify the object exists
@@ -316,9 +338,14 @@ func convertCommit(c *object.Commit) Commit {
 		parentHashes = append(parentHashes, parent.String())
 	}
 
+	// Clean commit message by removing trailing newlines and replacing internal newlines with spaces
+	message := strings.TrimSpace(c.Message)
+	message = strings.ReplaceAll(message, "\n", " ")
+	message = strings.ReplaceAll(message, "\r", " ")
+
 	return Commit{
 		Hash:    c.Hash.String(),
-		Message: c.Message,
+		Message: message,
 		Author: CommitAuthor{
 			Name:  c.Author.Name,
 			Email: c.Author.Email,

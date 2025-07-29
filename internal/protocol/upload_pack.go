@@ -103,8 +103,8 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Open repository using go-git with caching
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	// Open repository using go-git with simple caching
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
 		return
