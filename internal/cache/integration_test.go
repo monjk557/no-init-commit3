@@ -62,7 +62,7 @@ func TestRepositoryCache_Interface(t *testing.T) {
 
 	// Create test repository
 	repoPath, testRepo := createTestGitRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	t.Run("SetRepository and GetRepository", func(t *testing.T) {
 		// Set repository in cache
@@ -112,7 +112,7 @@ func TestRepositoryCache_Interface(t *testing.T) {
 	t.Run("InvalidateAll", func(t *testing.T) {
 		// Add multiple repositories
 		repoPath2, repo2 := createTestGitRepo(t)
-		defer os.RemoveAll(repoPath2)
+		defer func() { _ = os.RemoveAll(repoPath2) }()
 
 		err := cache.SetRepository(repoPath, testRepo)
 		assert.NoError(t, err)
@@ -184,7 +184,7 @@ func TestRepositoryCache_PathNormalization(t *testing.T) {
 
 	// Create test repository
 	repoPath, testRepo := createTestGitRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	// Store with absolute path
 	err = cache.SetRepository(repoPath, testRepo)
@@ -224,7 +224,7 @@ func TestRepositoryCache_TTLExpiration(t *testing.T) {
 
 	// Create test repository
 	repoPath, testRepo := createTestGitRepo(t)
-	defer os.RemoveAll(repoPath)
+	defer func() { _ = os.RemoveAll(repoPath) }()
 
 	// Add repository to cache
 	err = cache.SetRepository(repoPath, testRepo)
@@ -260,7 +260,7 @@ func TestRepositoryCache_Eviction(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		path, repo := createTestGitRepo(t)
-		defer os.RemoveAll(path)
+		defer func(p string) { _ = os.RemoveAll(p) }(path)
 		paths[i] = path
 		repos[path] = repo
 	}
