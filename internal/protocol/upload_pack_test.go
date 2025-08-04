@@ -11,7 +11,6 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -212,11 +211,12 @@ func TestUploadPackHandler_HandleInfoRefs(t *testing.T) {
 				req.Header.Set("X-USER-ID", tt.userID)
 			}
 
-			// Add URL parameters using chi context
-			rctx := chi.NewRouteContext()
-			rctx.URLParams.Add("owner", tt.owner)
-			rctx.URLParams.Add("repo", tt.repo)
-			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+			// Add URL parameters using Gin context
+			params := map[string]string{
+				"owner": tt.owner,
+				"repo":  tt.repo,
+			}
+			req = AddGinParamsToRequest(req, params)
 
 			// Create response recorder
 			w := httptest.NewRecorder()
@@ -270,11 +270,12 @@ func TestUploadPackHandler_HandleUploadPack(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/git-upload-pack", nil)
 	req.Header.Set("X-USER-ID", "user123")
 
-	// Add URL parameters
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("owner", "testowner")
-	rctx.URLParams.Add("repo", "testrepo")
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	// Add URL parameters using Gin context
+	params := map[string]string{
+		"owner": "testowner",
+		"repo":  "testrepo",
+	}
+	req = AddGinParamsToRequest(req, params)
 
 	// Create response recorder
 	w := httptest.NewRecorder()

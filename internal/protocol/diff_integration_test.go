@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,8 +13,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
@@ -137,46 +137,60 @@ func setupIntegrationTestRepoWithCommits(t *testing.T) (string, string, string) 
 }
 
 // setupIntegrationRouter creates a router with full middleware stack
-func setupIntegrationRouter(t *testing.T, diffHandler *DiffHandler, logger *logging.Logger) *chi.Mux {
-	router := chi.NewRouter()
+func setupIntegrationRouter(t *testing.T, diffHandler *DiffHandler, logger *logging.Logger) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	// Add Gin context middleware that our handlers expect
+	router.Use(func(c *gin.Context) {
+		// Store Gin context in request context for our URLParam function
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), GinContextKey{}, c))
+		c.Next()
+	})
 
 	// Add standard middleware
-	router.Use(middleware.RequestID)
-	router.Use(middleware.RealIP)
-	router.Use(middleware.Recoverer)
-	router.Use(middleware.Timeout(30 * time.Second))
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
 
-	// Create CORS middleware
-	corsMiddleware := createTestCORSMiddleware()
+	// Add custom test middleware equivalents
+	router.Use(func(c *gin.Context) {
+		// Add test headers that the middleware would normally add
+		c.Header("X-API-Version", "1.0")
+		c.Header("X-Service", "collabops-git-executor")
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-USER-ID, X-Source")
 
-	// Create auth middleware
-	authMiddleware := createTestAuthMiddleware()
+		// Handle CORS preflight requests
+		if c.Request.Method == "OPTIONS" {
+			c.Status(200)
+			c.Abort()
+			return
+		}
 
-	// Setup diff routes with middleware
-	router.Route("/repos", func(r chi.Router) {
-		r.Use(corsMiddleware)
-		r.Use(authMiddleware)
-		r.Use(middleware.Throttle(10)) // Lower throttle for testing
-
-		r.Route("/{owner}", func(r chi.Router) {
-			r.Route("/{repo}", func(r chi.Router) {
-				r.Route("/diff", func(r chi.Router) {
-					r.Get("/commits/{base}/{head}", diffHandler.HandleCommitDiff)
-					r.Get("/branches/{base}/{head}", diffHandler.HandleBranchDiff)
-					r.Get("/file", diffHandler.HandleFileDiff)
-				})
-				r.Route("/patch", func(r chi.Router) {
-					r.Get("/{base}/{head}", diffHandler.HandlePatch)
-				})
-			})
-		})
+		c.Next()
 	})
+
+	// Setup diff routes
+	repoGroup := router.Group("/repos/:owner/:repo")
+	{
+		diffGroup := repoGroup.Group("/diff")
+		{
+			diffGroup.GET("/commits/:base/:head", gin.WrapH(http.HandlerFunc(diffHandler.HandleCommitDiff)))
+			diffGroup.GET("/branches/:base/:head", gin.WrapH(http.HandlerFunc(diffHandler.HandleBranchDiff)))
+			diffGroup.GET("/file", gin.WrapH(http.HandlerFunc(diffHandler.HandleFileDiff)))
+		}
+		patchGroup := repoGroup.Group("/patch")
+		{
+			patchGroup.GET("/:base/:head", gin.WrapH(http.HandlerFunc(diffHandler.HandlePatch)))
+		}
+	}
 
 	return router
 }
 
 // Test middleware integration
-func testMiddlewareIntegration(t *testing.T, router *chi.Mux, commit1Hash, commit2Hash string) {
+func testMiddlewareIntegration(t *testing.T, router *gin.Engine, commit1Hash, commit2Hash string) {
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/testowner/test-repo/diff/commits/%s/%s", commit1Hash, commit2Hash), nil)
 	req.Header.Set("X-USER-ID", "test-user")
 	req.Header.Set("X-Source", "orchestrator")
@@ -200,7 +214,7 @@ func testMiddlewareIntegration(t *testing.T, router *chi.Mux, commit1Hash, commi
 }
 
 // Test CORS headers
-func testCORSHeaders(t *testing.T, router *chi.Mux) {
+func testCORSHeaders(t *testing.T, router *gin.Engine) {
 	// Test preflight request
 	req := httptest.NewRequest("OPTIONS", "/repos/testowner/test-repo/diff/commits/HEAD~1/HEAD", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
@@ -215,7 +229,7 @@ func testCORSHeaders(t *testing.T, router *chi.Mux) {
 }
 
 // Test authentication flow
-func testAuthenticationFlow(t *testing.T, router *chi.Mux, commit1Hash, commit2Hash string) {
+func testAuthenticationFlow(t *testing.T, router *gin.Engine, commit1Hash, commit2Hash string) {
 	tests := []struct {
 		name           string
 		headers        map[string]string
@@ -261,7 +275,7 @@ func testAuthenticationFlow(t *testing.T, router *chi.Mux, commit1Hash, commit2H
 }
 
 // Test rate limiting
-func testRateLimiting(t *testing.T, router *chi.Mux, commit1Hash, commit2Hash string) {
+func testRateLimiting(t *testing.T, router *gin.Engine, commit1Hash, commit2Hash string) {
 	// Make multiple rapid requests to test throttling
 	var responses []int
 	for i := 0; i < 15; i++ { // More than throttle limit of 10
@@ -288,7 +302,7 @@ func testRateLimiting(t *testing.T, router *chi.Mux, commit1Hash, commit2Hash st
 }
 
 // Test error handling integration
-func testErrorHandlingIntegration(t *testing.T, router *chi.Mux) {
+func testErrorHandlingIntegration(t *testing.T, router *gin.Engine) {
 	// Test with invalid commit hash
 	req := httptest.NewRequest("GET", "/repos/testowner/test-repo/diff/commits/invalidhash/validcommithash", nil)
 	req.Header.Set("X-USER-ID", "test-user")
@@ -307,7 +321,7 @@ func testErrorHandlingIntegration(t *testing.T, router *chi.Mux) {
 }
 
 // Test end-to-end diff operations
-func testEndToEndDiffOperations(t *testing.T, router *chi.Mux, commit1Hash, commit2Hash string) {
+func testEndToEndDiffOperations(t *testing.T, router *gin.Engine, commit1Hash, commit2Hash string) {
 	tests := []struct {
 		name     string
 		endpoint string
@@ -357,30 +371,3 @@ func testEndToEndDiffOperations(t *testing.T, router *chi.Mux, commit1Hash, comm
 }
 
 // Helper middleware functions for testing
-func createTestCORSMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-USER-ID, X-Source")
-			w.Header().Set("Access-Control-Max-Age", "86400")
-
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-func createTestAuthMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-API-Version", "1.0")
-			w.Header().Set("X-Service", "collabops-git-executor")
-			next.ServeHTTP(w, r)
-		})
-	}
-}

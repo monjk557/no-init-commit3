@@ -35,7 +35,9 @@ NC=\033[0m # No Color
 
 .PHONY: all build clean test test-coverage test-race test-verbose test-race-verbose test-logging lint fmt format fix vet verify help local
 .PHONY: deps deps-update deps-tidy docker docker-build docker-build-dev docker-run docker-run-dev docker-compose-up docker-compose-up-dev docker-compose-down
-.PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors setup-lint-prevention enforce-quality
+.PHONY: verify-structure verify-config verify-all local-setup install-tools qa-check qa-fix fmt-check pre-commit lint-errors
+.PHONY: local-it local-it-bg local-it-status local-it-logs local-it-logs-git local-it-cleanup local-it-restart local-it-rebuild
+.PHONY: local-it-safe local-it-aggressive local-it-no-migration local-it-test local-it-test-git local-it-shell local-it-shell-api local-it-env-setup local-it-info setup-lint-prevention enforce-quality kill-ports
 .PHONY: test-unit test-integration test-regression test-coverage-detailed test-benchmark test-security test-watch test-failure-only
 
 # Default target
@@ -59,6 +61,9 @@ help: ## Show this help message
 	@echo ""
 	@echo "$(GREEN)🐳 Docker Commands:$(NC)"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(docker)"
+	@echo ""
+	@echo "$(GREEN)🚀 Local Integration Commands:$(NC)"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | grep -E "(local-it)"
 	@echo ""
 
 # Build commands
@@ -219,15 +224,19 @@ format: ## Auto-format code, fix lint issues, run tests, and show results (COMPR
 		echo "$(GREEN)   ✅ goimports installed and completed$(NC)"; \
 	fi
 	@echo ""
-	@echo "$(YELLOW)4️⃣  Cleaning up go.mod with go mod tidy...$(NC)"
+	@echo "$(YELLOW)4️⃣  Re-running gofmt after lint auto-fixes...$(NC)"
+	$(GOFMT) -s -w .
+	@echo "$(GREEN)   ✅ Final gofmt completed$(NC)"
+	@echo ""
+	@echo "$(YELLOW)5️⃣  Cleaning up go.mod with go mod tidy...$(NC)"
 	go mod tidy
 	@echo "$(GREEN)   ✅ go mod tidy completed$(NC)"
 	@echo ""
-	@echo "$(YELLOW)5️⃣  Verifying go.mod integrity...$(NC)"
+	@echo "$(YELLOW)6️⃣  Verifying go.mod integrity...$(NC)"
 	go mod verify
 	@echo "$(GREEN)   ✅ go mod verify completed$(NC)"
 	@echo ""
-	@echo "$(YELLOW)6️⃣  Running final formatting check...$(NC)"
+	@echo "$(YELLOW)7️⃣  Running final formatting check...$(NC)"
 	@if [ "$$($(GOFMT) -l . | wc -l)" -gt 0 ]; then \
 		echo "$(RED)   ❌ Files still need formatting:$(NC)"; \
 		$(GOFMT) -l .; \
@@ -239,11 +248,11 @@ format: ## Auto-format code, fix lint issues, run tests, and show results (COMPR
 	@echo ""
 	@echo "$(GREEN)✨ COMPREHENSIVE formatting complete! Running final validation...$(NC)"
 	@echo "$(BLUE)═══════════════════════════════════════════════════$(NC)"
-	@echo "$(YELLOW)7️⃣  Running lint check (ALL issues, including manual fixes)...$(NC)"
+	@echo "$(YELLOW)8️⃣  Running lint check (ALL issues, including manual fixes)...$(NC)"
 	@$(MAKE) lint && echo "$(GREEN)   ✅ All lint checks pass$(NC)" || (echo "$(RED)   ❌ Lint issues found - please fix before committing$(NC)" && exit 1)
 	@echo ""
-	@echo "$(YELLOW)8️⃣  Running quick tests to catch breaking changes...$(NC)"
-	@$(GOTEST) -short ./... && echo "$(GREEN)   ✅ All tests pass$(NC)" || (echo "$(RED)   ❌ Tests failed - please fix issues before committing$(NC)" && exit 1)
+	@echo "$(YELLOW)9️⃣  Running tests with race detection to catch breaking changes and race conditions...$(NC)"
+	@$(GOTEST) -race -short ./... && echo "$(GREEN)   ✅ All tests pass (including race detection)$(NC)" || (echo "$(RED)   ❌ Tests failed or race conditions detected - please fix issues before committing$(NC)" && exit 1)
 
 vet: ## Run go vet
 	@echo "$(BLUE)🔍 Running go vet...$(NC)"
@@ -573,6 +582,206 @@ production-build: clean deps fmt vet lint test build-linux ## Full production bu
 local: fmt vet test-short ## Quick local workflow
 	@echo "$(GREEN)⚡ Local workflow completed!$(NC)"
 
+# Local Integration Testing Commands
+local-it: ## 🚀 Start full CollabOps stack with Git Executor integration
+	@echo "$(BLUE)🚀 Setting up local integration test environment...$(NC)"
+	@echo "$(YELLOW)📋 This will start the complete CollabOps stack:$(NC)"
+	@echo "$(YELLOW)  🌐 Web Frontend:      http://localhost:3000$(NC)"
+	@echo "$(YELLOW)  🔗 API Orchestrator:  http://localhost:2345$(NC)"
+	@echo "$(YELLOW)  ⚙️  API Service:       http://localhost:8000$(NC)"
+	@echo "$(YELLOW)  🗄️  Git Executor:      http://localhost:9090$(NC)"
+	@echo "$(YELLOW)  🗄️  PostgreSQL:        localhost:5432$(NC)"
+	@echo "$(YELLOW)  🔴 Redis:             localhost:6379$(NC)"
+	@echo ""
+	@echo "$(BLUE)Building and starting all services...$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml up --build
+	@echo "$(GREEN)🎉 Local integration test environment is ready!$(NC)"
+
+local-it-bg: ## 🚀 Start full CollabOps stack in background
+	@echo "$(BLUE)🚀 Starting CollabOps stack in background...$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml up --build -d
+	@echo "$(GREEN)✅ Services starting in background...$(NC)"
+	@echo ""
+	@echo "$(GREEN)📋 Service URLs:$(NC)"
+	@echo "$(YELLOW)  🌐 Web Frontend:      http://localhost:3000$(NC)"
+	@echo "$(YELLOW)  🔗 API Orchestrator:  http://localhost:2345$(NC)"
+	@echo "$(YELLOW)  ⚙️  API Service:       http://localhost:8000$(NC)"
+	@echo "$(YELLOW)  🗄️  Git Executor:      http://localhost:9090$(NC)"
+	@echo "$(YELLOW)  🗄️  PostgreSQL:        localhost:5432$(NC)"
+	@echo "$(YELLOW)  🔴 Redis:             localhost:6379$(NC)"
+	@echo ""
+	@echo "$(BLUE)🔍 Check status: make local-it-status$(NC)"
+	@echo "$(BLUE)📋 View logs: make local-it-logs$(NC)"
+	@echo "$(BLUE)🛑 Stop services: make local-it-cleanup$(NC)"
+
+local-it-status: ## 📊 Check status of local integration environment
+	@echo "$(BLUE)📊 CollabOps Stack Status:$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml ps
+
+local-it-logs: ## 📋 Show logs from all services
+	@echo "$(BLUE)📋 CollabOps Stack Logs:$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml logs -f
+
+local-it-logs-git: ## 📋 Show logs from Git Executor service only
+	@echo "$(BLUE)📋 Git Executor Logs:$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml logs -f collabops-git-executor
+
+local-it-cleanup: ## 🧹 Stop and cleanup local integration environment
+	@echo "$(BLUE)🧹 Cleaning up local integration test environment...$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml down -v
+	@echo "$(GREEN)✅ Local integration test environment has been cleaned up$(NC)"
+
+local-it-restart: ## 🔄 Restart local integration environment
+	@echo "$(BLUE)🔄 Restarting local integration environment...$(NC)"
+	@$(MAKE) local-it-cleanup
+	@sleep 2
+	@$(MAKE) local-it-bg
+
+local-it-rebuild: ## 🔨 Force rebuild and restart local integration environment
+	@echo "$(BLUE)🔨 Force rebuilding local integration environment...$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml down -v
+	cd config/docker/compose && docker compose -f local-it.yml build --no-cache
+	cd config/docker/compose && docker compose -f local-it.yml up -d
+	@echo "$(GREEN)✅ Local integration environment rebuilt and started$(NC)"
+
+# Migration Strategy Variants
+local-it-safe: ## 🛡️ Start local-it environment with SAFE migration strategy
+	@echo "$(BLUE)🛡️ Starting local-it environment with SAFE migration strategy...$(NC)"
+	cd config/docker/compose && MIGRATION_STRATEGY=safe docker compose -f local-it.yml up -d
+
+local-it-aggressive: ## ⚡ Start local-it environment with AGGRESSIVE migration strategy
+	@echo "$(BLUE)⚡ Starting local-it environment with AGGRESSIVE migration strategy...$(NC)"
+	cd config/docker/compose && MIGRATION_STRATEGY=aggressive docker compose -f local-it.yml up -d
+
+local-it-no-migration: ## ⏸️ Start local-it environment with migrations OFF
+	@echo "$(BLUE)⏸️ Starting local-it environment with migrations OFF...$(NC)"
+	cd config/docker/compose && MIGRATION_STRATEGY=off docker compose -f local-it.yml up -d
+
+# Integration Testing Commands
+local-it-test: ## 🧪 Run integration tests against running local-it environment
+	@echo "$(BLUE)🧪 Running integration tests...$(NC)"
+	@echo "$(YELLOW)Testing service endpoints...$(NC)"
+	@curl -f http://localhost:3000/api/health > /dev/null 2>&1 && echo "$(GREEN)✅ Web Frontend health check passed$(NC)" || echo "$(RED)❌ Web Frontend health check failed$(NC)"
+	@curl -f http://localhost:2345/health > /dev/null 2>&1 && echo "$(GREEN)✅ API Orchestrator health check passed$(NC)" || echo "$(RED)❌ API Orchestrator health check failed$(NC)"
+	@curl -f http://localhost:8000/health/ > /dev/null 2>&1 && echo "$(GREEN)✅ API Service health check passed$(NC)" || echo "$(RED)❌ API Service health check failed$(NC)"
+	@curl -f http://localhost:9090/health > /dev/null 2>&1 && echo "$(GREEN)✅ Git Executor health check passed$(NC)" || echo "$(RED)❌ Git Executor health check failed$(NC)"
+
+local-it-test-git: ## 🧪 Test Git Executor endpoints specifically
+	@echo "$(BLUE)🧪 Testing Git Executor endpoints...$(NC)"
+	@echo "$(YELLOW)Testing health endpoint...$(NC)"
+	@curl -f http://localhost:9090/health > /dev/null 2>&1 && echo "$(GREEN)✅ Git Executor health check passed$(NC)" || echo "$(RED)❌ Git Executor health check failed$(NC)"
+	@echo "$(YELLOW)Testing base path endpoint...$(NC)"
+	@curl -f http://localhost:9090/repos > /dev/null 2>&1 && echo "$(GREEN)✅ Git Executor base path accessible$(NC)" || echo "$(YELLOW)⚠️ Git Executor base path may require authentication$(NC)"
+
+local-it-shell: ## 🐚 Get shell access to Git Executor container
+	@echo "$(BLUE)🐚 Opening shell in Git Executor container...$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml exec collabops-git-executor /bin/sh
+
+local-it-shell-api: ## 🐚 Get shell access to API Service container
+	@echo "$(BLUE)🐚 Opening shell in API Service container...$(NC)"
+	cd config/docker/compose && docker compose -f local-it.yml exec collabops-api-service /bin/bash
+
+local-it-env-setup: ## 📝 Set up environment file for local integration testing
+	@echo "$(BLUE)📝 Setting up environment file...$(NC)"
+	@if [ ! -f config/docker/compose/.env.local-it ]; then \
+		echo "$(YELLOW)Creating .env.local-it file...$(NC)"; \
+		echo "# CollabOps Local Integration Testing Environment Configuration" > config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Service Ports Configuration" >> config/docker/compose/.env.local-it; \
+		echo "WEB_PORT=3000" >> config/docker/compose/.env.local-it; \
+		echo "ORCHESTRATOR_PORT=2345" >> config/docker/compose/.env.local-it; \
+		echo "API_SERVICE_PORT=8000" >> config/docker/compose/.env.local-it; \
+		echo "GIT_EXECUTOR_PORT=9090" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Database Ports" >> config/docker/compose/.env.local-it; \
+		echo "DB_PORT=5432" >> config/docker/compose/.env.local-it; \
+		echo "ORCHESTRATOR_DB_PORT=5433" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Redis Ports" >> config/docker/compose/.env.local-it; \
+		echo "REDIS_ORCHESTRATOR_PORT=6379" >> config/docker/compose/.env.local-it; \
+		echo "REDIS_API_SERVICE_PORT=6380" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Application Environment" >> config/docker/compose/.env.local-it; \
+		echo "APP_ENV=local" >> config/docker/compose/.env.local-it; \
+		echo "APP_DEBUG=true" >> config/docker/compose/.env.local-it; \
+		echo "APP_LOG_LEVEL=DEBUG" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Database Configuration" >> config/docker/compose/.env.local-it; \
+		echo "DB_NAME=collabops" >> config/docker/compose/.env.local-it; \
+		echo "DB_USER=postgres" >> config/docker/compose/.env.local-it; \
+		echo "DB_PASSWORD=postgres" >> config/docker/compose/.env.local-it; \
+		echo "DB_CONN_MAX_AGE=0" >> config/docker/compose/.env.local-it; \
+		echo "DB_SSLMODE=disable" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# API Keys and Secrets" >> config/docker/compose/.env.local-it; \
+		echo "DRF_API_KEY=api_service_key_local_it" >> config/docker/compose/.env.local-it; \
+		echo "SECRET_KEY=dev-secret-key-for-local-integration-testing" >> config/docker/compose/.env.local-it; \
+		echo "GIT_EXECUTOR_JWT_SECRET=git_executor_jwt_secret_local" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Git Executor Configuration" >> config/docker/compose/.env.local-it; \
+		echo "GIT_EXECUTOR_LOG_LEVEL=info" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Superuser Configuration" >> config/docker/compose/.env.local-it; \
+		echo "DJANGO_SUPERUSER_USERNAME=admin" >> config/docker/compose/.env.local-it; \
+		echo "DJANGO_SUPERUSER_EMAIL=admin@collabops.ai" >> config/docker/compose/.env.local-it; \
+		echo "DJANGO_SUPERUSER_PASSWORD=admin123" >> config/docker/compose/.env.local-it; \
+		echo "DJANGO_SUPERUSER_FIRST_NAME=Admin" >> config/docker/compose/.env.local-it; \
+		echo "DJANGO_SUPERUSER_LAST_NAME=User" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Feature Flags" >> config/docker/compose/.env.local-it; \
+		echo "ENABLE_METRICS=true" >> config/docker/compose/.env.local-it; \
+		echo "ENABLE_JWT_MIDDLEWARE=false" >> config/docker/compose/.env.local-it; \
+		echo "USE_SQLITE=0" >> config/docker/compose/.env.local-it; \
+		echo "USE_DUMMY_CACHE=0" >> config/docker/compose/.env.local-it; \
+		echo "CELERY_EAGER=1" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Migration and Deployment" >> config/docker/compose/.env.local-it; \
+		echo "MIGRATION_STRATEGY=auto" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Logging Configuration" >> config/docker/compose/.env.local-it; \
+		echo "GUNICORN_LOG_LEVEL=info" >> config/docker/compose/.env.local-it; \
+		echo "GUNICORN_WORKERS=2" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# Network Configuration" >> config/docker/compose/.env.local-it; \
+		echo "HOST=0.0.0.0" >> config/docker/compose/.env.local-it; \
+		echo "" >> config/docker/compose/.env.local-it; \
+		echo "# JWT Configuration" >> config/docker/compose/.env.local-it; \
+		echo "ACCESS_TOKEN_EXPIRE_MINUTES=30" >> config/docker/compose/.env.local-it; \
+		echo "$(GREEN)✅ Environment file created at config/docker/compose/.env.local-it$(NC)"; \
+	else \
+		echo "$(GREEN)✅ Environment file already exists at config/docker/compose/.env.local-it$(NC)"; \
+	fi
+
+local-it-info: ## 📋 Show local integration environment information
+	@echo "$(BLUE)📋 CollabOps Local Integration Environment$(NC)"
+	@echo ""
+	@echo "$(GREEN)🚀 Available Commands:$(NC)"
+	@echo "$(YELLOW)  make local-it           # Start full stack (foreground)$(NC)"
+	@echo "$(YELLOW)  make local-it-bg        # Start full stack (background)$(NC)"
+	@echo "$(YELLOW)  make local-it-status    # Check service status$(NC)"
+	@echo "$(YELLOW)  make local-it-logs      # View all logs$(NC)"
+	@echo "$(YELLOW)  make local-it-logs-git  # View Git Executor logs only$(NC)"
+	@echo "$(YELLOW)  make local-it-cleanup   # Stop and cleanup$(NC)"
+	@echo "$(YELLOW)  make local-it-restart   # Restart environment$(NC)"
+	@echo "$(YELLOW)  make local-it-rebuild   # Force rebuild$(NC)"
+	@echo ""
+	@echo "$(GREEN)🛡️ Migration Strategies:$(NC)"
+	@echo "$(YELLOW)  make local-it-safe      # Safe migration strategy$(NC)"
+	@echo "$(YELLOW)  make local-it-aggressive # Aggressive migration strategy$(NC)"
+	@echo "$(YELLOW)  make local-it-no-migration # Skip migrations$(NC)"
+	@echo ""
+	@echo "$(GREEN)🧪 Testing Commands:$(NC)"
+	@echo "$(YELLOW)  make local-it-test      # Test all service health$(NC)"
+	@echo "$(YELLOW)  make local-it-test-git  # Test Git Executor only$(NC)"
+	@echo ""
+	@echo "$(GREEN)🔧 Debug Commands:$(NC)"
+	@echo "$(YELLOW)  make local-it-shell     # Shell into Git Executor$(NC)"
+	@echo "$(YELLOW)  make local-it-shell-api # Shell into API Service$(NC)"
+	@echo ""
+	@echo "$(GREEN)📝 Setup Commands:$(NC)"
+	@echo "$(YELLOW)  make local-it-env-setup # Create environment file$(NC)"
+	@echo "$(YELLOW)  make local-it-info      # Show this information$(NC)"
+
 # Quality Assurance targets to prevent lint errors
 qa-check: ## Run comprehensive quality checks (lint, vet, fmt, test)
 	@echo "$(BLUE)🔍 Running comprehensive quality checks...$(NC)"
@@ -625,3 +834,29 @@ go-env: ## Show Go environment
 	else \
 		echo "$(RED)❌ Go is not installed$(NC)"; \
 	fi
+
+kill-ports: ## 🔧 Kill processes using common CollabOps ports (with confirmation)
+	@echo "$(YELLOW)🔧 Killing processes using common CollabOps ports...$(NC)"
+	@echo "$(RED)⚠️  This will forcefully terminate processes using ports 3000, 6379, 6380, 8000, 2345, 5432, 5433, 9090$(NC)"
+	@echo "$(BLUE)This is useful when ports are blocked before starting local-it environment$(NC)"
+	@echo ""
+	@read -p "Continue? (y/N): " confirm && [ "$$confirm" = "y" ] || (echo "$(GREEN)Cancelled.$(NC)" && exit 1)
+	@echo ""
+	@echo "$(BLUE)🔍 Checking and killing processes on port 3000 (Web Frontend)...$(NC)"
+	@if lsof -ti :3000 >/dev/null 2>&1; then lsof -ti :3000 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 3000$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 3000$(NC)"; else echo "$(GREEN)  ✅ No processes on port 3000$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 6379 (Redis - API Service)...$(NC)"
+	@if lsof -ti :6379 >/dev/null 2>&1; then lsof -ti :6379 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 6379$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 6379$(NC)"; else echo "$(GREEN)  ✅ No processes on port 6379$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 6380 (Redis - Orchestrator)...$(NC)"
+	@if lsof -ti :6380 >/dev/null 2>&1; then lsof -ti :6380 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 6380$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 6380$(NC)"; else echo "$(GREEN)  ✅ No processes on port 6380$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 8000 (API Service)...$(NC)"
+	@if lsof -ti :8000 >/dev/null 2>&1; then lsof -ti :8000 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 8000$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 8000$(NC)"; else echo "$(GREEN)  ✅ No processes on port 8000$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 2345 (API Orchestrator)...$(NC)"
+	@if lsof -ti :2345 >/dev/null 2>&1; then lsof -ti :2345 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 2345$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 2345$(NC)"; else echo "$(GREEN)  ✅ No processes on port 2345$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 5432 (PostgreSQL - API Service)...$(NC)"
+	@if lsof -ti :5432 >/dev/null 2>&1; then lsof -ti :5432 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 5432$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 5432$(NC)"; else echo "$(GREEN)  ✅ No processes on port 5432$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 5433 (PostgreSQL - Orchestrator)...$(NC)"
+	@if lsof -ti :5433 >/dev/null 2>&1; then lsof -ti :5433 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 5433$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 5433$(NC)"; else echo "$(GREEN)  ✅ No processes on port 5433$(NC)"; fi
+	@echo "$(BLUE)🔍 Checking and killing processes on port 9090 (Git Executor)...$(NC)"
+	@if lsof -ti :9090 >/dev/null 2>&1; then lsof -ti :9090 | xargs kill -9 2>/dev/null && echo "$(GREEN)  ✅ Killed processes on port 9090$(NC)" || echo "$(YELLOW)  ⚠️ Could not kill some processes on port 9090$(NC)"; else echo "$(GREEN)  ✅ No processes on port 9090$(NC)"; fi
+	@echo ""
+	@echo "$(GREEN)✅ Port cleanup completed! You can now run 'make local-it'$(NC)"

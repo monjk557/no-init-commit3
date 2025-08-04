@@ -5,10 +5,53 @@ import (
 	"net/http"
 	"time"
 
-	chi "github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 )
+
+// ResponseWriter interface for wrapped response writers
+type ResponseWriter interface {
+	http.ResponseWriter
+	Status() int
+	BytesWritten() int
+}
+
+// responseWriterWrapper wraps http.ResponseWriter to capture status and bytes written
+type responseWriterWrapper struct {
+	http.ResponseWriter
+	status       int
+	bytesWritten int
+}
+
+func (w *responseWriterWrapper) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *responseWriterWrapper) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	w.bytesWritten += n
+	return n, err
+}
+
+func (w *responseWriterWrapper) Status() int {
+	if w.status == 0 {
+		return 200
+	}
+	return w.status
+}
+
+func (w *responseWriterWrapper) BytesWritten() int {
+	return w.bytesWritten
+}
+
+// NewWrapResponseWriter creates a wrapped response writer
+func NewWrapResponseWriter(w http.ResponseWriter) ResponseWriter {
+	return &responseWriterWrapper{
+		ResponseWriter: w,
+		status:         0,
+		bytesWritten:   0,
+	}
+}
 
 // RequestIDMiddleware generates and adds request IDs to the context
 func RequestIDMiddleware(generator RequestIDGenerator) func(http.Handler) http.Handler {
@@ -64,7 +107,7 @@ func LoggingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 
 			// Wrap response writer to capture status code
-			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			ww := NewWrapResponseWriter(w)
 
 			// Continue with the request
 			next.ServeHTTP(ww, r)
@@ -143,7 +186,7 @@ func ConditionalLoggingMiddleware(logger *Logger) func(http.Handler) http.Handle
 			start := time.Now()
 
 			// Wrap response writer to capture status code
-			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			ww := NewWrapResponseWriter(w)
 
 			// Continue with the request
 			next.ServeHTTP(ww, r)
@@ -179,13 +222,5 @@ func LogMiddleware(logger *Logger) []func(http.Handler) http.Handler {
 		ErrorHandlingMiddleware(logger),
 		HealthCheckMiddleware(), // Skip logging for health checks
 		ConditionalLoggingMiddleware(logger),
-	}
-}
-
-// SetupLoggingMiddleware is a convenience function to set up all logging middleware
-func SetupLoggingMiddleware(r chi.Router, logger *Logger) {
-	middlewares := LogMiddleware(logger)
-	for _, mw := range middlewares {
-		r.Use(mw)
 	}
 }

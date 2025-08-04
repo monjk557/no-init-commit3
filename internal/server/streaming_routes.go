@@ -1,52 +1,53 @@
 package server
 
-import (
-	"fmt"
+// TODO: Streaming optimization features - commenting out unused functions for now
 
-	"github.com/collabops/git-executor/internal/permissions"
-	"github.com/collabops/git-executor/internal/protocol"
-	"github.com/go-chi/chi/v5"
-)
+// setupStreamingGitRoutes configures streaming Git operation routes
+// func (s *Server) setupStreamingGitRoutes(router *chi.Mux) {
+// 	// Create permission client
+// 	permClient, err := permissions.NewPermissionClient(permissions.DefaultConfig())
+// 	if err != nil {
+// 		fmt.Printf("Warning: Failed to create permission client for streaming routes: %v\n", err)
+// 		return
+// 	}
+//
+// 	// Create streaming protocol handler
+// 	streamingHandler, err := protocol.NewStreamingProtocolHandler(s.config, permClient)
+// 	if err != nil {
+// 		fmt.Printf("Warning: Failed to create streaming protocol handler: %v\n", err)
+// 		return
+// 	}
+//
+// 	router.Route("/streaming", func(r chi.Router) {
+// 		// Streaming clone operations
+// 		r.Get("/{owner}/{repo}/clone", streamingHandler.HandleStreamingClone)
+//
+// 		// Streaming fetch operations
+// 		r.Get("/{owner}/{repo}/fetch", streamingHandler.HandleStreamingFetch)
+//
+// 		// Streaming diff operations
+// 		r.Get("/{owner}/{repo}/diff", streamingHandler.HandleStreamingDiff)
+// 	})
+// }
 
-// setupStreamingGitRoutes configures Git Smart HTTP protocol routes with streaming optimization
-func (s *Server) setupStreamingGitRoutes(router *chi.Mux) {
-	// Initialize permission client with default configuration
-	// TODO: This should be properly configured with actual API service URL from config
-	permConfig := permissions.DefaultConfig()
-	permConfig.APIServiceURL = "http://api-service.local" // Override with specific URL
-
-	permClient, err := permissions.NewPermissionClient(permConfig)
-	if err != nil {
-		// For now, log the error and continue without Smart HTTP
-		fmt.Printf("⚠️  Warning: Failed to initialize permission client for streaming: %v\n", err)
-		return
-	}
-
-	// Initialize base upload-pack handler
-	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config, permClient)
-	if err != nil {
-		// For now, log the error and continue without Smart HTTP
-		fmt.Printf("⚠️  Warning: Failed to initialize upload-pack handler for streaming: %v\n", err)
-		return
-	}
-
-	// Create streaming upload-pack handler
-	streamingHandler := protocol.NewStreamingUploadPackHandler(uploadPackHandler)
-
-	// Add streaming routes as alternative endpoints (not conflicting with existing ones)
-	router.Route("/streaming/{owner}/{repo}", func(r chi.Router) {
-		// GET /repos/streaming/{owner}/{repo}/info/refs?service=git-upload-pack
-		r.Get("/info/refs", streamingHandler.HandleInfoRefsStreaming)
-
-		// POST /repos/streaming/{owner}/{repo}/git-upload-pack
-		r.Post("/git-upload-pack", streamingHandler.HandleUploadPackStreaming)
-	})
-
-	fmt.Printf("✅ Streaming Git Smart HTTP routes configured at /streaming/{owner}/{repo}\n")
-}
-
-// enableStreamingOptimization adds streaming routes alongside regular routes
-func (s *Server) enableStreamingOptimization(apiRouter *chi.Mux) {
-	fmt.Printf("🚀 Enabling streaming optimization for Git operations\n")
-	s.setupStreamingGitRoutes(apiRouter)
-}
+// enableStreamingOptimization sets up streaming optimization for large operations
+// func (s *Server) enableStreamingOptimization(apiRouter *chi.Mux) {
+// 	// Create streaming middleware for large repository operations
+// 	streamingMiddleware := func(next http.Handler) http.Handler {
+// 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 			// Check if request is for a large repository operation
+// 			if strings.Contains(r.URL.Path, "/diff") ||
+// 				strings.Contains(r.URL.Path, "/commits") ||
+// 				strings.Contains(r.URL.Path, "/tree") {
+//
+// 				// Enable streaming response
+// 				w.Header().Set("Transfer-Encoding", "chunked")
+// 				w.Header().Set("Cache-Control", "no-cache")
+// 			}
+// 			next.ServeHTTP(w, r)
+// 		})
+// 	}
+//
+// 	// Apply streaming middleware to API routes
+// 	apiRouter.Use(streamingMiddleware)
+// }

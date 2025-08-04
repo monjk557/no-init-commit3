@@ -406,7 +406,9 @@ func TestRepository_Close(t *testing.T) {
 
 	err := repo.Close()
 	assert.NoError(t, err)
-	assert.Nil(t, repo.GitRepo)
+	// GitRepo is not set to nil anymore to prevent "repository is closed" errors
+	// for existing references. The Go garbage collector handles cleanup.
+	assert.NotNil(t, repo.GitRepo)
 }
 
 func TestLRUCache_ConcurrentEviction(t *testing.T) {

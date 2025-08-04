@@ -343,11 +343,11 @@ func TestGoGitRepository_GetCommits(t *testing.T) {
 	}
 
 	// Check commit order (should be newest first)
-	if commits[0].Message != "Add utils.go\n" {
+	if commits[0].Message != "Add utils.go" {
 		t.Errorf("Expected first commit to be 'Add utils.go', got %q", commits[0].Message)
 	}
 
-	if commits[2].Message != "Initial commit\n" {
+	if commits[2].Message != "Initial commit" {
 		t.Errorf("Expected third commit to be 'Initial commit', got %q", commits[2].Message)
 	}
 

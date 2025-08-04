@@ -19,7 +19,6 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
-	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -82,8 +81,8 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 
 	// Extract path parameters from gateway-forwarded request
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
 	service := r.URL.Query().Get("service")
 
 	// Validate service parameter
@@ -126,7 +125,7 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Open repository using go-git with caching
-	gitRepo, err := git.OpenRepositoryWithCache(repoPath)
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		wrappedErr := fmt.Errorf("failed to open repository: %w", err)
 		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack_info_refs")
@@ -253,8 +252,8 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	ctx := r.Context()
 
 	// Extract path parameters from gateway-forwarded request
-	owner := chi.URLParam(r, "owner")
-	repo := chi.URLParam(r, "repo")
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
 
 	// Get user ID from gateway context (forwarded header)
 	userID := r.Header.Get("X-USER-ID")
