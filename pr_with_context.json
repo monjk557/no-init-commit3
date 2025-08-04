@@ -1,0 +1,830 @@
+{
+  "base": "37d8db049d9fe36521e369dbd2d28609166e102f",
+  "head": "f7e09424d8da202ea81ea1a40499e30a54b1065a",
+  "files": [
+    {
+      "path": "src/main.js",
+      "status": "modified",
+      "additions": 81,
+      "deletions": 70,
+      "changes": [
+        {
+          "type": "context",
+          "line": 1,
+          "content": " // CollabOps Git Executor Demo"
+        },
+        {
+          "type": "context",
+          "line": 2,
+          "content": " // Version: 1.0.0"
+        },
+        {
+          "type": "context",
+          "line": 3,
+          "content": " // Author: CollabOps Team"
+        },
+        {
+          "type": "context",
+          "line": 4,
+          "content": " "
+        },
+        {
+          "type": "context",
+          "line": 5,
+          "content": " const config = {"
+        },
+        {
+          "type": "context",
+          "line": 6,
+          "content": "     version: '1.0.0',"
+        },
+        {
+          "type": "context",
+          "line": 7,
+          "content": "     debug: true,"
+        },
+        {
+          "type": "context",
+          "line": 8,
+          "content": "     features: {"
+        },
+        {
+          "type": "context",
+          "line": 9,
+          "content": "         diffViewer: true,"
+        },
+        {
+          "type": "context",
+          "line": 10,
+          "content": "         pullRequests: true,"
+        },
+        {
+          "type": "del",
+          "line": 11,
+          "content": "-        authentication: true"
+        },
+        {
+          "type": "add",
+          "line": 11,
+          "content": "+        authentication: true,"
+        },
+        {
+          "type": "del",
+          "line": 12,
+          "content": "-    }"
+        },
+        {
+          "type": "add",
+          "line": 12,
+          "content": "+        // 새로 추가된 기능"
+        },
+        {
+          "type": "del",
+          "line": 13,
+          "content": "-};"
+        },
+        {
+          "type": "add",
+          "line": 13,
+          "content": "+        realTimeSync: true"
+        },
+        {
+          "type": "del",
+          "line": 14,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 14,
+          "content": "+    }"
+        },
+        {
+          "type": "del",
+          "line": 15,
+          "content": "-console.log(\"Hello from CollabOps!\");"
+        },
+        {
+          "type": "add",
+          "line": 15,
+          "content": "+};"
+        },
+        {
+          "type": "context",
+          "line": 16,
+          "content": " "
+        },
+        {
+          "type": "del",
+          "line": 17,
+          "content": "-// 기존 함수들"
+        },
+        {
+          "type": "add",
+          "line": 17,
+          "content": "+console.log(\"Hello from CollabOps!\");"
+        },
+        {
+          "type": "del",
+          "line": 18,
+          "content": "-function initializeApp() {"
+        },
+        {
+          "type": "add",
+          "line": 18,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 19,
+          "content": "-    console.log('Initializing CollabOps Git Executor');"
+        },
+        {
+          "type": "add",
+          "line": 19,
+          "content": "+// 기존 함수들"
+        },
+        {
+          "type": "del",
+          "line": 20,
+          "content": "-    loadConfiguration();"
+        },
+        {
+          "type": "add",
+          "line": 20,
+          "content": "+function initializeApp() {"
+        },
+        {
+          "type": "del",
+          "line": 21,
+          "content": "-    setupEventListeners();"
+        },
+        {
+          "type": "add",
+          "line": 21,
+          "content": "+    console.log('Initializing CollabOps Git Executor');"
+        },
+        {
+          "type": "del",
+          "line": 22,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 22,
+          "content": "+    loadConfiguration();"
+        },
+        {
+          "type": "del",
+          "line": 23,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 23,
+          "content": "+    setupEventListeners();"
+        },
+        {
+          "type": "del",
+          "line": 24,
+          "content": "-function loadConfiguration() {"
+        },
+        {
+          "type": "add",
+          "line": 24,
+          "content": "+}"
+        },
+        {
+          "type": "del",
+          "line": 25,
+          "content": "-    console.log('Loading configuration...');"
+        },
+        {
+          "type": "add",
+          "line": 25,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 26,
+          "content": "-    return config;"
+        },
+        {
+          "type": "add",
+          "line": 26,
+          "content": "+function loadConfiguration() {"
+        },
+        {
+          "type": "del",
+          "line": 27,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 27,
+          "content": "+    console.log('Loading configuration...');"
+        },
+        {
+          "type": "del",
+          "line": 28,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 28,
+          "content": "+    return config;"
+        },
+        {
+          "type": "del",
+          "line": 29,
+          "content": "-function setupEventListeners() {"
+        },
+        {
+          "type": "add",
+          "line": 29,
+          "content": "+}"
+        },
+        {
+          "type": "del",
+          "line": 30,
+          "content": "-    console.log('Setting up event listeners...');"
+        },
+        {
+          "type": "add",
+          "line": 30,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 31,
+          "content": "-    // 이벤트 리스너 설정"
+        },
+        {
+          "type": "add",
+          "line": 31,
+          "content": "+function setupEventListeners() {"
+        },
+        {
+          "type": "del",
+          "line": 32,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 32,
+          "content": "+    console.log('Setting up event listeners...');"
+        },
+        {
+          "type": "del",
+          "line": 33,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 33,
+          "content": "+    // 이벤트 리스너 설정"
+        },
+        {
+          "type": "del",
+          "line": 34,
+          "content": "-// 새로운 함수 추가 - 이 부분이 변경됨"
+        },
+        {
+          "type": "add",
+          "line": 34,
+          "content": "+}"
+        },
+        {
+          "type": "del",
+          "line": 35,
+          "content": "-function calculateDiff(base, head) {"
+        },
+        {
+          "type": "add",
+          "line": 35,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 36,
+          "content": "-    // 이 함수가 수정되었습니다"
+        },
+        {
+          "type": "add",
+          "line": 36,
+          "content": "+// 새로운 함수 추가 - 이 부분이 변경됨"
+        },
+        {
+          "type": "del",
+          "line": 37,
+          "content": "-    console.log('Calculating diff between', base, 'and', head);"
+        },
+        {
+          "type": "add",
+          "line": 37,
+          "content": "+function calculateDiff(base, head) {"
+        },
+        {
+          "type": "del",
+          "line": 38,
+          "content": "-    return {"
+        },
+        {
+          "type": "add",
+          "line": 38,
+          "content": "+    // 이 함수가 수정되었습니다"
+        },
+        {
+          "type": "del",
+          "line": 39,
+          "content": "-        added: [],"
+        },
+        {
+          "type": "add",
+          "line": 39,
+          "content": "+    console.log('Calculating diff between', base, 'and', head);"
+        },
+        {
+          "type": "del",
+          "line": 40,
+          "content": "-        modified: [],"
+        },
+        {
+          "type": "add",
+          "line": 40,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 41,
+          "content": "-        deleted: [],"
+        },
+        {
+          "type": "add",
+          "line": 41,
+          "content": "+    // 성능 개선을 위한 로깅 추가"
+        },
+        {
+          "type": "del",
+          "line": 42,
+          "content": "-        unchanged: [] // 새로 추가된 속성"
+        },
+        {
+          "type": "add",
+          "line": 42,
+          "content": "+    const startTime = Date.now();"
+        },
+        {
+          "type": "del",
+          "line": 43,
+          "content": "-    };"
+        },
+        {
+          "type": "add",
+          "line": 43,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 44,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 44,
+          "content": "+    const result = {"
+        },
+        {
+          "type": "del",
+          "line": 45,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 45,
+          "content": "+        added: [],"
+        },
+        {
+          "type": "del",
+          "line": 46,
+          "content": "-// Pull Request 처리 함수 - 이 부분도 변경됨"
+        },
+        {
+          "type": "add",
+          "line": 46,
+          "content": "+        modified: [],"
+        },
+        {
+          "type": "del",
+          "line": 47,
+          "content": "-function processPullRequest(data) {"
+        },
+        {
+          "type": "add",
+          "line": 47,
+          "content": "+        deleted: [],"
+        },
+        {
+          "type": "del",
+          "line": 48,
+          "content": "-    console.log('Processing PR:', data);"
+        },
+        {
+          "type": "add",
+          "line": 48,
+          "content": "+        unchanged: [] // 새로 추가된 속성"
+        },
+        {
+          "type": "del",
+          "line": 49,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 49,
+          "content": "+    };"
+        },
+        {
+          "type": "del",
+          "line": 50,
+          "content": "-    // 새로 추가된 validation 로직"
+        },
+        {
+          "type": "add",
+          "line": 50,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 51,
+          "content": "-    if (!data.base || !data.head) {"
+        },
+        {
+          "type": "add",
+          "line": 51,
+          "content": "+    // 실행 시간 로깅"
+        },
+        {
+          "type": "del",
+          "line": 52,
+          "content": "-        throw new Error('Base and head commits are required');"
+        },
+        {
+          "type": "add",
+          "line": 52,
+          "content": "+    console.log(`Diff calculation took ${Date.now() - startTime}ms`);"
+        },
+        {
+          "type": "del",
+          "line": 53,
+          "content": "-    }"
+        },
+        {
+          "type": "add",
+          "line": 53,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 54,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 54,
+          "content": "+    return result;"
+        },
+        {
+          "type": "del",
+          "line": 55,
+          "content": "-    const diff = calculateDiff(data.base, data.head);"
+        },
+        {
+          "type": "add",
+          "line": 55,
+          "content": "+}"
+        },
+        {
+          "type": "del",
+          "line": 56,
+          "content": "-    return {"
+        },
+        {
+          "type": "add",
+          "line": 56,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 57,
+          "content": "-        ...diff,"
+        },
+        {
+          "type": "add",
+          "line": 57,
+          "content": "+// Pull Request 처리 함수 - 이 부분도 변경됨"
+        },
+        {
+          "type": "del",
+          "line": 58,
+          "content": "-        summary: generateSummary(diff) // 새로 추가된 라인"
+        },
+        {
+          "type": "add",
+          "line": 58,
+          "content": "+function processPullRequest(data) {"
+        },
+        {
+          "type": "del",
+          "line": 59,
+          "content": "-    };"
+        },
+        {
+          "type": "add",
+          "line": 59,
+          "content": "+    console.log('Processing PR:', data);"
+        },
+        {
+          "type": "del",
+          "line": 60,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 60,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 61,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 61,
+          "content": "+    // 새로 추가된 validation 로직"
+        },
+        {
+          "type": "del",
+          "line": 62,
+          "content": "-// 완전히 새로운 함수"
+        },
+        {
+          "type": "add",
+          "line": 62,
+          "content": "+    if (!data.base || !data.head) {"
+        },
+        {
+          "type": "del",
+          "line": 63,
+          "content": "-function generateSummary(diff) {"
+        },
+        {
+          "type": "add",
+          "line": 63,
+          "content": "+        throw new Error('Base and head commits are required');"
+        },
+        {
+          "type": "del",
+          "line": 64,
+          "content": "-    return {"
+        },
+        {
+          "type": "add",
+          "line": 64,
+          "content": "+    }"
+        },
+        {
+          "type": "del",
+          "line": 65,
+          "content": "-        totalChanges: diff.added.length + diff.modified.length + diff.deleted.length,"
+        },
+        {
+          "type": "add",
+          "line": 65,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 66,
+          "content": "-        hasChanges: diff.added.length > 0 || diff.modified.length > 0 || diff.deleted.length > 0"
+        },
+        {
+          "type": "add",
+          "line": 66,
+          "content": "+    const diff = calculateDiff(data.base, data.head);"
+        },
+        {
+          "type": "del",
+          "line": 67,
+          "content": "-    };"
+        },
+        {
+          "type": "add",
+          "line": 67,
+          "content": "+    return {"
+        },
+        {
+          "type": "del",
+          "line": 68,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 68,
+          "content": "+        ...diff,"
+        },
+        {
+          "type": "del",
+          "line": 69,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 69,
+          "content": "+        summary: generateSummary(diff) // 새로 추가된 라인"
+        },
+        {
+          "type": "del",
+          "line": 70,
+          "content": "-// 기존 함수들 (변경되지 않음)"
+        },
+        {
+          "type": "add",
+          "line": 70,
+          "content": "+    };"
+        },
+        {
+          "type": "del",
+          "line": 71,
+          "content": "-function helperFunction() {"
+        },
+        {
+          "type": "add",
+          "line": 71,
+          "content": "+}"
+        },
+        {
+          "type": "del",
+          "line": 72,
+          "content": "-    return 'This function was not changed';"
+        },
+        {
+          "type": "add",
+          "line": 72,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 73,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 73,
+          "content": "+// 완전히 새로운 함수"
+        },
+        {
+          "type": "del",
+          "line": 74,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 74,
+          "content": "+function generateSummary(diff) {"
+        },
+        {
+          "type": "del",
+          "line": 75,
+          "content": "-function anotherHelperFunction() {"
+        },
+        {
+          "type": "add",
+          "line": 75,
+          "content": "+    return {"
+        },
+        {
+          "type": "del",
+          "line": 76,
+          "content": "-    console.log('Another helper function');"
+        },
+        {
+          "type": "add",
+          "line": 76,
+          "content": "+        totalChanges: diff.added.length + diff.modified.length + diff.deleted.length,"
+        },
+        {
+          "type": "del",
+          "line": 77,
+          "content": "-    return true;"
+        },
+        {
+          "type": "add",
+          "line": 77,
+          "content": "+        hasChanges: diff.added.length > 0 || diff.modified.length > 0 || diff.deleted.length > 0"
+        },
+        {
+          "type": "del",
+          "line": 78,
+          "content": "-}"
+        },
+        {
+          "type": "add",
+          "line": 78,
+          "content": "+    };"
+        },
+        {
+          "type": "del",
+          "line": 79,
+          "content": "-"
+        },
+        {
+          "type": "add",
+          "line": 79,
+          "content": "+}"
+        },
+        {
+          "type": "del",
+          "line": 80,
+          "content": "-// 마지막 부분"
+        },
+        {
+          "type": "add",
+          "line": 80,
+          "content": "+"
+        },
+        {
+          "type": "del",
+          "line": 81,
+          "content": "-initializeApp();"
+        },
+        {
+          "type": "add",
+          "line": 81,
+          "content": "+// 기존 함수들 (변경되지 않음)"
+        },
+        {
+          "type": "add",
+          "line": 82,
+          "content": "+function helperFunction() {"
+        },
+        {
+          "type": "add",
+          "line": 83,
+          "content": "+    return 'This function was not changed';"
+        },
+        {
+          "type": "add",
+          "line": 84,
+          "content": "+}"
+        },
+        {
+          "type": "add",
+          "line": 85,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 86,
+          "content": "+function anotherHelperFunction() {"
+        },
+        {
+          "type": "add",
+          "line": 87,
+          "content": "+    console.log('Another helper function');"
+        },
+        {
+          "type": "add",
+          "line": 88,
+          "content": "+    return true;"
+        },
+        {
+          "type": "add",
+          "line": 89,
+          "content": "+}"
+        },
+        {
+          "type": "add",
+          "line": 90,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 91,
+          "content": "+// 마지막 부분"
+        },
+        {
+          "type": "add",
+          "line": 92,
+          "content": "+initializeApp();"
+        }
+      ],
+      "is_binary": false
+    }
+  ],
+  "stats": {
+    "total_additions": 81,
+    "total_deletions": 70,
+    "files_changed": 1
+  }
+}

@@ -12,7 +12,7 @@ server:
 
 # Git Repository Configuration
 git:
-  repo_root: "/Users/johnbaek/collabops-git-executor/test-repos"
+  repo_root: "/Users/atci/Documents/GitHub/collabops-git-executor/test-repos"
   enable_packfile: true
   max_cache_size: 10
   cache_ttl: "5m"
@@ -27,4 +27,4 @@ log:
   level: "debug"
   format: "text"
   output: "stdout"
-  development: true 
+  development: true

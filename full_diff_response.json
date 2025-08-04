@@ -1,0 +1,452 @@
+{
+  "base": "1bd94bbd7aef03d8a24177b235d6ae17c287beba",
+  "head": "96e89a8861f43922996de68966a1f7ec546a0ee2",
+  "files": [
+    {
+      "path": "README.md",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 1,
+      "changes": [
+        {
+          "type": "context",
+          "line": 1,
+          "content": "diff --git a/README.md b/README.md"
+        },
+        {
+          "type": "context",
+          "line": 2,
+          "content": "index 02d45000bc0b6521fab1b0ec47664acf39a7e4bd..3ebe40df2c065a56e4e9b00b807fcb81990f2458 100644"
+        },
+        {
+          "type": "del",
+          "line": 3,
+          "content": "--- a/README.md"
+        },
+        {
+          "type": "add",
+          "line": 3,
+          "content": "+++ b/README.md"
+        },
+        {
+          "type": "context",
+          "line": 4,
+          "content": "@@ -1,6 +1,9 @@"
+        },
+        {
+          "type": "context",
+          "line": 5,
+          "content": " # testrepo"
+        },
+        {
+          "type": "context",
+          "line": 6,
+          "content": " This is a test repository for CollabOps Git Executor"
+        },
+        {
+          "type": "context",
+          "line": 7,
+          "content": " "
+        },
+        {
+          "type": "add",
+          "line": 8,
+          "content": "+Pull Request Demo - 이 라인이 추가됨"
+        },
+        {
+          "type": "context",
+          "line": 9,
+          "content": " Created: Thu Jul 24 15:16:49 KST 2025"
+        },
+        {
+          "type": "context",
+          "line": 10,
+          "content": " ## Features"
+        },
+        {
+          "type": "context",
+          "line": 11,
+          "content": " - Git Smart HTTP Protocol support"
+        },
+        {
+          "type": "add",
+          "line": 12,
+          "content": "+- New Feature: Pull Request diff support"
+        },
+        {
+          "type": "add",
+          "line": 13,
+          "content": "+- Enhanced JSON response format"
+        }
+      ],
+      "is_binary": false,
+      "metadata": {
+        "new_hash": "3ebe40df2c065a56e4e9b00b807fcb81990f2458",
+        "new_mode": "0100644",
+        "old_hash": "02d45000bc0b6521fab1b0ec47664acf39a7e4bd",
+        "old_mode": "0100644"
+      }
+    },
+    {
+      "path": "package.json",
+      "status": "deleted",
+      "additions": 1,
+      "deletions": 2,
+      "changes": [
+        {
+          "type": "context",
+          "line": 1,
+          "content": "diff --git a/package.json b/package.json"
+        },
+        {
+          "type": "context",
+          "line": 2,
+          "content": "deleted file mode 100644"
+        },
+        {
+          "type": "context",
+          "line": 3,
+          "content": "index fb9326b173dd8cf49ecba73760ef6e040f4a2ace..0000000000000000000000000000000000000000"
+        },
+        {
+          "type": "del",
+          "line": 4,
+          "content": "--- a/package.json"
+        },
+        {
+          "type": "add",
+          "line": 4,
+          "content": "+++ /dev/null"
+        },
+        {
+          "type": "context",
+          "line": 5,
+          "content": "@@ -1 +0,0 @@"
+        },
+        {
+          "type": "del",
+          "line": 6,
+          "content": "-{\"name\": \"test-repo\", \"version\": \"1.0.0\"}"
+        }
+      ],
+      "is_binary": false,
+      "metadata": {
+        "old_hash": "fb9326b173dd8cf49ecba73760ef6e040f4a2ace",
+        "old_mode": "0100644"
+      }
+    },
+    {
+      "path": "src/main.js",
+      "status": "modified",
+      "additions": 17,
+      "deletions": 1,
+      "changes": [
+        {
+          "type": "context",
+          "line": 1,
+          "content": "diff --git a/src/main.js b/src/main.js"
+        },
+        {
+          "type": "context",
+          "line": 2,
+          "content": "index fedb4429219ff4d8e22c511e584ad62f19400731..796057ab99387f1788f7536a2f993bbc7a1fa404 100644"
+        },
+        {
+          "type": "del",
+          "line": 3,
+          "content": "--- a/src/main.js"
+        },
+        {
+          "type": "add",
+          "line": 3,
+          "content": "+++ b/src/main.js"
+        },
+        {
+          "type": "context",
+          "line": 4,
+          "content": "@@ -1 +1,17 @@"
+        },
+        {
+          "type": "add",
+          "line": 5,
+          "content": "+// CollabOps Git Executor Demo"
+        },
+        {
+          "type": "context",
+          "line": 6,
+          "content": " console.log(\"Hello from CollabOps!\");"
+        },
+        {
+          "type": "add",
+          "line": 7,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 8,
+          "content": "+// 새로운 함수 추가"
+        },
+        {
+          "type": "add",
+          "line": 9,
+          "content": "+function calculateDiff(base, head) {"
+        },
+        {
+          "type": "add",
+          "line": 10,
+          "content": "+    return {"
+        },
+        {
+          "type": "add",
+          "line": 11,
+          "content": "+        added: [],"
+        },
+        {
+          "type": "add",
+          "line": 12,
+          "content": "+        modified: [],"
+        },
+        {
+          "type": "add",
+          "line": 13,
+          "content": "+        deleted: []"
+        },
+        {
+          "type": "add",
+          "line": 14,
+          "content": "+    };"
+        },
+        {
+          "type": "add",
+          "line": 15,
+          "content": "+}"
+        },
+        {
+          "type": "add",
+          "line": 16,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 17,
+          "content": "+// Pull Request 처리 함수"
+        },
+        {
+          "type": "add",
+          "line": 18,
+          "content": "+function processPullRequest(data) {"
+        },
+        {
+          "type": "add",
+          "line": 19,
+          "content": "+    console.log('Processing PR:', data);"
+        },
+        {
+          "type": "add",
+          "line": 20,
+          "content": "+    return calculateDiff(data.base, data.head);"
+        },
+        {
+          "type": "add",
+          "line": 21,
+          "content": "+}"
+        }
+      ],
+      "is_binary": false,
+      "metadata": {
+        "new_hash": "796057ab99387f1788f7536a2f993bbc7a1fa404",
+        "new_mode": "0100644",
+        "old_hash": "fedb4429219ff4d8e22c511e584ad62f19400731",
+        "old_mode": "0100644"
+      }
+    },
+    {
+      "path": "src/newfile.css",
+      "status": "added",
+      "additions": 29,
+      "deletions": 1,
+      "changes": [
+        {
+          "type": "context",
+          "line": 1,
+          "content": "diff --git a/src/newfile.css b/src/newfile.css"
+        },
+        {
+          "type": "context",
+          "line": 2,
+          "content": "new file mode 100644"
+        },
+        {
+          "type": "context",
+          "line": 3,
+          "content": "index 0000000000000000000000000000000000000000..4498e5589f6f4dc2e0f7f6a185ed68ba271d1a95"
+        },
+        {
+          "type": "del",
+          "line": 4,
+          "content": "--- /dev/null"
+        },
+        {
+          "type": "add",
+          "line": 4,
+          "content": "+++ b/src/newfile.css"
+        },
+        {
+          "type": "context",
+          "line": 5,
+          "content": "@@ -0,0 +1,28 @@"
+        },
+        {
+          "type": "add",
+          "line": 6,
+          "content": "+/* Pull Request Demo CSS */"
+        },
+        {
+          "type": "add",
+          "line": 7,
+          "content": "+.diff-container {"
+        },
+        {
+          "type": "add",
+          "line": 8,
+          "content": "+    font-family: monospace;"
+        },
+        {
+          "type": "add",
+          "line": 9,
+          "content": "+    background: #f6f8fa;"
+        },
+        {
+          "type": "add",
+          "line": 10,
+          "content": "+    border: 1px solid #d0d7de;"
+        },
+        {
+          "type": "add",
+          "line": 11,
+          "content": "+    border-radius: 6px;"
+        },
+        {
+          "type": "add",
+          "line": 12,
+          "content": "+    overflow: hidden;"
+        },
+        {
+          "type": "add",
+          "line": 13,
+          "content": "+}"
+        },
+        {
+          "type": "add",
+          "line": 14,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 15,
+          "content": "+.diff-line {"
+        },
+        {
+          "type": "add",
+          "line": 16,
+          "content": "+    padding: 0 8px;"
+        },
+        {
+          "type": "add",
+          "line": 17,
+          "content": "+    line-height: 20px;"
+        },
+        {
+          "type": "add",
+          "line": 18,
+          "content": "+}"
+        },
+        {
+          "type": "add",
+          "line": 19,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 20,
+          "content": "+.diff-line.added {"
+        },
+        {
+          "type": "add",
+          "line": 21,
+          "content": "+    background-color: #d1f4d1;"
+        },
+        {
+          "type": "add",
+          "line": 22,
+          "content": "+    color: #116329;"
+        },
+        {
+          "type": "add",
+          "line": 23,
+          "content": "+}"
+        },
+        {
+          "type": "add",
+          "line": 24,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 25,
+          "content": "+.diff-line.deleted {"
+        },
+        {
+          "type": "add",
+          "line": 26,
+          "content": "+    background-color: #ffd7d5;"
+        },
+        {
+          "type": "add",
+          "line": 27,
+          "content": "+    color: #82071e;"
+        },
+        {
+          "type": "add",
+          "line": 28,
+          "content": "+}"
+        },
+        {
+          "type": "add",
+          "line": 29,
+          "content": "+"
+        },
+        {
+          "type": "add",
+          "line": 30,
+          "content": "+.diff-line.context {"
+        },
+        {
+          "type": "add",
+          "line": 31,
+          "content": "+    background-color: #ffffff;"
+        },
+        {
+          "type": "add",
+          "line": 32,
+          "content": "+    color: #24292f;"
+        },
+        {
+          "type": "add",
+          "line": 33,
+          "content": "+}"
+        }
+      ],
+      "is_binary": false,
+      "metadata": {
+        "new_hash": "4498e5589f6f4dc2e0f7f6a185ed68ba271d1a95",
+        "new_mode": "0100644"
+      }
+    }
+  ],
+  "stats": {
+    "total_additions": 51,
+    "total_deletions": 5,
+    "files_changed": 4
+  }
+}

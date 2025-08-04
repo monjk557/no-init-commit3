@@ -263,6 +263,12 @@ func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check for full_context parameter (for Pull Request views)
+	fullContext := r.URL.Query().Get("full_context") == "true"
+	if fullContext {
+		contextLines = 999999 // Large number to include entire file
+	}
+
 	format := r.URL.Query().Get("format")
 	if format == "" {
 		format = "unified" // default
