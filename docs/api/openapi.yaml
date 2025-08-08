@@ -1,0 +1,1283 @@
+openapi: 3.0.3
+info:
+  title: CollabOps Git Executor - Server-side Git REST API
+  description: |
+    Comprehensive REST API for server-side Git operations enabling web applications to perform Git operations without direct Git client interaction.
+
+    ## Features
+    - **Single File Operations**: Create, update, and delete individual files
+    - **Multi-file Commits**: Atomic operations across multiple files
+    - **Branch Management**: Create, update, and delete Git branches
+    - **Repository State**: Query repository metadata and current state
+    - **Merge Operations**: Perform Git merges with conflict detection
+    - **Merge Preview**: Non-destructive merge analysis and conflict detection
+    - **Performance Optimization**: Built-in caching, pooling, and resource management
+
+    ## Authentication
+    All API endpoints require the following headers:
+    - `X-USER-ID`: User identifier for authentication
+    - `X-Source`: Source system identifier (must be "orchestrator" for REST API access)
+
+    ## Error Handling
+    All errors follow a consistent format with appropriate HTTP status codes and detailed error information.
+
+    ## Rate Limiting
+    APIs include built-in rate limiting and resource management to ensure optimal performance.
+  version: 1.0.0
+  contact:
+    name: CollabOps Git Executor API Support
+    url: https://github.com/collabops/git-executor
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Development server
+  - url: https://api.collabops.com
+    description: Production server
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /repos/{owner}/{repo}/files/{path}:
+    put:
+      summary: Create or update a file
+      description: |
+        Creates a new file or updates an existing file in the repository.
+        The operation is atomic and creates a single commit.
+      operationId: createOrUpdateFile
+      tags:
+        - File Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/FilePath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileOperationRequest'
+            examples:
+              createFile:
+                summary: Create a new file
+                value:
+                  content: "SGVsbG8gV29ybGQ="
+                  commit_message: "Add hello.txt"
+                  branch: "main"
+                  author:
+                    name: "John Doe"
+                    email: "john@example.com"
+              updateFile:
+                summary: Update existing file
+                value:
+                  content: "VXBkYXRlZCBjb250ZW50"
+                  commit_message: "Update hello.txt with new content"
+                  branch: "main"
+                  author:
+                    name: "John Doe"
+                    email: "john@example.com"
+      responses:
+        '200':
+          description: File created or updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileOperationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      summary: Delete a file
+      description: |
+        Deletes a file from the repository. The operation is atomic and creates a single commit.
+      operationId: deleteFile
+      tags:
+        - File Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/FilePath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileDeleteRequest'
+      responses:
+        '200':
+          description: File deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileOperationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/commits:
+    post:
+      summary: Create multi-file commit
+      description: |
+        Creates a single commit with multiple file operations (create, update, delete).
+        All operations are atomic - either all succeed or all fail.
+      operationId: createMultiFileCommit
+      tags:
+        - Multi-file Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultiFileCommitRequest'
+            example:
+              base_branch: "main"
+              operations:
+                - operation: "create"
+                  path: "src/main.js"
+                  content: "Y29uc29sZS5sb2coJ0hlbGxvIFdvcmxkJyk7"
+                - operation: "update"
+                  path: "README.md"
+                  content: "IyBVcGRhdGVkIFJlYWRtZQ=="
+                - operation: "delete"
+                  path: "old-file.txt"
+              commit_message: "Restructure project files"
+              author:
+                name: "John Doe"
+                email: "john@example.com"
+      responses:
+        '200':
+          description: Multi-file commit created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MultiFileCommitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/branches:
+    post:
+      summary: Create a new branch
+      description: |
+        Creates a new Git branch from an existing branch or commit.
+      operationId: createBranch
+      tags:
+        - Branch Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBranchRequest'
+            example:
+              name: "feature/new-feature"
+              source: "main"
+              description: "New feature development branch"
+      responses:
+        '200':
+          description: Branch created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Branch already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/branches/{branch}:
+    patch:
+      summary: Update a branch
+      description: |
+        Updates a branch to point to a different commit. Supports both fast-forward and forced updates.
+      operationId: updateBranch
+      tags:
+        - Branch Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/BranchName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBranchRequest'
+      responses:
+        '200':
+          description: Branch updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Update would not be fast-forward and force=false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      summary: Delete a branch
+      description: |
+        Deletes a Git branch. Protected branches and the current HEAD cannot be deleted unless forced.
+      operationId: deleteBranch
+      tags:
+        - Branch Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/BranchName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteBranchRequest'
+      responses:
+        '200':
+          description: Branch deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Branch is protected or current HEAD
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/state:
+    get:
+      summary: Get repository state
+      description: |
+        Returns comprehensive information about the repository's current state including metadata, HEAD information, and working tree status.
+      operationId: getRepositoryState
+      tags:
+        - Repository State
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Repository state retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryStateResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/head:
+    get:
+      summary: Get repository HEAD information
+      description: |
+        Returns detailed information about the current HEAD reference and its associated commit.
+      operationId: getRepositoryHead
+      tags:
+        - Repository State
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: HEAD information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeadInfoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/references:
+    get:
+      summary: Get repository references
+      description: |
+        Returns all branches and tags in the repository with their commit information.
+      operationId: getRepositoryReferences
+      tags:
+        - Repository State
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: type
+          in: query
+          description: Filter references by type
+          schema:
+            type: string
+            enum: [branches, tags, all]
+            default: all
+      responses:
+        '200':
+          description: References retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferencesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/merges:
+    post:
+      summary: Perform a Git merge
+      description: |
+        Merges one branch into another. Supports both fast-forward and three-way merges with conflict detection.
+      operationId: mergeBranches
+      tags:
+        - Merge Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergeRequest'
+            example:
+              source_branch: "feature/new-feature"
+              target_branch: "main"
+              commit_message: "Merge feature/new-feature into main"
+              author:
+                name: "John Doe"
+                email: "john@example.com"
+              fast_forward: false
+              force: false
+      responses:
+        '200':
+          description: Merge completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Merge conflicts detected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergeConflictResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/merges/preview:
+    get:
+      summary: Preview a merge operation
+      description: |
+        Performs a non-destructive merge analysis to preview conflicts, changes, and recommendations before performing the actual merge.
+      operationId: previewMerge
+      tags:
+        - Merge Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: source
+          in: query
+          required: true
+          description: Source branch or commit for the merge
+          schema:
+            type: string
+        - name: target
+          in: query
+          required: true
+          description: Target branch for the merge
+          schema:
+            type: string
+        - name: strategy
+          in: query
+          description: Analysis strategy for the preview
+          schema:
+            type: string
+            enum: [tree, diff, full]
+            default: tree
+        - name: include_content
+          in: query
+          description: Include file content in the preview
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Merge preview generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePreviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-USER-ID
+      description: User authentication via X-USER-ID header
+
+  parameters:
+    Owner:
+      name: owner
+      in: path
+      required: true
+      description: Repository owner username
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9_-]+$'
+        example: "testowner"
+
+    Repo:
+      name: repo
+      in: path
+      required: true
+      description: Repository name
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9_.-]+$'
+        example: "testrepo"
+
+    FilePath:
+      name: path
+      in: path
+      required: true
+      description: File path within the repository
+      schema:
+        type: string
+        example: "src/main.js"
+
+    BranchName:
+      name: branch
+      in: path
+      required: true
+      description: Branch name
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9/_.-]+$'
+        example: "feature/new-feature"
+
+  schemas:
+    FileOperationRequest:
+      type: object
+      required:
+        - content
+        - commit_message
+        - branch
+      properties:
+        content:
+          type: string
+          format: base64
+          description: Base64-encoded file content
+          example: "SGVsbG8gV29ybGQ="
+        commit_message:
+          type: string
+          maxLength: 1000
+          description: Commit message for the operation
+          example: "Add new feature file"
+        branch:
+          type: string
+          description: Target branch for the commit
+          example: "main"
+        author:
+          $ref: '#/components/schemas/CommitAuthor'
+        committer:
+          $ref: '#/components/schemas/CommitAuthor'
+
+    FileDeleteRequest:
+      type: object
+      required:
+        - commit_message
+        - branch
+      properties:
+        commit_message:
+          type: string
+          maxLength: 1000
+          description: Commit message for the deletion
+          example: "Remove deprecated file"
+        branch:
+          type: string
+          description: Target branch for the commit
+          example: "main"
+        author:
+          $ref: '#/components/schemas/CommitAuthor'
+        committer:
+          $ref: '#/components/schemas/CommitAuthor'
+
+    MultiFileCommitRequest:
+      type: object
+      required:
+        - base_branch
+        - operations
+        - commit_message
+      properties:
+        base_branch:
+          type: string
+          description: Base branch for the multi-file operation
+          example: "main"
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileOperation'
+          minItems: 1
+          maxItems: 100
+        commit_message:
+          type: string
+          maxLength: 1000
+          description: Commit message for all operations
+          example: "Restructure project files"
+        author:
+          $ref: '#/components/schemas/CommitAuthor'
+        committer:
+          $ref: '#/components/schemas/CommitAuthor'
+        options:
+          $ref: '#/components/schemas/CommitOptions'
+
+    FileOperation:
+      type: object
+      required:
+        - operation
+        - path
+      properties:
+        operation:
+          type: string
+          enum: [create, update, delete]
+          description: Type of operation to perform
+        path:
+          type: string
+          description: File path for the operation
+          example: "src/components/Button.tsx"
+        content:
+          type: string
+          format: base64
+          description: Base64-encoded content (required for create/update)
+        mode:
+          type: string
+          enum: ["100644", "100755", "120000"]
+          default: "100644"
+          description: File mode (regular, executable, symlink)
+
+    CreateBranchRequest:
+      type: object
+      required:
+        - name
+        - source
+      properties:
+        name:
+          type: string
+          pattern: '^[a-zA-Z0-9/_.-]+$'
+          description: Name for the new branch
+          example: "feature/new-feature"
+        source:
+          type: string
+          description: Source branch or commit SHA
+          example: "main"
+        description:
+          type: string
+          maxLength: 500
+          description: Optional description for the branch
+
+    UpdateBranchRequest:
+      type: object
+      required:
+        - target
+      properties:
+        target:
+          type: string
+          description: Target commit SHA or branch name
+          example: "feature/new-feature"
+        force:
+          type: boolean
+          default: false
+          description: Force update even if not fast-forward
+
+    DeleteBranchRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: Force deletion of protected branches
+
+    MergeRequest:
+      type: object
+      required:
+        - source_branch
+        - target_branch
+      properties:
+        source_branch:
+          type: string
+          description: Source branch to merge from
+          example: "feature/new-feature"
+        target_branch:
+          type: string
+          description: Target branch to merge into
+          example: "main"
+        commit_message:
+          type: string
+          maxLength: 1000
+          description: Custom merge commit message
+        author:
+          $ref: '#/components/schemas/CommitAuthor'
+        committer:
+          $ref: '#/components/schemas/CommitAuthor'
+        fast_forward:
+          type: boolean
+          default: false
+          description: Only allow fast-forward merges
+        force:
+          type: boolean
+          default: false
+          description: Force merge even with conflicts
+
+    CommitAuthor:
+      type: object
+      required:
+        - name
+        - email
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: Author name
+          example: "John Doe"
+        email:
+          type: string
+          format: email
+          maxLength: 100
+          description: Author email
+          example: "john@example.com"
+
+    CommitOptions:
+      type: object
+      properties:
+        allow_empty:
+          type: boolean
+          default: false
+          description: Allow commits with no changes
+        verify:
+          type: boolean
+          default: true
+          description: Run pre-commit hooks
+
+    # Response Schemas
+    FileOperationResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                commit_sha:
+                  type: string
+                  description: SHA of the created commit
+                  example: "a1b2c3d4e5f6..."
+                file_path:
+                  type: string
+                  description: Path of the affected file
+                  example: "src/main.js"
+                operation:
+                  type: string
+                  enum: [created, updated, deleted]
+                  description: Operation performed
+                tree_sha:
+                  type: string
+                  description: SHA of the updated tree
+                  example: "f6e5d4c3b2a1..."
+
+    MultiFileCommitResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                commit_sha:
+                  type: string
+                  description: SHA of the created commit
+                operations_count:
+                  type: integer
+                  description: Number of operations performed
+                tree_sha:
+                  type: string
+                  description: SHA of the updated tree
+                results:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/OperationResult'
+
+    OperationResult:
+      type: object
+      properties:
+        path:
+          type: string
+          description: File path
+        operation:
+          type: string
+          enum: [created, updated, deleted]
+        status:
+          type: string
+          enum: [success, failed]
+        error:
+          type: string
+          description: Error message if operation failed
+
+    BranchResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/BranchInfo'
+
+    BranchInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Branch name
+          example: "feature/new-feature"
+        commit:
+          $ref: '#/components/schemas/CommitInfo'
+        protected:
+          type: boolean
+          description: Whether the branch is protected
+        is_head:
+          type: boolean
+          description: Whether this is the current HEAD branch
+
+    CommitInfo:
+      type: object
+      properties:
+        sha:
+          type: string
+          description: Commit SHA
+          example: "a1b2c3d4e5f6..."
+        message:
+          type: string
+          description: Commit message
+        author:
+          $ref: '#/components/schemas/AuthorInfo'
+        committer:
+          $ref: '#/components/schemas/AuthorInfo'
+        created_at:
+          type: string
+          format: date-time
+          description: Commit timestamp
+
+    AuthorInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Author name
+        email:
+          type: string
+          description: Author email
+        date:
+          type: string
+          format: date-time
+          description: Author date
+
+    RepositoryStateResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                metadata:
+                  $ref: '#/components/schemas/RepositoryMetadata'
+                head:
+                  $ref: '#/components/schemas/HeadInfo'
+                status:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/FileStatus'
+
+    RepositoryMetadata:
+      type: object
+      properties:
+        is_bare:
+          type: boolean
+          description: Whether repository is bare
+        is_worktree:
+          type: boolean
+          description: Whether repository is a worktree
+        default_branch:
+          type: string
+          description: Default branch name
+        object_count:
+          type: integer
+          description: Number of objects in repository
+
+    HeadInfo:
+      type: object
+      properties:
+        reference:
+          type: string
+          description: HEAD reference name
+          example: "refs/heads/main"
+        commit:
+          $ref: '#/components/schemas/CommitInfo'
+        is_detached:
+          type: boolean
+          description: Whether HEAD is detached
+
+    HeadInfoResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/HeadInfo'
+
+    FileStatus:
+      type: object
+      properties:
+        path:
+          type: string
+          description: File path
+        status:
+          type: string
+          enum: [modified, added, deleted, renamed, copied]
+          description: File status
+        staged:
+          type: boolean
+          description: Whether file is staged
+
+    ReferencesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                branches:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ReferenceInfo'
+                tags:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ReferenceInfo'
+
+    ReferenceInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Reference name
+        commit_sha:
+          type: string
+          description: Commit SHA
+        commit:
+          $ref: '#/components/schemas/CommitInfo'
+
+    MergeResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                merge_commit_sha:
+                  type: string
+                  description: SHA of merge commit
+                status:
+                  type: string
+                  enum: [merged, fast-forwarded, up-to-date]
+                  description: Merge status
+
+    MergeConflictResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - type: object
+          properties:
+            error:
+              type: object
+              properties:
+                code:
+                  type: string
+                  example: "merge_conflicts"
+                message:
+                  type: string
+                  example: "Merge conflicts detected"
+                details:
+                  type: object
+                  properties:
+                    conflicts:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/FileConflict'
+
+    FileConflict:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Conflicted file path
+        type:
+          type: string
+          enum: [content, rename, delete, add, mode]
+          description: Type of conflict
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Conflict severity
+        auto_resolvable:
+          type: boolean
+          description: Whether conflict can be auto-resolved
+
+    MergePreviewResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                can_merge:
+                  type: boolean
+                  description: Whether merge is possible
+                has_conflicts:
+                  type: boolean
+                  description: Whether conflicts exist
+                is_fast_forward:
+                  type: boolean
+                  description: Whether merge would be fast-forward
+                changes_summary:
+                  $ref: '#/components/schemas/ChangesSummary'
+                conflicts:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/FileConflict'
+                recommendations:
+                  type: array
+                  items:
+                    type: string
+                warnings:
+                  type: array
+                  items:
+                    type: string
+                metrics:
+                  $ref: '#/components/schemas/PreviewMetrics'
+
+    ChangesSummary:
+      type: object
+      properties:
+        files_changed:
+          type: integer
+          description: Number of files changed
+        additions:
+          type: integer
+          description: Lines added
+        deletions:
+          type: integer
+          description: Lines deleted
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileChange'
+
+    FileChange:
+      type: object
+      properties:
+        path:
+          type: string
+          description: File path
+        status:
+          type: string
+          enum: [added, modified, deleted, renamed]
+        additions:
+          type: integer
+          description: Lines added
+        deletions:
+          type: integer
+          description: Lines deleted
+        content:
+          $ref: '#/components/schemas/FileContent'
+
+    FileContent:
+      type: object
+      properties:
+        base:
+          type: string
+          description: Base version content
+        source:
+          type: string
+          description: Source version content
+        target:
+          type: string
+          description: Target version content
+
+    PreviewMetrics:
+      type: object
+      properties:
+        analysis_time_ms:
+          type: integer
+          description: Analysis time in milliseconds
+        files_analyzed:
+          type: integer
+          description: Number of files analyzed
+        memory_usage_mb:
+          type: number
+          format: float
+          description: Memory usage in MB
+
+    # Base response schemas
+    SuccessResponse:
+      type: object
+      required:
+        - status
+        - data
+        - meta
+      properties:
+        status:
+          type: string
+          enum: [success]
+          example: success
+        data:
+          type: object
+          description: Response data
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    ErrorResponse:
+      type: object
+      required:
+        - status
+        - error
+        - meta
+      properties:
+        status:
+          type: string
+          enum: [error]
+          example: error
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Error code
+              example: "validation_failed"
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Invalid input parameters"
+            details:
+              type: object
+              description: Additional error details
+            trace_id:
+              type: string
+              description: Trace ID for debugging
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    ResponseMeta:
+      type: object
+      properties:
+        request_id:
+          type: string
+          description: Unique request identifier
+          example: "req_1234567890"
+        timestamp:
+          type: string
+          format: date-time
+          description: Response timestamp
+        duration_ms:
+          type: integer
+          description: Request duration in milliseconds
+        api_version:
+          type: string
+          description: API version
+          example: "1.0.0"
+
+  responses:
+    BadRequest:
+      description: Bad request - Invalid input parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            error:
+              code: "validation_failed"
+              message: "Invalid input parameters"
+              details:
+                field: "commit_message"
+                reason: "cannot be empty"
+            meta:
+              request_id: "req_1234567890"
+              timestamp: "2023-01-01T12:00:00Z"
+
+    Unauthorized:
+      description: Unauthorized - Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            error:
+              code: "unauthorized"
+              message: "X-USER-ID header is required"
+            meta:
+              request_id: "req_1234567890"
+              timestamp: "2023-01-01T12:00:00Z"
+
+    Forbidden:
+      description: Forbidden - Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            error:
+              code: "forbidden"
+              message: "Insufficient permissions for this operation"
+            meta:
+              request_id: "req_1234567890"
+              timestamp: "2023-01-01T12:00:00Z"
+
+    NotFound:
+      description: Not found - Repository or resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            error:
+              code: "not_found"
+              message: "Repository not found"
+            meta:
+              request_id: "req_1234567890"
+              timestamp: "2023-01-01T12:00:00Z"
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            error:
+              code: "internal_error"
+              message: "An unexpected error occurred"
+              trace_id: "trace_1234567890"
+            meta:
+              request_id: "req_1234567890"
+              timestamp: "2023-01-01T12:00:00Z"
+
+tags:
+  - name: File Operations
+    description: Single file create, update, and delete operations
+  - name: Multi-file Operations
+    description: Atomic multi-file commit operations
+  - name: Branch Operations
+    description: Git branch management operations
+  - name: Repository State
+    description: Repository metadata and state queries
+  - name: Merge Operations
+    description: Git merge and merge preview operations

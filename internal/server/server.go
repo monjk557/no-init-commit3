@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
@@ -87,7 +88,29 @@ func (s *Server) Start() error {
 	}()
 
 	// Wait for shutdown signal
-	return s.waitForShutdown()
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	s.logger.Info("Received shutdown signal, shutting down gracefully")
+	return nil
+}
+
+// Shutdown gracefully shuts down the server
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.server == nil {
+		return nil
+	}
+	s.logger.Info("Shutting down HTTP server...")
+	return s.server.Shutdown(ctx)
+}
+
+// GetAddr returns the server's listening address
+func (s *Server) GetAddr() string {
+	if s.server == nil {
+		return ""
+	}
+	return s.server.Addr
 }
 
 // SetupRouter configures the HTTP router with observability middleware and routes
@@ -188,9 +211,35 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	// Initialize file operations handler for server-side Git REST APIs
+	fileOpsHandler, err := protocol.NewFileOperationsHandler(s.config, permClient)
+	if err != nil {
+		s.logger.Error("Failed to create file operations handler", zap.Error(err))
+		return
+	}
+
+	// Initialize branch operations handler for branch management APIs
+	branchOpsHandler, err := protocol.NewBranchOperationsHandler(s.config, permClient)
+	if err != nil {
+		s.logger.Error("Failed to create branch operations handler", zap.Error(err))
+		return
+	}
+
+	// Initialize repository state handler for repository management APIs
+	repoStateHandler, err := protocol.NewRepositoryStateHandler(s.config, permClient)
+	if err != nil {
+		s.logger.Error("Failed to create repository state handler", zap.Error(err))
+		return
+	}
+
+	// Initialize JSON response middleware for proper error handling
+	jsonResponseMiddleware := api.NewJSONResponseMiddleware(s.logger, "v1")
+
 	// Git diff endpoints with enhanced middleware
 	reposGroup := router.Group("/repos")
 	reposGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
+	reposGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
+	reposGroup.Use(jsonResponseMiddleware.ErrorHandler())
 	{
 		ownerGroup := reposGroup.Group("/:owner")
 		{
@@ -219,9 +268,44 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 					// Generate Git patch format for commit range
 					patchGroup.GET("/:base/:head", gin.WrapF(diffHandler.HandlePatch))
 				}
+
+				// File operations endpoints (server-side Git REST APIs)
+				filesGroup := repoGroup.Group("/files")
+				{
+					// PUT endpoint for creating/updating files
+					filesGroup.PUT("/*path", fileOpsHandler.HandleFilePUT)
+					// DELETE endpoint for deleting files
+					filesGroup.DELETE("/*path", fileOpsHandler.HandleFileDELETE)
+				}
+
+				// Multi-file commit endpoints
+				repoGroup.POST("/commits", fileOpsHandler.HandleMultiFileCommit)
+
+				// Branch operations endpoints
+				branchesGroup := repoGroup.Group("/branches")
+				{
+					// POST endpoint for creating branches
+					branchesGroup.POST("", branchOpsHandler.HandleCreateBranch)
+					// PATCH endpoint for updating branches
+					branchesGroup.PATCH("/*branch", branchOpsHandler.HandleUpdateBranch)
+					// DELETE endpoint for deleting branches
+					branchesGroup.DELETE("/*branch", branchOpsHandler.HandleDeleteBranch)
+				}
+
+				// Repository state endpoints
+				repoGroup.GET("/state", repoStateHandler.HandleGetRepositoryState)
+				repoGroup.GET("/head", repoStateHandler.HandleGetRepositoryHead)
+				repoGroup.GET("/references", repoStateHandler.HandleGetRepositoryReferences)
 			}
 		}
 	}
+}
+
+// healthCheck handles health check requests
+func (s *Server) healthCheck(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+	c.Status(http.StatusOK)
+	_, _ = fmt.Fprintf(c.Writer, `{"status": "healthy", "timestamp": "%s"}`, time.Now().UTC().Format(time.RFC3339))
 }
 
 // setupProtocolRoutes configures Git Smart HTTP protocol routes
@@ -309,76 +393,4 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 			sshGroup.POST("/receive-pack", gin.WrapF(sshHandler.HandleSSHReceivePack))
 		}
 	}
-}
-
-// healthCheck handles the health check endpoint
-func (s *Server) healthCheck(c *gin.Context) {
-	c.Header("Content-Type", "application/json")
-	c.Status(http.StatusOK)
-	_, _ = fmt.Fprintf(c.Writer, `{"status": "healthy", "timestamp": "%s"}`, time.Now().UTC().Format(time.RFC3339))
-}
-
-// waitForShutdown waits for shutdown signals and performs graceful shutdown
-func (s *Server) waitForShutdown() error {
-	// Create channel to listen for interrupt signals
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	// Block until a signal is received
-	sig := <-quit
-	s.logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
-
-	// Create shutdown context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), s.config.Server.ShutdownTimeout)
-	defer cancel()
-
-	// Attempt graceful shutdown
-	s.logger.Info("Shutting down server gracefully")
-
-	// Shutdown HTTP server first
-	if err := s.server.Shutdown(ctx); err != nil {
-		s.logger.Error("Server forced to shutdown", zap.Error(err))
-		return err
-	}
-
-	// Shutdown observability components
-	if s.observabilityManager != nil {
-		s.logger.Info("Shutting down observability components")
-		if err := s.observabilityManager.Shutdown(ctx); err != nil {
-			s.logger.Error("Failed to shutdown observability components", zap.Error(err))
-			// Don't return error here as server shutdown is more critical
-		}
-	}
-
-	s.logger.Info("Server shutdown complete")
-	return nil
-}
-
-// Shutdown gracefully shuts down the server and observability components
-func (s *Server) Shutdown(ctx context.Context) error {
-	var lastErr error
-
-	// Shutdown HTTP server
-	if s.server != nil {
-		if err := s.server.Shutdown(ctx); err != nil {
-			lastErr = err
-		}
-	}
-
-	// Shutdown observability components
-	if s.observabilityManager != nil {
-		if err := s.observabilityManager.Shutdown(ctx); err != nil {
-			lastErr = err
-		}
-	}
-
-	return lastErr
-}
-
-// GetAddr returns the server address
-func (s *Server) GetAddr() string {
-	if s.server == nil {
-		return ""
-	}
-	return s.server.Addr
 }

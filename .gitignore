@@ -148,5 +148,5 @@ dev-debug.log
 
 # Task files
 # tasks.json
-# tasks/ 
 git-executor
+.taskmaster
