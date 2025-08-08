@@ -19,7 +19,7 @@ func TestRepositoryBasicOperations(t *testing.T) {
 	// Create temporary directory for test repositories
 	tempDir, err := os.MkdirTemp("", "git-executor-repo-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }() // errcheck
 
 	// Setup test repository path
 	testRepoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
@@ -98,7 +98,7 @@ func addSecondCommit(t *testing.T, repoPath string) {
 	require.NoError(t, err)
 	_, err = writer.Write([]byte(content))
 	require.NoError(t, err)
-	writer.Close()
+	_ = writer.Close() // errcheck
 
 	blobHash, err := repo.Storer.SetEncodedObject(blob)
 	require.NoError(t, err)

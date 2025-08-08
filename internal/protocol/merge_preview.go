@@ -479,12 +479,11 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repo *gog
 	// Phase 4: Find merge base
 	var mergeBase *CommitInfo
 	if conflictAnalysis != nil && !conflictAnalysis.IsFastForward {
-		mergeBaseCommit, err := h.findMergeBase(repo, sourceHash, targetHash)
+		_, err := h.findMergeBase(repo, sourceHash, targetHash)
 		if err != nil {
 			h.logger.Warn("Failed to find merge base", zap.Error(err))
-		} else if mergeBaseCommit != nil {
-			mergeBase = h.commitToInfo(mergeBaseCommit)
 		}
+		// Note: mergeBase remains nil since findMergeBase is not yet implemented
 	}
 
 	// Calculate total analysis time
@@ -668,15 +667,6 @@ func (h *MergePreviewHandler) generateWarnings(conflictAnalysis *git.MergeAnalys
 }
 
 // commitToInfo converts a commit object to CommitInfo
-func (h *MergePreviewHandler) commitToInfo(commit *object.Commit) *CommitInfo {
-	return &CommitInfo{
-		SHA:       commit.Hash.String(),
-		Message:   commit.Message,
-		Author:    AuthorInfo{Name: commit.Author.Name, Email: commit.Author.Email, Date: commit.Author.When},
-		Committer: AuthorInfo{Name: commit.Committer.Name, Email: commit.Committer.Email, Date: commit.Committer.When},
-		CreatedAt: commit.Author.When,
-	}
-}
 
 // SendSuccess sends a successful JSON response
 func (h *MergePreviewHandler) SendSuccess(c *gin.Context, data interface{}, message string) {

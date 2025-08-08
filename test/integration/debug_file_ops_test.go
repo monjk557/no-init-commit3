@@ -24,7 +24,7 @@ func TestDebugFileOperationsAPI(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/debug.txt", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Read the full response body
 		bodyBytes, err := io.ReadAll(resp.Body)

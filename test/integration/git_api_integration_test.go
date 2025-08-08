@@ -202,7 +202,7 @@ func createInitialCommit(t *testing.T, tempDir, repoPath string) {
 	require.NoError(t, err)
 	_, err = writer.Write([]byte(readme))
 	require.NoError(t, err)
-	writer.Close()
+	_ = writer.Close() // errcheck
 
 	blobHash, err := repo.Storer.SetEncodedObject(blob)
 	require.NoError(t, err)
@@ -265,7 +265,7 @@ func (suite *IntegrationTestSuite) Cleanup() {
 		suite.testServer.Close()
 	}
 	if suite.tempDir != "" {
-		os.RemoveAll(suite.tempDir)
+		_ = os.RemoveAll(suite.tempDir) // errcheck
 	}
 }
 

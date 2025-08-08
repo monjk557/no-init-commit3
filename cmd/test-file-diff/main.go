@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 
@@ -56,30 +55,21 @@ func main() {
 
 	// Test 1: File modification (README.md between commits)
 	fmt.Println("\n=== Test 1: File modification ===")
-	result, err := testCalculateFileDiff(diffHandler, ctx, repoPath, "README.md", "84e9286", "4fac4e1", 3, "unified")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	} else {
-		printDiffResult(result)
-	}
+	_, err = testCalculateFileDiff(diffHandler, ctx, repoPath, "README.md", "84e9286", "4fac4e1", 3, "unified")
+	// Function always returns error since it's not fully implemented
+	fmt.Printf("Error: %v\n", err)
 
 	// Test 2: File addition (src/index.js)
 	fmt.Println("\n=== Test 2: File addition ===")
-	result, err = testCalculateFileDiff(diffHandler, ctx, repoPath, "src/index.js", "4fac4e1", "1bd94bb", 3, "unified")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	} else {
-		printDiffResult(result)
-	}
+	_, err = testCalculateFileDiff(diffHandler, ctx, repoPath, "src/index.js", "4fac4e1", "1bd94bb", 3, "unified")
+	// Function always returns error since it's not fully implemented
+	fmt.Printf("Error: %v\n", err)
 
 	// Test 3: Non-existent file
 	fmt.Println("\n=== Test 3: Non-existent file ===")
-	result, err = testCalculateFileDiff(diffHandler, ctx, repoPath, "nonexistent.txt", "84e9286", "4fac4e1", 3, "unified")
-	if err != nil {
-		fmt.Printf("Expected error: %v\n", err)
-	} else {
-		printDiffResult(result)
-	}
+	_, err = testCalculateFileDiff(diffHandler, ctx, repoPath, "nonexistent.txt", "84e9286", "4fac4e1", 3, "unified")
+	// Function always returns error since it's not fully implemented
+	fmt.Printf("Expected error: %v\n", err)
 
 	fmt.Println("\nFile diff testing completed!")
 }
@@ -89,19 +79,4 @@ func testCalculateFileDiff(handler *protocol.DiffHandler, ctx context.Context, r
 	// Since calculateFileDiff is not exported, we'll need to test through the HTTP handler
 	// For now, let's just test that the handler was created successfully
 	return nil, fmt.Errorf("direct access to calculateFileDiff method is not available (private method)")
-}
-
-func printDiffResult(result *protocol.DiffResponse) {
-	if result == nil {
-		fmt.Println("Result: nil")
-		return
-	}
-
-	jsonData, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		fmt.Printf("Error marshaling result: %v\n", err)
-		return
-	}
-
-	fmt.Printf("Result:\n%s\n", jsonData)
 }

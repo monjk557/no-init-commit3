@@ -78,7 +78,7 @@ func (v *GitAPIPathValidator) ValidateCommitHash(hash string) error {
 	// Full SHA-1 hash (40 characters)
 	if len(hash) == 40 {
 		for _, r := range hash {
-			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 				return fmt.Errorf("invalid commit hash format (must be lowercase hex)")
 			}
 		}
@@ -88,7 +88,7 @@ func (v *GitAPIPathValidator) ValidateCommitHash(hash string) error {
 	// Short hash (7-40 characters)
 	if len(hash) >= 7 && len(hash) < 40 {
 		for _, r := range hash {
-			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 				return fmt.Errorf("invalid commit hash format (must be lowercase hex)")
 			}
 		}

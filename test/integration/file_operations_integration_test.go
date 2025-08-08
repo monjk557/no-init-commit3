@@ -313,7 +313,7 @@ func main() {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/src/main.go", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Add debugging to see the actual response body if status is not 200
 		if resp.StatusCode != http.StatusOK {
@@ -356,7 +356,7 @@ func main() {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/../../../etc/passwd", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Add debugging to see actual response
 		body, err := io.ReadAll(resp.Body)
