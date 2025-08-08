@@ -510,7 +510,6 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gi
 			}
 			_ = writer.Close() // errcheck
 
-
 			// Store the blob object
 			blobHash, err := storer.SetEncodedObject(encodedBlob)
 			if err != nil {

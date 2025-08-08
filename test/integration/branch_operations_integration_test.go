@@ -381,7 +381,6 @@ func TestBranchOperationsAPI_CreateBranch(t *testing.T) {
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
 		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
-
 		// Should be rejected due to invalid branch name
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
 	})
@@ -471,7 +470,6 @@ func TestBranchOperationsAPI_UpdateBranch(t *testing.T) {
 		resp := suite.makeRequest(t, "PATCH", "/repos/testowner/testrepo/branches/master", requestBody)
 		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
-
 		// Should succeed with force option, or return 501 if not implemented
 		assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotImplemented)
 	})
@@ -486,7 +484,6 @@ func TestBranchOperationsAPI_UpdateBranch(t *testing.T) {
 
 		resp := suite.makeRequest(t, "PATCH", "/repos/testowner/testrepo/branches/master", requestBody)
 		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
-
 
 		// Should fail due to protected branch, or return 501 if not implemented
 		assert.True(t, resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError || resp.StatusCode == http.StatusNotImplemented)

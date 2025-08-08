@@ -72,7 +72,6 @@ func createTestRepositoryWithFiles(t *testing.T, tempDir, owner, repo string) {
 	require.NoError(t, err)
 	_ = writer.Close() // errcheck
 
-
 	blobHash, err := gitRepo.Storer.SetEncodedObject(blob)
 	require.NoError(t, err)
 
