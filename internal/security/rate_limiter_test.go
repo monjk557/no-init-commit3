@@ -407,9 +407,10 @@ func TestRateLimiter_ConcurrentRequestLimit(t *testing.T) {
 	okCount := 0
 	tooManyCount := 0
 	for _, code := range results {
-		if code == http.StatusOK {
+		switch code {
+		case http.StatusOK:
 			okCount++
-		} else if code == http.StatusTooManyRequests {
+		case http.StatusTooManyRequests:
 			tooManyCount++
 		}
 	}

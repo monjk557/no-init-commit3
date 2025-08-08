@@ -257,9 +257,9 @@ func createRepositoryWithInitialFiles(t *testing.T, repoPath string) {
 func (suite *FileOperationsIntegrationTestSuite) Cleanup() {
 	suite.testServer.Close()
 	if suite.permClient != nil {
-		_ = suite.permClient.Close()
+		_ = suite.permClient.Close() // errcheck: cleanup, errors expected
 	}
-	_ = os.RemoveAll(suite.tempDir)
+	_ = os.RemoveAll(suite.tempDir) // errcheck: cleanup, errors expected
 }
 
 // makeRequest is a helper function to make HTTP requests with proper headers
@@ -313,7 +313,7 @@ func main() {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/src/main.go", requestBody)
-		defer func() { _ = resp.Body.Close() }() // errcheck
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		// Add debugging to see the actual response body if status is not 200
 		if resp.StatusCode != http.StatusOK {
@@ -356,7 +356,7 @@ func main() {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/../../../etc/passwd", requestBody)
-		defer func() { _ = resp.Body.Close() }() // errcheck
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		// Add debugging to see actual response
 		body, err := io.ReadAll(resp.Body)
@@ -384,7 +384,7 @@ func main() {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/test.txt", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		// Add debugging to see actual response
 		body, err := io.ReadAll(resp.Body)
@@ -419,7 +419,7 @@ func TestFileOperationsAPI_UpdateFile(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/config.json", updateBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -456,7 +456,7 @@ func TestFileOperationsAPI_DeleteFile(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "DELETE", "/repos/testowner/testrepo/files/README.md", deleteBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		// Due to repository isolation, file may not exist - 404 is correct behavior
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -508,7 +508,7 @@ func TestFileOperationsAPI_MultiFileCommit(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/commits", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -565,7 +565,7 @@ func TestFileOperationsAPI_MultiFileCommit(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/commits", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		// Should fail due to validation error
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
@@ -588,7 +588,7 @@ func TestFileOperationsAPI_ErrorHandling(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/test.txt", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
 	})
@@ -605,7 +605,7 @@ func TestFileOperationsAPI_ErrorHandling(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/test.txt", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
 	})
@@ -622,7 +622,7 @@ func TestFileOperationsAPI_ErrorHandling(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/nonexistent/files/test.txt", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
 		assert.True(t, resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusInternalServerError)
 	})
@@ -655,7 +655,7 @@ func TestFileOperationsAPI_PerformanceAndConcurrency(t *testing.T) {
 				}
 
 				resp := suite.makeRequest(t, "PUT", fmt.Sprintf("/repos/testowner/testrepo/files/concurrent-%d.txt", index), requestBody)
-				resp.Body.Close()
+				_ = resp.Body.Close() // errcheck: test cleanup
 				results <- resp.StatusCode == http.StatusOK
 			}(i)
 		}
@@ -685,7 +685,7 @@ func TestFileOperationsAPI_PerformanceAndConcurrency(t *testing.T) {
 		start := time.Now()
 		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/performance.txt", requestBody)
 		elapsed := time.Since(start)
-		resp.Body.Close()
+		_ = resp.Body.Close() // errcheck: test cleanup
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Less(t, elapsed, 10*time.Second, "Response should be fast")

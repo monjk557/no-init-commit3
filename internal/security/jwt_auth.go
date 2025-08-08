@@ -249,15 +249,15 @@ func (j *JWTAuthMiddleware) validateClaims(claims *JWTClaims) error {
 	now := time.Now()
 
 	// Check expiration with clock skew tolerance
-	if claims.RegisteredClaims.ExpiresAt != nil {
-		if now.After(claims.RegisteredClaims.ExpiresAt.Time.Add(j.config.ClockSkewTolerance)) {
+	if claims.ExpiresAt != nil {
+		if now.After(claims.ExpiresAt.Add(j.config.ClockSkewTolerance)) {
 			return fmt.Errorf("token has expired")
 		}
 	}
 
 	// Check not before with clock skew tolerance
-	if claims.RegisteredClaims.NotBefore != nil {
-		if now.Before(claims.RegisteredClaims.NotBefore.Time.Add(-j.config.ClockSkewTolerance)) {
+	if claims.NotBefore != nil {
+		if now.Before(claims.NotBefore.Add(-j.config.ClockSkewTolerance)) {
 			return fmt.Errorf("token not yet valid")
 		}
 	}
@@ -266,20 +266,20 @@ func (j *JWTAuthMiddleware) validateClaims(claims *JWTClaims) error {
 	if len(j.config.TrustedIssuers) > 0 {
 		validIssuer := false
 		for _, trustedIssuer := range j.config.TrustedIssuers {
-			if claims.RegisteredClaims.Issuer == trustedIssuer {
+			if claims.Issuer == trustedIssuer {
 				validIssuer = true
 				break
 			}
 		}
 		if !validIssuer {
-			return fmt.Errorf("token issuer not trusted: %s", claims.RegisteredClaims.Issuer)
+			return fmt.Errorf("token issuer not trusted: %s", claims.Issuer)
 		}
 	}
 
 	// Validate audience
 	if j.config.RequiredAudience != "" {
 		validAudience := false
-		for _, aud := range claims.RegisteredClaims.Audience {
+		for _, aud := range claims.Audience {
 			if aud == j.config.RequiredAudience {
 				validAudience = true
 				break
@@ -331,8 +331,8 @@ func (j *JWTAuthMiddleware) performSecurityChecks(c *gin.Context, claims *JWTCla
 	}
 
 	// Session timeout check
-	if claims.RegisteredClaims.IssuedAt != nil {
-		if time.Since(claims.RegisteredClaims.IssuedAt.Time) > j.config.SessionTimeout {
+	if claims.IssuedAt != nil {
+		if time.Since(claims.IssuedAt.Time) > j.config.SessionTimeout {
 			return fmt.Errorf("session has timed out")
 		}
 	}
@@ -357,7 +357,7 @@ func (j *JWTAuthMiddleware) createAuthContext(claims *JWTClaims) *AuthContext {
 		Permissions: claims.Permissions,
 		SessionID:   claims.SessionID,
 		IPAddress:   claims.IPAddress,
-		TokenIssuer: claims.RegisteredClaims.Issuer,
+		TokenIssuer: claims.Issuer,
 		AuthTime:    time.Now(),
 	}
 }

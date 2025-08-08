@@ -42,7 +42,7 @@ func createTestGitObjectManager(t *testing.T) (*GitObjectManager, string, func()
 	require.NoError(t, err)
 
 	cleanup := func() {
-		_ = os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir) // errcheck
 	}
 
 	return gom, tempDir, cleanup
@@ -70,7 +70,8 @@ func createTestRepositoryWithFiles(t *testing.T, tempDir, owner, repo string) {
 	require.NoError(t, err)
 	_, err = writer.Write([]byte(readme))
 	require.NoError(t, err)
-	_ = writer.Close()
+	_ = writer.Close() // errcheck
+
 
 	blobHash, err := gitRepo.Storer.SetEncodedObject(blob)
 	require.NoError(t, err)

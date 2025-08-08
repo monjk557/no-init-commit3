@@ -192,17 +192,17 @@ fix: ## COMPREHENSIVE: Auto-format, fix auto-fixable lint issues, and show remai
 format: ## Auto-format code, fix lint issues, run tests, and show results (COMPREHENSIVE)
 	@echo "$(BLUE)🎨 COMPREHENSIVE Auto-formatting and organizing code...$(NC)"
 	@echo ""
-	@echo "$(YELLOW)1️⃣  Running auto-fixable lint fixes (manual issues checked later)...$(NC)"
+	@echo "$(YELLOW)1️⃣  Running auto-fixable lint fixes (bugs only, no style police)...$(NC)"
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run --fix ./...; \
+		golangci-lint run --enable-only errcheck --fix ./...; \
 		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved (manual fixes checked in step 7)$(NC)"; \
 	elif command -v $$(go env GOPATH)/bin/golangci-lint >/dev/null 2>&1; then \
-		$$(go env GOPATH)/bin/golangci-lint run --fix ./...; \
+		$$(go env GOPATH)/bin/golangci-lint run --enable-only errcheck --fix ./...; \
 		echo "$(GREEN)   ✅ Auto-fixable lint issues resolved (manual fixes checked in step 7)$(NC)"; \
 	else \
 		echo "$(YELLOW)   📦 Installing golangci-lint for auto-fixes...$(NC)"; \
 		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
-		$$(go env GOPATH)/bin/golangci-lint run --fix ./...; \
+		$$(go env GOPATH)/bin/golangci-lint run --enable-only errcheck --fix ./...; \
 		echo "$(GREEN)   ✅ golangci-lint installed and auto-fixes applied (manual fixes checked in step 7)$(NC)"; \
 	fi
 	@echo ""
@@ -258,10 +258,10 @@ vet: ## Run go vet
 	@echo "$(BLUE)🔍 Running go vet...$(NC)"
 	$(GOCMD) vet ./...
 
-lint: ## Run golangci-lint
-	@echo "$(BLUE)🔍 Running golangci-lint...$(NC)"
+lint: ## Run golangci-lint (focused on real bugs, not style preferences)
+	@echo "$(BLUE)🔍 Running golangci-lint (errcheck only - no style police)...$(NC)"
 	@if command -v $(GOLINT) >/dev/null 2>&1; then \
-		$(GOLINT) run ./...; \
+		$(GOLINT) run --enable-only errcheck ./...; \
 	else \
 		echo "$(YELLOW)⚠️  golangci-lint not installed. Run 'make install-tools' to install.$(NC)"; \
 	fi

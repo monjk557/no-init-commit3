@@ -366,6 +366,7 @@ func (h *BranchOperationsHandler) validatePermissions(c *gin.Context, owner, rep
 	}
 
 	if err != nil {
+		h.logger.Error("Failed to check permissions", zap.Error(err))
 		return fmt.Errorf("permission check failed")
 	}
 

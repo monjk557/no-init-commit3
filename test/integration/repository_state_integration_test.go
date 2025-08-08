@@ -302,9 +302,9 @@ func createRepositoryWithBranchesAndTags(t *testing.T, repoPath string) {
 func (suite *RepositoryStateIntegrationTestSuite) Cleanup() {
 	suite.testServer.Close()
 	if suite.permClient != nil {
-		_ = suite.permClient.Close()
+		_ = suite.permClient.Close() // errcheck
 	}
-	_ = os.RemoveAll(suite.tempDir)
+	_ = os.RemoveAll(suite.tempDir) // errcheck
 }
 
 // makeRequest is a helper function to make HTTP requests with proper headers
@@ -340,7 +340,7 @@ func TestRepositoryStateAPI_GetRepositoryState(t *testing.T) {
 
 	t.Run("successful repository state retrieval", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/state", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -395,7 +395,7 @@ func TestRepositoryStateAPI_GetRepositoryState(t *testing.T) {
 
 	t.Run("repository not found", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/nonexistent/state", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Might be 404 or 500 depending on how errors are handled
 		assert.True(t, resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusInternalServerError)
@@ -417,7 +417,7 @@ func TestRepositoryStateAPI_GetRepositoryState(t *testing.T) {
 		defer func() { suite.permClient.readAccess = true }()
 
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/state", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Might be 403 or 500 depending on how errors are handled
 		assert.True(t, resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusInternalServerError)
@@ -438,7 +438,7 @@ func TestRepositoryStateAPI_GetRepositoryState(t *testing.T) {
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Might be 401 or 500 depending on how auth is handled
 		assert.True(t, resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusInternalServerError)
@@ -451,7 +451,7 @@ func TestRepositoryStateAPI_GetRepositoryHead(t *testing.T) {
 
 	t.Run("successful HEAD retrieval", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/head", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -485,7 +485,7 @@ func TestRepositoryStateAPI_GetRepositoryHead(t *testing.T) {
 
 	t.Run("repository not found", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/nonexistent/head", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Might be 404 or 500 depending on how errors are handled
 		assert.True(t, resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusInternalServerError)
@@ -498,7 +498,7 @@ func TestRepositoryStateAPI_GetRepositoryReferences(t *testing.T) {
 
 	t.Run("get all references", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/references", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -555,7 +555,7 @@ func TestRepositoryStateAPI_GetRepositoryReferences(t *testing.T) {
 
 	t.Run("filter by branches only", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/references?type=branches", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -581,7 +581,7 @@ func TestRepositoryStateAPI_GetRepositoryReferences(t *testing.T) {
 
 	t.Run("filter by tags only", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/references?type=tags", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -607,7 +607,7 @@ func TestRepositoryStateAPI_GetRepositoryReferences(t *testing.T) {
 
 	t.Run("include commit info", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/references?include_commit_info=true", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -643,7 +643,7 @@ func TestRepositoryStateAPI_ErrorHandling(t *testing.T) {
 
 	t.Run("invalid repository name", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/../../../etc/passwd/state", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Path traversal should result in 404 (not found) or 400 (bad request)
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotFound)
@@ -662,7 +662,7 @@ func TestRepositoryStateAPI_ErrorHandling(t *testing.T) {
 
 	t.Run("malformed request", func(t *testing.T) {
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/references?type=invalid_type", nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Should still work but return empty results or ignore invalid filter
 		assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest)
@@ -671,7 +671,7 @@ func TestRepositoryStateAPI_ErrorHandling(t *testing.T) {
 	t.Run("extremely long repository name", func(t *testing.T) {
 		longName := strings.Repeat("a", 1000)
 		resp := suite.makeRequest(t, "GET", fmt.Sprintf("/repos/testowner/%s/state", longName), nil)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Should handle gracefully (either 400 for validation, 404 for not found, or 500 for other issues)
 		assert.True(t,
@@ -698,7 +698,7 @@ func TestRepositoryStateAPI_PerformanceAndConcurrency(t *testing.T) {
 				}()
 
 				resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/state", nil)
-				resp.Body.Close()
+				_ = resp.Body.Close() // errcheck
 				results <- resp.StatusCode == http.StatusOK
 			}()
 		}
@@ -717,7 +717,7 @@ func TestRepositoryStateAPI_PerformanceAndConcurrency(t *testing.T) {
 		start := time.Now()
 		resp := suite.makeRequest(t, "GET", "/repos/testowner/testrepo/state", nil)
 		elapsed := time.Since(start)
-		resp.Body.Close()
+		_ = resp.Body.Close() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Less(t, elapsed, 5*time.Second, "Response should be fast")

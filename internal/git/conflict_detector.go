@@ -467,7 +467,6 @@ func (cd *ConflictDetector) createFileVersion(repo *gogit.Repository, entry *obj
 		if reader, err := obj.Reader(); err == nil {
 			defer func() {
 				if err := reader.Close(); err != nil {
-					// Log close error but don't return it since we're in cleanup
 					fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
 				}
 			}()
@@ -613,7 +612,6 @@ func (cd *ConflictDetector) getFileContent(repo *gogit.Repository, entry *object
 	}
 	defer func() {
 		if err := reader.Close(); err != nil {
-			// Log close error during cleanup - not critical
 			fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
 		}
 	}()

@@ -311,7 +311,7 @@ func TestFileOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("PUT", "/repos/testowner/testrepo/files/hello.txt", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -336,7 +336,7 @@ func TestFileOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("PUT", "/repos/testowner/testrepo/files/hello.txt", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
@@ -353,7 +353,7 @@ func TestFileOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("DELETE", "/repos/testowner/testrepo/files/hello.txt", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Due to repository isolation, file may not exist - 404 is correct behavior
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -393,7 +393,7 @@ func TestMultiFileCommit_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -418,7 +418,7 @@ func TestBranchOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/branches", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -450,7 +450,7 @@ func TestBranchOperations_Integration(t *testing.T) {
 
 		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
 		require.NoError(t, err)
-		_ = commitResp.Body.Close()
+		_ = commitResp.Body.Close() // errcheck
 
 		// Now update the main branch
 		updateBody := map[string]interface{}{
@@ -460,7 +460,7 @@ func TestBranchOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("PATCH", "/repos/testowner/testrepo/branches/master", updateBody)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Note: This might fail if not fast-forward, which is expected behavior
 		// Also accept 501 Not Implemented as the feature is not yet implemented
@@ -474,7 +474,7 @@ func TestBranchOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("DELETE", "/repos/testowner/testrepo/branches/feature/new-feature", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
@@ -487,7 +487,7 @@ func TestRepositoryState_Integration(t *testing.T) {
 	t.Run("GetRepositoryState", func(t *testing.T) {
 		resp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/state", nil)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -502,7 +502,7 @@ func TestRepositoryState_Integration(t *testing.T) {
 	t.Run("GetRepositoryHead", func(t *testing.T) {
 		resp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/head", nil)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -517,7 +517,7 @@ func TestRepositoryState_Integration(t *testing.T) {
 	t.Run("GetRepositoryReferences", func(t *testing.T) {
 		resp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/references", nil)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -544,7 +544,7 @@ func TestMergeOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/branches", createBranch)
 		require.NoError(t, err)
-		resp.Body.Close()
+		_ = resp.Body.Close() // errcheck
 
 		// Add commit to feature branch
 		commitBody := map[string]interface{}{
@@ -565,7 +565,7 @@ func TestMergeOperations_Integration(t *testing.T) {
 
 		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
 		require.NoError(t, err)
-		_ = commitResp.Body.Close()
+		_ = commitResp.Body.Close() // errcheck
 	})
 
 	t.Run("MergeBranches", func(t *testing.T) {
@@ -583,7 +583,7 @@ func TestMergeOperations_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/merges", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode) // Merging master into master is invalid
 
@@ -610,7 +610,7 @@ func TestMergePreview_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/branches", createBranch)
 		require.NoError(t, err)
-		resp.Body.Close()
+		_ = resp.Body.Close() // errcheck
 
 		// Add commit to preview branch
 		commitBody := map[string]interface{}{
@@ -631,13 +631,13 @@ func TestMergePreview_Integration(t *testing.T) {
 
 		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
 		require.NoError(t, err)
-		_ = commitResp.Body.Close()
+		_ = commitResp.Body.Close() // errcheck
 	})
 
 	t.Run("MergePreview", func(t *testing.T) {
 		resp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/merges/preview?source_ref=master&target_ref=master", nil)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode) // Previewing master into master is invalid
 
@@ -670,7 +670,7 @@ func TestErrorHandling_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("PUT", "/repos/testowner/testrepo/files/test.txt", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
@@ -681,7 +681,7 @@ func TestErrorHandling_Integration(t *testing.T) {
 	t.Run("NonExistentRepository", func(t *testing.T) {
 		resp, err := suite.makeRequest("GET", "/repos/testowner/nonexistent/state", nil)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
@@ -694,7 +694,7 @@ func TestErrorHandling_Integration(t *testing.T) {
 
 		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/branches", body)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	})
@@ -706,7 +706,7 @@ func TestErrorHandling_Integration(t *testing.T) {
 		// Don't set X-USER-ID or X-Source headers
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	})
@@ -745,7 +745,7 @@ func TestPerformance_Integration(t *testing.T) {
 						results <- err
 						return
 					}
-					resp.Body.Close()
+					_ = resp.Body.Close() // errcheck
 
 					if resp.StatusCode != http.StatusOK {
 						results <- fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -788,7 +788,7 @@ func TestPerformance_Integration(t *testing.T) {
 		duration := time.Since(start)
 
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Should complete within reasonable time (adjust based on performance requirements)
 		assert.True(t, duration < 30*time.Second, "Large file operation took too long: %v", duration)
@@ -803,7 +803,7 @@ func TestAPICompliance_Integration(t *testing.T) {
 	t.Run("ResponseFormat", func(t *testing.T) {
 		resp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/state", nil)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Check content type (Gin adds charset automatically)
 		assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
@@ -826,7 +826,7 @@ func TestAPICompliance_Integration(t *testing.T) {
 	t.Run("ErrorResponseFormat", func(t *testing.T) {
 		resp, err := suite.makeRequest("GET", "/repos/testowner/nonexistent/state", nil)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		// Should return a proper HTTP error status
 		assert.True(t, resp.StatusCode >= 400)
@@ -863,7 +863,7 @@ func BenchmarkFileOperations(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close() // errcheck
 	}
 }
 
@@ -877,6 +877,6 @@ func BenchmarkRepositoryState(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close() // errcheck
 	}
 }
