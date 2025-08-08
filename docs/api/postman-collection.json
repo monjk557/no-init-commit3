@@ -1,0 +1,897 @@
+{
+    "info": {
+        "name": "CollabOps Git Executor - Server-side Git REST API",
+        "description": "Comprehensive collection for testing all server-side Git REST API endpoints. Includes examples for file operations, branch management, repository state queries, and merge operations.",
+        "version": "1.0.0",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:8080",
+            "type": "string",
+            "description": "Base URL for the Git Executor API"
+        },
+        {
+            "key": "owner",
+            "value": "testowner",
+            "type": "string",
+            "description": "Repository owner"
+        },
+        {
+            "key": "repo",
+            "value": "testrepo",
+            "type": "string",
+            "description": "Repository name"
+        },
+        {
+            "key": "userID",
+            "value": "testuser",
+            "type": "string",
+            "description": "User ID for authentication"
+        },
+        {
+            "key": "source",
+            "value": "orchestrator",
+            "type": "string",
+            "description": "Source system identifier"
+        }
+    ],
+    "auth": {
+        "type": "noauth"
+    },
+    "event": [
+        {
+            "listen": "prerequest",
+            "script": {
+                "exec": [
+                    "// Set default headers for all requests",
+                    "pm.request.headers.add({",
+                    "  key: 'X-USER-ID',",
+                    "  value: pm.variables.get('userID')",
+                    "});",
+                    "",
+                    "pm.request.headers.add({",
+                    "  key: 'X-Source',",
+                    "  value: pm.variables.get('source')",
+                    "});",
+                    "",
+                    "// Set Content-Type for POST/PUT requests",
+                    "if (['POST', 'PUT', 'PATCH'].includes(pm.request.method)) {",
+                    "  pm.request.headers.add({",
+                    "    key: 'Content-Type',",
+                    "    value: 'application/json'",
+                    "  });",
+                    "}"
+                ],
+                "type": "text/javascript"
+            }
+        },
+        {
+            "listen": "test",
+            "script": {
+                "exec": [
+                    "// Common tests for all requests",
+                    "pm.test('Response time is reasonable', function () {",
+                    "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                    "});",
+                    "",
+                    "pm.test('Response has proper content type', function () {",
+                    "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                    "});",
+                    "",
+                    "if (pm.response.code === 200) {",
+                    "  pm.test('Success response has correct structure', function () {",
+                    "    const response = pm.response.json();",
+                    "    pm.expect(response).to.have.property('status', 'success');",
+                    "    pm.expect(response).to.have.property('data');",
+                    "    pm.expect(response).to.have.property('meta');",
+                    "    pm.expect(response.meta).to.have.property('request_id');",
+                    "    pm.expect(response.meta).to.have.property('timestamp');",
+                    "  });",
+                    "} else {",
+                    "  pm.test('Error response has correct structure', function () {",
+                    "    const response = pm.response.json();",
+                    "    pm.expect(response).to.have.property('status', 'error');",
+                    "    pm.expect(response).to.have.property('error');",
+                    "    pm.expect(response.error).to.have.property('code');",
+                    "    pm.expect(response.error).to.have.property('message');",
+                    "  });",
+                    "}"
+                ],
+                "type": "text/javascript"
+            }
+        }
+    ],
+    "item": [
+        {
+            "name": "File Operations",
+            "description": "Single file create, update, and delete operations",
+            "item": [
+                {
+                    "name": "Create File",
+                    "request": {
+                        "method": "PUT",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"content\": \"SGVsbG8gV29ybGQ=\",\n  \"commit_message\": \"Add hello.txt\",\n  \"branch\": \"main\",\n  \"author\": {\n    \"name\": \"Test User\",\n    \"email\": \"test@example.com\"\n  }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/files/hello.txt",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "files",
+                                "hello.txt"
+                            ]
+                        },
+                        "description": "Creates a new file with base64-encoded content. Content: 'Hello World' encoded as base64."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('File created successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('commit_sha');",
+                                    "  pm.expect(response.data).to.have.property('file_path', 'hello.txt');",
+                                    "  pm.expect(response.data).to.have.property('operation', 'created');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Update File",
+                    "request": {
+                        "method": "PUT",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"content\": \"SGVsbG8gVXBkYXRlZCBXb3JsZA==\",\n  \"commit_message\": \"Update hello.txt content\",\n  \"branch\": \"main\",\n  \"author\": {\n    \"name\": \"Test User\",\n    \"email\": \"test@example.com\"\n  }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/files/hello.txt",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "files",
+                                "hello.txt"
+                            ]
+                        },
+                        "description": "Updates an existing file. Content: 'Hello Updated World' encoded as base64."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('File updated successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('commit_sha');",
+                                    "  pm.expect(response.data).to.have.property('operation', 'updated');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Delete File",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"commit_message\": \"Delete hello.txt\",\n  \"branch\": \"main\",\n  \"author\": {\n    \"name\": \"Test User\",\n    \"email\": \"test@example.com\"\n  }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/files/hello.txt",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "files",
+                                "hello.txt"
+                            ]
+                        },
+                        "description": "Deletes an existing file from the repository."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('File deleted successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('operation', 'deleted');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Multi-file Operations",
+            "description": "Atomic multi-file commit operations",
+            "item": [
+                {
+                    "name": "Multi-file Commit",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"base_branch\": \"main\",\n  \"operations\": [\n    {\n      \"operation\": \"create\",\n      \"path\": \"src/main.js\",\n      \"content\": \"Y29uc29sZS5sb2coJ0hlbGxvIFdvcmxkJyk7\"\n    },\n    {\n      \"operation\": \"create\",\n      \"path\": \"src/style.css\",\n      \"content\": \"Ym9keSB7IGJhY2tncm91bmQ6ICNmMGYwZjA7IH0=\"\n    },\n    {\n      \"operation\": \"create\",\n      \"path\": \"package.json\",\n      \"content\": \"eyAibmFtZSI6ICJ0ZXN0LXByb2plY3QiIH0=\"\n    }\n  ],\n  \"commit_message\": \"Add initial project files\",\n  \"author\": {\n    \"name\": \"Test User\",\n    \"email\": \"test@example.com\"\n  }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/commits",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "commits"
+                            ]
+                        },
+                        "description": "Creates multiple files in a single atomic commit. Includes JavaScript, CSS, and JSON files."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Multi-file commit created successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('commit_sha');",
+                                    "  pm.expect(response.data).to.have.property('operations_count', 3);",
+                                    "  pm.expect(response.data).to.have.property('results');",
+                                    "  pm.expect(response.data.results).to.be.an('array').that.has.lengthOf(3);",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Branch Operations",
+            "description": "Git branch management operations",
+            "item": [
+                {
+                    "name": "Create Branch",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"feature/new-feature\",\n  \"source\": \"main\",\n  \"description\": \"New feature development branch\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/branches",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "branches"
+                            ]
+                        },
+                        "description": "Creates a new branch from an existing branch or commit."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Branch created successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('name', 'feature/new-feature');",
+                                    "  pm.expect(response.data).to.have.property('commit');",
+                                    "  pm.expect(response.data.commit).to.have.property('sha');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Update Branch",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"target\": \"feature/new-feature\",\n  \"force\": false\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/branches/main",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "branches",
+                                "main"
+                            ]
+                        },
+                        "description": "Updates a branch to point to a different commit. Only fast-forward updates allowed unless force=true."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Branch update response is valid', function () {",
+                                    "  // Could be 200 (success) or 409 (conflict) depending on merge state",
+                                    "  pm.expect(pm.response.code).to.be.oneOf([200, 409]);",
+                                    "  ",
+                                    "  if (pm.response.code === 200) {",
+                                    "    const response = pm.response.json();",
+                                    "    pm.expect(response.data).to.have.property('name', 'main');",
+                                    "  }",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Delete Branch",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"force\": false\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/branches/feature%2Fnew-feature",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "branches",
+                                "feature%2Fnew-feature"
+                            ]
+                        },
+                        "description": "Deletes a Git branch. Protected branches cannot be deleted unless force=true."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Branch deleted successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('name', 'feature/new-feature');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Repository State",
+            "description": "Repository metadata and state queries",
+            "item": [
+                {
+                    "name": "Get Repository State",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/state",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "state"
+                            ]
+                        },
+                        "description": "Returns comprehensive information about the repository's current state."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Repository state retrieved successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('metadata');",
+                                    "  pm.expect(response.data).to.have.property('head');",
+                                    "  pm.expect(response.data.metadata).to.have.property('is_bare');",
+                                    "  pm.expect(response.data.head).to.have.property('reference');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Get Repository HEAD",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/head",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "head"
+                            ]
+                        },
+                        "description": "Returns detailed information about the current HEAD reference."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('HEAD information retrieved successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('reference');",
+                                    "  pm.expect(response.data).to.have.property('commit');",
+                                    "  pm.expect(response.data).to.have.property('is_detached');",
+                                    "  pm.expect(response.data.commit).to.have.property('sha');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Get Repository References",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/references?type=all",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "references"
+                            ],
+                            "query": [
+                                {
+                                    "key": "type",
+                                    "value": "all",
+                                    "description": "Filter by reference type: branches, tags, or all"
+                                }
+                            ]
+                        },
+                        "description": "Returns all branches and tags in the repository with their commit information."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('References retrieved successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('branches');",
+                                    "  pm.expect(response.data).to.have.property('tags');",
+                                    "  pm.expect(response.data.branches).to.be.an('array');",
+                                    "  pm.expect(response.data.tags).to.be.an('array');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Merge Operations",
+            "description": "Git merge and merge preview operations",
+            "item": [
+                {
+                    "name": "Create Setup Branch for Merge",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"feature/merge-test\",\n  \"source\": \"main\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/branches",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "branches"
+                            ]
+                        },
+                        "description": "Setup: Creates a branch for merge testing."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Add Commit to Feature Branch",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"base_branch\": \"feature/merge-test\",\n  \"operations\": [\n    {\n      \"operation\": \"create\",\n      \"path\": \"feature.md\",\n      \"content\": \"IyBGZWF0dXJlIERvY3VtZW50YXRpb24=\"\n    }\n  ],\n  \"commit_message\": \"Add feature documentation\",\n  \"author\": {\n    \"name\": \"Test User\",\n    \"email\": \"test@example.com\"\n  }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/commits",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "commits"
+                            ]
+                        },
+                        "description": "Setup: Adds a commit to the feature branch for merge testing."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Merge Preview",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/merges/preview?source=feature/merge-test&target=main&strategy=tree&include_content=false",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "merges",
+                                "preview"
+                            ],
+                            "query": [
+                                {
+                                    "key": "source",
+                                    "value": "feature/merge-test",
+                                    "description": "Source branch for merge"
+                                },
+                                {
+                                    "key": "target",
+                                    "value": "main",
+                                    "description": "Target branch for merge"
+                                },
+                                {
+                                    "key": "strategy",
+                                    "value": "tree",
+                                    "description": "Analysis strategy: tree, diff, or full"
+                                },
+                                {
+                                    "key": "include_content",
+                                    "value": "false",
+                                    "description": "Include file content in preview"
+                                }
+                            ]
+                        },
+                        "description": "Previews a merge operation without performing it. Shows conflicts and changes."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Merge preview generated successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('can_merge');",
+                                    "  pm.expect(response.data).to.have.property('has_conflicts');",
+                                    "  pm.expect(response.data).to.have.property('is_fast_forward');",
+                                    "  pm.expect(response.data).to.have.property('changes_summary');",
+                                    "  pm.expect(response.data).to.have.property('metrics');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Perform Merge",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"source_branch\": \"feature/merge-test\",\n  \"target_branch\": \"main\",\n  \"commit_message\": \"Merge feature/merge-test into main\",\n  \"author\": {\n    \"name\": \"Test User\",\n    \"email\": \"test@example.com\"\n  },\n  \"fast_forward\": false,\n  \"force\": false\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/merges",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "merges"
+                            ]
+                        },
+                        "description": "Performs an actual Git merge between two branches."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Merge completed successfully', function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.data).to.have.property('merge_commit_sha');",
+                                    "  pm.expect(response.data).to.have.property('status');",
+                                    "  pm.expect(response.data.status).to.be.oneOf(['merged', 'fast-forwarded', 'up-to-date']);",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Error Handling Tests",
+            "description": "Tests for error conditions and edge cases",
+            "item": [
+                {
+                    "name": "Unauthorized - Missing Headers",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/state",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "state"
+                            ]
+                        },
+                        "description": "Test unauthorized access when headers are missing."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [
+                                    "// Override global pre-request to remove headers for this test",
+                                    "pm.request.headers.clear();"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Returns unauthorized when headers missing', function () {",
+                                    "  pm.response.to.have.status(401);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.error.code).to.include('unauthorized');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Not Found - Nonexistent Repository",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/nonexistent/state",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "nonexistent",
+                                "state"
+                            ]
+                        },
+                        "description": "Test accessing a repository that doesn't exist."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Returns not found for nonexistent repository', function () {",
+                                    "  pm.response.to.have.status(404);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.error.code).to.include('not_found');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Bad Request - Invalid Branch Name",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"invalid..branch\",\n  \"source\": \"main\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/repos/{{owner}}/{{repo}}/branches",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "repos",
+                                "{{owner}}",
+                                "{{repo}}",
+                                "branches"
+                            ]
+                        },
+                        "description": "Test creating a branch with an invalid name."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test('Returns bad request for invalid branch name', function () {",
+                                    "  pm.response.to.have.status(400);",
+                                    "  const response = pm.response.json();",
+                                    "  pm.expect(response.error.code).to.include('validation');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
