@@ -465,7 +465,12 @@ func (cd *ConflictDetector) createFileVersion(repo *gogit.Repository, entry *obj
 
 		// Check if binary (simple heuristic)
 		if reader, err := obj.Reader(); err == nil {
-			defer reader.Close()
+			defer func() {
+				if err := reader.Close(); err != nil {
+					// Log close error but don't return it since we're in cleanup
+					fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
+				}
+			}()
 			buffer := make([]byte, 512)
 			if n, err := reader.Read(buffer); err == nil {
 				version.IsBinary = cd.isBinaryContent(buffer[:n])
@@ -606,7 +611,12 @@ func (cd *ConflictDetector) getFileContent(repo *gogit.Repository, entry *object
 	if err != nil {
 		return "", err
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			// Log close error during cleanup - not critical
+			fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
+		}
+	}()
 
 	content := make([]byte, obj.Size)
 	_, err = reader.Read(content)

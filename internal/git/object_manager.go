@@ -501,13 +501,13 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gi
 			}
 
 			if _, err := io.Copy(writer, blobReader); err != nil {
-				writer.Close()
+				_ = writer.Close()
 				gom.logger.Error("Failed to write blob content",
 					zap.String("path", change.Path),
 					zap.Error(err))
 				return nil, fmt.Errorf("failed to write blob content for %s: %w", change.Path, err)
 			}
-			writer.Close()
+			_ = writer.Close()
 
 			// Store the blob object
 			blobHash, err := storer.SetEncodedObject(encodedBlob)

@@ -450,7 +450,7 @@ func TestBranchOperations_Integration(t *testing.T) {
 
 		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
 		require.NoError(t, err)
-		commitResp.Body.Close()
+		_ = commitResp.Body.Close()
 
 		// Now update the main branch
 		updateBody := map[string]interface{}{
@@ -565,7 +565,7 @@ func TestMergeOperations_Integration(t *testing.T) {
 
 		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
 		require.NoError(t, err)
-		commitResp.Body.Close()
+		_ = commitResp.Body.Close()
 	})
 
 	t.Run("MergeBranches", func(t *testing.T) {
@@ -631,7 +631,7 @@ func TestMergePreview_Integration(t *testing.T) {
 
 		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
 		require.NoError(t, err)
-		commitResp.Body.Close()
+		_ = commitResp.Body.Close()
 	})
 
 	t.Run("MergePreview", func(t *testing.T) {

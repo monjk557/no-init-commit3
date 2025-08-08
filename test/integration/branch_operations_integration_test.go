@@ -303,9 +303,9 @@ func createRepositoryWithMultipleBranches(t *testing.T, repoPath string) {
 func (suite *BranchOperationsIntegrationTestSuite) Cleanup() {
 	suite.testServer.Close()
 	if suite.permClient != nil {
-		suite.permClient.Close()
+		_ = suite.permClient.Close()
 	}
-	os.RemoveAll(suite.tempDir)
+	_ = os.RemoveAll(suite.tempDir)
 }
 
 // makeRequest is a helper function to make HTTP requests with proper headers
@@ -348,7 +348,7 @@ func TestBranchOperationsAPI_CreateBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -379,7 +379,7 @@ func TestBranchOperationsAPI_CreateBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should be rejected due to invalid branch name
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
@@ -394,7 +394,7 @@ func TestBranchOperationsAPI_CreateBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should fail due to non-existent source branch
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusInternalServerError)
@@ -413,7 +413,7 @@ func TestBranchOperationsAPI_CreateBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 	})
@@ -432,7 +432,7 @@ func TestBranchOperationsAPI_UpdateBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PATCH", "/repos/testowner/testrepo/branches/master", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Accept either 200 OK (if implemented) or 501 Not Implemented
 		assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotImplemented)
@@ -467,7 +467,7 @@ func TestBranchOperationsAPI_UpdateBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PATCH", "/repos/testowner/testrepo/branches/master", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should succeed with force option, or return 501 if not implemented
 		assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotImplemented)
@@ -482,7 +482,7 @@ func TestBranchOperationsAPI_UpdateBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "PATCH", "/repos/testowner/testrepo/branches/master", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should fail due to protected branch, or return 501 if not implemented
 		assert.True(t, resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError || resp.StatusCode == http.StatusNotImplemented)
@@ -500,7 +500,7 @@ func TestBranchOperationsAPI_DeleteBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "DELETE", "/repos/testowner/testrepo/branches/feature/test-feature", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -525,7 +525,7 @@ func TestBranchOperationsAPI_DeleteBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "DELETE", "/repos/testowner/testrepo/branches/master", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should fail due to protected branch
 		assert.True(t, resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
@@ -538,7 +538,7 @@ func TestBranchOperationsAPI_DeleteBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "DELETE", "/repos/testowner/testrepo/branches/nonexistent", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should fail due to non-existent branch
 		assert.True(t, resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
@@ -555,7 +555,7 @@ func TestBranchOperationsAPI_DeleteBranch(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "DELETE", "/repos/testowner/testrepo/branches/feature/test-feature", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 	})
@@ -574,7 +574,7 @@ func TestBranchOperationsAPI_ErrorHandling(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
 	})
@@ -588,7 +588,7 @@ func TestBranchOperationsAPI_ErrorHandling(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
 	})
@@ -602,7 +602,7 @@ func TestBranchOperationsAPI_ErrorHandling(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/nonexistent/branches", requestBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.True(t, resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusInternalServerError)
 	})
@@ -617,12 +617,12 @@ func TestBranchOperationsAPI_ErrorHandling(t *testing.T) {
 		}
 
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", createBody)
-		resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
 		// Try to create the same branch again
 		resp = suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", createBody)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		// Should fail due to branch already existing
 		assert.True(t, resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusInternalServerError)
@@ -653,7 +653,7 @@ func TestBranchOperationsAPI_PerformanceAndConcurrency(t *testing.T) {
 				}
 
 				resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
-				resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
 				results <- resp.StatusCode == http.StatusOK
 			}(i)
 		}
@@ -680,7 +680,7 @@ func TestBranchOperationsAPI_PerformanceAndConcurrency(t *testing.T) {
 		start := time.Now()
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
 		elapsed := time.Since(start)
-		resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Less(t, elapsed, 10*time.Second, "Response should be fast")

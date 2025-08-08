@@ -83,11 +83,11 @@
 				
 				<option value="file13">github.com/collabops/git-executor/internal/git/cached_repository.go (0.0%)</option>
 				
-				<option value="file14">github.com/collabops/git-executor/internal/git/conflict_detector.go (28.9%)</option>
+				<option value="file14">github.com/collabops/git-executor/internal/git/conflict_detector.go (28.4%)</option>
 				
 				<option value="file15">github.com/collabops/git-executor/internal/git/errors.go (100.0%)</option>
 				
-				<option value="file16">github.com/collabops/git-executor/internal/git/file_operations.go (68.8%)</option>
+				<option value="file16">github.com/collabops/git-executor/internal/git/file_operations.go (68.7%)</option>
 				
 				<option value="file17">github.com/collabops/git-executor/internal/git/gogit_repository.go (83.7%)</option>
 				
@@ -131,7 +131,7 @@
 				
 				<option value="file37">github.com/collabops/git-executor/internal/protocol/blob.go (0.0%)</option>
 				
-				<option value="file38">github.com/collabops/git-executor/internal/protocol/branch_operations.go (28.2%)</option>
+				<option value="file38">github.com/collabops/git-executor/internal/protocol/branch_operations.go (28.3%)</option>
 				
 				<option value="file39">github.com/collabops/git-executor/internal/protocol/capabilities.go (83.5%)</option>
 				
@@ -4012,8 +4012,13 @@ func (cd *ConflictDetector) createFileVersion(repo *gogit.Repository, entry *obj
 
                 // Check if binary (simple heuristic)
                 if reader, err := obj.Reader(); err == nil </span><span class="cov0" title="0">{
-                        defer reader.Close()
-                        buffer := make([]byte, 512)
+                        defer func() </span><span class="cov0" title="0">{
+                                if err := reader.Close(); err != nil </span><span class="cov0" title="0">{
+                                        // Log close error but don't return it since we're in cleanup
+                                        fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
+                                }</span>
+                        }()
+                        <span class="cov0" title="0">buffer := make([]byte, 512)
                         if n, err := reader.Read(buffer); err == nil </span><span class="cov0" title="0">{
                                 version.IsBinary = cd.isBinaryContent(buffer[:n])
                         }</span>
@@ -4153,9 +4158,14 @@ func (cd *ConflictDetector) getFileContent(repo *gogit.Repository, entry *object
         if err != nil </span><span class="cov0" title="0">{
                 return "", err
         }</span>
-        <span class="cov0" title="0">defer reader.Close()
+        <span class="cov0" title="0">defer func() </span><span class="cov0" title="0">{
+                if err := reader.Close(); err != nil </span><span class="cov0" title="0">{
+                        // Log close error during cleanup - not critical
+                        fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
+                }</span>
+        }()
 
-        content := make([]byte, obj.Size)
+        <span class="cov0" title="0">content := make([]byte, obj.Size)
         _, err = reader.Read(content)
         if err != nil </span><span class="cov0" title="0">{
                 return "", err
@@ -5038,9 +5048,14 @@ func (gom *GitObjectManager) GetFileContent(ctx context.Context, owner, repo, pa
         if err != nil </span><span class="cov0" title="0">{
                 return nil, fmt.Errorf("failed to get file reader: %w", err)
         }</span>
-        <span class="cov8" title="1">defer reader.Close()
+        <span class="cov8" title="1">defer func() </span><span class="cov8" title="1">{
+                if err := reader.Close(); err != nil </span><span class="cov0" title="0">{
+                        // Log close error during cleanup - not critical
+                        fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
+                }</span>
+        }()
 
-        content := make([]byte, file.Size)
+        <span class="cov8" title="1">content := make([]byte, file.Size)
         _, err = reader.Read(content)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, fmt.Errorf("failed to read file content: %w", err)
@@ -6215,13 +6230,13 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gi
                         }</span>
 
                         <span class="cov8" title="1">if _, err := io.Copy(writer, blobReader); err != nil </span><span class="cov0" title="0">{
-                                writer.Close()
+                                _ = writer.Close()
                                 gom.logger.Error("Failed to write blob content",
                                         zap.String("path", change.Path),
                                         zap.Error(err))
                                 return nil, fmt.Errorf("failed to write blob content for %s: %w", change.Path, err)
                         }</span>
-                        <span class="cov8" title="1">writer.Close()
+                        <span class="cov8" title="1">_ = writer.Close()
 
                         // Store the blob object
                         blobHash, err := storer.SetEncodedObject(encodedBlob)
@@ -13021,12 +13036,12 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error <span cl
 func (h *BranchOperationsHandler) validatePermissions(c *gin.Context, owner, repo, action string) error <span class="cov8" title="1">{
         userID := c.GetHeader("X-USER-ID")
         if userID == "" </span><span class="cov8" title="1">{
-                return fmt.Errorf("Missing X-USER-ID header")
+                return fmt.Errorf("missing X-USER-ID header")
         }</span>
 
         <span class="cov8" title="1">source := c.GetHeader("X-Source")
         if source == "" </span><span class="cov8" title="1">{
-                return fmt.Errorf("Missing X-Source header")
+                return fmt.Errorf("missing X-Source header")
         }</span>
 
         // Check permissions using permission client (always check, even for orchestrator)
@@ -13041,8 +13056,7 @@ func (h *BranchOperationsHandler) validatePermissions(c *gin.Context, owner, rep
         }</span>
 
         <span class="cov8" title="1">if err != nil </span><span class="cov0" title="0">{
-                h.logger.Error("Failed to check permissions", zap.Error(err))
-                return fmt.Errorf("Permission check failed")
+                return fmt.Errorf("permission check failed")
         }</span>
 
         <span class="cov8" title="1">if !hasPermission </span><span class="cov8" title="1">{
@@ -21751,7 +21765,7 @@ func (v *GitAPIPathValidator) validatePathPart(part string) error <span class="c
         }</span>
 
         <span class="cov0" title="0">if part == "." || part == ".." </span><span class="cov0" title="0">{
-                return fmt.Errorf("path component cannot be . or ..")
+                return fmt.Errorf("path component cannot be dot or dotdot")
         }</span>
 
         // Check for reserved names

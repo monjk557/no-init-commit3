@@ -346,12 +346,12 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 func (h *BranchOperationsHandler) validatePermissions(c *gin.Context, owner, repo, action string) error {
 	userID := c.GetHeader("X-USER-ID")
 	if userID == "" {
-		return fmt.Errorf("Missing X-USER-ID header")
+		return fmt.Errorf("missing X-USER-ID header")
 	}
 
 	source := c.GetHeader("X-Source")
 	if source == "" {
-		return fmt.Errorf("Missing X-Source header")
+		return fmt.Errorf("missing X-Source header")
 	}
 
 	// Check permissions using permission client (always check, even for orchestrator)
@@ -366,8 +366,7 @@ func (h *BranchOperationsHandler) validatePermissions(c *gin.Context, owner, rep
 	}
 
 	if err != nil {
-		h.logger.Error("Failed to check permissions", zap.Error(err))
-		return fmt.Errorf("Permission check failed")
+		return fmt.Errorf("permission check failed")
 	}
 
 	if !hasPermission {

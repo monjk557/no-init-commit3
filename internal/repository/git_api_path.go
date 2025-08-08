@@ -246,7 +246,7 @@ func (v *GitAPIPathValidator) validatePathPart(part string) error {
 	}
 
 	if part == "." || part == ".." {
-		return fmt.Errorf("path component cannot be . or ..")
+		return fmt.Errorf("path component cannot be dot or dotdot")
 	}
 
 	// Check for reserved names

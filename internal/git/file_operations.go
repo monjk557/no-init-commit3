@@ -647,7 +647,12 @@ func (gom *GitObjectManager) GetFileContent(ctx context.Context, owner, repo, pa
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file reader: %w", err)
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			// Log close error during cleanup - not critical
+			fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
+		}
+	}()
 
 	content := make([]byte, file.Size)
 	_, err = reader.Read(content)

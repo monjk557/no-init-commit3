@@ -257,9 +257,9 @@ func createRepositoryWithInitialFiles(t *testing.T, repoPath string) {
 func (suite *FileOperationsIntegrationTestSuite) Cleanup() {
 	suite.testServer.Close()
 	if suite.permClient != nil {
-		suite.permClient.Close()
+		_ = suite.permClient.Close()
 	}
-	os.RemoveAll(suite.tempDir)
+	_ = os.RemoveAll(suite.tempDir)
 }
 
 // makeRequest is a helper function to make HTTP requests with proper headers
