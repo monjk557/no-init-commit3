@@ -36,6 +36,22 @@ type DiffResponse struct {
 	MergeBase string       `json:"merge_base,omitempty"` // For branch diffs
 }
 
+// SingleCommitDiffResponse represents the response structure for single commit diff endpoint
+type SingleCommitDiffResponse struct {
+	Commit *CommitMetadata `json:"commit"`
+	*DiffResponse
+}
+
+// CommitMetadata represents commit information
+type CommitMetadata struct {
+	SHA     string   `json:"sha"`
+	Author  string   `json:"author"`
+	Email   string   `json:"email"`
+	Date    string   `json:"date"`
+	Message string   `json:"message"`
+	Parents []string `json:"parents"`
+}
+
 // CommitStats represents commit count differences for branch comparisons
 type CommitStats struct {
 	Ahead  int `json:"ahead"`  // Commits in head that aren't in base
@@ -283,6 +299,49 @@ func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 	sendJSONResponse(w, diffResp, http.StatusOK)
 }
 
+// HandleSingleCommitDiff handles GET /repos/:owner/:repo/commits/:sha/diff
+func (h *DiffHandler) HandleSingleCommitDiff(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract and validate common parameters
+	params, err := h.validateAndExtractParams(r)
+	if err != nil {
+		handleDiffError(w, err, "extract parameters")
+		return
+	}
+
+	// Get SHA parameter from URL path
+	sha := URLParam(r, "sha")
+	if sha == "" {
+		handleDiffError(w, fmt.Errorf("missing required parameter: sha"), "validate commit sha")
+		return
+	}
+
+	// Validate permissions and get repository path
+	repoPath, err := h.validateRequestAndPermissions(ctx, params)
+	if err != nil {
+		handleDiffError(w, err, "validate permissions")
+		return
+	}
+
+	// Get context lines from query parameter
+	contextLines := 3 // default
+	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
+			contextLines = ctx
+		}
+	}
+
+	// Calculate single commit diff
+	response, err := h.calculateSingleCommitDiff(ctx, repoPath, sha, contextLines)
+	if err != nil {
+		handleDiffError(w, err, "calculate single commit diff")
+		return
+	}
+
+	sendJSONResponse(w, response, http.StatusOK)
+}
+
 // HandlePatch handles GET /repos/:owner/:repo/patch/:base/:head
 func (h *DiffHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -401,6 +460,172 @@ func (h *DiffHandler) calculateCommitDiff(ctx context.Context, repoPath, base, h
 	return &DiffResponse{
 		Base:  base,
 		Head:  head,
+		Files: fileDiffs,
+		Stats: stats,
+	}, nil
+}
+
+// calculateSingleCommitDiff performs diff calculation for a single commit against its parent(s)
+func (h *DiffHandler) calculateSingleCommitDiff(ctx context.Context, repoPath, sha string, contextLines int) (*SingleCommitDiffResponse, error) {
+	// Open repository using cached approach
+	gitRepo, cleanup, err := h.getGitRepository(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	// Get the commit object
+	commitHash := plumbing.NewHash(sha)
+	commit, err := gitRepo.CommitObject(commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit %s: %w", sha, err)
+	}
+
+	// Extract commit metadata
+	commitMetadata := h.extractCommitMetadata(commit)
+
+	// Handle different commit scenarios
+	var diffResp *DiffResponse
+
+	if commit.NumParents() == 0 {
+		// Initial commit - compare against empty tree
+		diffResp, err = h.calculateInitialCommitDiff(ctx, gitRepo, commit, contextLines)
+		if err != nil {
+			return nil, fmt.Errorf("failed to calculate initial commit diff: %w", err)
+		}
+	} else {
+		// Regular commit - compare against first parent
+		parentCommit, err := commit.Parent(0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get parent commit: %w", err)
+		}
+
+		// Reuse existing commit diff logic
+		diffResp, err = h.calculateCommitDiffBetween(ctx, gitRepo, parentCommit, commit, contextLines)
+		if err != nil {
+			return nil, fmt.Errorf("failed to calculate commit diff: %w", err)
+		}
+	}
+
+	// Set the base and head to represent the commit and its parent
+	if commit.NumParents() > 0 {
+		parent, _ := commit.Parent(0)
+		diffResp.Base = parent.Hash.String()
+	} else {
+		diffResp.Base = "empty_tree"
+	}
+	diffResp.Head = sha
+
+	return &SingleCommitDiffResponse{
+		Commit:       commitMetadata,
+		DiffResponse: diffResp,
+	}, nil
+}
+
+// extractCommitMetadata extracts metadata from a commit object
+func (h *DiffHandler) extractCommitMetadata(commit *object.Commit) *CommitMetadata {
+	var parents []string
+	for _, parent := range commit.ParentHashes {
+		parents = append(parents, parent.String())
+	}
+
+	return &CommitMetadata{
+		SHA:     commit.Hash.String(),
+		Author:  commit.Author.Name,
+		Email:   commit.Author.Email,
+		Date:    commit.Author.When.Format("2006-01-02T15:04:05Z07:00"),
+		Message: strings.TrimSpace(commit.Message),
+		Parents: parents,
+	}
+}
+
+// calculateInitialCommitDiff handles diff for commits with no parents (initial commits)
+func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, repo *gogit.Repository, commit *object.Commit, contextLines int) (*DiffResponse, error) {
+	// Get commit tree
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit tree: %w", err)
+	}
+
+	// Create changes by treating all files in the tree as additions
+	var fileDiffs []FileDiff
+	var stats DiffStats
+
+	err = tree.Files().ForEach(func(file *object.File) error {
+		content, err := file.Contents()
+		if err != nil {
+			// Log error but continue with other files
+			fmt.Printf("Error getting content for %s: %v\n", file.Name, err)
+			return nil
+		}
+
+		lines := splitLines(content)
+		additions := len(lines)
+
+		fileDiff := FileDiff{
+			Path:      file.Name,
+			Status:    "added",
+			Additions: additions,
+			Deletions: 0,
+			IsBinary:  isBinaryFile(content, file.Name),
+		}
+
+		// Generate line changes if not binary and contextLines > 0
+		if !fileDiff.IsBinary && contextLines > 0 {
+			var lineChanges []LineChange
+			for i, line := range lines {
+				lineChanges = append(lineChanges, LineChange{
+					Type:    "add",
+					LineNum: i + 1,
+					Content: "+" + line,
+				})
+			}
+			fileDiff.Changes = lineChanges
+		}
+
+		fileDiffs = append(fileDiffs, fileDiff)
+		stats.FilesChanged++
+		stats.TotalAdditions += additions
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to iterate tree files: %w", err)
+	}
+
+	return &DiffResponse{
+		Files: fileDiffs,
+		Stats: stats,
+	}, nil
+}
+
+// calculateCommitDiffBetween calculates diff between two specific commit objects
+func (h *DiffHandler) calculateCommitDiffBetween(ctx context.Context, repo *gogit.Repository, baseCommit, headCommit *object.Commit, contextLines int) (*DiffResponse, error) {
+	// Get trees from commits
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get base tree: %w", err)
+	}
+
+	headTree, err := headCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get head tree: %w", err)
+	}
+
+	// Calculate diff between trees
+	changes, err := object.DiffTree(baseTree, headTree)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate tree diff: %w", err)
+	}
+
+	// Process changes into structured response
+	fileDiffs, stats, err := h.processChanges(changes, contextLines)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process changes: %w", err)
+	}
+
+	return &DiffResponse{
 		Files: fileDiffs,
 		Stats: stats,
 	}, nil

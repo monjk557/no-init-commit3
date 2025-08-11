@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +24,10 @@ import (
 
 // Test helper to create a test repository with commits
 func createTestRepositoryWithCommits(t *testing.T, repoPath string) (string, string, string) {
-	// Create repository directory
+	// Create repository directory (ensure it ends with .git)
+	if !strings.HasSuffix(repoPath, ".git") {
+		repoPath = repoPath + ".git"
+	}
 	err := os.MkdirAll(repoPath, 0755)
 	require.NoError(t, err)
 
@@ -118,6 +122,8 @@ func createTestRouter(t *testing.T, handler *DiffHandler) *gin.Engine {
 			diffGroup.GET("/commits/:base/:head", gin.WrapH(http.HandlerFunc(handler.HandleCommitDiff)))
 			diffGroup.GET("/branches/:base/:head", gin.WrapH(http.HandlerFunc(handler.HandleBranchDiff)))
 		}
+		// Single commit diff endpoint
+		repoGroup.GET("/commits/:sha/diff", gin.WrapH(http.HandlerFunc(handler.HandleSingleCommitDiff)))
 	}
 
 	return router
@@ -1281,5 +1287,466 @@ func TestErrorResponseStructure(t *testing.T) {
 			assert.Equal(t, tt.errorResp.Code, unmarshaled.Code)
 			assert.Equal(t, tt.errorResp.Details, unmarshaled.Details)
 		})
+	}
+}
+
+// Tests for Single Commit Diff Endpoint
+
+func TestHandleSingleCommitDiff_Success(t *testing.T) {
+	// Setup test repository
+	tempDir := t.TempDir()
+	repoPath := filepath.Join(tempDir, "owner", "repo.git")
+	commit1, commit2, commit3 := createTestRepositoryWithCommits(t, repoPath)
+
+	// Create handler
+	cfg := &config.Config{
+		Git: config.GitConfig{RepoRoot: tempDir},
+	}
+	mockPermClient := &MockPermissionClient{shouldAllow: true}
+	handler, err := NewDiffHandler(cfg, mockPermClient)
+	require.NoError(t, err)
+
+	// Create router
+	router := createTestRouter(t, handler)
+
+	tests := []struct {
+		name           string
+		sha            string
+		owner          string
+		repo           string
+		expectedStatus int
+		expectCommit   bool
+		expectFiles    bool
+	}{
+		{
+			name:           "First commit (initial commit)",
+			sha:            commit1,
+			owner:          "owner",
+			repo:           "repo",
+			expectedStatus: http.StatusOK,
+			expectCommit:   true,
+			expectFiles:    true,
+		},
+		{
+			name:           "Second commit (has parent)",
+			sha:            commit2,
+			owner:          "owner",
+			repo:           "repo",
+			expectedStatus: http.StatusOK,
+			expectCommit:   true,
+			expectFiles:    true,
+		},
+		{
+			name:           "Third commit (has parent)",
+			sha:            commit3,
+			owner:          "owner",
+			repo:           "repo",
+			expectedStatus: http.StatusOK,
+			expectCommit:   true,
+			expectFiles:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create request
+			url := fmt.Sprintf("/repos/%s/%s/commits/%s/diff", tt.owner, tt.repo, tt.sha)
+			req := httptest.NewRequest("GET", url, nil)
+			req.Header.Set("X-USER-ID", "test-user")
+
+			// Execute request
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			// Check status code
+			if w.Code != tt.expectedStatus {
+				t.Logf("Response body: %s", w.Body.String())
+			}
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedStatus == http.StatusOK {
+				// Parse response
+				var response SingleCommitDiffResponse
+				err := json.Unmarshal(w.Body.Bytes(), &response)
+				require.NoError(t, err)
+
+				// Verify commit metadata
+				if tt.expectCommit {
+					assert.NotNil(t, response.Commit)
+					assert.Equal(t, tt.sha, response.Commit.SHA)
+					assert.Equal(t, "Test User", response.Commit.Author)
+					assert.Equal(t, "test@example.com", response.Commit.Email)
+					assert.NotEmpty(t, response.Commit.Date)
+					assert.NotEmpty(t, response.Commit.Message)
+
+					// Check parent information
+					if tt.sha == commit1 {
+						// Initial commit should have no parents
+						assert.Empty(t, response.Commit.Parents)
+						assert.Equal(t, "empty_tree", response.DiffResponse.Base)
+					} else {
+						// Other commits should have parents
+						assert.NotEmpty(t, response.Commit.Parents)
+						assert.NotEqual(t, "empty_tree", response.DiffResponse.Base)
+					}
+				}
+
+				// Verify diff response structure
+				assert.NotNil(t, response.DiffResponse)
+				assert.Equal(t, tt.sha, response.DiffResponse.Head)
+
+				// Verify files and stats
+				if tt.expectFiles {
+					assert.NotEmpty(t, response.DiffResponse.Files)
+					assert.Greater(t, response.DiffResponse.Stats.FilesChanged, 0)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleSingleCommitDiff_InitialCommit(t *testing.T) {
+	// Setup test repository with just one commit
+	tempDir := t.TempDir()
+	repoPath := filepath.Join(tempDir, "owner", "repo.git")
+
+	// Create repository directory
+	err := os.MkdirAll(repoPath, 0755)
+	require.NoError(t, err)
+
+	// Initialize Git repository
+	repo, err := gogit.PlainInit(repoPath, false)
+	require.NoError(t, err)
+
+	// Get worktree
+	worktree, err := repo.Worktree()
+	require.NoError(t, err)
+
+	// Create initial commit with multiple files
+	file1Path := filepath.Join(repoPath, "README.md")
+	err = os.WriteFile(file1Path, []byte("# Test Project\n\nThis is a test.\n"), 0644)
+	require.NoError(t, err)
+
+	file2Path := filepath.Join(repoPath, "main.go")
+	err = os.WriteFile(file2Path, []byte("package main\n\nfunc main() {\n\tfmt.Println(\"Hello\")\n}\n"), 0644)
+	require.NoError(t, err)
+
+	_, err = worktree.Add("README.md")
+	require.NoError(t, err)
+	_, err = worktree.Add("main.go")
+	require.NoError(t, err)
+
+	initialCommit, err := worktree.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test Author",
+			Email: "author@test.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	// Create handler
+	cfg := &config.Config{
+		Git: config.GitConfig{RepoRoot: tempDir},
+	}
+	mockPermClient := &MockPermissionClient{shouldAllow: true}
+	handler, err := NewDiffHandler(cfg, mockPermClient)
+	require.NoError(t, err)
+
+	// Create router
+	router := createTestRouter(t, handler)
+
+	// Test initial commit diff
+	url := fmt.Sprintf("/repos/owner/repo/commits/%s/diff", initialCommit.String())
+	req := httptest.NewRequest("GET", url, nil)
+	req.Header.Set("X-USER-ID", "test-user")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Check response
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response SingleCommitDiffResponse
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	// Verify commit metadata
+	assert.Equal(t, initialCommit.String(), response.Commit.SHA)
+	assert.Equal(t, "Test Author", response.Commit.Author)
+	assert.Equal(t, "author@test.com", response.Commit.Email)
+	assert.Equal(t, "Initial commit", response.Commit.Message)
+	assert.Empty(t, response.Commit.Parents) // No parents for initial commit
+
+	// Verify diff response
+	assert.Equal(t, "empty_tree", response.DiffResponse.Base)
+	assert.Equal(t, initialCommit.String(), response.DiffResponse.Head)
+
+	// Should have 2 files added
+	assert.Len(t, response.DiffResponse.Files, 2)
+	assert.Equal(t, 2, response.DiffResponse.Stats.FilesChanged)
+	assert.Greater(t, response.DiffResponse.Stats.TotalAdditions, 0)
+	assert.Equal(t, 0, response.DiffResponse.Stats.TotalDeletions)
+
+	// Check that all files have "added" status
+	for _, file := range response.DiffResponse.Files {
+		assert.Equal(t, "added", file.Status)
+		assert.Greater(t, file.Additions, 0)
+		assert.Equal(t, 0, file.Deletions)
+	}
+}
+
+func TestHandleSingleCommitDiff_Errors(t *testing.T) {
+	// Setup test repository
+	tempDir := t.TempDir()
+	repoPath := filepath.Join(tempDir, "owner", "repo.git")
+	commit1, _, _ := createTestRepositoryWithCommits(t, repoPath)
+
+	// Create handler
+	cfg := &config.Config{
+		Git: config.GitConfig{RepoRoot: tempDir},
+	}
+
+	tests := []struct {
+		name           string
+		setupHandler   func() *DiffHandler
+		url            string
+		headers        map[string]string
+		expectedStatus int
+		expectedError  string
+	}{
+		{
+			name: "Invalid SHA format",
+			setupHandler: func() *DiffHandler {
+				mockPermClient := &MockPermissionClient{shouldAllow: true}
+				handler, _ := NewDiffHandler(cfg, mockPermClient)
+				return handler
+			},
+			url:            "/repos/owner/repo/commits/invalid-sha/diff",
+			headers:        map[string]string{"X-USER-ID": "test-user"},
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "Commit not found",
+		},
+		{
+			name: "Missing user authentication",
+			setupHandler: func() *DiffHandler {
+				mockPermClient := &MockPermissionClient{shouldAllow: true}
+				handler, _ := NewDiffHandler(cfg, mockPermClient)
+				return handler
+			},
+			url:            fmt.Sprintf("/repos/owner/repo/commits/%s/diff", commit1),
+			headers:        map[string]string{}, // No X-USER-ID header
+			expectedStatus: http.StatusUnauthorized,
+			expectedError:  "authentication",
+		},
+		{
+			name: "Access denied",
+			setupHandler: func() *DiffHandler {
+				mockPermClient := &MockPermissionClient{
+					shouldAllow: false, // Deny access
+				}
+				handler, _ := NewDiffHandler(cfg, mockPermClient)
+				return handler
+			},
+			url:            fmt.Sprintf("/repos/owner/repo/commits/%s/diff", commit1),
+			headers:        map[string]string{"X-USER-ID": "test-user"},
+			expectedStatus: http.StatusForbidden,
+			expectedError:  "Access denied",
+		},
+		{
+			name: "Nonexistent SHA",
+			setupHandler: func() *DiffHandler {
+				mockPermClient := &MockPermissionClient{shouldAllow: true}
+				handler, _ := NewDiffHandler(cfg, mockPermClient)
+				return handler
+			},
+			url:            "/repos/owner/repo/commits/1234567890abcdef1234567890abcdef12345678/diff",
+			headers:        map[string]string{"X-USER-ID": "test-user"},
+			expectedStatus: http.StatusNotFound,
+			expectedError:  "Commit not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create handler
+			handler := tt.setupHandler()
+			router := createTestRouter(t, handler)
+
+			// Create request
+			req := httptest.NewRequest("GET", tt.url, nil)
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			// Execute request
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			// Check status code
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			// Check error message
+			if tt.expectedError != "" {
+				responseBody := w.Body.String()
+				assert.Contains(t, responseBody, tt.expectedError)
+			}
+		})
+	}
+}
+
+func TestHandleSingleCommitDiff_ContextLines(t *testing.T) {
+	// Setup test repository
+	tempDir := t.TempDir()
+	repoPath := filepath.Join(tempDir, "owner", "repo.git")
+	_, commit2, _ := createTestRepositoryWithCommits(t, repoPath)
+
+	// Create handler
+	cfg := &config.Config{
+		Git: config.GitConfig{RepoRoot: tempDir},
+	}
+	mockPermClient := &MockPermissionClient{shouldAllow: true}
+	handler, err := NewDiffHandler(cfg, mockPermClient)
+	require.NoError(t, err)
+
+	// Create router
+	router := createTestRouter(t, handler)
+
+	tests := []struct {
+		name         string
+		contextParam string
+		expectLines  bool
+	}{
+		{
+			name:         "Default context (3 lines)",
+			contextParam: "",
+			expectLines:  true,
+		},
+		{
+			name:         "No context lines",
+			contextParam: "0",
+			expectLines:  false,
+		},
+		{
+			name:         "Custom context lines",
+			contextParam: "5",
+			expectLines:  true,
+		},
+		{
+			name:         "Invalid context parameter (should use default)",
+			contextParam: "invalid",
+			expectLines:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build URL with context parameter
+			url := fmt.Sprintf("/repos/owner/repo/commits/%s/diff", commit2)
+			if tt.contextParam != "" {
+				url += fmt.Sprintf("?context=%s", tt.contextParam)
+			}
+
+			req := httptest.NewRequest("GET", url, nil)
+			req.Header.Set("X-USER-ID", "test-user")
+
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var response SingleCommitDiffResponse
+			err := json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err)
+
+			// Check if line changes are included based on context setting
+			for _, file := range response.DiffResponse.Files {
+				if !file.IsBinary {
+					if tt.expectLines && tt.contextParam != "0" {
+						// Should have line changes when context > 0
+						if file.Additions > 0 || file.Deletions > 0 {
+							assert.NotEmpty(t, file.Changes, "Expected line changes for file %s", file.Path)
+						}
+					} else if tt.contextParam == "0" {
+						// Should not have line changes when context = 0
+						assert.Empty(t, file.Changes, "Expected no line changes for file %s when context=0", file.Path)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSingleCommitDiffResponse_JSONSerialization(t *testing.T) {
+	// Test proper JSON serialization/deserialization of SingleCommitDiffResponse
+	commitMetadata := &CommitMetadata{
+		SHA:     "abcdef1234567890abcdef1234567890abcdef12",
+		Author:  "Test Author",
+		Email:   "author@example.com",
+		Date:    "2023-01-01T12:00:00Z",
+		Message: "Test commit message",
+		Parents: []string{"parent1", "parent2"},
+	}
+
+	diffResponse := &DiffResponse{
+		Base: "parent1",
+		Head: "abcdef1234567890abcdef1234567890abcdef12",
+		Files: []FileDiff{
+			{
+				Path:      "test.go",
+				Status:    "modified",
+				Additions: 5,
+				Deletions: 3,
+				Changes: []LineChange{
+					{Type: "add", LineNum: 1, Content: "+new line"},
+					{Type: "del", LineNum: 2, Content: "-old line"},
+				},
+				IsBinary: false,
+			},
+		},
+		Stats: DiffStats{
+			TotalAdditions: 5,
+			TotalDeletions: 3,
+			FilesChanged:   1,
+		},
+	}
+
+	response := &SingleCommitDiffResponse{
+		Commit:       commitMetadata,
+		DiffResponse: diffResponse,
+	}
+
+	// Test JSON serialization
+	jsonData, err := json.Marshal(response)
+	assert.NoError(t, err)
+
+	// Test JSON deserialization
+	var unmarshaled SingleCommitDiffResponse
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	assert.NoError(t, err)
+
+	// Verify commit metadata
+	assert.Equal(t, response.Commit.SHA, unmarshaled.Commit.SHA)
+	assert.Equal(t, response.Commit.Author, unmarshaled.Commit.Author)
+	assert.Equal(t, response.Commit.Email, unmarshaled.Commit.Email)
+	assert.Equal(t, response.Commit.Date, unmarshaled.Commit.Date)
+	assert.Equal(t, response.Commit.Message, unmarshaled.Commit.Message)
+	assert.Equal(t, response.Commit.Parents, unmarshaled.Commit.Parents)
+
+	// Verify diff response
+	assert.Equal(t, response.DiffResponse.Base, unmarshaled.DiffResponse.Base)
+	assert.Equal(t, response.DiffResponse.Head, unmarshaled.DiffResponse.Head)
+	assert.Equal(t, len(response.DiffResponse.Files), len(unmarshaled.DiffResponse.Files))
+	assert.Equal(t, response.DiffResponse.Stats, unmarshaled.DiffResponse.Stats)
+
+	// Verify file diff details
+	if len(unmarshaled.DiffResponse.Files) > 0 {
+		origFile := response.DiffResponse.Files[0]
+		unmarshaledFile := unmarshaled.DiffResponse.Files[0]
+		assert.Equal(t, origFile.Path, unmarshaledFile.Path)
+		assert.Equal(t, origFile.Status, unmarshaledFile.Status)
+		assert.Equal(t, origFile.Additions, unmarshaledFile.Additions)
+		assert.Equal(t, origFile.Deletions, unmarshaledFile.Deletions)
+		assert.Equal(t, len(origFile.Changes), len(unmarshaledFile.Changes))
 	}
 }

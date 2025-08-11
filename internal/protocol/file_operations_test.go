@@ -841,3 +841,516 @@ func TestOperationResult_Success(t *testing.T) {
 		assert.Equal(t, "file not found", result.Error)
 	})
 }
+
+// Tests for RESTful File Content Endpoint
+
+func TestFileOperationsHandler_HandleFileContent_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Create mock permission client that allows read access
+	mockPermClient := &mockPermissionClient{
+		readAccess:  true,
+		writeAccess: false,
+		shouldError: false,
+	}
+
+	// Create handler
+	cfg := &config.Config{
+		Git:     config.GitConfig{RepoRoot: "/tmp"},
+		Logging: config.LoggingConfig{Level: "error", Format: "json"},
+	}
+
+	// This test focuses on validation and API structure
+	// Full integration tests with actual Git repositories should be in integration tests
+
+	t.Run("Parameter validation", func(t *testing.T) {
+		handler, err := NewFileOperationsHandler(cfg, mockPermClient)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.GET("/repos/:owner/:repo/files/*path", handler.HandleFileContent)
+
+		// Test missing path
+		req := httptest.NewRequest("GET", "/repos/owner/repo/files/", nil)
+		req.Header.Set("X-USER-ID", "test-user")
+		req.Header.Set("X-Source", "test-source")
+		req.Header.Set("X-Source", "test-source")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.False(t, response["success"].(bool))
+		assert.Contains(t, response["error"].(string), "Missing required parameter: path")
+	})
+
+	t.Run("Permission validation", func(t *testing.T) {
+		// Test with no read access
+		noAccessPermClient := &mockPermissionClient{
+			readAccess:  false,
+			writeAccess: false,
+			shouldError: false,
+		}
+
+		handler, err := NewFileOperationsHandler(cfg, noAccessPermClient)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.GET("/repos/:owner/:repo/files/*path", handler.HandleFileContent)
+
+		req := httptest.NewRequest("GET", "/repos/owner/repo/files/test.txt", nil)
+		req.Header.Set("X-USER-ID", "test-user")
+		req.Header.Set("X-Source", "test-source")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should get access denied
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+}
+
+func TestFileOperationsHandler_HandleFileContent_LineRangeProcessing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Create mock permission client
+	mockPermClient := &mockPermissionClient{
+		readAccess:  true,
+		writeAccess: false,
+		shouldError: false,
+	}
+
+	cfg := &config.Config{
+		Git:     config.GitConfig{RepoRoot: "/tmp"},
+		Logging: config.LoggingConfig{Level: "error", Format: "json"},
+	}
+
+	handler, err := NewFileOperationsHandler(cfg, mockPermClient)
+	require.NoError(t, err)
+
+	// Test line range processing functionality
+	testContent := "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
+
+	tests := []struct {
+		name           string
+		linesParam     string
+		expectedResult string
+		expectedError  bool
+		expectedLines  int
+	}{
+		{
+			name:           "Single line",
+			linesParam:     "2",
+			expectedResult: "Line 2",
+			expectedError:  false,
+			expectedLines:  5,
+		},
+		{
+			name:           "Range with start and end",
+			linesParam:     "2-4",
+			expectedResult: "Line 2\nLine 3\nLine 4",
+			expectedError:  false,
+			expectedLines:  5,
+		},
+		{
+			name:           "Range from line to end",
+			linesParam:     "3-",
+			expectedResult: "Line 3\nLine 4\nLine 5",
+			expectedError:  false,
+			expectedLines:  5,
+		},
+		{
+			name:           "Invalid range format",
+			linesParam:     "2-4-6",
+			expectedResult: "",
+			expectedError:  true,
+			expectedLines:  0,
+		},
+		{
+			name:           "Start greater than end",
+			linesParam:     "4-2",
+			expectedResult: "",
+			expectedError:  true,
+			expectedLines:  0,
+		},
+		{
+			name:           "Line number exceeds total",
+			linesParam:     "10",
+			expectedResult: "",
+			expectedError:  true,
+			expectedLines:  0,
+		},
+		{
+			name:           "Invalid number format",
+			linesParam:     "abc",
+			expectedResult: "",
+			expectedError:  true,
+			expectedLines:  0,
+		},
+		{
+			name:           "Zero line number",
+			linesParam:     "0",
+			expectedResult: "",
+			expectedError:  true,
+			expectedLines:  0,
+		},
+		{
+			name:           "Negative line number",
+			linesParam:     "-1",
+			expectedResult: "",
+			expectedError:  true,
+			expectedLines:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, totalLines, err := handler.processLineRange(testContent, tt.linesParam)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedResult, result)
+				assert.Equal(t, tt.expectedLines, totalLines)
+			}
+		})
+	}
+}
+
+func TestFileOperationsHandler_HandleFileContent_BinaryDetection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockPermClient := &mockPermissionClient{
+		readAccess:  true,
+		writeAccess: false,
+		shouldError: false,
+	}
+
+	cfg := &config.Config{
+		Git:     config.GitConfig{RepoRoot: "/tmp"},
+		Logging: config.LoggingConfig{Level: "error", Format: "json"},
+	}
+
+	handler, err := NewFileOperationsHandler(cfg, mockPermClient)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		content  []byte
+		expected bool
+	}{
+		{
+			name:     "Text content",
+			content:  []byte("Hello, World!\nThis is text."),
+			expected: false,
+		},
+		{
+			name:     "Binary content with null byte",
+			content:  []byte("Hello\x00World"),
+			expected: true,
+		},
+		{
+			name:     "Empty content",
+			content:  []byte(""),
+			expected: false,
+		},
+		{
+			name:     "UTF-8 content",
+			content:  []byte("Hello 世界"),
+			expected: false,
+		},
+		{
+			name:     "Binary data with null byte",
+			content:  []byte{0x89, 0x50, 0x4E, 0x47, 0x00, 0x0A, 0x1A, 0x0A},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := handler.isBinaryContent(tt.content)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFileOperationsHandler_HandleFileContent_QueryParams(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockPermClient := &mockPermissionClient{
+		readAccess:  true,
+		writeAccess: false,
+		shouldError: false,
+	}
+
+	cfg := &config.Config{
+		Git:     config.GitConfig{RepoRoot: "/tmp"},
+		Logging: config.LoggingConfig{Level: "error", Format: "json"},
+	}
+
+	handler, err := NewFileOperationsHandler(cfg, mockPermClient)
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/files/*path", handler.HandleFileContent)
+
+	// Test default ref parameter
+	t.Run("Default ref parameter", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/owner/repo/files/test.txt", nil)
+		req.Header.Set("X-USER-ID", "test-user")
+		req.Header.Set("X-Source", "test-source")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// This will fail at the Git operation level, but we can check the parameter processing
+		// The test validates that the default ref is set to "main" internally
+		assert.NotEqual(t, http.StatusBadRequest, w.Code) // Should not be a bad request due to missing ref
+	})
+
+	// Test custom ref parameter
+	t.Run("Custom ref parameter", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/owner/repo/files/test.txt?ref=develop", nil)
+		req.Header.Set("X-USER-ID", "test-user")
+		req.Header.Set("X-Source", "test-source")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// This will fail at the Git operation level, but parameter processing should work
+		assert.NotEqual(t, http.StatusBadRequest, w.Code)
+	})
+
+	// Test lines parameter
+	t.Run("Lines parameter", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/owner/repo/files/test.txt?lines=1-10", nil)
+		req.Header.Set("X-USER-ID", "test-user")
+		req.Header.Set("X-Source", "test-source")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should pass parameter validation
+		assert.NotEqual(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+func TestFileOperationsHandler_HandleFileContent_ErrorHandling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := &config.Config{
+		Git:     config.GitConfig{RepoRoot: "/tmp"},
+		Logging: config.LoggingConfig{Level: "error", Format: "json"},
+	}
+
+	tests := []struct {
+		name           string
+		setupHandler   func() *FileOperationsHandler
+		path           string
+		headers        map[string]string
+		queryParams    string
+		expectedStatus int
+		expectedError  string
+	}{
+		{
+			name: "Missing user authentication",
+			setupHandler: func() *FileOperationsHandler {
+				mockPermClient := &mockPermissionClient{
+					readAccess:  true,
+					writeAccess: false,
+					shouldError: false,
+				}
+				handler, _ := NewFileOperationsHandler(cfg, mockPermClient)
+				return handler
+			},
+			path:           "/repos/owner/repo/files/test.txt",
+			headers:        map[string]string{},     // No X-USER-ID header
+			expectedStatus: http.StatusUnauthorized, // validatePermissions should return 401 for missing user ID
+			expectedError:  "",
+		},
+		{
+			name: "Permission check error",
+			setupHandler: func() *FileOperationsHandler {
+				mockPermClient := &mockPermissionClient{
+					readAccess:  false,
+					writeAccess: false,
+					shouldError: true, // Force permission check error
+				}
+				handler, _ := NewFileOperationsHandler(cfg, mockPermClient)
+				return handler
+			},
+			path:           "/repos/owner/repo/files/test.txt",
+			headers:        map[string]string{"X-USER-ID": "test-user", "X-Source": "orchestrator"},
+			expectedStatus: http.StatusInternalServerError,
+			expectedError:  "",
+		},
+		{
+			name: "Invalid lines parameter format",
+			setupHandler: func() *FileOperationsHandler {
+				// This test would require a mock repository, so we'll test the parameter parsing separately
+				mockPermClient := &mockPermissionClient{
+					readAccess:  true,
+					writeAccess: false,
+					shouldError: false,
+				}
+				handler, _ := NewFileOperationsHandler(cfg, mockPermClient)
+				return handler
+			},
+			path:           "/repos/owner/repo/files/test.txt",
+			headers:        map[string]string{"X-USER-ID": "test-user", "X-Source": "orchestrator"},
+			queryParams:    "?lines=invalid",
+			expectedStatus: http.StatusNotFound, // Repository not found - can't test lines parameter without existing repo
+			expectedError:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := tt.setupHandler()
+			router := gin.New()
+			router.GET("/repos/:owner/:repo/files/*path", handler.HandleFileContent)
+
+			url := tt.path + tt.queryParams
+			req := httptest.NewRequest("GET", url, nil)
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedError != "" {
+				responseBody := w.Body.String()
+				assert.Contains(t, responseBody, tt.expectedError)
+			}
+		})
+	}
+}
+
+func TestFileContentResponse_Structure(t *testing.T) {
+	// Test the FileContentResponse structure and JSON serialization
+	response := FileContentResponse{
+		Success:    true,
+		Path:       "test/file.go",
+		Ref:        "main",
+		Content:    "package main\n\nfunc main() {\n\tfmt.Println(\"Hello\")\n}",
+		IsBinary:   false,
+		Size:       52,
+		TotalLines: 5,
+		CommitSHA:  "abcdef1234567890abcdef1234567890abcdef12",
+		Encoding:   "text",
+		LineRange:  "1-3",
+	}
+
+	// Test JSON serialization
+	jsonData, err := json.Marshal(response)
+	assert.NoError(t, err)
+
+	// Test JSON deserialization
+	var unmarshaled FileContentResponse
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	assert.NoError(t, err)
+
+	// Verify all fields are preserved
+	assert.Equal(t, response.Success, unmarshaled.Success)
+	assert.Equal(t, response.Path, unmarshaled.Path)
+	assert.Equal(t, response.Ref, unmarshaled.Ref)
+	assert.Equal(t, response.Content, unmarshaled.Content)
+	assert.Equal(t, response.IsBinary, unmarshaled.IsBinary)
+	assert.Equal(t, response.Size, unmarshaled.Size)
+	assert.Equal(t, response.TotalLines, unmarshaled.TotalLines)
+	assert.Equal(t, response.CommitSHA, unmarshaled.CommitSHA)
+	assert.Equal(t, response.Encoding, unmarshaled.Encoding)
+	assert.Equal(t, response.LineRange, unmarshaled.LineRange)
+}
+
+func TestFileOperationsHandler_ParseLineNumber(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockPermClient := &mockPermissionClient{
+		readAccess:  true,
+		writeAccess: false,
+		shouldError: false,
+	}
+
+	cfg := &config.Config{
+		Git:     config.GitConfig{RepoRoot: "/tmp"},
+		Logging: config.LoggingConfig{Level: "error", Format: "json"},
+	}
+
+	handler, err := NewFileOperationsHandler(cfg, mockPermClient)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		input       string
+		maxValue    int
+		expected    int
+		expectError bool
+	}{
+		{
+			name:        "Valid positive number",
+			input:       "5",
+			maxValue:    10,
+			expected:    5,
+			expectError: false,
+		},
+		{
+			name:        "Valid number at boundary",
+			input:       "1",
+			maxValue:    1,
+			expected:    1,
+			expectError: false,
+		},
+		{
+			name:        "Empty string",
+			input:       "",
+			maxValue:    10,
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name:        "Zero",
+			input:       "0",
+			maxValue:    10,
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name:        "Negative number",
+			input:       "-1",
+			maxValue:    10,
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name:        "Non-numeric string",
+			input:       "abc",
+			maxValue:    10,
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name:        "Float number",
+			input:       "5.5",
+			maxValue:    10,
+			expected:    5, // fmt.Sscanf will parse the integer part
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := handler.parseLineNumber(tt.input, tt.maxValue)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}

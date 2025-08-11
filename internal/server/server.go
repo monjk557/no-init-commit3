@@ -262,6 +262,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 					// Compare specific file between two references
 					diffGroup.GET("/file", gin.WrapF(diffHandler.HandleFileDiff))
 				}
+
+				// Single commit diff endpoint
+				repoGroup.GET("/commits/:sha/diff", gin.WrapF(diffHandler.HandleSingleCommitDiff))
+
+				// RESTful file content endpoint
+				repoGroup.GET("/files/*path", fileOpsHandler.HandleFileContent)
 				// Patch endpoints
 				patchGroup := repoGroup.Group("/patch")
 				{

@@ -594,6 +594,300 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 	api.SendSuccess(c, response, "File deletion completed successfully")
 }
 
+// HandleFileContent handles GET /repos/:owner/:repo/files/*path?ref=:ref&lines=:range for RESTful file content access
+func (h *FileOperationsHandler) HandleFileContent(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	path := c.Param("path")
+
+	// Remove leading slash from path parameter
+	if strings.HasPrefix(path, "/") {
+		path = path[1:]
+	}
+
+	// Validate path parameter
+	if path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Missing required parameter: path",
+		})
+		return
+	}
+
+	// Get query parameters
+	ref := c.Query("ref")
+	if ref == "" {
+		ref = "main" // Default to main branch
+	}
+
+	linesParam := c.Query("lines")
+
+	// Validate permissions
+	if err := h.validatePermissions(c, owner, repo, "read"); err != nil {
+		h.logger.Warn("Permission validation failed", zap.Error(err))
+
+		// Check if it's a GitAPIError and handle based on error code
+		if apiErr, ok := err.(*api.GitAPIError); ok {
+			switch apiErr.Code {
+			case api.ErrorCodeUnauthorized:
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"error":   apiErr.Message,
+				})
+			case api.ErrorCodeForbidden:
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"error":   apiErr.Message,
+				})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"error":   apiErr.Message,
+				})
+			}
+		} else {
+			// Generic error handling
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
+		return
+	}
+
+	// Validate file path
+	if err := h.pathValidator.ValidateFilePath(path); err != nil {
+		apiErr := h.errorMapper.MapError(err, "validate_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Open repository
+	ctx := c.Request.Context()
+	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "open_repository")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Resolve the reference
+	refHash, err := h.objectManager.ResolveReference(ctx, repository, ref)
+	if err != nil {
+		apiErr := h.errorMapper.MapErrorWithContext(err, "resolve_reference", fmt.Sprintf("ref=%s", ref))
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Get the commit object
+	commit, err := repository.CommitObject(refHash)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_commit_object")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Get the tree for the commit
+	tree, err := commit.Tree()
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_commit_tree")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Get the file from tree
+	file, err := h.objectManager.GetFileFromTree(ctx, tree, path)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_file_from_tree")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Get file contents
+	content, err := file.Contents()
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_file_contents")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Check if file is binary
+	isBinary := h.isBinaryContent([]byte(content))
+
+	// Process line range if specified
+	var processedContent string
+	var totalLines int
+
+	if linesParam != "" && !isBinary {
+		processedContent, totalLines, err = h.processLineRange(content, linesParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Invalid lines parameter: %v", err),
+			})
+			return
+		}
+	} else {
+		processedContent = content
+		if !isBinary {
+			totalLines = len(strings.Split(content, "\n"))
+		}
+	}
+
+	// Prepare response
+	response := FileContentResponse{
+		Success:    true,
+		Path:       path,
+		Ref:        ref,
+		Content:    processedContent,
+		IsBinary:   isBinary,
+		Size:       len(content),
+		TotalLines: totalLines,
+		CommitSHA:  commit.Hash.String(),
+	}
+
+	// For binary content, encode as base64
+	if isBinary {
+		response.Content = base64.StdEncoding.EncodeToString([]byte(content))
+		response.Encoding = "base64"
+	} else {
+		response.Encoding = "text"
+	}
+
+	// If line range was applied, add range info
+	if linesParam != "" && !isBinary {
+		response.LineRange = linesParam
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// FileContentResponse represents the response structure for file content requests
+type FileContentResponse struct {
+	Success    bool   `json:"success"`
+	Path       string `json:"path"`
+	Ref        string `json:"ref"`
+	Content    string `json:"content"`
+	IsBinary   bool   `json:"is_binary"`
+	Size       int    `json:"size"`
+	TotalLines int    `json:"total_lines,omitempty"`
+	CommitSHA  string `json:"commit_sha"`
+	Encoding   string `json:"encoding"`
+	LineRange  string `json:"line_range,omitempty"`
+}
+
+// processLineRange processes the content based on line range specification
+func (h *FileOperationsHandler) processLineRange(content, linesParam string) (string, int, error) {
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+
+	// Parse line range (e.g., "10-20", "5", "15-")
+	if strings.Contains(linesParam, "-") {
+		parts := strings.Split(linesParam, "-")
+		if len(parts) != 2 {
+			return "", 0, fmt.Errorf("invalid range format, expected 'start-end'")
+		}
+
+		start, err := h.parseLineNumber(parts[0], 1)
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid start line: %v", err)
+		}
+
+		var end int
+		if parts[1] == "" {
+			// Format "15-" means from line 15 to end
+			end = totalLines
+		} else {
+			end, err = h.parseLineNumber(parts[1], totalLines)
+			if err != nil {
+				return "", 0, fmt.Errorf("invalid end line: %v", err)
+			}
+		}
+
+		if start > end {
+			return "", 0, fmt.Errorf("start line (%d) cannot be greater than end line (%d)", start, end)
+		}
+
+		if start > totalLines {
+			return "", 0, fmt.Errorf("start line (%d) exceeds total lines (%d)", start, totalLines)
+		}
+
+		// Adjust for 0-based indexing
+		startIdx := start - 1
+		endIdx := end
+		if endIdx > totalLines {
+			endIdx = totalLines
+		}
+
+		selectedLines := lines[startIdx:endIdx]
+		return strings.Join(selectedLines, "\n"), totalLines, nil
+	} else {
+		// Single line number
+		lineNum, err := h.parseLineNumber(linesParam, totalLines)
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid line number: %v", err)
+		}
+
+		if lineNum > totalLines {
+			return "", 0, fmt.Errorf("line number (%d) exceeds total lines (%d)", lineNum, totalLines)
+		}
+
+		// Return single line (adjust for 0-based indexing)
+		return lines[lineNum-1], totalLines, nil
+	}
+}
+
+// parseLineNumber parses a line number string with validation
+func (h *FileOperationsHandler) parseLineNumber(s string, maxValue int) (int, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty line number")
+	}
+
+	var num int
+	_, err := fmt.Sscanf(s, "%d", &num)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number format: %v", err)
+	}
+
+	if num < 1 {
+		return 0, fmt.Errorf("line number must be positive")
+	}
+
+	return num, nil
+}
+
+// isBinaryContent checks if content appears to be binary
+func (h *FileOperationsHandler) isBinaryContent(content []byte) bool {
+	// Simple heuristic: if content contains null bytes, consider it binary
+	for _, b := range content {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // validateRefName validates Git reference names with strict branch name rules
 func (h *FileOperationsHandler) validateRefName(ref string) error {
 	if ref == "" {
