@@ -1,0 +1,30 @@
+# Docker Configuration for CollabOps Git Executor
+# Used for Docker local integration testing
+
+# HTTP Server Configuration
+server:
+  port: 9090
+  host: "0.0.0.0"
+  base_path: "/repos"
+  read_timeout: "60s"
+  write_timeout: "60s"
+  idle_timeout: "300s"
+
+# Git Repository Configuration
+git:
+  repo_root: "/repos"
+  enable_packfile: true
+  max_cache_size: 100
+  cache_ttl: "5m"
+
+# JWT Configuration
+jwt:
+  algorithm: "HS256"
+  secret_key: "git_executor_jwt_secret_local_integration_test"
+
+# Logging Configuration
+log:
+  level: "info"
+  format: "json"
+  output: "stdout"
+  development: false

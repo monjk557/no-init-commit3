@@ -152,9 +152,9 @@ services:
       - COLLABOPS_GIT_MAX_CACHE_SIZE=100
       - COLLABOPS_GIT_CACHE_TTL=5m
 
-      # JWT Configuration (for API authentication)
-      - COLLABOPS_JWT_ALGORITHM=HS256
-      - COLLABOPS_JWT_SECRET_KEY=${GIT_EXECUTOR_JWT_SECRET:-git_executor_jwt_secret_local}
+      # JWT Configuration (for API authentication) - using RS256 default
+      - COLLABOPS_JWT_ALGORITHM=RS256
+      - COLLABOPS_JWT_PUBLIC_KEY_PATH=/dev/null
 
       # Logging Configuration
       - COLLABOPS_LOG_LEVEL=${GIT_EXECUTOR_LOG_LEVEL:-info}
@@ -170,8 +170,6 @@ services:
     volumes:
       # Git repositories storage
       - git_executor_repos:/repos
-      # Configuration volume (if using file-based config)
-      - ../../../config:/config:ro
       # Logs volume
       - git_executor_logs:/var/log/collabops
     networks:
