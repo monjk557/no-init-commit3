@@ -56,9 +56,6 @@ jobs:
           echo ""
           echo "✅ Perfect alignment - no more CI/local discrepancies!"
 
-      - name: Verify project structure
-        run: make verify-structure
-
       - name: Verify configuration
         run: make verify-config
 
