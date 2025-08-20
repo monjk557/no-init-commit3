@@ -17,6 +17,8 @@ import (
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 )
 
@@ -130,6 +132,18 @@ func (s *Server) SetupRouter() *gin.Engine {
 
 	// Keep the original simple health check for backward compatibility
 	router.GET(s.config.Server.HealthCheckPath, s.healthCheck)
+
+	// Swagger UI 및 OpenAPI spec 서빙
+	router.GET("/api-docs", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/api-docs/swagger/index.html")
+	})
+	router.GET("/api-docs/openapi.yaml", func(c *gin.Context) {
+		c.File("./docs/api/openapi.yaml")
+	})
+	router.GET("/api-docs/swagger/*any", ginSwagger.WrapHandler(
+		swaggerFiles.Handler,
+		ginSwagger.URL("/api-docs/openapi.yaml"), // .yaml 대신 .json 사용
+	))
 
 	// Mount API routes under base path if configured
 	if s.config.Server.BasePath != "/" {
