@@ -28,6 +28,8 @@ type ServerConfig struct {
 	IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 	HealthCheckPath string        `mapstructure:"health_check_path"`
+	EnableDocs      bool          `mapstructure:"enable_docs"`
+	DocsPath        string        `mapstructure:"docs_path"`
 }
 
 // GitConfig holds Git repository configuration
@@ -129,6 +131,8 @@ func setDefaults() {
 	// Server additional defaults
 	viper.SetDefault("server.shutdown_timeout", "30s")
 	viper.SetDefault("server.health_check_path", "/health")
+	viper.SetDefault("server.enable_docs", true)
+	viper.SetDefault("server.docs_path", "/api-docs")
 
 	// Logging defaults
 	viper.SetDefault("logging.level", "info")

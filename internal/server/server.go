@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +23,53 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 )
+
+// setupSwaggerRoutes configures Swagger documentation routes with proper base path support
+func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
+	if !s.config.Server.EnableDocs {
+		return
+	}
+
+	docsPath := s.config.Server.DocsPath
+	if docsPath == "" {
+		docsPath = "/api-docs"
+	}
+
+	// Ensure docs path starts with /
+	if !strings.HasPrefix(docsPath, "/") {
+		docsPath = "/" + docsPath
+	}
+
+	// Create docs group with proper base path
+	var docsGroup *gin.RouterGroup
+	if s.config.Server.BasePath != "/" {
+		docsGroup = router.Group(s.config.Server.BasePath + docsPath)
+	} else {
+		docsGroup = router.Group(docsPath)
+	}
+
+	// Redirect from docs root to Swagger UI
+	docsGroup.GET("", func(c *gin.Context) {
+		redirectPath := path.Join(docsPath, "swagger/index.html")
+		if s.config.Server.BasePath != "/" {
+			redirectPath = s.config.Server.BasePath + redirectPath
+		}
+		c.Redirect(http.StatusFound, redirectPath)
+	})
+
+	// Serve OpenAPI specification from configured path
+	docsGroup.GET("/openapi.yaml", func(c *gin.Context) {
+		// Try to serve from embedded file first, fallback to filesystem
+		specPath := "./docs/api/openapi.yaml"
+		c.File(specPath)
+	})
+
+	// Serve Swagger UI
+	docsGroup.GET("/swagger/*any", ginSwagger.WrapHandler(
+		swaggerFiles.Handler,
+		ginSwagger.URL(path.Join(docsPath, "openapi.yaml")),
+	))
+}
 
 // ginContextMiddleware stores the Gin context in the request context for protocol handlers
 func ginContextMiddleware() gin.HandlerFunc {
@@ -133,17 +182,8 @@ func (s *Server) SetupRouter() *gin.Engine {
 	// Keep the original simple health check for backward compatibility
 	router.GET(s.config.Server.HealthCheckPath, s.healthCheck)
 
-	// Swagger UI 및 OpenAPI spec 서빙
-	router.GET("/api-docs", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "/api-docs/swagger/index.html")
-	})
-	router.GET("/api-docs/openapi.yaml", func(c *gin.Context) {
-		c.File("./docs/api/openapi.yaml")
-	})
-	router.GET("/api-docs/swagger/*any", ginSwagger.WrapHandler(
-		swaggerFiles.Handler,
-		ginSwagger.URL("/api-docs/openapi.yaml"), // .yaml 대신 .json 사용
-	))
+	// Setup Swagger documentation routes with proper configuration
+	s.setupSwaggerRoutes(router)
 
 	// Mount API routes under base path if configured
 	if s.config.Server.BasePath != "/" {
