@@ -58,16 +58,16 @@ func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
 	})
 
 	// Serve OpenAPI specification from configured path
-	docsGroup.GET("/openapi.yaml", func(c *gin.Context) {
+	docsGroup.GET("/collabops-git-executor.yaml", func(c *gin.Context) {
 		// Try to serve from embedded file first, fallback to filesystem
-		specPath := "./docs/api/openapi.yaml"
+		specPath := "./specs/collabops-git-executor.yaml"
 		c.File(specPath)
 	})
 
 	// Serve Swagger UI
 	docsGroup.GET("/swagger/*any", ginSwagger.WrapHandler(
 		swaggerFiles.Handler,
-		ginSwagger.URL(path.Join(docsPath, "openapi.yaml")),
+		ginSwagger.URL(path.Join(docsPath, "collabops-git-executor.yaml")),
 	))
 }
 
