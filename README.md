@@ -5,6 +5,33 @@
 **Last Updated:** January 8, 2025
 **🏆 TEST STATUS: 100% SUCCESS RATE - 567/567 TESTS PASSING ✅**
 
+### 📚 API Documentation & Swagger UI
+
+**Interactive API Documentation:**
+- **Swagger UI:** `http://localhost:8080/repos/api-docs/swagger/index.html` (with base path)
+- **OpenAPI Spec:** `http://localhost:8080/repos/api-docs/openapi.yaml` (with base path)
+- **API Docs Redirect:** `http://localhost:8080/repos/api-docs` → Redirects to Swagger UI
+
+**Configuration Options:**
+```yaml
+server:
+  enable_docs: true          # Enable/disable documentation routes
+  docs_path: "/api-docs"     # Custom docs path (default: /api-docs)
+  base_path: "/repos"        # Base path for all routes
+```
+
+**Access the complete interactive API documentation with:**
+```bash
+# With base path (production/docker config)
+open http://localhost:8080/repos/api-docs/swagger/index.html
+
+# Without base path (test config)
+open http://localhost:3000/api-docs/swagger/index.html
+
+# Or curl the OpenAPI spec
+curl http://localhost:8080/repos/api-docs/openapi.yaml
+```
+
 ### ✅ What's Working
 - **100% Test Coverage:** All 567 tests passing - comprehensive validation complete
 - **Production Ready:** Real functionality validated with live server testing
