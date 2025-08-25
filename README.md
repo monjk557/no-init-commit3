@@ -559,71 +559,180 @@ curl -X POST "http://localhost:3000/repos/testowner/testrepo/branches" \
 
 ---
 
-## 📖 Git Protocol API Reference
+## 📖 Complete API Reference
 
-**For Component Integration:** This section provides complete endpoint specifications for `collabops-git-http` and `collabops-git-ssh` gateways.
+**Note: This is a Git Protocol Server, not a full Git hosting API**
 
-### 🌐 Git Smart HTTP Protocol Endpoints
+This server primarily implements Git Smart HTTP Protocol and SSH Protocol for Git operations (push/pull/fetch), with comprehensive REST API endpoints for repository management and diff operations.
+
+### 🏥 Health Check
+```http
+GET /health
+```
+- Returns server health status
+- No authentication required
+- **Response:** `{"status": "ok", "message": "Git Executor is running"}`
+
+### 🔄 Git Smart HTTP Protocol (Primary Purpose)
 
 **For collabops-git-http Gateway Integration**
 
-#### Reference Advertisement
+#### Info/Refs - Repository Capabilities
+```http
+GET /repos/{owner}/{repo}/info/refs?service={git-upload-pack|git-receive-pack}
 ```
-GET /{owner}/{repo}/info/refs?service={git-upload-pack|git-receive-pack}
-X-USER-ID: {userId}
-X-Source: http-gateway
-Content-Type: application/x-git-{upload|receive}-pack-advertisement
-```
+- **Headers Required:** `X-USER-ID`, `X-Source: http-gateway`
+- **git-upload-pack:** Advertises capabilities for fetch/clone operations
+- **git-receive-pack:** Advertises capabilities for push operations
+- **Response:** Git pkt-line format with capabilities and references
 
-#### Upload Pack (Fetch/Clone)
+#### Upload Pack - Fetch/Clone Operations
+```http
+POST /repos/{owner}/{repo}/git-upload-pack
 ```
-POST /{owner}/{repo}/git-upload-pack
-X-USER-ID: {userId}
-X-Source: http-gateway
-Content-Type: application/x-git-upload-pack-request
-Response: application/x-git-upload-pack-result
-```
+- **Headers Required:** `X-USER-ID`, `X-Source: http-gateway`
+- **Content-Type:** `application/x-git-upload-pack-request`
+- **Purpose:** Handles Git fetch/clone operations
+- **Response:** Git packfile data stream
 
-#### Receive Pack (Push)
+#### Receive Pack - Push Operations
+```http
+POST /repos/{owner}/{repo}/git-receive-pack
 ```
-POST /{owner}/{repo}/git-receive-pack
-X-USER-ID: {userId}
-X-Source: http-gateway
-Content-Type: application/x-git-receive-pack-request
-Response: application/x-git-receive-pack-result
-```
+- **Headers Required:** `X-USER-ID`, `X-Source: http-gateway`
+- **Content-Type:** `application/x-git-receive-pack-request`
+- **Purpose:** Handles Git push operations with packfile processing
+- **Response:** Push result status
 
 ### 🔐 SSH Protocol Endpoints
 
 **For collabops-git-ssh Gateway Integration**
 
-#### SSH Upload Pack (SSH Fetch/Clone)
-```
+#### SSH Upload Pack - SSH Fetch/Clone
+```http
 POST /ssh/{owner}/{repo}/upload-pack
-X-USER-ID: {userId}
-X-Source: ssh-gateway
-X-Correlation-ID: {optional-correlation-id}
-Git-Protocol: {optional-protocol-version}
-Content-Type: application/x-git-upload-pack-request
-Response: application/x-git-upload-pack-result
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: ssh-gateway`
+- **Optional Headers:** `X-Correlation-ID`, `Git-Protocol`
+- **Purpose:** SSH-forwarded fetch operations from Git SSH gateway
+
+#### SSH Receive Pack - SSH Push
+```http
+POST /ssh/{owner}/{repo}/receive-pack
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: ssh-gateway`
+- **Optional Headers:** `X-Correlation-ID`, `Git-Protocol`
+- **Purpose:** SSH-forwarded push operations from Git SSH gateway
+
+### 📊 REST API Endpoints (Repository Management)
+
+#### Repository State
+```http
+GET /repos/{owner}/{repo}/state
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Response:** Complete repository information including branches, commits, and metadata
+
+#### File Operations
+```http
+PUT /repos/{owner}/{repo}/files/{file_path}     # Create/Update file
+DELETE /repos/{owner}/{repo}/files/{file_path}  # Delete file
+POST /repos/{owner}/{repo}/commits              # Multi-file commit
 ```
 
-#### SSH Receive Pack (SSH Push)
+#### Branch Operations
+```http
+POST /repos/{owner}/{repo}/branches             # Create branch
+PUT /repos/{owner}/{repo}/branches/{name}       # Update branch (501 - Not Implemented)
 ```
-POST /ssh/{owner}/{repo}/receive-pack
-X-USER-ID: {userId}
-X-Source: ssh-gateway
-X-Correlation-ID: {optional-correlation-id}
-Git-Protocol: {optional-protocol-version}
-Content-Type: application/x-git-receive-pack-request
-Response: application/x-git-receive-pack-result
+
+#### Merge Operations
+```http
+POST /repos/{owner}/{repo}/merges                                    # Merge branches
+GET /repos/{owner}/{repo}/merges/preview?source_ref={}&target_ref={} # Merge preview
 ```
+
+### 📊 Diff & Patch Operations
+
+#### Commit Diff
+```http
+GET /repos/{owner}/{repo}/diff/commits/{base}/{head}
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Query Parameters:** `context=N` (number of context lines, default: 3)
+- **Response:** JSON with file changes, additions, deletions
+
+#### Branch Diff
+```http
+GET /repos/{owner}/{repo}/diff/branches/{base}/{head}
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Query Parameters:** `context=N` (number of context lines, default: 3)
+- **Response:** JSON with file changes between branches
+
+#### File Diff
+```http
+GET /repos/{owner}/{repo}/diff/file?path={file_path}&base={base_ref}&head={head_ref}
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Query Parameters:**
+  - `path` (required): File path to compare
+  - `base` (required): Base commit/branch reference
+  - `head` (required): Head commit/branch reference
+  - `context=N` (optional): Number of context lines
+  - `full_context=true` (optional): Include entire file
+- **Response:** JSON with line-by-line diff
+
+#### Patch Generation
+```http
+GET /repos/{owner}/{repo}/patch/{base}/{head}
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Response:** Git patch format
+
+### 📁 Repository Content
+
+#### Tree Listing
+```http
+GET /repos/{owner}/{repo}/tree
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Query Parameters:** Reference, path
+- **Response:** Directory/file tree structure
+
+#### Blob Content
+```http
+GET /repos/{owner}/{repo}/blob
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Query Parameters:** Reference, path
+- **Response:** File content
+
+#### Commit History
+```http
+GET /repos/{owner}/{repo}/commits
+```
+- **Headers Required:** `X-USER-ID`, `X-Source: orchestrator`
+- **Query Parameters:** Reference, limit
+- **Response:** Commit history
+
+### 🔐 Required Headers
+
+All endpoints require authentication headers:
+
+#### For Git Smart HTTP Protocol:
+- `X-USER-ID`: User identifier
+- `X-Source: http-gateway`
+
+#### For SSH Protocol:
+- `X-USER-ID`: User identifier
+- `X-Source: ssh-gateway`
+
+#### For REST API:
+- `X-USER-ID`: User identifier
+- `X-Source: orchestrator`
 
 ### 🛡️ Authentication & Authorization
-
-**Required Headers for All Git Operations:**
-- `X-USER-ID`: User identifier from gateway authentication
-- `X-Source`: Must be `http-gateway` or `ssh-gateway` respectively
 
 **Permission Model:**
 - **Read Operations (upload-pack):** Requires read access to repository
@@ -634,6 +743,45 @@ Response: application/x-git-receive-pack-result
 - Repository path validation
 - Per-repository locking for concurrent operations
 - Gateway source validation
+
+### 📝 Example Usage
+
+#### Test Git Clone Capability Discovery:
+```bash
+curl -H "X-USER-ID: testuser" \
+     -H "X-Source: http-gateway" \
+     "http://localhost:3000/repos/testowner/testrepo/info/refs?service=git-upload-pack"
+```
+
+#### Get File Diff (Pull Request Style):
+```bash
+curl -H "X-USER-ID: testuser" \
+     -H "X-Source: orchestrator" \
+     "http://localhost:3000/repos/testowner/testrepo/diff/file?path=README.md&base=abc123&head=def456&context=10"
+```
+
+### ❌ What This Server Does NOT Provide
+
+This is NOT a full Git hosting service API. Missing features include:
+- Repository creation/deletion
+- User management
+- Pull request management
+- Issues, wikis, releases
+- Repository settings
+- Team/organization management
+- Full commit browsing API
+- File upload/editing via web
+
+### 🎯 Purpose
+
+This server is designed to:
+1. **Handle Git protocol operations** (the core Git push/pull/fetch)
+2. **Provide comprehensive REST API** for repository management and file operations
+3. **Provide diff operations** for pull request functionality
+4. **Work with Git gateways** (HTTP and SSH) for authentication
+5. **Integrate with orchestrator** for diff/patch operations
+
+It's essentially the "Git engine" that powers Git operations in a larger Git hosting platform.
 
 ---
 
