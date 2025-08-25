@@ -22,19 +22,20 @@ This document lists ALL available endpoints in the CollabOps Git Executor servic
 
 All REST API endpoints are under `/repos/:owner/:repo` pattern.
 
-### Repository Information
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/repos/:owner/:repo/state` | Get repository state and status |
-| `GET` | `/repos/:owner/:repo/head` | Get repository HEAD reference |
-| `GET` | `/repos/:owner/:repo/references` | Get all repository references (branches, tags) |
+### Repository Management
+| Method | Endpoint | Description | Request Body |
+|--------|----------|-------------|--------------|
+| `POST` | `/repos/:owner/:repo` | Create new repository | `{"description": "...", "initial_commit": true, "default_branch": "main", "author": {...}}` |
+| `GET` | `/repos/:owner/:repo/state` | Get repository state and status | - |
+| `GET` | `/repos/:owner/:repo/head` | Get repository HEAD reference | - |
+| `GET` | `/repos/:owner/:repo/references` | Get all repository references (branches, tags) | - |
 
 ### Git Object Access
 | Method | Endpoint | Description | Query Params |
 |--------|----------|-------------|--------------|
 | `GET` | `/repos/:owner/:repo/tree` | Get tree objects | `sha`, `path`, `recursive` |
 | `GET` | `/repos/:owner/:repo/blob` | Get blob (file) contents | `sha`, `path` |
-| `GET` | `/repos/:owner/:repo/commits` | Get commit history | `ref`, `since`, `until`, `limit` |
+| `GET` | `/repos/:owner/:repo/commits` | Get commit history | `ref`, `limit`, `skip` |
 
 ### Diff & Comparison
 | Method | Endpoint | Description | Query Params |
