@@ -1,185 +1,174 @@
-# CollabOps Git Executor - Go Project Makefile
+# [MANUAL 0] make install base|local|qa|stage|prod
+# Description: Install Go dependencies and tools
+# Used: go.mod, go.sum
+# Options: local (local development), qa (QA), stage (staging), prod (production)
+.PHONY: install base local qa stage prod
+install:
+	@echo "📦 Installing Go dependencies..."
+	@go mod download
+	@go mod tidy
+	@if [ "$(filter local,$(MAKECMDGOALS))" ]; then \
+		echo "🔧 Installing local development tools..."; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install golang.org/x/tools/cmd/goimports@latest; \
+		go install honnef.co/go/tools/cmd/staticcheck@latest; \
+	elif [ "$(filter qa,$(MAKECMDGOALS))" ] || [ "$(filter stage,$(MAKECMDGOALS))" ] || [ "$(filter prod,$(MAKECMDGOALS))" ]; then \
+		echo "🏗️  Installing production tools..."; \
+		go install honnef.co/go/tools/cmd/staticcheck@latest; \
+	fi
+	@echo "✅ Dependencies installed!"
 
-# Build configuration
-BINARY_NAME=git-executor
-BUILD_DIR=bin
-GO_FILES=$(shell find . -name "*.go" -type f)
-VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS=-ldflags "-X main.version=$(VERSION)"
+# [MANUAL 1] make local [bg]
+# Description: Start local development environment and mock services.
+# Used: config/docker/compose/local.yml
+# Options: bg (run in background)
+.PHONY: local
+local: ensure-keys
+	@make check-docker
+	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
+		docker-compose -f config/docker/compose/local.yml up --build -d; \
+	else \
+		docker-compose -f config/docker/compose/local.yml up --build; \
+	fi
 
-# Default target
-.PHONY: all
-all: clean build
+# [MANUAL 2] make local-it [bg]
+# Description: Start local development environment with real services.
+# Used: config/docker/compose/local-it.yml
+# Options: bg (run in background)
+.PHONY: local-it
+local-it: ensure-keys
+	@make check-docker
+	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
+		docker-compose -f config/docker/compose/local-it.yml up --build -d; \
+	else \
+		docker-compose -f config/docker/compose/local-it.yml up --build; \
+	fi
 
-# Build the application
-.PHONY: build
-build:
-	@echo "🔨 Building $(BINARY_NAME)..."
-	@mkdir -p $(BUILD_DIR)
-	@go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/git-executor
-	@echo "✅ Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
+# [MANUAL 3] make build-it [bg]
+# Description: Start local dev (builds all images from source)
+# Used: config/docker/compose/build-it.yml
+# Options: bg (run in background)
+.PHONY: build-it
+build-it: ensure-keys
+	@make check-docker
+	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
+		docker-compose -f config/docker/compose/build-it.yml up --build -d; \
+	else \
+		docker-compose -f config/docker/compose/build-it.yml up --build; \
+	fi
 
-# Run tests
-.PHONY: test
-test:
-	@echo "🧪 Running tests..."
-	@go test -race -v ./...
-	@echo "✅ All tests passed!"
+# [MANUAL 4] make specs [fetch|generate|fix]
+# Description: OpenAPI specs management (delegated to specs/Makefile)
+# Used: specs/Makefile
+# Options: fetch, generate, fix (core workflow steps)
+.PHONY: specs
+specs: ## 📋 OpenAPI specs management (fetch/generate/fix)
+	@if [ "$(filter fetch,$(MAKECMDGOALS))" ]; then \
+		$(MAKE) -f specs/Makefile fetch; \
+	elif [ "$(filter generate,$(MAKECMDGOALS))" ]; then \
+		$(MAKE) -f specs/Makefile generate; \
+	elif [ "$(filter fix,$(MAKECMDGOALS))" ]; then \
+		$(MAKE) -f specs/Makefile fix; \
+	elif [ "$(filter help,$(MAKECMDGOALS))" ]; then \
+		$(MAKE) -f specs/Makefile help; \
+	else \
+		$(MAKE) -f specs/Makefile all; \
+	fi
 
-# Run tests with coverage
-.PHONY: test-coverage
-test-coverage:
-	@echo "🧪 Running tests with coverage..."
-	@go test -race -coverprofile=coverage.out ./...
-	@go tool cover -html=coverage.out -o coverage.html
-	@echo "✅ Coverage report generated: coverage.html"
-
-# Format code
+# [MANUAL 4] make format
+# Description: Auto-format code and check formatting (matches CI behavior)
 .PHONY: format
 format:
 	@echo "🎨 Formatting Go code..."
 	@gofmt -w .
+	@echo "📦 Organizing imports..."
+	@goimports -w . 2>/dev/null || echo "⚠️  goimports not found, skipping import organization"
+	@echo "🔍 Checking code formatting..."
+	@if [ "$(shell gofmt -l . | wc -l)" -gt 0 ]; then echo "❌ Code not formatted:"; gofmt -l .; exit 1; fi
+	@echo "🧹 Tidying modules..."
 	@go mod tidy
-	@echo "✅ Code formatted!"
+	@echo "✅ Code formatting complete!"
 
-# Lint code
+# [MANUAL 4.5] make lint
+# Description: Run linters and static analysis
 .PHONY: lint
 lint:
-	@echo "🔍 Running linters..."
+	@echo "🔍 Running Go linters..."
 	@if command -v golangci-lint >/dev/null 2>&1; then \
 		golangci-lint run; \
 	else \
 		echo "⚠️  golangci-lint not found, running basic checks..."; \
 		go vet ./...; \
-		gofmt -l . | grep . && exit 1 || true; \
+		if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; fi; \
 	fi
 	@echo "✅ Linting complete!"
 
-# Clean build artifacts
+# [MANUAL 5] make test all|unit|api|integration|e2e [internal|protocol|server|git]
+# Description: Run tests with flexible categorization
+# Options:
+#   - all: Run all tests in Docker
+#   - unit: Run unit tests (with optional subcategories: internal, protocol, server, git)
+#   - api: Run API endpoint tests
+#   - integration: Run integration tests
+#   - e2e: Run end-to-end tests
+.PHONY: test all unit api integration e2e internal protocol server git
+test: ensure-keys
+	@if [ "$(filter all,$(MAKECMDGOALS))" ]; then \
+		docker-compose -f config/docker/compose/local-it.yml up --build --abort-on-container-exit --exit-code-from collabops-git-executor; \
+	elif [ "$(filter unit,$(MAKECMDGOALS))" ]; then \
+		if [ "$(filter internal,$(MAKECMDGOALS))" ]; then \
+			go test -v ./internal/...; \
+		elif [ "$(filter protocol,$(MAKECMDGOALS))" ]; then \
+			go test -v ./internal/protocol/...; \
+		elif [ "$(filter server,$(MAKECMDGOALS))" ]; then \
+			go test -v ./internal/server/...; \
+		elif [ "$(filter git,$(MAKECMDGOALS))" ]; then \
+			go test -v ./internal/git/...; \
+		else \
+			go test -v ./internal/...; \
+		fi; \
+	elif [ "$(filter api,$(MAKECMDGOALS))" ]; then \
+		go test -v ./internal/server/... ./internal/api/...; \
+	elif [ "$(filter integration,$(MAKECMDGOALS))" ]; then \
+		go test -v ./test/integration/...; \
+	elif [ "$(filter e2e,$(MAKECMDGOALS))" ]; then \
+		$(MAKE) local-it bg; \
+		sleep 10; \
+		go test -v -tags=e2e ./test/...; \
+	else \
+		go test -race -v ./...; \
+	fi
+
+# [MANUAL 6] make test-fast
+# Description: Run tests quickly without coverage
+.PHONY: test-fast
+test-fast: ensure-keys
+	@go test -short ./...
+
+# [MANUAL 7] make clean
+# Description: Kill all processes on used ports and remove volumes
 .PHONY: clean
 clean:
-	@echo "🧹 Cleaning build artifacts..."
-	@rm -rf $(BUILD_DIR)
-	@rm -f coverage.out coverage.html
-	@echo "✅ Clean complete!"
+	@lsof -ti:2345,3000,8000,8001,5432,5433,6379,6380 | xargs kill -9 2>/dev/null || true
+	@pkill -f "uvicorn app.main:app" 2>/dev/null || true
+	@echo "✅ All processes (2345, 3000, 8000, 8001, 5432, 5433, 6379, 6380) killed"
 
-# Run the application
-.PHONY: run
-run: build
-	@echo "🚀 Starting $(BINARY_NAME)..."
-	@./$(BUILD_DIR)/$(BINARY_NAME) -config config/test-config.yaml
-
-# Development server with auto-reload
-.PHONY: dev
-dev:
-	@echo "🔄 Starting development server..."
-	@go run ./cmd/git-executor -config config/test-config.yaml
-
-# Docker build
-.PHONY: docker-build
-docker-build:
-	@echo "🐳 Building Docker image..."
-	@docker build -t collabops-git-executor:$(VERSION) -f deployments/Dockerfile .
-	@echo "✅ Docker image built: collabops-git-executor:$(VERSION)"
-
-# Docker compose - local development
-.PHONY: local-it
-local-it:
-	@echo "🐳 Starting local integration environment..."
-	@docker-compose -f config/docker/compose/local-it.yml up --build
-
-# Docker compose - background
-.PHONY: local-it-bg
-local-it-bg:
-	@echo "🐳 Starting local integration environment (background)..."
-	@docker-compose -f config/docker/compose/local-it.yml up --build -d
-
-# Stop Docker compose
-.PHONY: stop
-stop:
-	@echo "🛑 Stopping Docker services..."
-	@docker-compose -f config/docker/compose/local-it.yml down
-
-# Install development dependencies
-.PHONY: install-deps
-install-deps:
-	@echo "📦 Installing development dependencies..."
-	@go mod download
-	@if ! command -v golangci-lint >/dev/null 2>&1; then \
-		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
-	fi
-	@echo "✅ Dependencies installed!"
-
-# Generate mocks (if using mockery)
-.PHONY: mocks
-mocks:
-	@echo "🎭 Generating mocks..."
-	@if command -v mockery >/dev/null 2>&1; then \
-		mockery --all --output ./internal/mocks; \
-	else \
-		echo "⚠️  mockery not found, skipping mock generation"; \
+# [HELPER] Ensure RSA keys exist before running tests
+.PHONY: ensure-keys
+ensure-keys:
+	@if [ ! -f "keys/private_key.pem" ] || [ ! -f "keys/public_key.pem" ]; then \
+		mkdir -p keys; \
+		openssl genrsa -out keys/private_key.pem 2048; \
+		openssl rsa -in keys/private_key.pem -pubout -out keys/public_key.pem; \
+		echo "✅ RSA keys were missing, generated successfully"; \
 	fi
 
-# Integration tests
-.PHONY: test-integration
-test-integration:
-	@echo "🧪 Running integration tests..."
-	@go test -tags=integration -v ./test/integration/...
+# [HELPER] Dummy targets for command arguments
+.PHONY: bg all e2e base qa stage prod internal protocol server git
+bg all e2e base qa stage prod internal protocol server git:
+	@:
 
-# Benchmark tests
-.PHONY: bench
-bench:
-	@echo "⚡ Running benchmarks..."
-	@go test -bench=. -benchmem ./...
-
-# Security scan
-.PHONY: security
-security:
-	@echo "🔒 Running security scan..."
-	@if command -v gosec >/dev/null 2>&1; then \
-		gosec ./...; \
-	else \
-		echo "⚠️  gosec not found, install with: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest"; \
-	fi
-
-# Kill processes on common ports
-.PHONY: kill-ports
-kill-ports:
-	@echo "🔪 Killing processes on ports 3000, 8080, 9091..."
-	@lsof -ti:3000,8080,9091 | xargs kill -9 2>/dev/null || true
-	@echo "✅ Ports cleared!"
-
-# Help
-.PHONY: help
-help:
-	@echo "CollabOps Git Executor - Available Commands:"
-	@echo ""
-	@echo "Build & Run:"
-	@echo "  build          Build the application"
-	@echo "  run            Build and run the application"
-	@echo "  dev            Run development server with auto-reload"
-	@echo "  clean          Clean build artifacts"
-	@echo ""
-	@echo "Testing:"
-	@echo "  test           Run all tests"
-	@echo "  test-coverage  Run tests with coverage report"
-	@echo "  test-integration Run integration tests"
-	@echo "  bench          Run benchmark tests"
-	@echo ""
-	@echo "Code Quality:"
-	@echo "  format         Format Go code"
-	@echo "  lint           Run linters"
-	@echo "  security       Run security scan"
-	@echo ""
-	@echo "Docker:"
-	@echo "  docker-build   Build Docker image"
-	@echo "  local-it       Start local integration environment"
-	@echo "  local-it-bg    Start local integration environment (background)"
-	@echo "  stop           Stop Docker services"
-	@echo ""
-	@echo "Development:"
-	@echo "  install-deps   Install development dependencies"
-	@echo "  mocks          Generate mocks"
-	@echo "  kill-ports     Kill processes on common ports"
-	@echo ""
+# [HELPER] Check Docker status
+.PHONY: check-docker
+check-docker:
+	@if ! docker info >/dev/null 2>&1; then echo "❌ Docker not running"; exit 1; else echo "✅ Docker is running"; fi
