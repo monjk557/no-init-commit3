@@ -192,37 +192,32 @@ type Client struct {
 
 // NewPermissionClient creates a new permission client with the given configuration.
 func NewPermissionClient(config *Config) (PermissionClient, error) {
-	if config == nil {
-		config = DefaultConfig()
-	}
+	// if config == nil {
+	// 	config = DefaultConfig()
+	// }
 
-	if err := config.Validate(); err != nil {
-		return nil, errors.New("invalid configuration: " + err.Error())
-	}
+	// if err := config.Validate(); err != nil {
+	// 	return nil, errors.New("invalid configuration: " + err.Error())
+	// }
 
-	// Create HTTP client if not provided
-	httpClient := config.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: config.Timeout,
-		}
-	}
+	// // Create HTTP client if not provided
+	// httpClient := config.HTTPClient
+	// if httpClient == nil {
+	// 	httpClient = &http.Client{
+	// 		Timeout: config.Timeout,
+	// 	}
+	// }
 
-	// Initialize cache
-	cache := NewPermissionCache(config.CacheTTL)
+	// // Initialize cache
+	// cache := NewPermissionCache(config.CacheTTL)
 
-	// Initialize circuit breaker if enabled
-	var circuitBreaker *CircuitBreaker
-	if config.EnableCircuitBreaker {
-		circuitBreaker = NewCircuitBreaker(config.CircuitBreakerConfig)
-	}
+	// // Initialize circuit breaker if enabled
+	// var circuitBreaker *CircuitBreaker
+	// if config.EnableCircuitBreaker {
+	// 	circuitBreaker = NewCircuitBreaker(config.CircuitBreakerConfig)
+	// }
 
-	return &Client{
-		config:         config,
-		httpClient:     httpClient,
-		cache:          cache,
-		circuitBreaker: circuitBreaker,
-	}, nil
+	return nil, nil
 }
 
 // CheckReadAccess implements PermissionClient.CheckReadAccess.
@@ -288,27 +283,20 @@ func (c *Client) checkAccess(ctx context.Context, userID, repoOwner, repoName st
 // requestPermissionWithFallback handles the API request with circuit breaker and fallback logic.
 func (c *Client) requestPermissionWithFallback(ctx context.Context, userID, repoOwner, repoName string, operation Operation, cachedResult *PermissionResult) (bool, error) {
 	// If circuit breaker is disabled, use regular request logic
-	if c.circuitBreaker == nil {
-		hasAccess, err := c.requestPermission(ctx, userID, repoOwner, repoName, operation)
-		if err != nil {
-			// Fall back to cached result if available
-			if cachedResult != nil {
-				return cachedResult.HasAccess, nil
-			}
-			// Apply fallback policy
-			fallbackAccess := c.config.FallbackPolicy.ShouldAllowAccess(operation, false)
-			return fallbackAccess, &ServiceUnavailableError{
-				Operation:      operation,
-				UserID:         userID,
-				RepoOwner:      repoOwner,
-				RepoName:       repoName,
-				FallbackUsed:   true,
-				FallbackAccess: fallbackAccess,
-				Err:            err,
-			}
-		}
-		return hasAccess, nil
-	}
+	// if c.circuitBreaker == nil {
+	// 	hasAccess, err := c.requestPermission(ctx, userID, repoOwner, repoName, operation)
+	// 	if err != nil {
+	// 		// Fall back to cached result if available
+	// 		if cachedResult != nil {
+	// 			return cachedResult.HasAccess, nil
+	// 		}
+	// 		// Apply fallback policy
+	// 		fallbackAccess := c.config.FallbackPolicy.ShouldAllowAccess(operation, false)
+	// 		return fallbackAccess, &ServiceUnavailableError{
+	// 			Operation:      operation,
+	// 			UserID:         userID,
+	// 			RepoOwner:      repoOwner,
+	// 			RepoName:       repoName,
 
 	// Use circuit breaker for API requests
 	var requestErr error

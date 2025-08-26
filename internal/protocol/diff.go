@@ -90,10 +90,6 @@ func NewDiffHandler(cfg *config.Config, permClient permissions.PermissionClient)
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
-	if permClient == nil {
-		return nil, fmt.Errorf("permission client cannot be nil")
-	}
-
 	// Create path configuration
 	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {

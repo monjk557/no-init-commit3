@@ -55,6 +55,11 @@ type LoggingConfig struct {
 	Development bool   `mapstructure:"development"`
 }
 
+// PermissionsConfig holds permission service configuration
+type PermissionsConfig struct {
+	APIServiceURL string `mapstructure:"api_service_url"`
+}
+
 // Load loads configuration from file with Viper
 func Load(configPath string) (*Config, error) {
 	// Reset Viper to ensure clean state

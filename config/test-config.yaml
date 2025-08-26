@@ -3,8 +3,8 @@
 
 # HTTP Server Configuration
 server:
-  port: 3000
-  host: "localhost"
+  port: 8081
+  host: "0.0.0.0"
   base_path: "/"
   read_timeout: "30s"
   write_timeout: "30s"
@@ -14,10 +14,14 @@ server:
 
 # Git Repository Configuration
 git:
-  repo_root: "/Users/atci/Documents/GitHub/collabops-git-executor/test-repos"
+  repo_root: "/Users/seungbaek/Desktop/CODE/collabops-git-executor/repos"
   enable_packfile: true
   max_cache_size: 10
   cache_ttl: "5m"
+
+# Permission Service Configuration
+permissions:
+  api_service_url: "http://collabops-api-orchestrator:2345"
 
 # JWT Configuration (using simple HS256 for testing)
 jwt:

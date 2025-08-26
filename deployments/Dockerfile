@@ -1,7 +1,7 @@
-# Build stage
-FROM golang:1.23-alpine AS builder
+# Production stage with binary execution
+FROM golang:1.24-alpine AS builder
 
-# Install git for go mod download
+# Install git and build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
 # Set working directory
@@ -16,44 +16,41 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags='-w -s -extldflags "-static"' \
-    -a -installsuffix cgo \
-    -o bin/git-executor \
-    ./cmd/git-executor
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o git-executor ./cmd/git-executor
 
 # Final stage
-FROM scratch
+FROM alpine:latest
 
-# Copy CA certificates from builder stage
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates tzdata git
 
-# Copy timezone data
-COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+# Create non-root user
+RUN addgroup -g 1001 -S gituser && \
+    adduser -u 1001 -S gituser -G gituser
 
-# Copy the binary
-COPY --from=builder /app/bin/git-executor /git-executor
+# Set working directory
+WORKDIR /app
 
-# Copy default configuration files
-COPY --from=builder /app/config/config.yaml.example /config/config.yaml.example
+# Copy the binary from builder stage
+COPY --from=builder /app/git-executor .
 
-# Create directories for repositories and configuration
-# Note: We'll create these as volumes in docker-compose
-VOLUME ["/repos", "/config"]
+# Copy configuration file
+COPY config/config.yaml /config/config.yaml
 
-# Expose the default port (overrideable via configuration)
-EXPOSE 8080
+# Create necessary directories
+RUN mkdir -p /repos /config /tmp && \
+    chown -R gituser:gituser /app /repos /config /tmp /config/config.yaml
+
+# Switch to non-root user
+USER gituser
+
+# Expose the default port
+EXPOSE 8081
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD ["/git-executor", "--health-check"] || exit 1
+    CMD ["./git-executor", "--health-check"] || exit 1
 
-# Run as non-root user (using numeric ID for scratch image compatibility)
-USER 65534:65534
-
-# Set entrypoint
-ENTRYPOINT ["/git-executor"]
-
-# Default command (will use built-in defaults if no config file is provided)
-CMD []
+# Run the binary
+CMD ["./git-executor", "--config", "/config/config.yaml"]

@@ -91,3 +91,84 @@ type CommitAuthor struct {
 
 // OpenRepositoryFunc is a function type for opening repositories
 type OpenRepositoryFunc func(path string) (Repository, error)
+
+// RepositoryManager provides high-level repository management operations
+type RepositoryManager interface {
+	// CreateRepository creates a new Git repository at the specified path
+	CreateRepository(ctx context.Context, options *CreateRepositoryOptions) (*RepositoryInfo, error)
+
+	// OpenRepository opens an existing Git repository
+	OpenRepository(ctx context.Context, path string) (Repository, error)
+
+	// RepositoryExists checks if a repository exists at the given path
+	RepositoryExists(ctx context.Context, path string) (bool, error)
+
+	// DeleteRepository removes a repository from the filesystem
+	DeleteRepository(ctx context.Context, path string) error
+
+	// ListRepositories returns a list of repositories in a directory
+	ListRepositories(ctx context.Context, rootPath string) ([]RepositoryInfo, error)
+}
+
+// CreateRepositoryOptions contains options for creating a new repository
+type CreateRepositoryOptions struct {
+	// Path is the filesystem path where the repository should be created
+	Path string
+
+	// Bare indicates whether to create a bare repository
+	Bare bool
+
+	// Description is an optional description for the repository
+	Description string
+
+	// DefaultBranch is the name of the default branch (defaults to "main")
+	DefaultBranch string
+
+	// InitialCommit specifies whether to create an initial commit
+	InitialCommit bool
+
+	// Author information for the initial commit
+	Author *CommitAuthor
+
+	// InitialFiles is a map of file paths to their content for the initial commit
+	InitialFiles map[string]string
+
+	// Template is an optional template repository to copy from
+	Template string
+}
+
+// RepositoryInfo contains metadata about a Git repository
+type RepositoryInfo struct {
+	// Path is the filesystem path of the repository
+	Path string `json:"path"`
+
+	// Name is the repository name (derived from path)
+	Name string `json:"name"`
+
+	// Description is the repository description
+	Description string `json:"description,omitempty"`
+
+	// DefaultBranch is the name of the default branch
+	DefaultBranch string `json:"default_branch"`
+
+	// IsBare indicates whether this is a bare repository
+	IsBare bool `json:"is_bare"`
+
+	// CreatedAt is the creation timestamp
+	CreatedAt time.Time `json:"created_at"`
+
+	// LastModified is the last modification timestamp
+	LastModified time.Time `json:"last_modified"`
+
+	// Size is the repository size in bytes
+	Size int64 `json:"size"`
+
+	// CommitCount is the total number of commits
+	CommitCount int `json:"commit_count"`
+
+	// BranchCount is the total number of branches
+	BranchCount int `json:"branch_count"`
+
+	// TagCount is the total number of tags
+	TagCount int `json:"tag_count"`
+}
