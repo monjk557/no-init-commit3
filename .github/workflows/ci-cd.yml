@@ -26,17 +26,16 @@ jobs:
           go-version: '1.24.5'  # Updated to match go.mod toolchain
           check-latest: true
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-            ~/.cache/golangci-lint
-          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum', '**/go.mod') }}
-          restore-keys: |
-            ${{ runner.os }}-go-v2-
-            ${{ runner.os }}-go-
+      # - name: Cache Go modules
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       ~/.cache/go-build
+      #       ~/go/pkg/mod
+      #       ~/.cache/golangci-lint
+      #     key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum', '**/go.mod') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-go-
 
       - name: Install tools
         run: make install-tools
@@ -103,9 +102,8 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum', '**/go.mod') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum', '**/go.mod') }}
           restore-keys: |
-            ${{ runner.os }}-go-v2-
             ${{ runner.os }}-go-
 
       - name: Download dependencies
@@ -151,9 +149,8 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum', '**/go.mod') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum', '**/go.mod') }}
           restore-keys: |
-            ${{ runner.os }}-go-v2-
             ${{ runner.os }}-go-
 
       - name: Download dependencies and build
