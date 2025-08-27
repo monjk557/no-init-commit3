@@ -46,7 +46,7 @@ RUN mkdir -p /repos /config /tmp && \
 USER gituser
 
 # Expose the default port
-EXPOSE 8081
+EXPOSE 5001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
