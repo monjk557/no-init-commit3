@@ -60,7 +60,7 @@ func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
 	// Serve OpenAPI specification from configured path
 	docsGroup.GET("/collabops-git-executor.yaml", func(c *gin.Context) {
 		// Try to serve from embedded file first, fallback to filesystem
-		specPath := "./specs/collabops-git-executor.yaml"
+		specPath := "./specs/generated/collabops-git-executor.yaml"
 		c.File(specPath)
 	})
 
