@@ -9,15 +9,15 @@ services:
     environment:
       - GIT_REPO_ROOT=/repos
       - LOG_LEVEL=debug
-      - PORT=8080
+      - PORT=5001
       - PERMISSION_SERVICE_URL=http://permission-mock:8081
     volumes:
       - git-repos:/repos
       - ./test-config.yaml:/app/config.yaml:ro
     ports:
-      - "8080:8080"
+      - "5001:5001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -36,9 +36,9 @@ services:
         node server.js
       "
     ports:
-      - "8081:8081"
+      - "5001:5001"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5001/health"]
       interval: 5s
       timeout: 3s
       retries: 5

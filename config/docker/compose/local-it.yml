@@ -90,7 +90,7 @@ services:
       - DRF_RETRY_COUNT=3
 
       # Git Executor Service Configuration
-      - GIT_EXECUTOR_URL=http://collabops-git-executor:9090
+      - GIT_EXECUTOR_URL=http://collabops-git-executor:5001
       - GIT_EXECUTOR_BASE_PATH=/repos
       - GIT_EXECUTOR_TIMEOUT=60
       - GIT_EXECUTOR_RETRY_COUNT=3
@@ -135,11 +135,11 @@ services:
     image: collabops/git-executor:latest
     container_name: collabops-git-executor
     ports:
-      - '${GIT_EXECUTOR_PORT:-9090}:9090'
+      - '${GIT_EXECUTOR_PORT:-5001}:5001'
     environment:
       # Server Configuration
       - COLLABOPS_SERVER_HOST=0.0.0.0
-      - COLLABOPS_SERVER_PORT=9090
+      - COLLABOPS_SERVER_PORT=5001
       - COLLABOPS_SERVER_BASE_PATH=/repos
       - COLLABOPS_SERVER_READ_TIMEOUT=60s
       - COLLABOPS_SERVER_WRITE_TIMEOUT=60s
