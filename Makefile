@@ -90,6 +90,14 @@ format:
 	@go mod tidy
 	@echo "✅ Code formatting complete!"
 
+# Build the application
+.PHONY: build
+build:
+	@echo "🔨 Building application..."
+	@mkdir -p bin
+	@go build -o bin/git-executor ./cmd/git-executor
+	@echo "✅ Build complete: bin/git-executor"
+
 # [MANUAL 4.5] make lint
 # Description: Run linters and static analysis
 .PHONY: lint
