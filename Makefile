@@ -37,7 +37,6 @@ local: ensure-keys
 # Options: bg (run in background)
 .PHONY: local-it
 local-it: ensure-keys
-	@make check-docker
 	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
 		docker-compose -f config/docker/compose/local-it.yml up --build -d; \
 	else \
@@ -50,7 +49,6 @@ local-it: ensure-keys
 # Options: bg (run in background)
 .PHONY: build-it
 build-it: ensure-keys
-	@make check-docker
 	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
 		docker-compose -f config/docker/compose/build-it.yml up --build -d; \
 	else \
@@ -146,12 +144,18 @@ test-fast: ensure-keys
 	@go test -short ./...
 
 # [MANUAL 7] make clean
-# Description: Kill all processes on used ports and remove volumes
+# Description: Gracefully stop all services and clean up everything
 .PHONY: clean
 clean:
-	@lsof -ti:2345,3000,8000,8001,5432,5433,6379,6380 | xargs kill -9 2>/dev/null || true
-	@pkill -f "uvicorn app.main:app" 2>/dev/null || true
-	@echo "✅ All processes (2345, 3000, 8000, 8001, 5432, 5433, 6379, 6380) killed"
+	@echo "🛑 Gracefully stopping all Docker environments..."
+	@docker-compose -f config/docker/compose/local.yml down 2>/dev/null || true
+	@docker-compose -f config/docker/compose/local-it.yml down 2>/dev/null || true
+	@docker-compose -f config/docker/compose/build-it.yml down 2>/dev/null || true
+	@echo "🧹 Cleaning up unused Docker resources..."
+	@docker system prune -f 2>/dev/null || true
+	@echo "🔄 Checking for any remaining processes on our ports..."
+	@lsof -ti:2345,3000,8000,8001,9091 | xargs kill -15 2>/dev/null || true
+	@echo "✅ All cleanup complete!"
 
 # [HELPER] Ensure RSA keys exist before running tests
 .PHONY: ensure-keys
