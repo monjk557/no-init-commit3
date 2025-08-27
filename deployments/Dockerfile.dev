@@ -1,0 +1,69 @@
+# Development Dockerfile with binary execution
+FROM golang:1.24-alpine AS builder
+
+# Install development tools and dependencies
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata \
+    make \
+    bash \
+    curl \
+    jq
+
+# Install golangci-lint for development
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o git-executor ./cmd/git-executor
+
+# Final stage
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk --no-cache add \
+    git \
+    ca-certificates \
+    tzdata \
+    bash \
+    curl \
+    jq
+
+# Create non-root user
+RUN addgroup -g 1001 -S gituser && \
+    adduser -u 1001 -S gituser -G gituser
+
+# Set working directory
+WORKDIR /app
+
+# Copy the binary from builder stage
+COPY --from=builder /app/git-executor .
+
+# Copy configuration file
+COPY config/config.yaml /config/config.yaml
+
+# Create directories for development
+RUN mkdir -p /repos /config /var/log/collabops /tmp && \
+    chown -R gituser:gituser /app /repos /config /var/log/collabops /tmp /config/config.yaml
+
+# Expose port for development
+EXPOSE 8081
+
+# Health check for development
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+# Default command for development
+CMD ["./git-executor", "--config", "/config/config.yaml"] 

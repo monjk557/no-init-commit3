@@ -1,0 +1,36 @@
+# Test Configuration for CollabOps Git Executor
+# Used for testing the file diff endpoint
+
+# HTTP Server Configuration
+server:
+  port: 8081
+  host: "0.0.0.0"
+  base_path: "/"
+  read_timeout: "30s"
+  write_timeout: "30s"
+  idle_timeout: "120s"
+  enable_docs: true
+  docs_path: "/api-docs"
+
+# Git Repository Configuration
+git:
+  repo_root: "/Users/seungbaek/Desktop/CODE/collabops-git-executor/repos"
+  enable_packfile: true
+  max_cache_size: 10
+  cache_ttl: "5m"
+
+# Permission Service Configuration
+permissions:
+  api_service_url: "http://collabops-api-orchestrator:2345"
+
+# JWT Configuration (using simple HS256 for testing)
+jwt:
+  algorithm: "HS256"
+  secret_key: "test-secret-key-for-development"
+
+# Logging Configuration
+log:
+  level: "debug"
+  format: "text"
+  output: "stdout"
+  development: true
