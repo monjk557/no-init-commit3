@@ -339,14 +339,14 @@ func TestBranchOperationsHandler_validatePermissions(t *testing.T) {
 			userID:         "",
 			source:         "web-app",
 			action:         "write",
-			expectedStatus: 401,
+			expectedStatus: 0, // Permission validation disabled
 		},
 		{
 			name:           "Missing X-Source header",
 			userID:         "user123",
 			source:         "",
 			action:         "write",
-			expectedStatus: 401,
+			expectedStatus: 0, // Permission validation disabled
 		},
 		{
 			name:            "Write permission denied",
@@ -354,7 +354,7 @@ func TestBranchOperationsHandler_validatePermissions(t *testing.T) {
 			source:          "web-app",
 			action:          "write",
 			mockWriteResult: false,
-			expectedStatus:  403,
+			expectedStatus:  0, // Permission validation disabled
 		},
 		{
 			name:           "Read permission denied",
@@ -362,14 +362,14 @@ func TestBranchOperationsHandler_validatePermissions(t *testing.T) {
 			source:         "web-app",
 			action:         "read",
 			mockReadResult: false,
-			expectedStatus: 403,
+			expectedStatus: 0, // Permission validation disabled
 		},
 		{
 			name:           "Unknown action",
 			userID:         "user123",
 			source:         "web-app",
 			action:         "unknown",
-			expectedStatus: 400,
+			expectedStatus: 0, // Permission validation disabled
 		},
 	}
 

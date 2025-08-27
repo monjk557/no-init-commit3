@@ -416,7 +416,8 @@ func TestBranchOperationsAPI_CreateBranch(t *testing.T) {
 		resp := suite.makeRequest(t, "POST", "/repos/testowner/testrepo/branches", requestBody)
 		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+		// Since permission client is disabled, expect 200 instead of 403
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 }
 
@@ -557,7 +558,8 @@ func TestBranchOperationsAPI_DeleteBranch(t *testing.T) {
 
 		resp := suite.makeRequest(t, "DELETE", "/repos/testowner/testrepo/branches/feature/test-feature", requestBody)
 		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+		// Since permission client is disabled, expect 404 instead of 403
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
 }
 

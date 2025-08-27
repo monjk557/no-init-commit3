@@ -337,7 +337,9 @@ func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repositor
 
 		_, err = writer.Write([]byte(content))
 		if err != nil {
-			writer.Close()
+			if closeErr := writer.Close(); closeErr != nil {
+				return plumbing.ZeroHash, fmt.Errorf("failed to close writer: %w", closeErr)
+			}
 			return plumbing.ZeroHash, fmt.Errorf("failed to write blob content for %s: %w", filename, err)
 		}
 

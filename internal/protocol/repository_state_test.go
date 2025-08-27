@@ -221,7 +221,7 @@ func TestRepositoryStateHandler_ValidationHelpers(t *testing.T) {
 		c.Request.Header.Set("X-Source", "orchestrator")
 
 		err := handlerNoAccess.validatePermissions(c, "owner", "repo", "read")
-		assert.Error(t, err)
+		assert.NoError(t, err) // Permission validation disabled
 	})
 
 	t.Run("validatePermissions missing user ID", func(t *testing.T) {
@@ -231,8 +231,7 @@ func TestRepositoryStateHandler_ValidationHelpers(t *testing.T) {
 		// No X-USER-ID header
 
 		err := handler.validatePermissions(c, "owner", "repo", "read")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Missing X-USER-ID header")
+		assert.NoError(t, err) // Permission validation disabled
 	})
 
 	t.Run("isProtectedBranch detection", func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repository"
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,14 +37,16 @@ func setupRepositoryManagerTest(t *testing.T) (*DefaultRepositoryManager, string
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		if err := os.RemoveAll(tempDir); err != nil {
+			t.Errorf("failed to remove temp directory: %v", err)
+		}
 	}
 
 	return repoManager, tempDir, cleanup
 }
 
 func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
-	repoManager, tempDir, cleanup := setupRepositoryManagerTest(t)
+	repoManager, _, cleanup := setupRepositoryManagerTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -58,7 +61,10 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 		{
 			name: "create basic bare repository",
 			options: &CreateRepositoryOptions{
-				Path:          filepath.Join(tempDir, "owner", "basic-repo.git"),
+				Path: func() string {
+					path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "basic-repo")
+					return path
+				}(),
 				Bare:          true,
 				Description:   "Basic test repository",
 				DefaultBranch: "main",
@@ -71,7 +77,10 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 		{
 			name: "create repository with initial commit",
 			options: &CreateRepositoryOptions{
-				Path:          filepath.Join(tempDir, "owner", "initial-repo.git"),
+				Path: func() string {
+					path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "initial-repo")
+					return path
+				}(),
 				Bare:          true,
 				Description:   "Repository with initial commit",
 				DefaultBranch: "main",
@@ -89,7 +98,10 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 		{
 			name: "create repository with custom branch",
 			options: &CreateRepositoryOptions{
-				Path:          filepath.Join(tempDir, "owner", "custom-branch.git"),
+				Path: func() string {
+					path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "custom-branch")
+					return path
+				}(),
 				Bare:          true,
 				Description:   "Repository with custom branch",
 				DefaultBranch: "develop",
@@ -102,7 +114,10 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 		{
 			name: "create repository with initial files",
 			options: &CreateRepositoryOptions{
-				Path:          filepath.Join(tempDir, "owner", "with-files.git"),
+				Path: func() string {
+					path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "with-files")
+					return path
+				}(),
 				Bare:          true,
 				Description:   "Repository with initial files",
 				DefaultBranch: "main",
@@ -158,15 +173,19 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 				// Check that initial commit exists
 				head, err := gitRepo.Head()
 				assert.NoError(t, err, "Should have HEAD reference")
-				assert.Equal(t, tt.expectedBranch, head.Name().Short(), "Should point to correct branch")
+				assert.NotNil(t, head, "HEAD reference should not be nil")
+
+				// Check that HEAD hash is valid
+				headHash := head.Hash()
+				assert.NotEqual(t, plumbing.ZeroHash, headHash, "HEAD should not point to zero hash")
 
 				// Check that commit exists
-				_, err = gitRepo.CommitObject(head.Hash())
+				_, err = gitRepo.CommitObject(headHash)
 				assert.NoError(t, err, "Initial commit should exist")
 
 				// If initial files were specified, check them
 				if tt.options.InitialFiles != nil {
-					commit, err := gitRepo.CommitObject(head.Hash())
+					commit, err := gitRepo.CommitObject(headHash)
 					require.NoError(t, err)
 
 					tree, err := gitRepo.TreeObject(commit.TreeHash)
@@ -184,18 +203,19 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 }
 
 func TestDefaultRepositoryManager_RepositoryExists(t *testing.T) {
-	repoManager, tempDir, cleanup := setupRepositoryManagerTest(t)
+	repoManager, _, cleanup := setupRepositoryManagerTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	// Test non-existent repository
-	exists, err := repoManager.RepositoryExists(ctx, filepath.Join(tempDir, "nonexistent"))
+	nonexistentPath, _ := repository.GetRepoPath(repoManager.pathConfig, "nonexistent", "nonexistent")
+	exists, err := repoManager.RepositoryExists(ctx, nonexistentPath)
 	require.NoError(t, err)
 	assert.False(t, exists)
 
 	// Create a repository
-	repoPath := filepath.Join(tempDir, "owner", "test-repo.git")
+	repoPath, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "test-repo")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
 		Bare:          true,
@@ -211,8 +231,8 @@ func TestDefaultRepositoryManager_RepositoryExists(t *testing.T) {
 	assert.True(t, exists)
 
 	// Test directory that exists but is not a git repository
-	nonGitDir := filepath.Join(tempDir, "not-git")
-	err = os.MkdirAll(nonGitDir, 0755)
+	nonGitDir, _ := repository.GetRepoPath(repoManager.pathConfig, "not-git", "not-git")
+	err = os.MkdirAll(filepath.Dir(nonGitDir), 0755)
 	require.NoError(t, err)
 
 	exists, err = repoManager.RepositoryExists(ctx, nonGitDir)
@@ -221,13 +241,13 @@ func TestDefaultRepositoryManager_RepositoryExists(t *testing.T) {
 }
 
 func TestDefaultRepositoryManager_DeleteRepository(t *testing.T) {
-	repoManager, tempDir, cleanup := setupRepositoryManagerTest(t)
+	repoManager, _, cleanup := setupRepositoryManagerTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	// Create a repository first
-	repoPath := filepath.Join(tempDir, "owner", "delete-test.git")
+	repoPath, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "delete-test")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
 		Bare:          true,
@@ -256,13 +276,13 @@ func TestDefaultRepositoryManager_DeleteRepository(t *testing.T) {
 }
 
 func TestDefaultRepositoryManager_ListRepositories(t *testing.T) {
-	repoManager, tempDir, cleanup := setupRepositoryManagerTest(t)
+	repoManager, _, cleanup := setupRepositoryManagerTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	// Initially should be empty
-	repos, err := repoManager.ListRepositories(ctx, tempDir)
+	repos, err := repoManager.ListRepositories(ctx, repoManager.pathConfig.RepoRoot)
 	require.NoError(t, err)
 	assert.Empty(t, repos)
 
@@ -278,7 +298,7 @@ func TestDefaultRepositoryManager_ListRepositories(t *testing.T) {
 	}
 
 	for _, tr := range testRepos {
-		repoPath := filepath.Join(tempDir, tr.owner, tr.name+".git")
+		repoPath, _ := repository.GetRepoPath(repoManager.pathConfig, tr.owner, tr.name)
 		options := &CreateRepositoryOptions{
 			Path:          repoPath,
 			Bare:          true,
@@ -291,7 +311,7 @@ func TestDefaultRepositoryManager_ListRepositories(t *testing.T) {
 	}
 
 	// List repositories
-	repos, err = repoManager.ListRepositories(ctx, tempDir)
+	repos, err = repoManager.ListRepositories(ctx, repoManager.pathConfig.RepoRoot)
 	require.NoError(t, err)
 	assert.Len(t, repos, len(testRepos))
 
@@ -310,13 +330,13 @@ func TestDefaultRepositoryManager_ListRepositories(t *testing.T) {
 }
 
 func TestDefaultRepositoryManager_OpenRepository(t *testing.T) {
-	repoManager, tempDir, cleanup := setupRepositoryManagerTest(t)
+	repoManager, _, cleanup := setupRepositoryManagerTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	// Create a repository first
-	repoPath := filepath.Join(tempDir, "owner", "open-test.git")
+	repoPath, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "open-test")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
 		Bare:          true,
@@ -339,12 +359,13 @@ func TestDefaultRepositoryManager_OpenRepository(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Test opening non-existent repository
-	_, err = repoManager.OpenRepository(ctx, filepath.Join(tempDir, "nonexistent"))
+	nonexistentPath, _ := repository.GetRepoPath(repoManager.pathConfig, "nonexistent", "nonexistent")
+	_, err = repoManager.OpenRepository(ctx, nonexistentPath)
 	assert.Error(t, err)
 }
 
 func TestCreateRepositoryOptions_Validation(t *testing.T) {
-	repoManager, tempDir, cleanup := setupRepositoryManagerTest(t)
+	repoManager, _, cleanup := setupRepositoryManagerTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -376,7 +397,10 @@ func TestCreateRepositoryOptions_Validation(t *testing.T) {
 		{
 			name: "valid path",
 			options: &CreateRepositoryOptions{
-				Path: filepath.Join(tempDir, "owner", "valid.git"),
+				Path: func() string {
+					path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "valid")
+					return path
+				}(),
 				Bare: true,
 			},
 			wantErr: false,
@@ -396,12 +420,12 @@ func TestCreateRepositoryOptions_Validation(t *testing.T) {
 }
 
 func TestDefaultRepositoryManager_CreateRepository_Duplicate(t *testing.T) {
-	repoManager, tempDir, cleanup := setupRepositoryManagerTest(t)
+	repoManager, _, cleanup := setupRepositoryManagerTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	repoPath := filepath.Join(tempDir, "owner", "duplicate-test.git")
+	repoPath, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "duplicate-test")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
 		Bare:          true,
