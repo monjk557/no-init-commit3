@@ -50,8 +50,7 @@ func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
 	}
 
 	return &UploadPackHandler{
-		pathConfig:       pathConfig,
-		permissionClient: permClient,
+		pathConfig: pathConfig,
 	}, nil
 }
 

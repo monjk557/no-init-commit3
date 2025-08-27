@@ -42,18 +42,13 @@ func NewProtocolComplianceTestSuite(t *testing.T) *ProtocolComplianceTestSuite {
 			RepoRoot: tempDir,
 		},
 	}
-	permClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewUploadPackHandler(cfg, permClient)
+	handler, err := NewUploadPackHandler(cfg)
 	require.NoError(t, err)
 	return &ProtocolComplianceTestSuite{
-		Handler:    handler,
-		Config:     cfg,
-		PermClient: permClient,
-		Logger:     logger,
-		TempDir:    tempDir,
+		Handler: handler,
+		Config:  cfg,
+		Logger:  logger,
+		TempDir: tempDir,
 	}
 }
 
@@ -584,11 +579,7 @@ func BenchmarkProtocolOperations(b *testing.B) {
 			RepoRoot: tempDir,
 		},
 	}
-	permClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewUploadPackHandler(cfg, permClient)
+	handler, err := NewUploadPackHandler(cfg)
 	require.NoError(b, err)
 	b.Run("Info_Refs_Performance", func(b *testing.B) {
 		req := httptest.NewRequest("GET", "/testowner/testrepo/info/refs?service=git-upload-pack", nil)

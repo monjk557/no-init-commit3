@@ -18,11 +18,7 @@ func TestStreamingUploadPackHandler(t *testing.T) {
 			RepoRoot: "/nonexistent", // Will fail gracefully
 		},
 	}
-	permClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	baseHandler, err := NewUploadPackHandler(cfg, permClient)
+	baseHandler, err := NewUploadPackHandler(cfg)
 	require.NoError(t, err)
 	streamingHandler := NewStreamingUploadPackHandler(baseHandler)
 	t.Run("HandleUploadPackStreaming_Success", func(t *testing.T) {
@@ -60,12 +56,7 @@ func TestStreamingUploadPackHandler(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 	t.Run("HandleUploadPackStreaming_PermissionDenied", func(t *testing.T) {
-		// Create handler with denied permissions
-		deniedPermClient := &MockPermissionClient{
-			shouldAllow: false,
-			shouldError: false,
-		}
-		deniedBaseHandler, err := NewUploadPackHandler(cfg, deniedPermClient)
+		deniedBaseHandler, err := NewUploadPackHandler(cfg)
 		require.NoError(t, err)
 		deniedStreamingHandler := NewStreamingUploadPackHandler(deniedBaseHandler)
 		var requestBody bytes.Buffer
@@ -113,12 +104,8 @@ func TestStreamingHandlerIntegration(t *testing.T) {
 				RepoRoot: "/tmp", // Use a path that might exist
 			},
 		}
-		permClient := &MockPermissionClient{
-			shouldAllow: true,
-			shouldError: false,
-		}
 		// Create both handlers
-		baseHandler, err := NewUploadPackHandler(cfg, permClient)
+		baseHandler, err := NewUploadPackHandler(cfg)
 		require.NoError(t, err)
 		streamingHandler := NewStreamingUploadPackHandler(baseHandler)
 		// Create identical requests
@@ -160,11 +147,8 @@ func TestStreamingMemoryEfficiency(t *testing.T) {
 				RepoRoot: "/tmp",
 			},
 		}
-		permClient := &MockPermissionClient{
-			shouldAllow: true,
-			shouldError: false,
-		}
-		baseHandler, err := NewUploadPackHandler(cfg, permClient)
+
+		baseHandler, err := NewUploadPackHandler(cfg)
 		require.NoError(t, err)
 		streamingHandler := NewStreamingUploadPackHandler(baseHandler)
 		// Create a request that would potentially generate a lot of data
