@@ -43,11 +43,7 @@ func TestUploadPackValidation_BasicFlow(t *testing.T) {
 				RepoRoot: "/nonexistent", // This will fail gracefully
 			},
 		}
-		permClient := &MockPermissionClient{
-			shouldAllow: true,
-			shouldError: false,
-		}
-		handler, err := NewUploadPackHandler(cfg, permClient)
+		handler, err := NewUploadPackHandler(cfg)
 		require.NoError(t, err)
 		// Create request body
 		var requestBody bytes.Buffer
@@ -89,12 +85,7 @@ func TestUploadPackValidation_BasicFlow(t *testing.T) {
 				RepoRoot: "/tmp",
 			},
 		}
-		// Test with permission denied
-		permClient := &MockPermissionClient{
-			shouldAllow: false,
-			shouldError: false,
-		}
-		handler, err := NewUploadPackHandler(cfg, permClient)
+		handler, err := NewUploadPackHandler(cfg)
 		require.NoError(t, err)
 		var requestBody bytes.Buffer
 		requestBody.WriteString(formatPktLine("want 1234567890123456789012345678901234567890"))
@@ -117,11 +108,8 @@ func TestUploadPackValidation_BasicFlow(t *testing.T) {
 				RepoRoot: "/tmp",
 			},
 		}
-		permClient := &MockPermissionClient{
-			shouldAllow: true,
-			shouldError: false,
-		}
-		handler, err := NewUploadPackHandler(cfg, permClient)
+
+		handler, err := NewUploadPackHandler(cfg)
 		require.NoError(t, err)
 		var requestBody bytes.Buffer
 		requestBody.WriteString(formatPktLine("want 1234567890123456789012345678901234567890"))

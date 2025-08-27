@@ -42,7 +42,7 @@ type UploadPackHandler struct {
 }
 
 // NewUploadPackHandler creates a new upload-pack handler for the executor
-func NewUploadPackHandler(cfg *config.Config, permClient permissions.PermissionClient) (*UploadPackHandler, error) {
+func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
 	// Initialize path configuration
 	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {

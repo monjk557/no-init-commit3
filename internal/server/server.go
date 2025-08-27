@@ -278,7 +278,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	}
 
 	// Initialize repository creation handler for repository creation APIs
-	repoCreationHandler, err := protocol.NewRepositoryCreationHandler(s.config, nil)
+	repoCreationHandler, err := protocol.NewRepositoryCreationHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create repository creation handler", zap.Error(err))
 		return

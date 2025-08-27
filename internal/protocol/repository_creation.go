@@ -32,7 +32,7 @@ type RepositoryCreationHandler struct {
 }
 
 // NewRepositoryCreationHandler creates a new repository creation handler
-func NewRepositoryCreationHandler(cfg *config.Config, permClient permissions.PermissionClient) (*RepositoryCreationHandler, error) {
+func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandler, error) {
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
@@ -62,7 +62,6 @@ func NewRepositoryCreationHandler(cfg *config.Config, permClient permissions.Per
 	return &RepositoryCreationHandler{
 		config:             cfg,
 		logger:             logger,
-		permClient:         permClient,
 		pathConfig:         pathConfig,
 		pathValidator:      pathValidator,
 		objectManager:      objectManager,
@@ -100,39 +99,15 @@ type CreateRepositoryResponse struct {
 }
 
 // validatePermissions validates user permissions for repository creation
-func (h *RepositoryCreationHandler) validatePermissions(c *gin.Context, owner, repo, permission string) error {
+func (h *RepositoryCreationHandler) validatePermissions(c *gin.Context) error {
 	userID := c.GetHeader("X-USER-ID")
 	if userID == "" {
-		return fmt.Errorf("Missing X-USER-ID header")
+		return fmt.Errorf("missing X-USER-ID header")
 	}
 
 	source := c.GetHeader("X-Source")
 	if source == "" {
-		return fmt.Errorf("Missing X-Source header")
-	}
-
-	// If permission client is nil, skip permission checking (for development/testing)
-	if h.permClient == nil {
-		return nil
-	}
-
-	// Check permissions using the permission client
-	ctx := c.Request.Context()
-	var hasPermission bool
-	var err error
-
-	if permission == "write" {
-		hasPermission, err = h.permClient.CheckWriteAccess(ctx, userID, owner, repo)
-	} else {
-		hasPermission, err = h.permClient.CheckReadAccess(ctx, userID, owner, repo)
-	}
-
-	if err != nil {
-		return fmt.Errorf("Failed to check permissions: %w", err)
-	}
-
-	if !hasPermission {
-		return fmt.Errorf("User %s does not have %s permission for %s/%s", userID, permission, owner, repo)
+		return fmt.Errorf("missing X-Source header")
 	}
 
 	return nil
@@ -175,8 +150,8 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 	}
 
 	// Validate permissions (require write permission to create repositories)
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		if err.Error() == "Missing X-USER-ID header" || err.Error() == "Missing X-Source header" {
+	if err := h.validatePermissions(c); err != nil {
+		if err.Error() == "missing X-USER-ID header" || err.Error() == "missing X-Source header" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
 				"error":   err.Error(),
