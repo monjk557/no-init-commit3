@@ -7,9 +7,12 @@ install:
 	@echo "📦 Installing Go dependencies..."
 	@go mod download
 	@go mod tidy
-	@if [ "$(filter local,$(MAKECMDGOALS))" ]; then \
+	@if [ "$(filter local,$(MAKECMDGOALS))" ] || [ "$(words $(MAKECMDGOALS))" -eq 1 ]; then \
 		echo "🔧 Installing local development tools..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		command -v golangci-lint >/dev/null 2>&1 || { \
+			echo "Installing golangci-lint..."; \
+			curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin; \
+		}; \
 		go install golang.org/x/tools/cmd/goimports@latest; \
 		go install honnef.co/go/tools/cmd/staticcheck@latest; \
 	elif [ "$(filter qa,$(MAKECMDGOALS))" ] || [ "$(filter stage,$(MAKECMDGOALS))" ] || [ "$(filter prod,$(MAKECMDGOALS))" ]; then \
