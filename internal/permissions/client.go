@@ -4,22 +4,6 @@
 //
 // The package is designed to be thread-safe and production-ready, with
 // comprehensive error handling and observability features.
-//
-// Basic usage:
-//
-//	config := &Config{
-//		APIServiceURL: "http://api-service.local",
-//		Timeout:       10 * time.Second,
-//	}
-//
-//	client := NewPermissionClient(config)
-//	hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "repo")
-//	if err != nil {
-//		// Handle error
-//	}
-//	if hasAccess {
-//		// Allow repository access
-//	}
 package permissions
 
 import (
@@ -190,32 +174,8 @@ type Client struct {
 	circuitBreaker *CircuitBreaker
 }
 
-// NewPermissionClient creates a new permission client with the given configuration.
+// This Method will be deprecated in the future.
 func NewPermissionClient(config *Config) (PermissionClient, error) {
-	// if config == nil {
-	// 	config = DefaultConfig()
-	// }
-
-	// if err := config.Validate(); err != nil {
-	// 	return nil, errors.New("invalid configuration: " + err.Error())
-	// }
-
-	// // Create HTTP client if not provided
-	// httpClient := config.HTTPClient
-	// if httpClient == nil {
-	// 	httpClient = &http.Client{
-	// 		Timeout: config.Timeout,
-	// 	}
-	// }
-
-	// // Initialize cache
-	// cache := NewPermissionCache(config.CacheTTL)
-
-	// // Initialize circuit breaker if enabled
-	// var circuitBreaker *CircuitBreaker
-	// if config.EnableCircuitBreaker {
-	// 	circuitBreaker = NewCircuitBreaker(config.CircuitBreakerConfig)
-	// }
 
 	return nil, nil
 }
