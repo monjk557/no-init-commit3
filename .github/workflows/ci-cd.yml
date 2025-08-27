@@ -37,11 +37,11 @@ jobs:
       #     restore-keys: |
       #       ${{ runner.os }}-go-
 
-      - name: Install tools
-        run: make install-tools
+      # - name: Install tools
+      #   run: make install-tools
 
-      - name: Download dependencies
-        run: make deps
+      # - name: Download dependencies
+      #   run: make deps
 
       - name: Verify linting configuration alignment
         run: |
