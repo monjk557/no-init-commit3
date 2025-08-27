@@ -40,11 +40,8 @@ func TestUploadPackIntegration_RealGitProtocol(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	permClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewUploadPackHandler(cfg, permClient)
+
+	handler, err := NewUploadPackHandler(cfg)
 	require.NoError(t, err)
 	// Test real Git protocol scenarios
 	t.Run("Real_Want_Have_Request", func(t *testing.T) {

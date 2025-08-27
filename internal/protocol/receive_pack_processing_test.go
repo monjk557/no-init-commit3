@@ -29,11 +29,7 @@ func TestProcessRefUpdateSimple(t *testing.T) {
 			RepoRoot: "/tmp/test",
 		},
 	}
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -166,11 +162,7 @@ func TestProcessPackfile(t *testing.T) {
 			RepoRoot: "/tmp/test",
 		},
 	}
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -226,11 +218,7 @@ func TestValidatePackfileFormat(t *testing.T) {
 			RepoRoot: "/tmp/test",
 		},
 	}
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 
 	// Test 1: Valid packfile header

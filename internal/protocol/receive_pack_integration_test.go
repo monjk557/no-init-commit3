@@ -110,15 +110,10 @@ func TestReceivePackIntegration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock permission client
-			mockPermClient := &MockPermissionClient{
-				shouldAllow: true,
-				shouldError: false,
-			}
 			// Create handlers
-			uploadHandler, err := NewUploadPackHandler(cfg, mockPermClient)
+			uploadHandler, err := NewUploadPackHandler(cfg)
 			require.NoError(t, err)
-			receiveHandler, err := NewReceivePackHandler(cfg, mockPermClient)
+			receiveHandler, err := NewReceivePackHandler(cfg)
 			require.NoError(t, err)
 			// Create router and setup routes like the real server
 			gin.SetMode(gin.TestMode)
@@ -197,11 +192,8 @@ func TestReceivePackCapabilities(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 	// Test capability building
 	capString := handler.buildReceiveCapabilities()
@@ -232,14 +224,9 @@ func TestReceivePackVsUploadPackDifferences(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	// Test with denied permissions
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: false, // No permissions
-		shouldError: false,
-	}
-	uploadHandler, err := NewUploadPackHandler(cfg, mockPermClient)
+	uploadHandler, err := NewUploadPackHandler(cfg)
 	require.NoError(t, err)
-	receiveHandler, err := NewReceivePackHandler(cfg, mockPermClient)
+	receiveHandler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 	// Create request
 	req := httptest.NewRequest("GET", "/testowner/testrepo/info/refs?service=git-receive-pack", nil)
@@ -276,11 +263,7 @@ func TestReceivePackProtocolCompliance(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 	// Test proper service parameter handling
 	testCases := []struct {
@@ -325,11 +308,7 @@ func BenchmarkReceivePackHandler(b *testing.B) {
 			RepoRoot: tempDir,
 		},
 	}
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(b, err)
 	req := httptest.NewRequest("GET", "/testowner/testrepo/info/refs?service=git-receive-pack", nil)
 	req.Header.Set("X-USER-ID", "testuser123")

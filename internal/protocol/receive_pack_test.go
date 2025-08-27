@@ -22,17 +22,11 @@ func TestNewReceivePackHandler(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	// Create mock permission client
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
 	// Test successful handler creation
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 	assert.NotNil(t, handler)
 	assert.NotNil(t, handler.pathConfig)
-	assert.NotNil(t, handler.permissionClient)
 	assert.NotNil(t, handler.errorHandler)
 	assert.NotNil(t, handler.capabilities)
 }
@@ -120,13 +114,8 @@ func TestReceivePackHandler_HandleInfoRefs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock permission client with test-specific behavior
-			mockPermClient := &MockPermissionClient{
-				shouldAllow: tt.permissionShouldAllow,
-				shouldError: tt.permissionShouldError,
-			}
 			// Create handler
-			handler, err := NewReceivePackHandler(cfg, mockPermClient)
+			handler, err := NewReceivePackHandler(cfg)
 			require.NoError(t, err)
 			// Create request
 			req := httptest.NewRequest(http.MethodGet, "/info/refs?service="+tt.service, nil)
@@ -169,13 +158,8 @@ func TestReceivePackHandler_HandleReceivePack(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	// Create mock permission client
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
 	// Create handler
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 	// Create request
 	req := httptest.NewRequest(http.MethodPost, "/git-receive-pack", nil)
@@ -204,13 +188,8 @@ func TestReceivePackHandler_buildReceiveCapabilities(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	// Create mock permission client
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
 	// Create handler
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 	// Test capability string building
 	capString := handler.buildReceiveCapabilities()
@@ -240,11 +219,8 @@ func TestReceivePackHandler_AuthenticationFlow(t *testing.T) {
 		},
 	}
 	t.Run("Missing_Authentication", func(t *testing.T) {
-		mockPermClient := &MockPermissionClient{
-			shouldAllow: true,
-			shouldError: false,
-		}
-		handler, err := NewReceivePackHandler(cfg, mockPermClient)
+
+		handler, err := NewReceivePackHandler(cfg)
 		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodGet, "/info/refs?service=git-receive-pack", nil)
 		// Deliberately not setting X-USER-ID header
@@ -257,11 +233,7 @@ func TestReceivePackHandler_AuthenticationFlow(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 	t.Run("Valid_Authentication_No_Permission", func(t *testing.T) {
-		mockPermClient := &MockPermissionClient{
-			shouldAllow: false, // User authenticated but no write permission
-			shouldError: false,
-		}
-		handler, err := NewReceivePackHandler(cfg, mockPermClient)
+		handler, err := NewReceivePackHandler(cfg)
 		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodGet, "/info/refs?service=git-receive-pack", nil)
 		req.Header.Set("X-USER-ID", "user123")
@@ -274,11 +246,7 @@ func TestReceivePackHandler_AuthenticationFlow(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 	t.Run("Valid_Authentication_With_Permission", func(t *testing.T) {
-		mockPermClient := &MockPermissionClient{
-			shouldAllow: true, // User has write permission
-			shouldError: false,
-		}
-		handler, err := NewReceivePackHandler(cfg, mockPermClient)
+		handler, err := NewReceivePackHandler(cfg)
 		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodGet, "/info/refs?service=git-receive-pack", nil)
 		req.Header.Set("X-USER-ID", "user123")
@@ -305,12 +273,7 @@ func TestReceivePackHandler_WritePermissionCheck(t *testing.T) {
 			RepoRoot: tempDir,
 		},
 	}
-	// Create a permission client that tracks what permission was checked
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-	handler, err := NewReceivePackHandler(cfg, mockPermClient)
+	handler, err := NewReceivePackHandler(cfg)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodGet, "/info/refs?service=git-receive-pack", nil)
 	req.Header.Set("X-USER-ID", "user123")

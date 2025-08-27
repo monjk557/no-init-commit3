@@ -372,7 +372,7 @@ func (s *Server) healthCheck(c *gin.Context) {
 // setupProtocolRoutes configures Git Smart HTTP protocol routes
 func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	// Initialize upload-pack handler (fetch operations)
-	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config, nil)
+	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config)
 	if err != nil {
 		// For now, log the error and continue without Smart HTTP
 		fmt.Printf("⚠️  Warning: Failed to initialize upload-pack handler: %v\n", err)
@@ -380,7 +380,7 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	}
 
 	// Initialize receive-pack handler (push operations)
-	receivePackHandler, err := protocol.NewReceivePackHandler(s.config, nil)
+	receivePackHandler, err := protocol.NewReceivePackHandler(s.config)
 	if err != nil {
 		// For now, log the error and continue without receive-pack
 		fmt.Printf("⚠️  Warning: Failed to initialize receive-pack handler: %v\n", err)
