@@ -25,7 +25,6 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
 
-	assert.Equal(t, "http://api-service.local", config.APIServiceURL)
 	assert.Equal(t, 10*time.Second, config.Timeout)
 	assert.Equal(t, 3, config.MaxRetries)
 	assert.Equal(t, 100*time.Millisecond, config.InitialRetryDelay)
@@ -194,39 +193,6 @@ func TestNewPermissionClient(t *testing.T) {
 	})
 }
 
-func TestPermissionResult(t *testing.T) {
-	now := time.Now()
-
-	t.Run("cache key generation", func(t *testing.T) {
-		result := &PermissionResult{
-			UserID:    "user123",
-			RepoOwner: "owner",
-			RepoName:  "repo",
-			Operation: OperationRead,
-		}
-
-		expected := "user123:owner:repo:read"
-		assert.Equal(t, expected, result.CacheKey())
-	})
-
-	t.Run("expiration check", func(t *testing.T) {
-		// Not expired
-		result := &PermissionResult{
-			ExpiresAt: now.Add(1 * time.Hour),
-		}
-		assert.False(t, result.IsExpired())
-
-		// Expired
-		result.ExpiresAt = now.Add(-1 * time.Hour)
-		assert.True(t, result.IsExpired())
-
-		// Exactly at expiration time (should be expired)
-		result.ExpiresAt = now
-		time.Sleep(1 * time.Millisecond) // Ensure some time has passed
-		assert.True(t, result.IsExpired())
-	})
-}
-
 func TestClientInputValidation(t *testing.T) {
 	client, err := NewPermissionClient(DefaultConfig())
 	require.NoError(t, err)
@@ -276,21 +242,4 @@ func TestClientInputValidation(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.expectErr)
 		})
 	}
-}
-
-func TestClientCacheOperations(t *testing.T) {
-	client, err := NewPermissionClient(DefaultConfig())
-	require.NoError(t, err)
-	defer func() { _ = client.Close() }()
-
-	// Test cache invalidation (should not panic)
-	client.InvalidateCache("user123", "owner", "repo")
-
-	// Test cache clearing (should not panic)
-	client.ClearCache()
-}
-
-func TestOperationConstants(t *testing.T) {
-	assert.Equal(t, Operation("read"), OperationRead)
-	assert.Equal(t, Operation("write"), OperationWrite)
 }

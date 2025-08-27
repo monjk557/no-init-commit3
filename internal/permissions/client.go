@@ -242,22 +242,6 @@ func (c *Client) checkAccess(ctx context.Context, userID, repoOwner, repoName st
 
 // requestPermissionWithFallback handles the API request with circuit breaker and fallback logic.
 func (c *Client) requestPermissionWithFallback(ctx context.Context, userID, repoOwner, repoName string, operation Operation, cachedResult *PermissionResult) (bool, error) {
-	// If circuit breaker is disabled, use regular request logic
-	// if c.circuitBreaker == nil {
-	// 	hasAccess, err := c.requestPermission(ctx, userID, repoOwner, repoName, operation)
-	// 	if err != nil {
-	// 		// Fall back to cached result if available
-	// 		if cachedResult != nil {
-	// 			return cachedResult.HasAccess, nil
-	// 		}
-	// 		// Apply fallback policy
-	// 		fallbackAccess := c.config.FallbackPolicy.ShouldAllowAccess(operation, false)
-	// 		return fallbackAccess, &ServiceUnavailableError{
-	// 			Operation:      operation,
-	// 			UserID:         userID,
-	// 			RepoOwner:      repoOwner,
-	// 			RepoName:       repoName,
-
 	// Use circuit breaker for API requests
 	var requestErr error
 	var hasAccess bool
