@@ -112,7 +112,7 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 			expectedBranch: "develop",
 		},
 		{
-			name: "create repository with initial files",
+			name: "create repository with initial files only root",
 			options: &CreateRepositoryOptions{
 				Path: func() string {
 					path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "with-files")
