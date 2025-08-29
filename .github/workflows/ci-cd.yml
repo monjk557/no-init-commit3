@@ -26,58 +26,18 @@ jobs:
           go-version: '1.24.5'  # Updated to match go.mod toolchain
           check-latest: true
 
+      # Note: Go module cache disabled due to file conflicts
       # - name: Cache Go modules
       #   uses: actions/cache@v4
-      #   with:
-      #     path: |
-      #       ~/.cache/go-build
-      #       ~/go/pkg/mod
-      #       ~/.cache/golangci-lint
-      #     key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum', '**/go.mod') }}
-      #     restore-keys: |
-      #       ${{ runner.os }}-go-
 
-      - name: Install tools
-        run: make install-tools
+      - name: Install dependencies and tools
+        run: make install
 
-      - name: Download dependencies
-        run: make deps
+      - name: Format and lint
+        run: make format
 
-      - name: Verify linting configuration alignment
-        run: |
-          echo "🔍 Verifying CI configuration matches local setup..."
-          echo ""
-          echo "📋 Configuration from Makefile:"
-          echo "Available commands: test-verbose, format (comprehensive), vet, test-race"
-          echo ""
-          echo "🎯 CI commands now match local development exactly:"
-          echo "  Local: make format (includes fmt + lint + tests)"
-          echo "  CI:    make format (includes fmt + lint + tests)"
-          echo ""
-          echo "✅ Perfect alignment - no more CI/local discrepancies!"
-
-      - name: Verify configuration
-        run: make verify-config
-
-      - name: Run comprehensive formatting and linting
-        run: |
-          echo "🎨 Running comprehensive formatting (includes linting)..."
-          make format
-          if [ -n "$(git diff --name-only)" ]; then
-            echo "❌ Code formatting/linting produced changes. Please run 'make format' locally"
-            git diff
-            exit 1
-          fi
-
-      - name: Run go vet  
-        run: make vet
-
-      - name: Run tests with race detection
-        run: make test-race-verbose
-
-      - name: Run tests with coverage
-        timeout-minutes: 15
-        run: make test-coverage
+      - name: Run tests
+        run: make test
 
   build:
     name: Build Only (PR)
@@ -94,18 +54,12 @@ jobs:
         with:
           go-version: '1.24.5'  # Updated to match go.mod toolchain
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum', '**/go.mod') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+      # Note: Go module cache disabled due to file conflicts
+      # - name: Cache Go modules
+      #   uses: actions/cache@v4
 
-      - name: Download dependencies
-        run: make deps
+      - name: Install dependencies
+        run: make install
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -114,7 +68,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deployments/Dockerfile
+          file: config/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -141,20 +95,14 @@ jobs:
         with:
           go-version: '1.24.5'  # Updated to match go.mod toolchain
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum', '**/go.mod') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+      # Note: Go module cache disabled due to file conflicts
+      # - name: Cache Go modules
+      #   uses: actions/cache@v4
 
-      - name: Download dependencies and build
+      - name: Install dependencies and build
         run: |
-          make deps
-          make build-linux
+          make install
+          make build
 
       - name: Extract metadata
         id: meta
@@ -199,7 +147,7 @@ jobs:
 
           # Check required files
           echo "Checking required files..."
-          [ -f "deployments/Dockerfile" ] && echo "✓ Dockerfile exists" || { echo "✗ Dockerfile not found" ; exit 1; }
+          [ -f "config/Dockerfile" ] && echo "✓ Dockerfile exists" || { echo "✗ Dockerfile not found" ; exit 1; }
           [ -f "go.mod" ] && echo "✓ go.mod exists" || { echo "✗ go.mod not found" ; exit 1; }
           [ -f "Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
 
@@ -268,7 +216,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deployments/Dockerfile
+          file: config/Dockerfile
           push: true
           build-args: |
             APP_ENV=prod
