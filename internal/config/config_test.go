@@ -14,7 +14,7 @@ func TestLoad_ValidConfig(t *testing.T) {
 	// Create a temporary config file
 	configContent := `
 server:
-  port: 9090
+  port: 5001
   base_path: "/api/repos"
   host: "localhost"
   read_timeout: "45s"
@@ -79,7 +79,7 @@ func TestLoad_Defaults(t *testing.T) {
 	require.NotNil(t, config)
 
 	// Verify default values
-	assert.Equal(t, 8080, config.Server.Port)
+	assert.Equal(t, 5001, config.Server.Port)
 	assert.Equal(t, "/repos", config.Server.BasePath)
 	assert.Equal(t, "0.0.0.0", config.Server.Host)
 	assert.Equal(t, 30*time.Second, config.Server.ReadTimeout)
