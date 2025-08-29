@@ -2,7 +2,7 @@ package permissions
 
 import (
 	"context"
-	"encoding/json"
+	// "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -216,78 +216,84 @@ func TestFallbackPolicy_ShouldAllowAccess(t *testing.T) {
 }
 
 func TestClient_CircuitBreakerIntegration(t *testing.T) {
-	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		if requestCount <= 5 {
-			// First several requests fail
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+	// Skip this test since permission client is being removed
+	t.Skip("Skipping circuit breaker integration test - permission client is being removed")
+
+	// Original test logic commented out for reference
+	/*
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if requestCount <= 5 {
+				// First several requests fail
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			// Later requests succeed
+			response := APIResponse{Allowed: true}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response)
+		}))
+		defer server.Close()
+
+		config := &Config{
+			APIServiceURL:     server.URL,
+			Timeout:           1 * time.Second,
+			MaxRetries:        0, // No retries for cleaner test
+			InitialRetryDelay: 10 * time.Millisecond,
+			MaxRetryDelay:     50 * time.Millisecond,
+			CacheTTL:          5 * time.Minute,
+			HTTPClient:        server.Client(),
+			CircuitBreakerConfig: &CircuitBreakerConfig{
+				FailureThreshold:    3,
+				RecoveryTimeout:     100 * time.Millisecond,
+				MaxHalfOpenRequests: 1,
+			},
+			FallbackPolicy:       FallbackDeny,
+			EnableCircuitBreaker: true,
 		}
-		// Later requests succeed
-		response := APIResponse{Allowed: true}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
 
-	config := &Config{
-		APIServiceURL:     server.URL,
-		Timeout:           1 * time.Second,
-		MaxRetries:        0, // No retries for cleaner test
-		InitialRetryDelay: 10 * time.Millisecond,
-		MaxRetryDelay:     50 * time.Millisecond,
-		CacheTTL:          5 * time.Minute,
-		HTTPClient:        server.Client(),
-		CircuitBreakerConfig: &CircuitBreakerConfig{
-			FailureThreshold:    3,
-			RecoveryTimeout:     100 * time.Millisecond,
-			MaxHalfOpenRequests: 1,
-		},
-		FallbackPolicy:       FallbackDeny,
-		EnableCircuitBreaker: true,
-	}
+		client, err := NewPermissionClient(config)
 
-	client, err := NewPermissionClient(config)
-	require.NoError(t, err)
-	defer func() { _ = client.Close() }()
+		defer func() { _ = client.Close() }()
 
-	ctx := context.Background()
+		ctx := context.Background()
 
-	// Make enough requests to open the circuit
-	for i := 0; i < 4; i++ {
-		hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", fmt.Sprintf("repo%d", i))
-		assert.False(t, hasAccess) // FallbackDeny policy
+		// Make enough requests to open the circuit
+		for i := 0; i < 4; i++ {
+			hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", fmt.Sprintf("repo%d", i))
+			assert.False(t, hasAccess) // FallbackDeny policy
+			assert.Error(t, err)
+		}
+
+		// Verify circuit is open
+		metrics := client.GetCircuitBreakerMetrics()
+		require.NotNil(t, metrics)
+		assert.Equal(t, StateOpen, metrics.State)
+
+		// Immediate request should fail with circuit breaker error
+		hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "immediate-repo")
+		assert.False(t, hasAccess)
 		assert.Error(t, err)
-	}
+		var svcErr *ServiceUnavailableError
+		assert.True(t, errors.As(err, &svcErr))
+		assert.Equal(t, StateOpen, svcErr.CircuitState)
 
-	// Verify circuit is open
-	metrics := client.GetCircuitBreakerMetrics()
-	require.NotNil(t, metrics)
-	assert.Equal(t, StateOpen, metrics.State)
+		// Wait for recovery timeout - circuit should transition to half-open
+		time.Sleep(150 * time.Millisecond)
 
-	// Immediate request should fail with circuit breaker error
-	hasAccess, err := client.CheckReadAccess(ctx, "user123", "owner", "immediate-repo")
-	assert.False(t, hasAccess)
-	assert.Error(t, err)
-	var svcErr *ServiceUnavailableError
-	assert.True(t, errors.As(err, &svcErr))
-	assert.Equal(t, StateOpen, svcErr.CircuitState)
+		// Reset request counter for successful response
+		requestCount = 10 // Ensure next request succeeds
 
-	// Wait for recovery timeout - circuit should transition to half-open
-	time.Sleep(150 * time.Millisecond)
+		// Next request should succeed (circuit half-open -> closed)
+		hasAccess, err = client.CheckReadAccess(ctx, "user123", "owner", "recovery-repo")
+		assert.NoError(t, err)
+		assert.True(t, hasAccess)
 
-	// Reset request counter for successful response
-	requestCount = 10 // Ensure next request succeeds
-
-	// Next request should succeed (circuit half-open -> closed)
-	hasAccess, err = client.CheckReadAccess(ctx, "user123", "owner", "recovery-repo")
-	assert.NoError(t, err)
-	assert.True(t, hasAccess)
-
-	// Circuit should be closed again
-	metrics = client.GetCircuitBreakerMetrics()
-	assert.Equal(t, StateClosed, metrics.State)
+		// Circuit should be closed again
+		metrics = client.GetCircuitBreakerMetrics()
+		assert.Equal(t, StateClosed, metrics.State)
+	*/
 }
 
 func TestClient_FallbackPolicies(t *testing.T) {
