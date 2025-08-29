@@ -39,9 +39,9 @@ COPY --from=builder /app/git-executor .
 COPY config/config.yaml /config/config.yaml
 
 # Create necessary directories
-RUN mkdir -p /repos /config /tmp && \
-    chown -R gituser:gituser /app /repos /config /tmp /config/config.yaml
-
+RUN mkdir -p /repos /config /tmp /specs && \
+    chown -R gituser:gituser /app /repos /config /tmp /specs /config/config.yaml
+    
 # Switch to non-root user
 USER gituser
 

@@ -116,7 +116,7 @@ func Load(configPath string) (*Config, error) {
 // setDefaults sets default configuration values
 func setDefaults() {
 	// Server defaults
-	viper.SetDefault("server.port", 8080)
+	viper.SetDefault("server.port", 5001)
 	viper.SetDefault("server.base_path", "/repos")
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.read_timeout", "30s")
