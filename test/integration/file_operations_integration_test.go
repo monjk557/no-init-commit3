@@ -81,7 +81,7 @@ func SetupFileOperationsIntegrationTest(t *testing.T) *FileOperationsIntegration
 	require.NoError(t, err)
 
 	// Create initial commit with some files
-	// createRepositoryWithInitialFiles(t, testRepoPath)
+	createRepositoryWithInitialFiles(t, testRepoPath)
 
 	// Setup configuration
 	cfg := &config.Config{

@@ -601,9 +601,7 @@ func (h *FileOperationsHandler) HandleFileContent(c *gin.Context) {
 	path := c.Param("path")
 
 	// Remove leading slash from path parameter
-	if strings.HasPrefix(path, "/") {
-		path = path[1:]
-	}
+	path = strings.TrimPrefix(path, "/")
 
 	// Validate path parameter
 	if path == "" {
