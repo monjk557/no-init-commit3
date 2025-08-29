@@ -48,7 +48,7 @@ logging:
 	require.NotNil(t, config)
 
 	// Verify server configuration
-	assert.Equal(t, 9090, config.Server.Port)
+	assert.Equal(t, 5001, config.Server.Port)
 	assert.Equal(t, "/api/repos", config.Server.BasePath)
 	assert.Equal(t, "localhost", config.Server.Host)
 	assert.Equal(t, 45*time.Second, config.Server.ReadTimeout)
