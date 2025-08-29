@@ -49,10 +49,6 @@ func NewTreeHandler(cfg *config.Config, permClient permissions.PermissionClient)
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
-	if permClient == nil {
-		return nil, fmt.Errorf("permission client cannot be nil")
-	}
-
 	// Create path configuration
 	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
@@ -141,13 +137,16 @@ func (h *TreeHandler) validateAndExtractTreeParams(r *http.Request) (*TreeReques
 
 // validateTreeRequestAndPermissions performs validation and permission checking for tree requests
 func (h *TreeHandler) validateTreeRequestAndPermissions(ctx context.Context, params *TreeRequestParams) (string, error) {
-	// Check user permissions (read access for tree operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
-	if err != nil {
-		return "", fmt.Errorf("permission check failed: %w", err)
-	}
-	if !hasAccess {
-		return "", fmt.Errorf("access denied to repository")
+	// If permission client is nil, skip permission checking (for development/testing)
+	if h.permissionClient != nil {
+		// Check user permissions (read access for tree operations)
+		hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
+		if err != nil {
+			return "", fmt.Errorf("permission check failed: %w", err)
+		}
+		if !hasAccess {
+			return "", fmt.Errorf("access denied to repository")
+		}
 	}
 
 	// Get repository path and validate

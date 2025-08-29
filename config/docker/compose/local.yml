@@ -1,0 +1,34 @@
+services:
+  # Git Executor Service
+  collabops-git-executor:
+    build:
+      context: ../../../../collabops-git-executor
+      dockerfile: deployments/Dockerfile
+    ports:
+      - "${GIT_EXECUTOR_PORT:-5001}:5001"
+    environment:
+      - APP_ENV=${APP_ENV:-local}
+      - APP_DEBUG=${APP_DEBUG:-true}
+      - APP_NAME=${APP_NAME:-"Git Executor Service"}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-DEBUG}
+      - PORT=5001
+    volumes:  
+      - ../../../specs:/app/specs:ro
+    networks:
+      - collabops-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        labels: "service=collabops-git-executor"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  collabops-network:
+    driver: bridge 

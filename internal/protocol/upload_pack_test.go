@@ -192,14 +192,8 @@ func TestUploadPackHandler_HandleInfoRefs(t *testing.T) {
 				createTestRepository(t, repoPath)
 			}
 
-			// Create mock permission client
-			mockPermClient := &MockPermissionClient{
-				shouldAllow: tt.permissionShouldOK,
-				shouldError: tt.permissionError,
-			}
-
 			// Create handler
-			handler, err := NewUploadPackHandler(cfg, mockPermClient)
+			handler, err := NewUploadPackHandler(cfg)
 			require.NoError(t, err)
 
 			// Create request
@@ -256,14 +250,8 @@ func TestUploadPackHandler_HandleUploadPack(t *testing.T) {
 		},
 	}
 
-	// Create mock permission client
-	mockPermClient := &MockPermissionClient{
-		shouldAllow: true,
-		shouldError: false,
-	}
-
 	// Create handler
-	handler, err := NewUploadPackHandler(cfg, mockPermClient)
+	handler, err := NewUploadPackHandler(cfg)
 	require.NoError(t, err)
 
 	// Create request
@@ -302,7 +290,7 @@ func TestUploadPackHandler_writeReferences(t *testing.T) {
 	}
 
 	// Create handler
-	handler, err := NewUploadPackHandler(cfg, &MockPermissionClient{})
+	handler, err := NewUploadPackHandler(cfg)
 	require.NoError(t, err)
 
 	// Create a mock repository
@@ -376,9 +364,7 @@ func TestNewUploadPackHandler(t *testing.T) {
 				},
 			}
 
-			mockPermClient := &MockPermissionClient{}
-
-			handler, err := NewUploadPackHandler(cfg, mockPermClient)
+			handler, err := NewUploadPackHandler(cfg)
 
 			if tt.expectError {
 				assert.Error(t, err)

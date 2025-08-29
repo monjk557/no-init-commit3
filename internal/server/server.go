@@ -223,15 +223,6 @@ func (s *Server) setupAPIRoutesOnGroup(group *gin.RouterGroup) {
 
 // setupRestAPIRoutes configures REST API routes for Git operations
 func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
-	// Initialize permission client for REST API routes
-	permConfig := permissions.DefaultConfig()
-	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing
-	permClient, err := permissions.NewPermissionClient(permConfig)
-	if err != nil {
-		s.logger.Error("Failed to create permission client for REST API", zap.Error(err))
-		return
-	}
-
 	// Create path configuration for handlers
 	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
@@ -239,50 +230,57 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
-	// Initialize handlers for REST API endpoints
-	treeHandler, err := protocol.NewTreeHandler(s.config, permClient)
+	// Initialize handlers for REST API endpoints (without permission client)
+	treeHandler, err := protocol.NewTreeHandler(s.config, nil)
 	if err != nil {
 		s.logger.Error("Failed to create tree handler", zap.Error(err))
 		return
 	}
 
-	blobHandler, err := protocol.NewBlobHandler(pathConfig, permClient)
+	blobHandler, err := protocol.NewBlobHandler(pathConfig, nil)
 	if err != nil {
 		s.logger.Error("Failed to create blob handler", zap.Error(err))
 		return
 	}
 
-	commitsHandler, err := protocol.NewCommitsHandler(s.config, permClient)
+	commitsHandler, err := protocol.NewCommitsHandler(s.config, nil)
 	if err != nil {
 		s.logger.Error("Failed to create commits handler", zap.Error(err))
 		return
 	}
 
 	// Initialize diff handler for enhanced Git operations
-	diffHandler, err := protocol.NewDiffHandler(s.config, permClient)
+	diffHandler, err := protocol.NewDiffHandler(s.config, nil)
 	if err != nil {
 		s.logger.Error("Failed to create diff handler", zap.Error(err))
 		return
 	}
 
 	// Initialize file operations handler for server-side Git REST APIs
-	fileOpsHandler, err := protocol.NewFileOperationsHandler(s.config, permClient)
+	fileOpsHandler, err := protocol.NewFileOperationsHandler(s.config, nil)
 	if err != nil {
 		s.logger.Error("Failed to create file operations handler", zap.Error(err))
 		return
 	}
 
 	// Initialize branch operations handler for branch management APIs
-	branchOpsHandler, err := protocol.NewBranchOperationsHandler(s.config, permClient)
+	branchOpsHandler, err := protocol.NewBranchOperationsHandler(s.config, nil)
 	if err != nil {
 		s.logger.Error("Failed to create branch operations handler", zap.Error(err))
 		return
 	}
 
 	// Initialize repository state handler for repository management APIs
-	repoStateHandler, err := protocol.NewRepositoryStateHandler(s.config, permClient)
+	repoStateHandler, err := protocol.NewRepositoryStateHandler(s.config, nil)
 	if err != nil {
 		s.logger.Error("Failed to create repository state handler", zap.Error(err))
+		return
+	}
+
+	// Initialize repository creation handler for repository creation APIs
+	repoCreationHandler, err := protocol.NewRepositoryCreationHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create repository creation handler", zap.Error(err))
 		return
 	}
 
@@ -295,6 +293,9 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	reposGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
 	reposGroup.Use(jsonResponseMiddleware.ErrorHandler())
 	{
+		// Repository creation endpoint - separate from existing repos
+		reposGroup.POST("/:owner/:repo", repoCreationHandler.HandleCreateRepository)
+
 		ownerGroup := reposGroup.Group("/:owner")
 		{
 			repoGroup := ownerGroup.Group("/:repo")
@@ -370,19 +371,8 @@ func (s *Server) healthCheck(c *gin.Context) {
 
 // setupProtocolRoutes configures Git Smart HTTP protocol routes
 func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
-	// Initialize permission client (for now, we'll create a basic config)
-	// TODO: This should be properly configured with actual API service URL
-	permConfig := permissions.DefaultConfig()
-	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing
-	permClient, err := permissions.NewPermissionClient(permConfig)
-	if err != nil {
-		// For now, log the error and continue without Smart HTTP
-		fmt.Printf("⚠️  Warning: Failed to initialize permission client: %v\n", err)
-		return
-	}
-
 	// Initialize upload-pack handler (fetch operations)
-	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config, permClient)
+	uploadPackHandler, err := protocol.NewUploadPackHandler(s.config)
 	if err != nil {
 		// For now, log the error and continue without Smart HTTP
 		fmt.Printf("⚠️  Warning: Failed to initialize upload-pack handler: %v\n", err)
@@ -390,7 +380,7 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	}
 
 	// Initialize receive-pack handler (push operations)
-	receivePackHandler, err := protocol.NewReceivePackHandler(s.config, permClient)
+	receivePackHandler, err := protocol.NewReceivePackHandler(s.config)
 	if err != nil {
 		// For now, log the error and continue without receive-pack
 		fmt.Printf("⚠️  Warning: Failed to initialize receive-pack handler: %v\n", err)
@@ -398,7 +388,7 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	}
 
 	// Initialize SSH protocol handler (SSH-forwarded operations)
-	sshHandler, err := protocol.NewSSHProtocolHandler(s.config, permClient)
+	sshHandler, err := protocol.NewSSHProtocolHandler(s.config, nil)
 	if err != nil {
 		// For now, log the error and continue without SSH support
 		fmt.Printf("⚠️  Warning: Failed to initialize SSH protocol handler: %v\n", err)

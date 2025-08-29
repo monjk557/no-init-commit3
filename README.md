@@ -105,6 +105,62 @@ curl -X GET "http://localhost:3000/repos/testowner/testrepo/state" \
 
 ### 📊 Repository Operations
 
+#### Create Repository
+Create a new Git repository with optional initial commit and custom settings.
+
+```http
+POST /repos/{owner}/{repo}
+```
+
+**Request Body:**
+```json
+{
+  "description": "My new repository",
+  "initial_commit": true,
+  "default_branch": "main",
+  "author": {
+    "name": "Developer Name",
+    "email": "dev@example.com"
+  },
+  "initial_files": {
+    "README.md": "# My Project\n\nThis is my new repository.",
+    "src/main.js": "console.log('Hello World!');"
+  }
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "repository": "myowner/myrepo",
+  "owner": "myowner",
+  "name": "myrepo",
+  "description": "My new repository",
+  "default_branch": "main",
+  "initial_commit": "a1b2c3d4e5f6...",
+  "created_at": "2025-01-08T10:30:00Z"
+}
+```
+
+**Example:**
+```bash
+curl -X POST "http://localhost:3000/repos/myowner/myrepo" \
+  -H "Content-Type: application/json" \
+  -H "X-USER-ID: backend-service" \
+  -H "X-Source: api-integration" \
+  -H "Authorization: Bearer your-token" \
+  -d '{
+    "description": "My new repository",
+    "initial_commit": true,
+    "default_branch": "main",
+    "author": {
+      "name": "Developer Name",
+      "email": "dev@example.com"
+    }
+  }'
+```
+
 #### Get Repository State
 Get complete repository information including branches, commits, and metadata.
 

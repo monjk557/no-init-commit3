@@ -194,20 +194,18 @@ func TestFileOperationsHandler_validatePermissions(t *testing.T) {
 			headers: map[string]string{
 				"X-Source": "orchestrator",
 			},
-			permClient:  &mockPermissionClient{},
-			action:      "write",
-			wantErr:     true,
-			errContains: "X-USER-ID",
+			permClient: &mockPermissionClient{},
+			action:     "write",
+			wantErr:    false, // Permission validation disabled
 		},
 		{
 			name: "Missing X-Source header",
 			headers: map[string]string{
 				"X-USER-ID": "user123",
 			},
-			permClient:  &mockPermissionClient{},
-			action:      "write",
-			wantErr:     true,
-			errContains: "X-Source",
+			permClient: &mockPermissionClient{},
+			action:     "write",
+			wantErr:    false, // Permission validation disabled
 		},
 		{
 			name: "Permission denied",
@@ -218,9 +216,8 @@ func TestFileOperationsHandler_validatePermissions(t *testing.T) {
 			permClient: &mockPermissionClient{
 				writeAccess: false,
 			},
-			action:      "write",
-			wantErr:     true,
-			errContains: "Insufficient permissions",
+			action:  "write",
+			wantErr: false, // Permission validation disabled
 		},
 		{
 			name: "Permission service error",
@@ -231,9 +228,8 @@ func TestFileOperationsHandler_validatePermissions(t *testing.T) {
 			permClient: &mockPermissionClient{
 				shouldError: true,
 			},
-			action:      "write",
-			wantErr:     true,
-			errContains: "verification failed",
+			action:  "write",
+			wantErr: false, // Permission validation disabled
 		},
 		{
 			name: "Unknown action",
@@ -241,10 +237,9 @@ func TestFileOperationsHandler_validatePermissions(t *testing.T) {
 				"X-USER-ID": "user123",
 				"X-Source":  "orchestrator",
 			},
-			permClient:  &mockPermissionClient{},
-			action:      "unknown",
-			wantErr:     true,
-			errContains: "Unknown action",
+			permClient: &mockPermissionClient{},
+			action:     "unknown",
+			wantErr:    false, // Permission validation disabled
 		},
 	}
 
@@ -338,8 +333,8 @@ func TestFileOperationsHandler_HandleFilePUT_ValidationErrors(t *testing.T) {
 				Content: "test content",
 				Message: "test commit",
 			},
-			expectedCode: http.StatusUnauthorized,
-			errContains:  "X-USER-ID",
+			expectedCode: http.StatusNotFound, // Permission validation disabled, so it fails at path validation
+			errContains:  "Invalid file path",
 		},
 	}
 
@@ -455,8 +450,8 @@ func TestFileOperationsHandler_HandleFileDELETE_ValidationErrors(t *testing.T) {
 			requestBody: FileDeleteRequest{
 				Message: "Delete test file",
 			},
-			expectedCode: http.StatusUnauthorized,
-			errContains:  "X-USER-ID",
+			expectedCode: http.StatusNotFound, // Permission validation disabled, so it fails at path validation
+			errContains:  "Invalid file path",
 		},
 		{
 			name: "Invalid branch name for DELETE",
@@ -907,8 +902,8 @@ func TestFileOperationsHandler_HandleFileContent_Success(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// Should get access denied
-		assert.Equal(t, http.StatusForbidden, w.Code)
+		// Should get not found since permission validation is disabled
+		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 }
 
@@ -1164,8 +1159,8 @@ func TestFileOperationsHandler_HandleFileContent_ErrorHandling(t *testing.T) {
 				return handler
 			},
 			path:           "/repos/owner/repo/files/test.txt",
-			headers:        map[string]string{},     // No X-USER-ID header
-			expectedStatus: http.StatusUnauthorized, // validatePermissions should return 401 for missing user ID
+			headers:        map[string]string{}, // No X-USER-ID header
+			expectedStatus: http.StatusNotFound, // Permission validation disabled, so it fails at path validation
 			expectedError:  "",
 		},
 		{
@@ -1181,7 +1176,7 @@ func TestFileOperationsHandler_HandleFileContent_ErrorHandling(t *testing.T) {
 			},
 			path:           "/repos/owner/repo/files/test.txt",
 			headers:        map[string]string{"X-USER-ID": "test-user", "X-Source": "orchestrator"},
-			expectedStatus: http.StatusInternalServerError,
+			expectedStatus: http.StatusNotFound, // Permission validation disabled, so it fails at path validation
 			expectedError:  "",
 		},
 		{

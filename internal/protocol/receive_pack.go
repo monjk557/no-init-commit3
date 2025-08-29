@@ -54,7 +54,7 @@ type ReceivePackHandler struct {
 }
 
 // NewReceivePackHandler creates a new receive-pack handler for the executor
-func NewReceivePackHandler(cfg *config.Config, permClient permissions.PermissionClient) (*ReceivePackHandler, error) {
+func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 	// Initialize path configuration
 	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
@@ -68,10 +68,9 @@ func NewReceivePackHandler(cfg *config.Config, permClient permissions.Permission
 	capabilities := DefaultServerCapabilities()
 
 	return &ReceivePackHandler{
-		pathConfig:       pathConfig,
-		permissionClient: permClient,
-		errorHandler:     errorHandler,
-		capabilities:     capabilities,
+		pathConfig:   pathConfig,
+		errorHandler: errorHandler,
+		capabilities: capabilities,
 	}, nil
 }
 

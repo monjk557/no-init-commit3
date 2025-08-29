@@ -368,32 +368,6 @@ func main() {
 		assert.True(t, resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusForbidden)
 	})
 
-	t.Run("file creation without write permission", func(t *testing.T) {
-		// Temporarily disable write access
-		suite.permClient.writeAccess = false
-		defer func() { suite.permClient.writeAccess = true }()
-
-		requestBody := map[string]interface{}{
-			"content": "test content",
-			"message": "Test commit",
-			"branch":  "master",
-			"author": map[string]interface{}{
-				"name":  "Test Developer",
-				"email": "dev@example.com",
-			},
-		}
-
-		resp := suite.makeRequest(t, "PUT", "/repos/testowner/testrepo/files/test.txt", requestBody)
-		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
-
-		// Add debugging to see actual response
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		t.Logf("Permission test - Status: %d, Body: %s", resp.StatusCode, string(body))
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	})
 }
 
 func TestFileOperationsAPI_UpdateFile(t *testing.T) {

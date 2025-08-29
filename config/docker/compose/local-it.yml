@@ -94,13 +94,43 @@ services:
       retries: 3
       start_period: 40s
 
-  # Git Executor (Go) - Build Locally
+  # CollabOps Git Executor Service - Handles Git Operations
   collabops-git-executor:
     build:
       context: ../../../
       dockerfile: config/Dockerfile
     ports:
-      - "${GIT_EXECUTOR_PORT:-9091}:8080"
+      - "${GIT_EXECUTOR_PORT:-5001}:5001"
+    environment:
+      # Server Configuration
+      - COLLABOPS_SERVER_HOST=0.0.0.0
+      - COLLABOPS_SERVER_PORT=5001
+      - COLLABOPS_SERVER_BASE_PATH=/repos
+      - COLLABOPS_SERVER_READ_TIMEOUT=60s
+      - COLLABOPS_SERVER_WRITE_TIMEOUT=60s
+      - COLLABOPS_SERVER_IDLE_TIMEOUT=300s
+      - COLLABOPS_SERVER_HEALTH_CHECK_PATH=/health
+
+      # Git Configuration
+      - COLLABOPS_GIT_REPO_ROOT=/repos
+      - COLLABOPS_GIT_ENABLE_PACKFILE=true
+      - COLLABOPS_GIT_MAX_CACHE_SIZE=100
+      - COLLABOPS_GIT_CACHE_TTL=5m
+
+      # JWT Configuration (for API authentication) - using RS256 default
+      - COLLABOPS_JWT_ALGORITHM=RS256
+      - COLLABOPS_JWT_PUBLIC_KEY_PATH=/dev/null
+
+      # Logging Configuration
+      - COLLABOPS_LOG_LEVEL=${GIT_EXECUTOR_LOG_LEVEL:-info}
+      - COLLABOPS_LOG_FORMAT=json
+      - COLLABOPS_LOG_OUTPUT=stdout
+      - COLLABOPS_LOG_DEVELOPMENT=false
+
+      # Integration Settings
+      - APP_ENV=${APP_ENV:-local}
+      - ENABLE_CORS=true
+      - CORS_ORIGINS=http://localhost:2345
     volumes:
       - ../../../test-repos:/app/test-repos:ro
       - ../../../config:/app/config:ro
@@ -120,7 +150,7 @@ services:
         max-file: "5"
         labels: "service=git-executor"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 30s
       timeout: 10s
       retries: 3

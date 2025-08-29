@@ -194,13 +194,13 @@ echo -e "\n${BLUE}=== Advanced Testing with Git Client ===${NC}"
 echo "To test with an actual Git client through SSH:"
 echo
 echo "1. Set up SSH tunnel to executor:"
-echo "   ssh -L 8081:localhost:8080 your-server"
+echo "   ssh -L 5001:localhost:5001 your-server"
 echo
 echo "2. Configure Git to use custom SSH command:"
 echo "   export GIT_SSH_COMMAND='ssh -o SendEnv=X-USER-ID -o SendEnv=X-CORRELATION-ID'"
 echo
 echo "3. Clone via SSH (simulated):"
-echo "   git clone ssh://git@localhost:8081/${TEST_OWNER}/${TEST_REPO}"
+echo "   git clone ssh://git@localhost:5001/${TEST_OWNER}/${TEST_REPO}"
 echo
 echo "4. Test push operations:"
 echo "   cd ${TEST_REPO}"
