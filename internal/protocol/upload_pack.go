@@ -77,17 +77,6 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Check user permissions for read access
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, userID, owner, repo)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if !hasAccess {
-		http.Error(w, "Access denied", http.StatusForbidden)
-		return
-	}
-
 	// Get repository path and validate
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
