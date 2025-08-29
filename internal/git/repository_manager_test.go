@@ -123,9 +123,9 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 				DefaultBranch: "main",
 				InitialCommit: true,
 				InitialFiles: map[string]string{
-					"README.md": "# Test Repository\n\nThis is a test.",
-					"main.go":   "package main\n\nfunc main() {\n\tprintln(\"Hello World\")\n}",
-					"guide.md":  "# Guide\n\nThis is a guide.",
+					"README.md":     "# Test Repository\n\nThis is a test.",
+					"src/main.go":   "package main\n\nfunc main() {\n\tprintln(\"Hello World\")\n}",
+					"docs/guide.md": "# Guide\n\nThis is a guide.",
 				},
 			},
 			expectError:    false,
