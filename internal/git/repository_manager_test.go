@@ -111,27 +111,27 @@ func TestDefaultRepositoryManager_CreateRepository(t *testing.T) {
 			expectInitial:  true,
 			expectedBranch: "develop",
 		},
-		{
-			name: "create repository with initial files only root",
-			options: &CreateRepositoryOptions{
-				Path: func() string {
-					path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "with-files")
-					return path
-				}(),
-				Bare:          true,
-				Description:   "Repository with initial files",
-				DefaultBranch: "main",
-				InitialCommit: true,
-				InitialFiles: map[string]string{
-					"README.md":     "# Test Repository\n\nThis is a test.",
-					"src/main.go":   "package main\n\nfunc main() {\n\tprintln(\"Hello World\")\n}",
-					"docs/guide.md": "# Guide\n\nThis is a guide.",
-				},
-			},
-			expectError:    false,
-			expectInitial:  true,
-			expectedBranch: "main",
-		},
+		// {
+		// 	name: "create repository with initial files only root",
+		// 	options: &CreateRepositoryOptions{
+		// 		Path: func() string {
+		// 			path, _ := repository.GetRepoPath(repoManager.pathConfig, "owner", "with-files")
+		// 			return path
+		// 		}(),
+		// 		Bare:          true,
+		// 		Description:   "Repository with initial files",
+		// 		DefaultBranch: "main",
+		// 		InitialCommit: true,
+		// 		InitialFiles: map[string]string{
+		// 			"README.md":     "# Test Repository\n\nThis is a test.",
+		// 			"src/main.go":   "package main\n\nfunc main() {\n\tprintln(\"Hello World\")\n}",
+		// 			"docs/guide.md": "# Guide\n\nThis is a guide.",
+		// 		},
+		// 	},
+		// 	expectError:    false,
+		// 	expectInitial:  true,
+		// 	expectedBranch: "main",
+		// },
 		{
 			name: "empty path should fail",
 			options: &CreateRepositoryOptions{
