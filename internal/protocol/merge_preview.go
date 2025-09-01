@@ -20,6 +20,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/common"
 )
 
 // MergePreviewHandler handles REST API operations for Git merge preview operations
@@ -88,7 +89,7 @@ type MergePreviewResponse struct {
 	ConflictCount      int                      `json:"conflict_count"`                // Number of conflicts
 	Strategy           MergeStrategy            `json:"strategy"`                      // Strategy to be used
 	RecommendedActions []string                 `json:"recommended_actions,omitempty"` // Recommended actions
-	MergeBase          *CommitInfo              `json:"merge_base,omitempty"`          // Common ancestor commit
+	MergeBase          *common.CommitInfo       `json:"merge_base,omitempty"`          // Common ancestor commit
 	ConflictSummary    *git.MergeAnalysisResult `json:"conflict_summary,omitempty"`    // Detailed conflict analysis
 	ChangesSummary     *ChangesSummary          `json:"changes_summary,omitempty"`     // Summary of changes
 	FilesChanged       []*FileChange            `json:"files_changed,omitempty"`       // Detailed file changes
@@ -477,7 +478,7 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repo *gog
 	warnings := h.generateWarnings(conflictAnalysis, changesSummary, req)
 
 	// Phase 4: Find merge base
-	var mergeBase *CommitInfo
+	var mergeBase *common.CommitInfo
 	if conflictAnalysis != nil && !conflictAnalysis.IsFastForward {
 		_, err := h.findMergeBase(repo, sourceHash, targetHash)
 		if err != nil {

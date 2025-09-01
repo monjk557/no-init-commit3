@@ -171,21 +171,17 @@ type FileOperationResponse struct {
 func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
+	filePath := c.Param("path")
 
-	// Extract file path from URL path
-	fullPath := c.Request.URL.Path
-	h.logger.Info("Raw URL path", zap.String("full_path", fullPath))
+	// Remove leading slash from path parameter
+	filePath = strings.TrimPrefix(filePath, "/")
 
-	pathParts := strings.SplitN(fullPath, "/files/", 2)
-	h.logger.Info("Path parts after split", zap.Strings("path_parts", pathParts))
-
-	if len(pathParts) < 2 {
-		h.logger.Error("Invalid path parts", zap.Int("parts_count", len(pathParts)))
-		apiErr := api.NewBadRequestError("Invalid file path in URL")
+	// Validate path parameter
+	if filePath == "" {
+		apiErr := api.NewBadRequestError("Missing required parameter: path")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
-	filePath := pathParts[1]
 
 	h.logger.Info("Extracted file path", zap.String("file_path", filePath))
 
@@ -408,16 +404,17 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
+	filePath := c.Param("path")
 
-	// Extract file path from URL path
-	fullPath := c.Request.URL.Path
-	pathParts := strings.SplitN(fullPath, "/files/", 2)
-	if len(pathParts) < 2 {
-		apiErr := api.NewBadRequestError("Invalid file path in URL")
+	// Remove leading slash from path parameter
+	filePath = strings.TrimPrefix(filePath, "/")
+
+	// Validate path parameter
+	if filePath == "" {
+		apiErr := api.NewBadRequestError("Missing required parameter: path")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
-	filePath := pathParts[1]
 
 	h.logger.Info("File DELETE operation requested",
 		zap.String("owner", owner),

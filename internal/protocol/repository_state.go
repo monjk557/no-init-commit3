@@ -20,6 +20,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/common"
 )
 
 // RepositoryStateHandler handles REST API operations for repository state queries
@@ -83,13 +84,13 @@ type RepositoryStateResponse struct {
 
 // HeadReferenceInfo contains information about the current HEAD
 type HeadReferenceInfo struct {
-	Type       string      `json:"type"`        // "symbolic" or "hash"
-	Name       string      `json:"name"`        // branch name or "HEAD"
-	Target     string      `json:"target"`      // target reference or commit hash
-	CommitSHA  string      `json:"commit_sha"`  // actual commit hash
-	CommitInfo *CommitInfo `json:"commit_info"` // detailed commit information
-	IsBranch   bool        `json:"is_branch"`   // true if pointing to a branch
-	IsDetached bool        `json:"is_detached"` // true if in detached HEAD state
+	Type       string             `json:"type"`        // "symbolic" or "hash"
+	Name       string             `json:"name"`        // branch name or "HEAD"
+	Target     string             `json:"target"`      // target reference or commit hash
+	CommitSHA  string             `json:"commit_sha"`  // actual commit hash
+	CommitInfo *common.CommitInfo `json:"commit_info"` // detailed commit information
+	IsBranch   bool               `json:"is_branch"`   // true if pointing to a branch
+	IsDetached bool               `json:"is_detached"` // true if in detached HEAD state
 }
 
 // RepositoryReferences contains all repository references
@@ -102,43 +103,43 @@ type RepositoryReferences struct {
 
 // BranchReference represents a branch reference
 type BranchReference struct {
-	Name         string      `json:"name"`
-	FullName     string      `json:"full_name"` // refs/heads/branch-name
-	CommitSHA    string      `json:"commit_sha"`
-	CommitInfo   *CommitInfo `json:"commit_info"`
-	IsHead       bool        `json:"is_head"`      // true if this is the current HEAD branch
-	IsProtected  bool        `json:"is_protected"` // true if this is a protected branch
-	LastModified time.Time   `json:"last_modified"`
+	Name         string             `json:"name"`
+	FullName     string             `json:"full_name"` // refs/heads/branch-name
+	CommitSHA    string             `json:"commit_sha"`
+	CommitInfo   *common.CommitInfo `json:"commit_info"`
+	IsHead       bool               `json:"is_head"`      // true if this is the current HEAD branch
+	IsProtected  bool               `json:"is_protected"` // true if this is a protected branch
+	LastModified time.Time          `json:"last_modified"`
 }
 
 // TagReference represents a tag reference
 type TagReference struct {
-	Name         string      `json:"name"`
-	FullName     string      `json:"full_name"` // refs/tags/tag-name
-	CommitSHA    string      `json:"commit_sha"`
-	CommitInfo   *CommitInfo `json:"commit_info"`
-	IsAnnotated  bool        `json:"is_annotated"`       // true if this is an annotated tag
-	TagInfo      *TagInfo    `json:"tag_info,omitempty"` // additional tag information
-	LastModified time.Time   `json:"last_modified"`
+	Name         string             `json:"name"`
+	FullName     string             `json:"full_name"` // refs/tags/tag-name
+	CommitSHA    string             `json:"commit_sha"`
+	CommitInfo   *common.CommitInfo `json:"commit_info"`
+	IsAnnotated  bool               `json:"is_annotated"`       // true if this is an annotated tag
+	TagInfo      *TagInfo           `json:"tag_info,omitempty"` // additional tag information
+	LastModified time.Time          `json:"last_modified"`
 }
 
 // RemoteReference represents a remote reference
 type RemoteReference struct {
-	Name         string      `json:"name"`
-	FullName     string      `json:"full_name"` // refs/remotes/origin/branch-name
-	CommitSHA    string      `json:"commit_sha"`
-	CommitInfo   *CommitInfo `json:"commit_info"`
-	RemoteName   string      `json:"remote_name"` // e.g., "origin"
-	BranchName   string      `json:"branch_name"` // e.g., "main"
-	LastModified time.Time   `json:"last_modified"`
+	Name         string             `json:"name"`
+	FullName     string             `json:"full_name"` // refs/remotes/origin/branch-name
+	CommitSHA    string             `json:"commit_sha"`
+	CommitInfo   *common.CommitInfo `json:"commit_info"`
+	RemoteName   string             `json:"remote_name"` // e.g., "origin"
+	BranchName   string             `json:"branch_name"` // e.g., "main"
+	LastModified time.Time          `json:"last_modified"`
 }
 
 // TagInfo contains additional information for annotated tags
 type TagInfo struct {
-	Message    string      `json:"message"`
-	Tagger     *AuthorInfo `json:"tagger"`
-	TargetType string      `json:"target_type"` // "commit", "tree", "blob", "tag"
-	TargetSHA  string      `json:"target_sha"`
+	Message    string             `json:"message"`
+	Tagger     *common.AuthorInfo `json:"tagger"`
+	TargetType string             `json:"target_type"` // "commit", "tree", "blob", "tag"
+	TargetSHA  string             `json:"target_sha"`
 }
 
 // ReferenceCounts provides counts of different reference types
@@ -468,16 +469,16 @@ func (h *RepositoryStateHandler) getHeadInfo(ctx context.Context, repo *gogit.Re
 	// Get commit information
 	commit, err := repo.CommitObject(headRef.Hash())
 	if err == nil {
-		headInfo.CommitInfo = &CommitInfo{
+		headInfo.CommitInfo = &common.CommitInfo{
 			SHA:       commit.Hash.String(),
 			Message:   commit.Message,
 			CreatedAt: commit.Author.When,
-			Author: AuthorInfo{
+			Author: common.AuthorInfo{
 				Name:  commit.Author.Name,
 				Email: commit.Author.Email,
 				Date:  commit.Author.When,
 			},
-			Committer: AuthorInfo{
+			Committer: common.AuthorInfo{
 				Name:  commit.Committer.Name,
 				Email: commit.Committer.Email,
 				Date:  commit.Committer.When,
@@ -569,16 +570,16 @@ func (h *RepositoryStateHandler) createBranchReference(ref *plumbing.Reference, 
 
 	if includeCommitInfo {
 		if commit, err := repo.CommitObject(ref.Hash()); err == nil {
-			branch.CommitInfo = &CommitInfo{
+			branch.CommitInfo = &common.CommitInfo{
 				SHA:       commit.Hash.String(),
 				Message:   commit.Message,
 				CreatedAt: commit.Author.When,
-				Author: AuthorInfo{
+				Author: common.AuthorInfo{
 					Name:  commit.Author.Name,
 					Email: commit.Author.Email,
 					Date:  commit.Author.When,
 				},
-				Committer: AuthorInfo{
+				Committer: common.AuthorInfo{
 					Name:  commit.Committer.Name,
 					Email: commit.Committer.Email,
 					Date:  commit.Committer.When,
@@ -612,7 +613,7 @@ func (h *RepositoryStateHandler) createTagReference(ref *plumbing.Reference, inc
 		}
 
 		if tagObj.Tagger.Name != "" {
-			tag.TagInfo.Tagger = &AuthorInfo{
+			tag.TagInfo.Tagger = &common.AuthorInfo{
 				Name:  tagObj.Tagger.Name,
 				Email: tagObj.Tagger.Email,
 				Date:  tagObj.Tagger.When,
@@ -624,16 +625,16 @@ func (h *RepositoryStateHandler) createTagReference(ref *plumbing.Reference, inc
 			tag.CommitSHA = commit.Hash.String()
 
 			if includeCommitInfo {
-				tag.CommitInfo = &CommitInfo{
+				tag.CommitInfo = &common.CommitInfo{
 					SHA:       commit.Hash.String(),
 					Message:   commit.Message,
 					CreatedAt: commit.Author.When,
-					Author: AuthorInfo{
+					Author: common.AuthorInfo{
 						Name:  commit.Author.Name,
 						Email: commit.Author.Email,
 						Date:  commit.Author.When,
 					},
-					Committer: AuthorInfo{
+					Committer: common.AuthorInfo{
 						Name:  commit.Committer.Name,
 						Email: commit.Committer.Email,
 						Date:  commit.Committer.When,
@@ -645,16 +646,16 @@ func (h *RepositoryStateHandler) createTagReference(ref *plumbing.Reference, inc
 		// Lightweight tag - points directly to a commit
 		if includeCommitInfo {
 			if commit, err := repo.CommitObject(ref.Hash()); err == nil {
-				tag.CommitInfo = &CommitInfo{
+				tag.CommitInfo = &common.CommitInfo{
 					SHA:       commit.Hash.String(),
 					Message:   commit.Message,
 					CreatedAt: commit.Author.When,
-					Author: AuthorInfo{
+					Author: common.AuthorInfo{
 						Name:  commit.Author.Name,
 						Email: commit.Author.Email,
 						Date:  commit.Author.When,
 					},
-					Committer: AuthorInfo{
+					Committer: common.AuthorInfo{
 						Name:  commit.Committer.Name,
 						Email: commit.Committer.Email,
 						Date:  commit.Committer.When,
@@ -689,16 +690,16 @@ func (h *RepositoryStateHandler) createRemoteReference(ref *plumbing.Reference, 
 
 	if includeCommitInfo {
 		if commit, err := repo.CommitObject(ref.Hash()); err == nil {
-			remote.CommitInfo = &CommitInfo{
+			remote.CommitInfo = &common.CommitInfo{
 				SHA:       commit.Hash.String(),
 				Message:   commit.Message,
 				CreatedAt: commit.Author.When,
-				Author: AuthorInfo{
+				Author: common.AuthorInfo{
 					Name:  commit.Author.Name,
 					Email: commit.Author.Email,
 					Date:  commit.Author.When,
 				},
-				Committer: AuthorInfo{
+				Committer: common.AuthorInfo{
 					Name:  commit.Committer.Name,
 					Email: commit.Committer.Email,
 					Date:  commit.Committer.When,

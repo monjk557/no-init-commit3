@@ -294,18 +294,25 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	reposGroup.Use(jsonResponseMiddleware.ErrorHandler())
 	{
 		// Repository creation endpoint - separate from existing repos
-		reposGroup.POST("/:owner/:repo", repoCreationHandler.HandleCreateRepository)
 
 		ownerGroup := reposGroup.Group("/:owner")
 		{
 			repoGroup := ownerGroup.Group("/:repo")
 			{
+				// Repository creation endpoint
+				repoGroup.POST("", repoCreationHandler.HandleCreateRepository)
 				// Tree endpoint
 				repoGroup.GET("/tree", gin.WrapF(treeHandler.HandleTreeAPI))
 				// Blob endpoint
 				repoGroup.GET("/blob", blobHandler.HandleBlobAPIGin)
-				// Commits endpoint
-				repoGroup.GET("/commits", gin.WrapF(commitsHandler.HandleCommitsAPI))
+
+				commitGroup := repoGroup.Group("/commits")
+				{
+					// Commits endpoint
+					commitGroup.GET("", gin.WrapF(commitsHandler.HandleCommitsAPI))
+					// Multi-file commit endpoints
+					commitGroup.POST("", fileOpsHandler.HandleMultiFileCommit)
+				}
 
 				// Diff endpoints
 				diffGroup := repoGroup.Group("/diff")
@@ -321,8 +328,6 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				// Single commit diff endpoint
 				repoGroup.GET("/commits/:sha/diff", gin.WrapF(diffHandler.HandleSingleCommitDiff))
 
-				// RESTful file content endpoint
-				repoGroup.GET("/files/*path", fileOpsHandler.HandleFileContent)
 				// Patch endpoints
 				patchGroup := repoGroup.Group("/patch")
 				{
@@ -333,14 +338,13 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				// File operations endpoints (server-side Git REST APIs)
 				filesGroup := repoGroup.Group("/files")
 				{
+					// GET endpoint for reading file content
+					filesGroup.GET("/*path", fileOpsHandler.HandleFileContent)
 					// PUT endpoint for creating/updating files
 					filesGroup.PUT("/*path", fileOpsHandler.HandleFilePUT)
 					// DELETE endpoint for deleting files
 					filesGroup.DELETE("/*path", fileOpsHandler.HandleFileDELETE)
 				}
-
-				// Multi-file commit endpoints
-				repoGroup.POST("/commits", fileOpsHandler.HandleMultiFileCommit)
 
 				// Branch operations endpoints
 				branchesGroup := repoGroup.Group("/branches")
