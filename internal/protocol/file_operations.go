@@ -16,6 +16,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -127,29 +128,6 @@ type CommitOptions struct {
 	DryRun             bool          `json:"dry_run,omitempty"`              // alias for validate_only
 }
 
-// MultiFileCommitResponse represents the response for multi-file commit operations
-type MultiFileCommitResponse struct {
-	Success          bool                   `json:"success"`
-	CommitSHA        string                 `json:"commit_sha,omitempty"`
-	TransactionID    string                 `json:"transaction_id"`
-	Message          string                 `json:"message"`
-	TotalOperations  int                    `json:"total_operations"`
-	SuccessfulOps    int                    `json:"successful_operations"`
-	FailedOps        int                    `json:"failed_operations"`
-	OperationResults []OperationResult      `json:"operation_results,omitempty"`
-	ValidationOnly   bool                   `json:"validation_only,omitempty"`
-	Duration         time.Duration          `json:"duration_ms"` // in milliseconds
-	Details          map[string]interface{} `json:"details,omitempty"`
-}
-
-// OperationResult represents the result of a single file operation
-type OperationResult struct {
-	Path      string `json:"path"`
-	Operation string `json:"operation"`
-	Success   bool   `json:"success"`
-	Error     string `json:"error,omitempty"`
-}
-
 // CommitAuthor represents author/committer information
 type CommitAuthor struct {
 	Name  string `json:"name" binding:"required"`
@@ -222,7 +200,7 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 			return
 		}
 	} else {
-		req.Branch = "master" // Default branch
+		req.Branch = "main" // Default branch
 	}
 
 	// Set default encoding if not provided
@@ -421,13 +399,6 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 		zap.String("repo", repo),
 		zap.String("file_path", filePath))
 
-	// Validate path components
-	if err := h.pathValidator.ValidateFilePath(filePath); err != nil {
-		apiErr := api.NewBadRequestError(fmt.Sprintf("Invalid file path: %v", err))
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
 	// Parse JSON request body
 	var req FileDeleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -448,7 +419,7 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 			return
 		}
 	} else {
-		req.Branch = "master" // Default branch
+		req.Branch = "main" // Default branch
 	}
 
 	// Set default author/committer if not provided
@@ -460,39 +431,6 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 	}
 	if req.Committer == nil {
 		req.Committer = req.Author
-	}
-
-	// Check permissions (using existing permission validation)
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		h.logger.Warn("Permission validation failed", zap.Error(err))
-
-		// Check if it's a GitAPIError and handle based on error code
-		if apiErr, ok := err.(*api.GitAPIError); ok {
-			switch apiErr.Code {
-			case api.ErrorCodeUnauthorized:
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			case api.ErrorCodeForbidden:
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			default:
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"error":   err.Error(),
-				})
-			}
-		} else {
-			// Fallback for non-GitAPIError
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
 	}
 
 	// Open repository
@@ -618,37 +556,6 @@ func (h *FileOperationsHandler) HandleFileContent(c *gin.Context) {
 	linesParam := c.Query("lines")
 
 	// Validate permissions
-	if err := h.validatePermissions(c, owner, repo, "read"); err != nil {
-		h.logger.Warn("Permission validation failed", zap.Error(err))
-
-		// Check if it's a GitAPIError and handle based on error code
-		if apiErr, ok := err.(*api.GitAPIError); ok {
-			switch apiErr.Code {
-			case api.ErrorCodeUnauthorized:
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			case api.ErrorCodeForbidden:
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			default:
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			}
-		} else {
-			// Generic error handling
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
 
 	// Validate file path
 	if err := h.pathValidator.ValidateFilePath(path); err != nil {
@@ -1020,39 +927,6 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		req.Committer = req.Author
 	}
 
-	// Validate permissions
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		h.logger.Warn("Permission validation failed", zap.Error(err))
-
-		// Check if it's a GitAPIError and handle based on error code
-		if apiErr, ok := err.(*api.GitAPIError); ok {
-			switch apiErr.Code {
-			case api.ErrorCodeUnauthorized:
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			case api.ErrorCodeForbidden:
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			default:
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"error":   err.Error(),
-				})
-			}
-		} else {
-			// Fallback for non-GitAPIError
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-
 	// Open repository
 	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
 	if err != nil {
@@ -1125,11 +999,11 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 	}()
 
 	// Convert and add operations to transaction
-	operationResults := make([]OperationResult, len(req.Operations))
+	operationResults := make([]responses.OperationResult, len(req.Operations))
 	for i, op := range req.Operations {
 		fileChange, err := h.convertToFileChange(&op)
 		if err != nil {
-			operationResults[i] = OperationResult{
+			operationResults[i] = responses.OperationResult{
 				Path:      op.Path,
 				Operation: op.Operation,
 				Success:   false,
@@ -1149,7 +1023,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		}
 
 		if err := h.transactionManager.AddOperation(ctx, transaction, txnOp); err != nil {
-			operationResults[i] = OperationResult{
+			operationResults[i] = responses.OperationResult{
 				Path:      op.Path,
 				Operation: op.Operation,
 				Success:   false,
@@ -1161,7 +1035,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 				return
 			}
 		} else {
-			operationResults[i] = OperationResult{
+			operationResults[i] = responses.OperationResult{
 				Path:      op.Path,
 				Operation: op.Operation,
 				Success:   true,
@@ -1191,7 +1065,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 	}
 
 	// Prepare response
-	response := MultiFileCommitResponse{
+	response := responses.MultiFileCommitResponse{
 		Success:          result.State == git.TransactionStateCommitted,
 		TransactionID:    result.TransactionID,
 		Message:          req.Message,
