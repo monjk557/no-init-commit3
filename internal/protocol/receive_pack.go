@@ -261,18 +261,6 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Check user permissions for WRITE access
-	hasAccess, err := h.permissionClient.CheckWriteAccess(ctx, userID, owner, repo)
-	if err != nil {
-		wrappedErr := fmt.Errorf("permission check failed: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack")
-		return
-	}
-	if !hasAccess {
-		h.errorHandler.HandleError(w, r, ErrPermissionDenied, "receive_pack")
-		return
-	}
-
 	// Get repository path and validate
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
