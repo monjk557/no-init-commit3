@@ -120,9 +120,9 @@ func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate permissions and get repository path
-	repoPath, err := h.validateRequestAndPermissions(ctx, params)
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		handleDiffError(w, err, "invalid repository path: %w")
 		return
 	}
 
@@ -260,9 +260,9 @@ func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 	params.Head = head
 
 	// Validate permissions and get repository path
-	repoPath, err := h.validateRequestAndPermissions(ctx, params)
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		handleDiffError(w, fmt.Errorf("invalid repository path: %w", err), "invalid repository path: %w")
 		return
 	}
 
@@ -356,9 +356,9 @@ func (h *DiffHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate permissions and get repository path
-	repoPath, err := h.validateRequestAndPermissions(ctx, params)
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		handleDiffError(w, fmt.Errorf("invalid repository path: %w", err), "invalid repository path: %w")
 		return
 	}
 
@@ -1327,13 +1327,6 @@ func (h *DiffHandler) validateAndExtractParams(r *http.Request) (*RequestParams,
 // validateRequestAndPermissions performs common validation and permission checking
 func (h *DiffHandler) validateRequestAndPermissions(ctx context.Context, params *RequestParams) (string, error) {
 	// Check user permissions (read access for diff operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
-	if err != nil {
-		return "", fmt.Errorf("permission check failed: %w", err)
-	}
-	if !hasAccess {
-		return "", fmt.Errorf("access denied to repository")
-	}
 
 	// Get repository path and validate
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)

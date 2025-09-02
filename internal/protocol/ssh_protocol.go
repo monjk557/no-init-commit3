@@ -310,12 +310,6 @@ func (h *SSHProtocolHandler) HandleSSHReceivePack(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Check permissions
-	if err := h.CheckSSHPermissions(r.Context(), sshReq); err != nil {
-		h.errorHandler.HandleError(w, r, err, "ssh_receive_pack")
-		return
-	}
-
 	// Ensure repository exists
 	repo, err := h.EnsureSSHRepository(r.Context(), sshReq)
 	if err != nil {
