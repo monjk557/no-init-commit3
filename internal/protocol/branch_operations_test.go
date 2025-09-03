@@ -202,15 +202,15 @@ func TestCreateBranchResponse_Structure(t *testing.T) {
 		}
 
 		assert.True(t, response.Success)
-		assert.Equal(t, "feature/auth", response.BranchName)
-		assert.Equal(t, "abc123def456789", response.CommitSHA)
-		assert.Equal(t, "main", response.Source)
-		assert.Equal(t, "refs/heads/feature/auth", response.RefPath)
-		assert.True(t, response.IsNewBranch)
-		assert.Contains(t, response.Message, "created successfully")
-		assert.NotNil(t, response.Details)
-		assert.False(t, response.Details["force_used"].(bool))
-		assert.True(t, response.Details["checkout"].(bool))
+		assert.Equal(t, "feature/auth", response.Data.BranchName)
+		assert.Equal(t, "abc123def456789", response.Data.CommitSHA)
+		assert.Equal(t, "main", response.Data.Source)
+		assert.Equal(t, "refs/heads/feature/auth", response.Data.RefPath)
+		assert.True(t, response.Data.IsNewBranch)
+		assert.Contains(t, response.Data.Message, "created successfully")
+		assert.NotNil(t, response.Data.Details)
+		assert.False(t, response.Data.Details["force_used"].(bool))
+		assert.True(t, response.Data.Details["checkout"].(bool))
 	})
 
 	t.Run("Force update branch response", func(t *testing.T) {

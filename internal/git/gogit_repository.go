@@ -344,7 +344,7 @@ func convertCommit(c *object.Commit) Commit {
 	message = strings.ReplaceAll(message, "\r", " ")
 
 	return Commit{
-		Hash:    c.Hash.String(),
+		Sha:     c.Hash.String(),
 		Message: message,
 		Author: CommitAuthor{
 			Name:  c.Author.Name,

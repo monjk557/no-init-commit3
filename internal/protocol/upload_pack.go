@@ -142,7 +142,7 @@ func (h *UploadPackHandler) writeReferences(ctx context.Context, w http.Response
 
 	if len(commits) > 0 {
 		// Write HEAD reference with capabilities
-		headHash := commits[0].Hash
+		headHash := commits[0].Sha
 		line := fmt.Sprintf("%s HEAD\x00multi_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/main agent=git/collabops-git-executor\n", headHash)
 		pktLine := fmt.Sprintf("%04x%s", len(line)+4, line)
 		_, _ = w.Write([]byte(pktLine))

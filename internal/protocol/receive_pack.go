@@ -197,7 +197,7 @@ func (h *ReceivePackHandler) getAllReferences(ctx context.Context, repo git.Repo
 
 	if len(commits) > 0 {
 		// For now, add HEAD and main branch
-		headHash := commits[0].Hash
+		headHash := commits[0].Sha
 
 		refs = append(refs, Reference{
 			Name: "HEAD",

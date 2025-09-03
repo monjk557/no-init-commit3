@@ -511,7 +511,7 @@ func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repo git.Reposito
 
 	if len(commits) > 0 {
 		// Write HEAD reference
-		headHash := commits[0].Hash
+		headHash := commits[0].Sha
 		refLine := fmt.Sprintf("%s HEAD\n", headHash)
 		pktLine := fmt.Sprintf("%04x%s", len(refLine)+4, refLine)
 
