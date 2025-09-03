@@ -38,12 +38,13 @@ COPY --from=builder /app/git-executor .
 # Copy configuration file
 COPY config/config.yaml /config/config.yaml
 
-# Create necessary directories
-RUN mkdir -p /repos /config /tmp /specs && \
-    chown -R gituser:gituser /app /repos /config /tmp /specs /config/config.yaml
+# Create necessary directories with proper permissions
+RUN mkdir -p /opt/repos /repos /config /tmp /specs && \
+    chown -R gituser:gituser /app /repos /config /tmp /specs /opt/repos /config/config.yaml && \
+    chmod -R 777 /opt/repos
     
-# Switch to non-root user
-USER gituser
+# Switch to non-root user (commented out for debugging)
+# USER gituser
 
 # Expose the default port
 EXPOSE 5001
