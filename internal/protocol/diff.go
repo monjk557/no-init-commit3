@@ -1044,10 +1044,11 @@ func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath,
 	stats.TotalDeletions = fileDiff.Deletions
 
 	return &DiffResponse{
-		Base:  base,
-		Head:  head,
-		Files: []FileDiff{fileDiff},
-		Stats: stats,
+		Success: true,
+		Base:    base,
+		Head:    head,
+		Files:   []FileDiff{fileDiff},
+		Stats:   stats,
 	}, nil
 }
 
