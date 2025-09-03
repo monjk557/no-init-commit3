@@ -28,6 +28,7 @@ type DiffHandler struct {
 
 // DiffResponse represents the response structure for diff endpoints
 type DiffResponse struct {
+	Success   bool         `json:"success"`
 	Base      string       `json:"base"`
 	Head      string       `json:"head"`
 	Files     []FileDiff   `json:"files"`
@@ -38,7 +39,8 @@ type DiffResponse struct {
 
 // SingleCommitDiffResponse represents the response structure for single commit diff endpoint
 type SingleCommitDiffResponse struct {
-	Commit *CommitMetadata `json:"commit"`
+	Success bool            `json:"success"`
+	Commit  *CommitMetadata `json:"commit"`
 	*DiffResponse
 }
 
@@ -147,6 +149,7 @@ func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
 		response := &PaginatedDiffResponse{
+			Success: true,
 			DiffResponse: &DiffResponse{
 				Base:  diffResp.Base,
 				Head:  diffResp.Head,
@@ -210,6 +213,7 @@ func (h *DiffHandler) HandleBranchDiff(w http.ResponseWriter, r *http.Request) {
 		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
 		response := &PaginatedDiffResponse{
+			Success: true,
 			DiffResponse: &DiffResponse{
 				Base:  diffResp.Base,
 				Head:  diffResp.Head,
@@ -454,10 +458,11 @@ func (h *DiffHandler) calculateCommitDiff(ctx context.Context, repoPath, base, h
 	}
 
 	return &DiffResponse{
-		Base:  base,
-		Head:  head,
-		Files: fileDiffs,
-		Stats: stats,
+		Success: true,
+		Base:    base,
+		Head:    head,
+		Files:   fileDiffs,
+		Stats:   stats,
 	}, nil
 }
 
@@ -513,6 +518,7 @@ func (h *DiffHandler) calculateSingleCommitDiff(ctx context.Context, repoPath, s
 	diffResp.Head = sha
 
 	return &SingleCommitDiffResponse{
+		Success:      true,
 		Commit:       commitMetadata,
 		DiffResponse: diffResp,
 	}, nil
@@ -844,6 +850,7 @@ func (h *DiffHandler) calculateBranchDiff(ctx context.Context, repoPath, baseBra
 	}
 
 	return &DiffResponse{
+		Success:   true,
 		Base:      baseBranch,
 		Head:      headBranch,
 		Files:     fileDiffs,
@@ -1285,6 +1292,7 @@ type PaginationParams struct {
 
 // ErrorResponse represents a standardized error response
 type ErrorResponse struct {
+	Success bool   `json:"success"`
 	Error   string `json:"error"`
 	Code    string `json:"code,omitempty"`
 	Details string `json:"details,omitempty"`
@@ -1292,6 +1300,7 @@ type ErrorResponse struct {
 
 // PaginatedDiffResponse extends DiffResponse with pagination
 type PaginatedDiffResponse struct {
+	Success bool `json:"success"`
 	*DiffResponse
 	Pagination *PaginationParams `json:"pagination,omitempty"`
 }
@@ -1351,7 +1360,8 @@ func sendJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
 // sendErrorResponse sends a standardized error response
 func sendErrorResponse(w http.ResponseWriter, message string, statusCode int) {
 	errorResp := ErrorResponse{
-		Error: message,
+		Success: false,
+		Error:   message,
 	}
 	sendJSONResponse(w, errorResp, statusCode)
 }

@@ -361,6 +361,29 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 				zap.String("branch", req.Branch),
 				zap.String("commit_hash", result.Hash.String()))
 		}
+
+		headRef := plumbing.NewSymbolicReference(plumbing.HEAD, refName)
+		if err := repository.Storer.SetReference(headRef); err != nil {
+			h.logger.Warn("Failed to update HEAD to branch",
+				zap.String("branch", req.Branch),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Updated HEAD to point to branch",
+				zap.String("branch", req.Branch))
+		}
+		// Ensure HEAD is properly set (additional safety check)
+		if err := h.objectManager.EnsureProperHEAD(ctx, repository, req.Branch); err != nil {
+			h.logger.Warn("Failed to ensure proper HEAD state",
+				zap.String("branch", req.Branch),
+				zap.Error(err))
+		}
+	}
+
+	// Ensure HEAD is properly set to branch (additional safety check)
+	if err := h.objectManager.EnsureProperHEAD(ctx, repository, req.Branch); err != nil {
+		h.logger.Warn("Failed to ensure proper HEAD state",
+			zap.String("branch", req.Branch),
+			zap.Error(err))
 	}
 
 	// Prepare successful response

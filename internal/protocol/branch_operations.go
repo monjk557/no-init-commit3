@@ -555,22 +555,6 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		return
 	}
 
-	// Validate permissions
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		if err.Error() == "Missing X-USER-ID header" || err.Error() == "Missing X-Source header" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-
 	// Open repository
 	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
 	if err != nil {

@@ -10,6 +10,8 @@ import (
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/schemas/requests"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -147,7 +149,7 @@ func TestBranchOperationsHandler_validateBranchName(t *testing.T) {
 
 func TestCreateBranchRequest_Structure(t *testing.T) {
 	t.Run("Valid create branch request", func(t *testing.T) {
-		req := CreateBranchRequest{
+		req := requests.CreateBranchRequest{
 			Name:     "feature/new-api",
 			Source:   "main",
 			Force:    false,
@@ -167,7 +169,7 @@ func TestCreateBranchRequest_Structure(t *testing.T) {
 	})
 
 	t.Run("Minimal create branch request", func(t *testing.T) {
-		req := CreateBranchRequest{
+		req := requests.CreateBranchRequest{
 			Name: "hotfix/urgent-fix",
 		}
 
@@ -181,7 +183,7 @@ func TestCreateBranchRequest_Structure(t *testing.T) {
 
 func TestCreateBranchResponse_Structure(t *testing.T) {
 	t.Run("Successful branch creation response", func(t *testing.T) {
-		response := CreateBranchResponse{
+		response := responses.CreateBranchResponse{
 			Success:     true,
 			BranchName:  "feature/auth",
 			CommitSHA:   "abc123def456789",
@@ -212,7 +214,7 @@ func TestCreateBranchResponse_Structure(t *testing.T) {
 	})
 
 	t.Run("Force update branch response", func(t *testing.T) {
-		response := CreateBranchResponse{
+		response := responses.CreateBranchResponse{
 			Success:     true,
 			BranchName:  "feature/existing",
 			CommitSHA:   "def456abc789",
@@ -237,20 +239,20 @@ func TestCreateBranchResponse_Structure(t *testing.T) {
 
 func TestBranchInfo_Structure(t *testing.T) {
 	t.Run("Complete branch info", func(t *testing.T) {
-		branchInfo := BranchInfo{
+		branchInfo := responses.BranchInfo{
 			Name:      "main",
 			CommitSHA: "abc123",
 			RefPath:   "refs/heads/main",
 			IsHead:    true,
-			LastCommit: &CommitInfo{
+			LastCommit: &responses.CommitInfo{
 				SHA:     "abc123",
 				Message: "Initial commit",
-				Author: AuthorInfo{
+				Author: responses.AuthorInfo{
 					Name:  "John Doe",
 					Email: "john@example.com",
 					Date:  time.Now(),
 				},
-				Committer: AuthorInfo{
+				Committer: responses.AuthorInfo{
 					Name:  "John Doe",
 					Email: "john@example.com",
 					Date:  time.Now(),
@@ -272,15 +274,15 @@ func TestBranchInfo_Structure(t *testing.T) {
 func TestCommitInfo_Structure(t *testing.T) {
 	t.Run("Complete commit info", func(t *testing.T) {
 		now := time.Now()
-		commitInfo := CommitInfo{
+		commitInfo := responses.CommitInfo{
 			SHA:     "abc123def456",
 			Message: "Add new feature",
-			Author: AuthorInfo{
+			Author: responses.AuthorInfo{
 				Name:  "Alice Developer",
 				Email: "alice@example.com",
 				Date:  now,
 			},
-			Committer: AuthorInfo{
+			Committer: responses.AuthorInfo{
 				Name:  "Bob Maintainer",
 				Email: "bob@example.com",
 				Date:  now.Add(time.Hour),
@@ -421,7 +423,7 @@ func TestBranchOperationsHandler_validatePermissions(t *testing.T) {
 func TestBranchCreationWorkflow(t *testing.T) {
 	t.Run("Branch creation request validation", func(t *testing.T) {
 		// Test the structure without full integration
-		req := CreateBranchRequest{
+		req := responses.CreateBranchRequest{
 			Name:     "feature/user-dashboard",
 			Source:   "main",
 			Force:    false,
@@ -443,7 +445,7 @@ func TestBranchCreationWorkflow(t *testing.T) {
 
 	t.Run("Branch creation response validation", func(t *testing.T) {
 		// Test response structure without full integration
-		response := CreateBranchResponse{
+		response := responses.CreateBranchResponse{
 			Success:     true,
 			BranchName:  "feature/user-dashboard",
 			CommitSHA:   "1234567890abcdef1234567890abcdef12345678",
@@ -472,7 +474,7 @@ func TestBranchCreationWorkflow(t *testing.T) {
 	})
 
 	t.Run("JSON serialization", func(t *testing.T) {
-		req := CreateBranchRequest{
+		req := responses.CreateBranchRequest{
 			Name:   "test-branch",
 			Source: "main",
 			Force:  true,
@@ -481,7 +483,7 @@ func TestBranchCreationWorkflow(t *testing.T) {
 		jsonData, err := json.Marshal(req)
 		require.NoError(t, err)
 
-		var decoded CreateBranchRequest
+		var decoded responses.CreateBranchRequest
 		err = json.Unmarshal(jsonData, &decoded)
 		require.NoError(t, err)
 

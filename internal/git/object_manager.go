@@ -12,6 +12,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/go-git/go-git/v5"
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -647,4 +648,37 @@ func (gom *GitObjectManager) CreateCommit(ctx context.Context, repo *git.Reposit
 		zap.Int("parent_count", len(commitInfo.Parents)))
 
 	return result, nil
+}
+
+// EnsureProperHEAD ensures HEAD points to a branch, not directly to a commit
+func (gom *GitObjectManager) EnsureProperHEAD(ctx context.Context, repo *gogit.Repository, branchName string) error {
+	// Check current HEAD state
+	headRef, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD: %w", err)
+	}
+
+	// If HEAD is already pointing to the correct branch, nothing to do
+	expectedTarget := plumbing.ReferenceName("refs/heads/" + branchName)
+	if headRef.Type() == plumbing.SymbolicReference && headRef.Target() == expectedTarget {
+		return nil
+	}
+
+	// Check if the target branch exists
+	branchRef, err := repo.Reference(expectedTarget, true)
+	if err != nil {
+		return fmt.Errorf("branch %s does not exist: %w", branchName, err)
+	}
+
+	// Update HEAD to point to the branch
+	newHeadRef := plumbing.NewSymbolicReference(plumbing.HEAD, branchRef.Name())
+	if err := repo.Storer.SetReference(newHeadRef); err != nil {
+		return fmt.Errorf("failed to update HEAD to branch %s: %w", branchName, err)
+	}
+
+	gom.logger.Info("Updated HEAD to point to branch",
+		zap.String("branch", branchName),
+		zap.String("previous_type", headRef.Type().String()))
+
+	return nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/permissions"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -724,7 +725,7 @@ func TestMultiFileCommitRequest_Structure(t *testing.T) {
 
 func TestMultiFileCommitResponse_Structure(t *testing.T) {
 	t.Run("Successful multi-file commit response", func(t *testing.T) {
-		response := MultiFileCommitResponse{
+		response := responses.MultiFileCommitResponse{
 			Success:         true,
 			CommitSHA:       "abc123def456",
 			TransactionID:   "txn_12345",
@@ -732,8 +733,8 @@ func TestMultiFileCommitResponse_Structure(t *testing.T) {
 			TotalOperations: 3,
 			SuccessfulOps:   3,
 			FailedOps:       0,
-			OperationResults: []OperationResult{
-				{Path: "file1.txt", Operation: "create", Success: true},
+			OperationResults: []responses.OperationResult{
+				{FilePath: "file1.txt", Operation: "create", Success: true},
 				{Path: "file2.txt", Operation: "update", Success: true},
 				{Path: "file3.txt", Operation: "delete", Success: true},
 			},
@@ -752,17 +753,17 @@ func TestMultiFileCommitResponse_Structure(t *testing.T) {
 	})
 
 	t.Run("Partial success multi-file commit response", func(t *testing.T) {
-		response := MultiFileCommitResponse{
+		response := responses.MultiFileCommitResponse{
 			Success:         true, // Can still be successful with partial commits
 			TransactionID:   "txn_67890",
 			Message:         "Partial commit",
 			TotalOperations: 3,
 			SuccessfulOps:   2,
 			FailedOps:       1,
-			OperationResults: []OperationResult{
-				{Path: "file1.txt", Operation: "create", Success: true},
-				{Path: "file2.txt", Operation: "update", Success: true},
-				{Path: "invalid/../../path.txt", Operation: "create", Success: false, Error: "invalid path"},
+			OperationResults: []responses.OperationResult{
+				{FilePath: "file1.txt", Operation: "create", Success: true},
+				{FilePath: "file2.txt", Operation: "update", Success: true},
+				{FilePath: "invalid/../../path.txt", Operation: "create", Success: false, Error: "invalid path"},
 			},
 			ValidationOnly: false,
 			Duration:       time.Millisecond * 500,
@@ -814,8 +815,8 @@ func TestCommitOptions_Validation(t *testing.T) {
 
 func TestOperationResult_Success(t *testing.T) {
 	t.Run("Successful operation result", func(t *testing.T) {
-		result := OperationResult{
-			Path:      "success.txt",
+		result := responses.OperationResult{
+			FilePath:  "success.txt",
 			Operation: "create",
 			Success:   true,
 		}
@@ -825,8 +826,8 @@ func TestOperationResult_Success(t *testing.T) {
 	})
 
 	t.Run("Failed operation result", func(t *testing.T) {
-		result := OperationResult{
-			Path:      "fail.txt",
+		result := responses.OperationResult{
+			FilePath:  "fail.txt",
 			Operation: "update",
 			Success:   false,
 			Error:     "file not found",

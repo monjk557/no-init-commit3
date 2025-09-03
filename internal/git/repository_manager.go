@@ -431,6 +431,14 @@ func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repositor
 		return plumbing.ZeroHash, fmt.Errorf("failed to set HEAD reference: %w", err)
 	}
 
+	// Set HEAD to point to the default branch
+	if rm.objectManager != nil {
+		if ensureErr := rm.objectManager.EnsureProperHEAD(context.Background(), gitRepo, options.DefaultBranch); ensureErr != nil {
+			rm.logger.Warn("Failed to ensure proper HEAD state after repository creation",
+				zap.String("branch", options.DefaultBranch),
+				zap.Error(ensureErr))
+		}
+	}
 	return commitHash, nil
 }
 
