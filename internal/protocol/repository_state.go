@@ -11,8 +11,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"os"
+	"path/filepath"
+
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/storage/filesystem"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
@@ -447,18 +451,34 @@ func (h *RepositoryStateHandler) getHeadInfo(ctx context.Context, repo *gogit.Re
 		return nil, fmt.Errorf("failed to get HEAD reference: %w", err)
 	}
 
+	// For bare repositories, check if HEAD is actually a symbolic reference
+	// by looking at the raw HEAD file content
+	repoPath := repo.Storer.(*filesystem.Storage).Filesystem().Root()
+	headFilePath := filepath.Join(repoPath, "HEAD")
+	headContent, err := os.ReadFile(headFilePath)
+
+	isSymbolic := false
+	targetBranch := ""
+
+	if err == nil {
+		headStr := strings.TrimSpace(string(headContent))
+		if strings.HasPrefix(headStr, "ref: ") {
+			isSymbolic = true
+			targetBranch = strings.TrimPrefix(headStr, "ref: ")
+		}
+	}
+
 	headInfo := &HeadReferenceInfo{
 		Type:       headRef.Type().String(),
 		CommitSHA:  headRef.Hash().String(),
-		IsDetached: headRef.Type() == plumbing.HashReference,
+		IsDetached: !isSymbolic, // Use the file content to determine if detached
 	}
 
-	if headRef.Type() == plumbing.SymbolicReference {
-		// HEAD points to a branch
-		targetRef := headRef.Target()
-		headInfo.Target = targetRef.String()
-		headInfo.Name = strings.TrimPrefix(targetRef.String(), "refs/heads/")
-		headInfo.IsBranch = strings.HasPrefix(targetRef.String(), "refs/heads/")
+	if isSymbolic {
+		// HEAD points to a branch (based on file content)
+		headInfo.Target = targetBranch
+		headInfo.Name = strings.TrimPrefix(targetBranch, "refs/heads/")
+		headInfo.IsBranch = strings.HasPrefix(targetBranch, "refs/heads/")
 	} else {
 		// Detached HEAD
 		headInfo.Target = headRef.Hash().String()

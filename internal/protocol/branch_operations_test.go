@@ -215,25 +215,21 @@ func TestCreateBranchResponse_Structure(t *testing.T) {
 
 	t.Run("Force update branch response", func(t *testing.T) {
 		response := responses.CreateBranchResponse{
-			Success:     true,
-			BranchName:  "feature/existing",
-			CommitSHA:   "def456abc789",
-			Source:      "develop",
-			RefPath:     "refs/heads/feature/existing",
-			IsNewBranch: false,
-			Message:     "Branch 'feature/existing' updated successfully (forced)",
-			Details: map[string]interface{}{
-				"force_used":      true,
-				"checkout":        false,
-				"previous_commit": "old123commit456",
+			Success: true,
+			Data: responses.CreateBranchData{
+				BranchName:  "feature/existing",
+				CommitSHA:   "def456abc789",
+				Source:      "develop",
+				RefPath:     "refs/heads/feature/existing",
+				IsNewBranch: false,
+				Message:     "Branch 'feature/existing' updated successfully (forced)",
 			},
 		}
 
 		assert.True(t, response.Success)
-		assert.False(t, response.IsNewBranch)
-		assert.Contains(t, response.Message, "updated successfully")
-		assert.True(t, response.Details["force_used"].(bool))
-		assert.Equal(t, "old123commit456", response.Details["previous_commit"])
+		assert.False(t, response.Data.IsNewBranch)
+		assert.Contains(t, response.Data.Message, "updated successfully")
+
 	})
 }
 

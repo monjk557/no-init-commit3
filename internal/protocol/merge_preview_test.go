@@ -11,6 +11,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
+	"github.com/collabops/git-executor/internal/schemas/common"
 )
 
 // mockPreviewPermissionClient for testing
@@ -130,7 +131,7 @@ func TestMergePreviewResponse_Structure(t *testing.T) {
 		ConflictCount:      3,
 		Strategy:           MergeStrategyRecursive,
 		RecommendedActions: []string{"Manual conflict resolution required"},
-		MergeBase:          &CommitInfo{SHA: "abc123", Message: "Base commit", CreatedAt: now},
+		MergeBase:          &common.CommitInfo{SHA: "abc123", Message: "Base commit", CreatedAt: now},
 		PerformanceMetrics: metrics,
 		Warnings:           []string{"High number of conflicts"},
 	}

@@ -305,6 +305,28 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 			zap.String("base_hash", baseHash.String()))
 	}
 
+	// Get the base tree for applying changes
+	baseTree, err := h.objectManager.GetTreeFromCommit(ctx, repository, baseHash)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_base_tree")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// Create new tree from file changes
+	treeResult, err := h.objectManager.CreateTreeFromChanges(ctx, repository, baseTree, fileChanges)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "create_tree_from_changes")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	h.logger.Info("Created tree from changes",
+		zap.String("new_tree_hash", treeResult.TreeHash.String()),
+		zap.Int("created_files", len(treeResult.CreatedFiles)),
+		zap.Int("changed_files", len(treeResult.ChangedFiles)),
+		zap.Int("deleted_files", len(treeResult.DeletedFiles)))
+
 	// Determine operation type by checking if file exists
 	operationType := "create"
 
@@ -339,7 +361,7 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 	}
 
 	// Create new commit
-	result, err := h.objectManager.CreateCommit(ctx, repository, baseHash, commitInfo)
+	result, err := h.objectManager.CreateCommit(ctx, repository, treeResult.TreeHash, commitInfo)
 	if err != nil {
 		apiErr := h.errorMapper.MapErrorWithContext(err, "create_commit", fmt.Sprintf("file=%s", filePath))
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
@@ -473,21 +495,39 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 		return
 	}
 
+	h.logger.Info("Resolved branch reference",
+		zap.String("branch", req.Branch),
+		zap.String("base_hash", baseHash.String()))
+
 	// Get the current commit to check if file exists
 	commit, err := repository.CommitObject(baseHash)
 	if err != nil {
+		h.logger.Error("Failed to get commit object",
+			zap.String("base_hash", baseHash.String()),
+			zap.Error(err))
 		apiErr := h.errorMapper.MapError(err, "get_commit_object")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
+	h.logger.Info("Retrieved commit object",
+		zap.String("commit_hash", commit.Hash.String()),
+		zap.String("tree_hash", commit.TreeHash.String()))
+
 	// Get the tree for the commit
 	tree, err := commit.Tree()
 	if err != nil {
+		h.logger.Error("Failed to get commit tree",
+			zap.String("commit_hash", commit.Hash.String()),
+			zap.Error(err))
 		apiErr := h.errorMapper.MapError(err, "get_commit_tree")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
+
+	h.logger.Info("Retrieved commit tree",
+		zap.String("tree_hash", tree.Hash.String()),
+		zap.Int("tree_entry_count", len(tree.Entries)))
 
 	// Verify that the file exists before attempting deletion
 	_, err = h.objectManager.GetFileFromTree(ctx, tree, filePath)
@@ -513,6 +553,20 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 		return
 	}
 
+	// Create new tree from file changes (with deletion)
+	treeResult, err := h.objectManager.CreateTreeFromChanges(ctx, repository, tree, fileChanges)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "create_tree_from_changes")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	h.logger.Info("Created tree from changes",
+		zap.String("new_tree_hash", treeResult.TreeHash.String()),
+		zap.Int("created_files", len(treeResult.CreatedFiles)),
+		zap.Int("changed_files", len(treeResult.ChangedFiles)),
+		zap.Int("deleted_files", len(treeResult.DeletedFiles)))
+
 	// Create commit info with proper signatures
 	now := time.Now()
 	commitInfo := git.CommitInfo{
@@ -523,18 +577,46 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 			When:  now,
 		},
 		Committer: &object.Signature{
-			Name:  req.Committer.Name,
-			Email: req.Committer.Email,
+			Name:  req.Author.Name,
+			Email: req.Author.Email,
 			When:  now,
 		},
+		Parents: []plumbing.Hash{baseHash}, // Set parent to current commit
 	}
 
-	// Create new commit with file deletion
-	result, err := h.objectManager.CreateCommit(ctx, repository, baseHash, commitInfo)
+	// Create new commit with the new tree (containing file deletion)
+	result, err := h.objectManager.CreateCommit(ctx, repository, treeResult.TreeHash, commitInfo)
 	if err != nil {
 		apiErr := h.errorMapper.MapErrorWithContext(err, "create_commit", fmt.Sprintf("delete_file=%s", filePath))
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
+	}
+
+	// Update branch reference to point to the new commit
+	if req.Branch != "" {
+		refName := plumbing.ReferenceName("refs/heads/" + req.Branch)
+		ref := plumbing.NewHashReference(refName, result.Hash)
+		if err := repository.Storer.SetReference(ref); err != nil {
+			h.logger.Warn("Failed to update branch reference",
+				zap.String("branch", req.Branch),
+				zap.String("commit_hash", result.Hash.String()),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Updated branch reference",
+				zap.String("branch", req.Branch),
+				zap.String("commit_hash", result.Hash.String()))
+		}
+
+		// Update HEAD to point to the branch
+		headRef := plumbing.NewSymbolicReference(plumbing.HEAD, refName)
+		if err := repository.Storer.SetReference(headRef); err != nil {
+			h.logger.Warn("Failed to update HEAD to branch",
+				zap.String("branch", req.Branch),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Updated HEAD to point to branch",
+				zap.String("branch", req.Branch))
+		}
 	}
 
 	// Prepare successful response
