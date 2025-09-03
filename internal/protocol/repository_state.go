@@ -199,16 +199,6 @@ func (h *RepositoryStateHandler) HandleGetRepositoryState(c *gin.Context) {
 		return
 	}
 
-	// Validate permissions
-	if err := h.validatePermissions(c, owner, repo, "read"); err != nil {
-		if gitAPIErr, ok := err.(*api.GitAPIError); ok {
-			c.JSON(gitAPIErr.HTTPStatusCode(), gin.H{"success": false, "error": gitAPIErr.Message})
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": err.Error()})
-		}
-		return
-	}
-
 	// Open repository
 	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
 	if err != nil {
