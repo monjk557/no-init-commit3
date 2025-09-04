@@ -371,13 +371,13 @@ func TestGoGitRepository_GetCommits(t *testing.T) {
 	}
 
 	// Verify pagination works correctly
-	if firstCommit[0].Hash == secondCommit[0].Hash {
+	if firstCommit[0].Sha == secondCommit[0].Sha {
 		t.Error("First and second commits should be different")
 	}
 
 	// Test commit structure
 	commit := commits[0]
-	if commit.Hash == "" {
+	if commit.Sha == "" {
 		t.Error("Commit hash should not be empty")
 	}
 	if commit.Author.Name == "" {

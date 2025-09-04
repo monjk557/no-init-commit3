@@ -734,7 +734,6 @@ func TestMultiFileCommitResponse_Structure(t *testing.T) {
 			SuccessfulOps:   3,
 			FailedOps:       0,
 			OperationResults: []responses.OperationResult{
-				{FilePath: "file1.txt", Operation: "create", Success: true},
 				{Path: "file2.txt", Operation: "update", Success: true},
 				{Path: "file3.txt", Operation: "delete", Success: true},
 			},
@@ -761,7 +760,7 @@ func TestMultiFileCommitResponse_Structure(t *testing.T) {
 			SuccessfulOps:   2,
 			FailedOps:       1,
 			OperationResults: []responses.OperationResult{
-				{FilePath: "file1.txt", Operation: "create", Success: true},
+				{Path: "file1.txt", Operation: "create", Success: true},
 				{FilePath: "file2.txt", Operation: "update", Success: true},
 				{FilePath: "invalid/../../path.txt", Operation: "create", Success: false, Error: "invalid path"},
 			},

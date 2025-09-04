@@ -24,3 +24,10 @@ type MultiFileCommitResponse struct {
 	Duration         time.Duration          `json:"duration_ms"` // in milliseconds
 	Details          map[string]interface{} `json:"details,omitempty"`
 }
+
+type OperationResultResponse struct {
+	Path      string `json:"path"`
+	Operation string `json:"operation"`
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
+}
