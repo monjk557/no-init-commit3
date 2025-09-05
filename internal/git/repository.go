@@ -59,7 +59,7 @@ const (
 // Commit represents a Git commit
 type Commit struct {
 	// Hash is the commit hash
-	Hash string `json:"hash"`
+	Sha string `json:"sha"`
 
 	// Author is the commit author information
 	Author CommitAuthor `json:"author"`

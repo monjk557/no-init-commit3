@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
@@ -15,6 +14,8 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/requests"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -82,62 +83,6 @@ func NewBranchOperationsHandler(cfg *config.Config, permClient permissions.Permi
 	}, nil
 }
 
-// CreateBranchRequest represents the JSON payload for branch creation
-type CreateBranchRequest struct {
-	Name         string            `json:"name" binding:"required"`
-	Source       string            `json:"source,omitempty"`        // for unit test compatibility
-	SourceBranch string            `json:"source_branch,omitempty"` // for integration test compatibility
-	Force        bool              `json:"force,omitempty"`         // force creation even if branch exists
-	Checkout     bool              `json:"checkout,omitempty"`      // set as default branch (HEAD)
-	AuthorName   string            `json:"author_name,omitempty"`   // author name (for compatibility)
-	AuthorEmail  string            `json:"author_email,omitempty"`  // author email (for compatibility)
-	Metadata     map[string]string `json:"metadata,omitempty"`      // additional metadata
-}
-
-// UpdateBranchRequest represents the JSON payload for branch updates
-type UpdateBranchRequest struct {
-	Target  string `json:"target" binding:"required"` // commit SHA or branch name to point to
-	Force   bool   `json:"force,omitempty"`           // force update even if not fast-forward
-	Message string `json:"message,omitempty"`         // optional update message
-}
-
-// CreateBranchResponse represents the response for branch creation (for unit test compatibility)
-type CreateBranchResponse struct {
-	Success     bool                   `json:"success"`
-	BranchName  string                 `json:"branch_name"`
-	CommitSHA   string                 `json:"commit_sha"`
-	Source      string                 `json:"source"`
-	RefPath     string                 `json:"ref_path"`
-	IsNewBranch bool                   `json:"is_new_branch"`
-	Message     string                 `json:"message"`
-	Details     map[string]interface{} `json:"details,omitempty"`
-}
-
-// BranchInfo represents information about a Git branch (for unit test compatibility)
-type BranchInfo struct {
-	Name       string      `json:"name"`
-	CommitSHA  string      `json:"commit_sha"`
-	RefPath    string      `json:"ref_path"`
-	IsHead     bool        `json:"is_head"`
-	LastCommit *CommitInfo `json:"last_commit,omitempty"`
-}
-
-// AuthorInfo represents commit author/committer information
-type AuthorInfo struct {
-	Name  string    `json:"name"`
-	Email string    `json:"email"`
-	Date  time.Time `json:"date"`
-}
-
-// CommitInfo represents information about a Git commit
-type CommitInfo struct {
-	SHA       string     `json:"sha"`
-	Message   string     `json:"message"`
-	Author    AuthorInfo `json:"author"`
-	Committer AuthorInfo `json:"committer"`
-	CreatedAt time.Time  `json:"created_at"`
-}
-
 // HandleCreateBranch handles POST /repos/{owner}/{repo}/branches for creating new branches
 func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -160,7 +105,7 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	}
 
 	// Parse and validate JSON request
-	var req CreateBranchRequest
+	var req requests.CreateBranchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -265,18 +210,21 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 		}
 	}
 
-	// Prepare response data in the format expected by tests
-	responseData := map[string]interface{}{
-		"branch_name":   req.Name,
-		"source_branch": source,
-		"commit_hash":   sourceCommit.String(),
-		"operation":     "create",
-	}
-
-	// Prepare full response
-	response := map[string]interface{}{
-		"success": true,
-		"data":    responseData,
+	response := responses.CreateBranchResponse{
+		Success: true,
+		Data: responses.CreateBranchData{
+			BranchName:  req.Name,
+			CommitSHA:   sourceCommit.String(),
+			Source:      source,
+			RefPath:     refPath, // "refs/heads/브랜치명"
+			IsNewBranch: !branchExists,
+			Message:     fmt.Sprintf("Branch '%s' created successfully", req.Name),
+			Details: responses.CreateBranchDetails{
+				Checkout:  req.Checkout,
+				ForceUsed: req.Force && branchExists,
+				Author:    req.AuthorName,
+			},
+		},
 	}
 
 	// Log success
@@ -430,7 +378,7 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 	}
 
 	// Parse and validate JSON request
-	var req UpdateBranchRequest
+	var req requests.UpdateBranchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -604,22 +552,6 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 			"success": false,
 			"error":   fmt.Sprintf("Invalid branch name: %v", err),
 		})
-		return
-	}
-
-	// Validate permissions
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		if err.Error() == "Missing X-USER-ID header" || err.Error() == "Missing X-Source header" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
 		return
 	}
 

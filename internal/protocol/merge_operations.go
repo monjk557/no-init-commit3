@@ -20,6 +20,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/common"
 )
 
 // MergeOperationsHandler handles REST API operations for Git merge operations
@@ -85,8 +86,8 @@ type MergeRequest struct {
 	TargetRef     string                 `json:"target_ref" binding:"required"` // Target branch/commit to merge INTO
 	Strategy      MergeStrategy          `json:"strategy,omitempty"`            // Merge strategy (default: recursive)
 	Message       string                 `json:"message,omitempty"`             // Custom merge commit message
-	Author        *AuthorInfo            `json:"author,omitempty"`              // Merge commit author
-	Committer     *AuthorInfo            `json:"committer,omitempty"`           // Merge commit committer
+	Author        *common.AuthorInfo     `json:"author,omitempty"`              // Merge commit author
+	Committer     *common.AuthorInfo     `json:"committer,omitempty"`           // Merge commit committer
 	ForceConflict bool                   `json:"force_conflict,omitempty"`      // Force merge even with conflicts
 	DryRun        bool                   `json:"dry_run,omitempty"`             // Analyze merge without performing it
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`            // Additional metadata
@@ -95,7 +96,7 @@ type MergeRequest struct {
 // MergeResponse represents the response for merge operations
 type MergeResponse struct {
 	Success         bool                     `json:"success"`
-	MergeCommit     *CommitInfo              `json:"merge_commit,omitempty"`     // Created merge commit info
+	MergeCommit     *common.CommitInfo       `json:"merge_commit,omitempty"`     // Created merge commit info
 	IsFastForward   bool                     `json:"is_fast_forward"`            // Whether merge was fast-forward
 	HasConflicts    bool                     `json:"has_conflicts"`              // Whether conflicts were detected
 	ConflictCount   int                      `json:"conflict_count"`             // Number of conflicts
@@ -672,12 +673,12 @@ func (h *MergeOperationsHandler) getMergeType(result *MergeResult) string {
 }
 
 // commitToInfo converts a commit object to CommitInfo
-func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) *CommitInfo {
-	return &CommitInfo{
+func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) *common.CommitInfo {
+	return &common.CommitInfo{
 		SHA:       commit.Hash.String(),
 		Message:   commit.Message,
-		Author:    AuthorInfo{Name: commit.Author.Name, Email: commit.Author.Email, Date: commit.Author.When},
-		Committer: AuthorInfo{Name: commit.Committer.Name, Email: commit.Committer.Email, Date: commit.Committer.When},
+		Author:    common.AuthorInfo{Name: commit.Author.Name, Email: commit.Author.Email, Date: commit.Author.When},
+		Committer: common.AuthorInfo{Name: commit.Committer.Name, Email: commit.Committer.Email, Date: commit.Committer.When},
 		CreatedAt: commit.Author.When,
 	}
 }

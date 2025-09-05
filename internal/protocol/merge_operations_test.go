@@ -7,6 +7,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/permissions"
+	"github.com/collabops/git-executor/internal/schemas/common"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 )
@@ -115,8 +116,8 @@ func TestMergeRequest_Structure(t *testing.T) {
 		TargetRef:     "main",
 		Strategy:      MergeStrategyRecursive,
 		Message:       "Custom merge message",
-		Author:        &AuthorInfo{Name: "John Doe", Email: "john@example.com", Date: now},
-		Committer:     &AuthorInfo{Name: "Jane Doe", Email: "jane@example.com", Date: now},
+		Author:        &common.AuthorInfo{Name: "John Doe", Email: "john@example.com", Date: now},
+		Committer:     &common.AuthorInfo{Name: "Jane Doe", Email: "jane@example.com", Date: now},
 		ForceConflict: false,
 		DryRun:        true,
 		Metadata:      map[string]interface{}{"test": "value"},
@@ -139,7 +140,7 @@ func TestMergeResponse_Structure(t *testing.T) {
 	now := time.Now()
 	response := &MergeResponse{
 		Success:       true,
-		MergeCommit:   &CommitInfo{SHA: "abc123", Message: "Test commit", CreatedAt: now},
+		MergeCommit:   &common.CommitInfo{SHA: "abc123", Message: "Test commit", CreatedAt: now},
 		IsFastForward: false,
 		HasConflicts:  true,
 		ConflictCount: 3,
@@ -304,7 +305,7 @@ func TestMergeOperationsHandler_ValidateMergeRequest(t *testing.T) {
 				SourceRef: "feature-branch",
 				TargetRef: "main",
 				Strategy:  MergeStrategyRecursive,
-				Author:    &AuthorInfo{Name: "", Email: "test@example.com"},
+				Author:    &common.AuthorInfo{Name: "", Email: "test@example.com"},
 			},
 			expectErr: true,
 			errorMsg:  "Author name cannot be empty",
@@ -315,7 +316,7 @@ func TestMergeOperationsHandler_ValidateMergeRequest(t *testing.T) {
 				SourceRef: "feature-branch",
 				TargetRef: "main",
 				Strategy:  MergeStrategyRecursive,
-				Author:    &AuthorInfo{Name: "Test Author", Email: ""},
+				Author:    &common.AuthorInfo{Name: "Test Author", Email: ""},
 			},
 			expectErr: true,
 			errorMsg:  "Author email cannot be empty",
@@ -326,7 +327,7 @@ func TestMergeOperationsHandler_ValidateMergeRequest(t *testing.T) {
 				SourceRef: "feature-branch",
 				TargetRef: "main",
 				Strategy:  MergeStrategyRecursive,
-				Committer: &AuthorInfo{Name: "", Email: "test@example.com"},
+				Committer: &common.AuthorInfo{Name: "", Email: "test@example.com"},
 			},
 			expectErr: true,
 			errorMsg:  "Committer name cannot be empty",
@@ -337,7 +338,7 @@ func TestMergeOperationsHandler_ValidateMergeRequest(t *testing.T) {
 				SourceRef: "feature-branch",
 				TargetRef: "main",
 				Strategy:  MergeStrategyRecursive,
-				Committer: &AuthorInfo{Name: "Test Committer", Email: ""},
+				Committer: &common.AuthorInfo{Name: "Test Committer", Email: ""},
 			},
 			expectErr: true,
 			errorMsg:  "Committer email cannot be empty",

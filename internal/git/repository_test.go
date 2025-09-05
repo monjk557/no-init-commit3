@@ -71,7 +71,7 @@ func TestCommit_JSONSerialization(t *testing.T) {
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	commit := Commit{
-		Hash:    "abc123def456",
+		Sha:     "abc123def456",
 		Message: "Initial commit",
 		Author: CommitAuthor{
 			Name:  "John Doe",
@@ -101,8 +101,8 @@ func TestCommit_JSONSerialization(t *testing.T) {
 	}
 
 	// Verify all fields
-	if unmarshaled.Hash != commit.Hash {
-		t.Errorf("Hash mismatch: expected %q, got %q", commit.Hash, unmarshaled.Hash)
+	if unmarshaled.Sha != commit.Sha {
+		t.Errorf("Hash mismatch: expected %q, got %q", commit.Sha, unmarshaled.Sha)
 	}
 	if unmarshaled.Message != commit.Message {
 		t.Errorf("Message mismatch: expected %q, got %q", commit.Message, unmarshaled.Message)
@@ -235,8 +235,8 @@ func TestMockRepository_WithData(t *testing.T) {
 	mock.SetBlob("file1.txt", "main", blob)
 
 	commits := []Commit{
-		{Hash: "commit1", Message: "First commit", TreeHash: "tree1"},
-		{Hash: "commit2", Message: "Second commit", TreeHash: "tree2"},
+		{Sha: "commit1", Message: "First commit", TreeHash: "tree1"},
+		{Sha: "commit2", Message: "Second commit", TreeHash: "tree2"},
 	}
 	mock.SetCommits("main", commits)
 
@@ -275,8 +275,8 @@ func TestMockRepository_WithData(t *testing.T) {
 	if len(firstCommit) != 1 {
 		t.Errorf("Expected 1 commit, got %d", len(firstCommit))
 	}
-	if firstCommit[0].Hash != "commit1" {
-		t.Errorf("Expected commit1, got %s", firstCommit[0].Hash)
+	if firstCommit[0].Sha != "commit1" {
+		t.Errorf("Expected commit1, got %s", firstCommit[0].Sha)
 	}
 
 	secondCommit, err := mock.GetCommits(ctx, "main", 1, 1)
@@ -286,8 +286,8 @@ func TestMockRepository_WithData(t *testing.T) {
 	if len(secondCommit) != 1 {
 		t.Errorf("Expected 1 commit, got %d", len(secondCommit))
 	}
-	if secondCommit[0].Hash != "commit2" {
-		t.Errorf("Expected commit2, got %s", secondCommit[0].Hash)
+	if secondCommit[0].Sha != "commit2" {
+		t.Errorf("Expected commit2, got %s", secondCommit[0].Sha)
 	}
 }
 
@@ -297,7 +297,7 @@ func TestMockRepository_ContextCancellation(t *testing.T) {
 	// Set up test data
 	mock.SetTree("main", []TreeEntry{{Path: "file.txt", Type: EntryTypeBlob}})
 	mock.SetBlob("file.txt", "main", []byte("content"))
-	mock.SetCommits("main", []Commit{{Hash: "commit1"}})
+	mock.SetCommits("main", []Commit{{Sha: "commit1"}})
 
 	// Create a cancelled context
 	ctx, cancel := context.WithCancel(context.Background())

@@ -360,15 +360,15 @@ func TestRepositoryStateAPI_GetRepositoryState(t *testing.T) {
 		assert.Equal(t, "testowner", dataMap["owner"])
 		assert.NotNil(t, dataMap["timestamp"])
 
-		// Verify HEAD information (HEAD is actually detached in a bare repo)
+		// Verify HEAD information (HEAD points to master branch in this test setup)
 		head, exists := dataMap["head"]
 		require.True(t, exists)
 		headMap := head.(map[string]interface{})
-		assert.Equal(t, "hash-reference", headMap["type"]) // HEAD is detached in bare repo
-		assert.Equal(t, "HEAD", headMap["name"])
+		assert.Equal(t, "hash-reference", headMap["type"]) // HEAD is a hash reference
+		assert.Equal(t, "master", headMap["name"])         // HEAD points to master branch
 		assert.NotEmpty(t, headMap["commit_sha"])
-		assert.False(t, headMap["is_branch"].(bool))  // HEAD is not pointing to a branch
-		assert.True(t, headMap["is_detached"].(bool)) // HEAD is detached
+		assert.True(t, headMap["is_branch"].(bool))    // HEAD is pointing to a branch
+		assert.False(t, headMap["is_detached"].(bool)) // HEAD is not detached
 
 		// Verify references section
 		references, exists := dataMap["references"]

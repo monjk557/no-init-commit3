@@ -11,8 +11,8 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"go.uber.org/zap"
@@ -22,7 +22,6 @@ import (
 type RepositoryCreationHandler struct {
 	config             *config.Config
 	logger             *logging.Logger
-	permClient         permissions.PermissionClient
 	pathConfig         *repository.PathConfig
 	pathValidator      *repository.GitAPIPathValidator
 	objectManager      *git.GitObjectManager
@@ -83,20 +82,6 @@ type CreateRepositoryRequest struct {
 }
 
 // Note: CommitAuthor is already defined in file_operations.go
-
-// CreateRepositoryResponse represents the response for repository creation
-type CreateRepositoryResponse struct {
-	Success       bool                   `json:"success"`
-	Repository    string                 `json:"repository"`
-	Owner         string                 `json:"owner"`
-	Name          string                 `json:"name"`
-	Path          string                 `json:"path,omitempty"`
-	Description   string                 `json:"description,omitempty"`
-	DefaultBranch string                 `json:"default_branch"`
-	InitialCommit string                 `json:"initial_commit,omitempty"`
-	CreatedAt     time.Time              `json:"created_at"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
-}
 
 // validatePermissions validates user permissions for repository creation
 func (h *RepositoryCreationHandler) validatePermissions(c *gin.Context) error {
@@ -195,7 +180,7 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 }
 
 // createRepository creates a new Git repository with optional initial commit
-func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner, repo string, req *CreateRepositoryRequest) (*CreateRepositoryResponse, error) {
+func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner, repo string, req *CreateRepositoryRequest) (*responses.CreateRepositoryResponse, error) {
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
 
 	// Prepare author information
@@ -225,7 +210,7 @@ func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner,
 		return nil, fmt.Errorf("failed to create repository: %w", err)
 	}
 
-	response := &CreateRepositoryResponse{
+	response := &responses.CreateRepositoryResponse{
 		Success:       true,
 		Repository:    fmt.Sprintf("%s/%s", owner, repo),
 		Owner:         owner,

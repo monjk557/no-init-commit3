@@ -365,9 +365,11 @@ func TestBranchOperationsAPI_CreateBranch(t *testing.T) {
 		dataMap := data.(map[string]interface{})
 
 		assert.Equal(t, "feature/new-feature", dataMap["branch_name"])
-		assert.Equal(t, "master", dataMap["source_branch"])
-		assert.NotEmpty(t, dataMap["commit_hash"])
-		assert.Equal(t, "create", dataMap["operation"])
+		assert.Equal(t, "master", dataMap["source"])
+		assert.NotEmpty(t, dataMap["commit_sha"])
+		assert.Equal(t, "refs/heads/feature/new-feature", dataMap["ref_path"])
+		assert.True(t, dataMap["is_new_branch"].(bool))
+		assert.Contains(t, dataMap["message"], "created successfully")
 	})
 
 	t.Run("branch creation with invalid name", func(t *testing.T) {

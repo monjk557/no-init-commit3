@@ -243,9 +243,6 @@ func (rm *DefaultRepositoryManager) ListRepositories(ctx context.Context, rootPa
 		rootPath = rm.pathConfig.GetRepoRoot()
 	}
 
-	rm.logger.Debug("Listing repositories",
-		zap.String("root_path", rootPath))
-
 	var repositories []RepositoryInfo
 
 	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
@@ -300,10 +297,6 @@ func (rm *DefaultRepositoryManager) ListRepositories(ctx context.Context, rootPa
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk repository directory: %w", err)
 	}
-
-	rm.logger.Debug("Found repositories",
-		zap.String("root_path", rootPath),
-		zap.Int("count", len(repositories)))
 
 	return repositories, nil
 }
@@ -429,6 +422,15 @@ func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repositor
 	err = storer.SetReference(headRef)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to set HEAD reference: %w", err)
+	}
+
+	// Ensure HEAD is properly set using the object manager
+	if rm.objectManager != nil {
+		if ensureErr := rm.objectManager.EnsureProperHEAD(context.Background(), gitRepo, options.DefaultBranch); ensureErr != nil {
+			rm.logger.Warn("Failed to ensure proper HEAD state after repository creation",
+				zap.String("branch", options.DefaultBranch),
+				zap.Error(ensureErr))
+		}
 	}
 
 	return commitHash, nil

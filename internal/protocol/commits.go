@@ -34,20 +34,26 @@ type CommitsRequestParams struct {
 
 // CommitsResponse represents the response structure for commit log endpoints
 type CommitsResponse struct {
-	Commits    []git.Commit   `json:"commits"`
+	Success    bool           `json:"success"`
+	Message    string         `json:"message"`
+	Results    []git.Commit   `json:"results"`
 	Pagination PaginationInfo `json:"pagination"`
 }
 
 // PaginationInfo represents pagination information in commit responses
 type PaginationInfo struct {
-	Limit   int  `json:"limit"`
-	Skip    int  `json:"skip"`
-	Count   int  `json:"count"`    // Number of commits returned
-	HasMore bool `json:"has_more"` // Whether there are more commits available
+	// Python PaginatedResponse compatible fields
+	Count       int     `json:"count"`        // Total number of items
+	Next        *string `json:"next"`         // Next page URL
+	Previous    *string `json:"previous"`     // Previous page URL
+	CurrentPage int     `json:"current_page"` // Current page number
+	TotalPages  int     `json:"total_pages"`  // Total number of pages
+	PageSize    int     `json:"page_size"`    // Number of items per page
 }
 
 // CommitsErrorResponse represents a standardized error response for commit endpoints
 type CommitsErrorResponse struct {
+	Success bool   `json:"success"`
 	Error   string `json:"error"`
 	Code    string `json:"code,omitempty"`
 	Details string `json:"details,omitempty"`
@@ -59,6 +65,30 @@ const (
 	MaxCommitsLimit     = 100
 	MinCommitsLimit     = 1
 )
+
+func buildPagination(totalCount, currentPage, pageSize int, baseURL string) PaginationInfo {
+	totalPages := (totalCount + pageSize - 1) / pageSize
+
+	var next, previous *string
+
+	if currentPage < totalPages {
+		nextURL := fmt.Sprintf("%s?page=%d&page_size=%d", baseURL, currentPage+1, pageSize)
+		next = &nextURL
+	}
+
+	if currentPage > 1 {
+		prevURL := fmt.Sprintf("%s?page=%d&page_size=%d", baseURL, currentPage-1, pageSize)
+		previous = &prevURL
+	}
+
+	return PaginationInfo{
+		Count:      totalCount,
+		Next:       next,
+		Previous:   previous,
+		TotalPages: totalPages,
+		PageSize:   pageSize,
+	}
+}
 
 // NewCommitsHandler creates a new commits handler
 func NewCommitsHandler(cfg *config.Config, permClient permissions.PermissionClient) (*CommitsHandler, error) {
@@ -97,7 +127,7 @@ func (h *CommitsHandler) HandleCommitsAPI(w http.ResponseWriter, r *http.Request
 	}
 
 	// Get commit history
-	commits, hasMore, err := h.getCommitHistory(ctx, repoPath, params)
+	commits, totalCount, err := h.getCommitHistory(ctx, repoPath, params)
 	if err != nil {
 		h.handleCommitsError(w, err, "get commit history")
 		return
@@ -105,12 +135,15 @@ func (h *CommitsHandler) HandleCommitsAPI(w http.ResponseWriter, r *http.Request
 
 	// Create response with pagination info
 	response := CommitsResponse{
-		Commits: commits,
+		Success: true,
+		Results: commits,
+		Message: "Commits fetched successfully",
 		Pagination: PaginationInfo{
-			Limit:   params.Limit,
-			Skip:    params.Skip,
-			Count:   len(commits),
-			HasMore: hasMore,
+			Count:      totalCount,
+			Next:       buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, r.URL.String()).Next,
+			Previous:   buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, r.URL.String()).Previous,
+			TotalPages: buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, r.URL.String()).TotalPages,
+			PageSize:   params.Limit,
 		},
 	}
 
@@ -197,16 +230,6 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(r *http.Request) (*Comm
 
 // validateCommitsRequestAndPermissions performs validation and permission checking for commit requests
 func (h *CommitsHandler) validateCommitsRequestAndPermissions(ctx context.Context, params *CommitsRequestParams) (string, error) {
-	// If permission client is nil, skip permission checking (for development/testing)
-	if h.permissionClient != nil {
-		hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
-		if err != nil {
-			return "", fmt.Errorf("permission check failed: %w", err)
-		}
-		if !hasAccess {
-			return "", fmt.Errorf("access denied to repository")
-		}
-	}
 
 	// Get repository path and validate
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
@@ -218,11 +241,11 @@ func (h *CommitsHandler) validateCommitsRequestAndPermissions(ctx context.Contex
 }
 
 // getCommitHistory retrieves commit history using the Git repository interface
-func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, params *CommitsRequestParams) ([]git.Commit, bool, error) {
+func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, params *CommitsRequestParams) ([]git.Commit, int, error) {
 	// Open repository using the simple cache
 	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to open repository: %w", err)
+		return nil, 0, fmt.Errorf("failed to open repository: %w", err)
 	}
 	defer func() { _ = gitRepo.Close() }()
 
@@ -231,17 +254,13 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, 
 	requestLimit := params.Limit + 1
 	commits, err := gitRepo.GetCommits(ctx, params.Ref, requestLimit, params.Skip)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to get commits: %w", err)
+		return nil, 0, fmt.Errorf("failed to get commits: %w", err)
 	}
 
 	// Determine if there are more commits (pagination)
-	hasMore := len(commits) > params.Limit
-	if hasMore {
-		// Remove the extra commit we requested
-		commits = commits[:params.Limit]
-	}
+	totalCount := len(commits)
 
-	return commits, hasMore, nil
+	return commits, totalCount, nil
 }
 
 // sendCommitsJSONResponse sends a standardized JSON response for commit endpoints
@@ -256,9 +275,10 @@ func (h *CommitsHandler) sendCommitsJSONResponse(w http.ResponseWriter, data int
 }
 
 // sendCommitsErrorResponse sends a standardized error response for commit endpoints
-func (h *CommitsHandler) sendCommitsErrorResponse(w http.ResponseWriter, message string, statusCode int) {
+func (h *CommitsHandler) sendCommitsErrorResponse(w http.ResponseWriter, success bool, message string, statusCode int) {
 	errorResp := CommitsErrorResponse{
-		Error: message,
+		Success: success,
+		Error:   message,
 	}
 	h.sendCommitsJSONResponse(w, errorResp, statusCode)
 }
@@ -266,19 +286,19 @@ func (h *CommitsHandler) sendCommitsErrorResponse(w http.ResponseWriter, message
 // handleCommitsError categorizes errors and sends appropriate HTTP responses for commit endpoints
 func (h *CommitsHandler) handleCommitsError(w http.ResponseWriter, err error, operation string) {
 	if isCommitsReferenceNotFoundError(err) {
-		h.sendCommitsErrorResponse(w, fmt.Sprintf("Reference not found: %v", err), http.StatusNotFound)
+		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Reference not found: %v", err), http.StatusNotFound)
 	} else if isCommitsRepositoryNotFoundError(err) {
-		h.sendCommitsErrorResponse(w, fmt.Sprintf("Repository not found: %v", err), http.StatusNotFound)
+		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Repository not found: %v", err), http.StatusNotFound)
 	} else if strings.Contains(err.Error(), "permission") {
-		h.sendCommitsErrorResponse(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
+		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
 	} else if strings.Contains(err.Error(), "access denied") {
-		h.sendCommitsErrorResponse(w, "Access denied to repository", http.StatusForbidden)
+		h.sendCommitsErrorResponse(w, true, "Access denied to repository", http.StatusForbidden)
 	} else if strings.Contains(err.Error(), "authentication") {
-		h.sendCommitsErrorResponse(w, err.Error(), http.StatusUnauthorized)
+		h.sendCommitsErrorResponse(w, true, err.Error(), http.StatusUnauthorized)
 	} else if strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "invalid") {
-		h.sendCommitsErrorResponse(w, err.Error(), http.StatusBadRequest)
+		h.sendCommitsErrorResponse(w, true, err.Error(), http.StatusBadRequest)
 	} else {
-		h.sendCommitsErrorResponse(w, fmt.Sprintf("Failed to %s: %v", operation, err), http.StatusInternalServerError)
+		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Failed to %s: %v", operation, err), http.StatusInternalServerError)
 	}
 }
 

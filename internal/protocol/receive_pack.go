@@ -17,7 +17,6 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
@@ -47,10 +46,9 @@ type RefUpdateCommand struct {
 
 // ReceivePackHandler handles Git Smart HTTP protocol for push operations (executor side)
 type ReceivePackHandler struct {
-	pathConfig       *repository.PathConfig
-	permissionClient permissions.PermissionClient
-	errorHandler     *ErrorHandler
-	capabilities     *ServerCapabilities
+	pathConfig   *repository.PathConfig
+	errorHandler *ErrorHandler
+	capabilities *ServerCapabilities
 }
 
 // NewReceivePackHandler creates a new receive-pack handler for the executor
@@ -94,18 +92,6 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	userID := r.Header.Get("X-USER-ID")
 	if userID == "" {
 		h.errorHandler.HandleError(w, r, ErrMissingUserContext, "receive_pack_info_refs")
-		return
-	}
-
-	// Check user permissions for WRITE access (pushes require write permission)
-	hasAccess, err := h.permissionClient.CheckWriteAccess(ctx, userID, owner, repo)
-	if err != nil {
-		wrappedErr := fmt.Errorf("permission check failed: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack_info_refs")
-		return
-	}
-	if !hasAccess {
-		h.errorHandler.HandleError(w, r, ErrPermissionDenied, "receive_pack_info_refs")
 		return
 	}
 
@@ -211,7 +197,7 @@ func (h *ReceivePackHandler) getAllReferences(ctx context.Context, repo git.Repo
 
 	if len(commits) > 0 {
 		// For now, add HEAD and main branch
-		headHash := commits[0].Hash
+		headHash := commits[0].Sha
 
 		refs = append(refs, Reference{
 			Name: "HEAD",
@@ -258,18 +244,6 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	userID := r.Header.Get("X-USER-ID")
 	if userID == "" {
 		h.errorHandler.HandleError(w, r, ErrMissingUserContext, "receive_pack")
-		return
-	}
-
-	// Check user permissions for WRITE access
-	hasAccess, err := h.permissionClient.CheckWriteAccess(ctx, userID, owner, repo)
-	if err != nil {
-		wrappedErr := fmt.Errorf("permission check failed: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack")
-		return
-	}
-	if !hasAccess {
-		h.errorHandler.HandleError(w, r, ErrPermissionDenied, "receive_pack")
 		return
 	}
 

@@ -10,6 +10,9 @@ import (
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/schemas/common"
+	"github.com/collabops/git-executor/internal/schemas/requests"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -147,7 +150,7 @@ func TestBranchOperationsHandler_validateBranchName(t *testing.T) {
 
 func TestCreateBranchRequest_Structure(t *testing.T) {
 	t.Run("Valid create branch request", func(t *testing.T) {
-		req := CreateBranchRequest{
+		req := requests.CreateBranchRequest{
 			Name:     "feature/new-api",
 			Source:   "main",
 			Force:    false,
@@ -167,7 +170,7 @@ func TestCreateBranchRequest_Structure(t *testing.T) {
 	})
 
 	t.Run("Minimal create branch request", func(t *testing.T) {
-		req := CreateBranchRequest{
+		req := requests.CreateBranchRequest{
 			Name: "hotfix/urgent-fix",
 		}
 
@@ -181,76 +184,76 @@ func TestCreateBranchRequest_Structure(t *testing.T) {
 
 func TestCreateBranchResponse_Structure(t *testing.T) {
 	t.Run("Successful branch creation response", func(t *testing.T) {
-		response := CreateBranchResponse{
-			Success:     true,
-			BranchName:  "feature/auth",
-			CommitSHA:   "abc123def456789",
-			Source:      "main",
-			RefPath:     "refs/heads/feature/auth",
-			IsNewBranch: true,
-			Message:     "Branch 'feature/auth' created successfully",
-			Details: map[string]interface{}{
-				"force_used": false,
-				"checkout":   true,
-				"commit_info": map[string]interface{}{
-					"author": "John Doe",
-					"date":   time.Now(),
+		response := responses.CreateBranchResponse{
+			Success: true,
+			Data: responses.CreateBranchData{
+				BranchName:  "feature/auth",
+				CommitSHA:   "abc123def456789",
+				Source:      "main",
+				RefPath:     "refs/heads/feature/auth",
+				IsNewBranch: true,
+				Message:     "Branch 'feature/auth' created successfully",
+				Details: responses.CreateBranchDetails{
+					ForceUsed: false,
+					Checkout:  true,
+					Author:    "John Doe",
 				},
 			},
 		}
 
 		assert.True(t, response.Success)
-		assert.Equal(t, "feature/auth", response.BranchName)
-		assert.Equal(t, "abc123def456789", response.CommitSHA)
-		assert.Equal(t, "main", response.Source)
-		assert.Equal(t, "refs/heads/feature/auth", response.RefPath)
-		assert.True(t, response.IsNewBranch)
-		assert.Contains(t, response.Message, "created successfully")
-		assert.NotNil(t, response.Details)
-		assert.False(t, response.Details["force_used"].(bool))
-		assert.True(t, response.Details["checkout"].(bool))
+		assert.Equal(t, "feature/auth", response.Data.BranchName)
+		assert.Equal(t, "abc123def456789", response.Data.CommitSHA)
+		assert.Equal(t, "main", response.Data.Source)
+		assert.Equal(t, "refs/heads/feature/auth", response.Data.RefPath)
+		assert.True(t, response.Data.IsNewBranch)
+		assert.Contains(t, response.Data.Message, "created successfully")
+		assert.False(t, response.Data.Details.ForceUsed)
+		assert.True(t, response.Data.Details.Checkout)
+		assert.Equal(t, "John Doe", response.Data.Details.Author)
 	})
 
 	t.Run("Force update branch response", func(t *testing.T) {
-		response := CreateBranchResponse{
-			Success:     true,
-			BranchName:  "feature/existing",
-			CommitSHA:   "def456abc789",
-			Source:      "develop",
-			RefPath:     "refs/heads/feature/existing",
-			IsNewBranch: false,
-			Message:     "Branch 'feature/existing' updated successfully (forced)",
-			Details: map[string]interface{}{
-				"force_used":      true,
-				"checkout":        false,
-				"previous_commit": "old123commit456",
+		response := responses.CreateBranchResponse{
+			Success: true,
+			Data: responses.CreateBranchData{
+				BranchName:  "feature/existing",
+				CommitSHA:   "def456abc789",
+				Source:      "develop",
+				RefPath:     "refs/heads/feature/existing",
+				IsNewBranch: false,
+				Message:     "Branch 'feature/existing' updated successfully (forced)",
+				Details: responses.CreateBranchDetails{
+					ForceUsed: true,
+					Checkout:  false,
+					Author:    "System",
+				},
 			},
 		}
 
 		assert.True(t, response.Success)
-		assert.False(t, response.IsNewBranch)
-		assert.Contains(t, response.Message, "updated successfully")
-		assert.True(t, response.Details["force_used"].(bool))
-		assert.Equal(t, "old123commit456", response.Details["previous_commit"])
+		assert.False(t, response.Data.IsNewBranch)
+		assert.Contains(t, response.Data.Message, "updated successfully")
+
 	})
 }
 
 func TestBranchInfo_Structure(t *testing.T) {
 	t.Run("Complete branch info", func(t *testing.T) {
-		branchInfo := BranchInfo{
+		branchInfo := responses.BranchInfo{
 			Name:      "main",
 			CommitSHA: "abc123",
 			RefPath:   "refs/heads/main",
 			IsHead:    true,
-			LastCommit: &CommitInfo{
+			LastCommit: &common.CommitInfo{
 				SHA:     "abc123",
 				Message: "Initial commit",
-				Author: AuthorInfo{
+				Author: common.AuthorInfo{
 					Name:  "John Doe",
 					Email: "john@example.com",
 					Date:  time.Now(),
 				},
-				Committer: AuthorInfo{
+				Committer: common.AuthorInfo{
 					Name:  "John Doe",
 					Email: "john@example.com",
 					Date:  time.Now(),
@@ -272,15 +275,15 @@ func TestBranchInfo_Structure(t *testing.T) {
 func TestCommitInfo_Structure(t *testing.T) {
 	t.Run("Complete commit info", func(t *testing.T) {
 		now := time.Now()
-		commitInfo := CommitInfo{
+		commitInfo := common.CommitInfo{
 			SHA:     "abc123def456",
 			Message: "Add new feature",
-			Author: AuthorInfo{
+			Author: common.AuthorInfo{
 				Name:  "Alice Developer",
 				Email: "alice@example.com",
 				Date:  now,
 			},
-			Committer: AuthorInfo{
+			Committer: common.AuthorInfo{
 				Name:  "Bob Maintainer",
 				Email: "bob@example.com",
 				Date:  now.Add(time.Hour),
@@ -421,7 +424,7 @@ func TestBranchOperationsHandler_validatePermissions(t *testing.T) {
 func TestBranchCreationWorkflow(t *testing.T) {
 	t.Run("Branch creation request validation", func(t *testing.T) {
 		// Test the structure without full integration
-		req := CreateBranchRequest{
+		req := requests.CreateBranchRequest{
 			Name:     "feature/user-dashboard",
 			Source:   "main",
 			Force:    false,
@@ -443,36 +446,34 @@ func TestBranchCreationWorkflow(t *testing.T) {
 
 	t.Run("Branch creation response validation", func(t *testing.T) {
 		// Test response structure without full integration
-		response := CreateBranchResponse{
-			Success:     true,
-			BranchName:  "feature/user-dashboard",
-			CommitSHA:   "1234567890abcdef1234567890abcdef12345678",
-			Source:      "main",
-			RefPath:     "refs/heads/feature/user-dashboard",
-			IsNewBranch: true,
-			Message:     "Branch 'feature/user-dashboard' created successfully",
-			Details: map[string]interface{}{
-				"force_used": false,
-				"checkout":   true,
-				"commit_info": map[string]interface{}{
-					"author": "Test User",
-					"date":   time.Now(),
+		response := responses.CreateBranchResponse{
+			Success: true,
+			Data: responses.CreateBranchData{
+				BranchName:  "feature/user-dashboard",
+				CommitSHA:   "1234567890abcdef1234567890abcdef12345678",
+				Source:      "main",
+				RefPath:     "refs/heads/feature/user-dashboard",
+				IsNewBranch: true,
+				Message:     "Branch 'feature/user-dashboard' created successfully",
+				Details: responses.CreateBranchDetails{
+					ForceUsed: false,
+					Checkout:  true,
+					Author:    "Test User",
 				},
 			},
 		}
 
 		assert.True(t, response.Success)
-		assert.NotEmpty(t, response.CommitSHA)
-		assert.NotEmpty(t, response.RefPath)
-		assert.True(t, response.IsNewBranch)
-		assert.Contains(t, response.Message, "created successfully")
-		assert.NotNil(t, response.Details)
-		assert.False(t, response.Details["force_used"].(bool))
-		assert.True(t, response.Details["checkout"].(bool))
+		assert.NotEmpty(t, response.Data.CommitSHA)
+		assert.NotEmpty(t, response.Data.RefPath)
+		assert.True(t, response.Data.IsNewBranch)
+		assert.Contains(t, response.Data.Message, "created successfully")
+		assert.False(t, response.Data.Details.ForceUsed)
+		assert.True(t, response.Data.Details.Checkout)
 	})
 
 	t.Run("JSON serialization", func(t *testing.T) {
-		req := CreateBranchRequest{
+		req := requests.CreateBranchRequest{
 			Name:   "test-branch",
 			Source: "main",
 			Force:  true,
@@ -481,7 +482,7 @@ func TestBranchCreationWorkflow(t *testing.T) {
 		jsonData, err := json.Marshal(req)
 		require.NoError(t, err)
 
-		var decoded CreateBranchRequest
+		var decoded requests.CreateBranchRequest
 		err = json.Unmarshal(jsonData, &decoded)
 		require.NoError(t, err)
 

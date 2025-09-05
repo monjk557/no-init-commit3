@@ -12,6 +12,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/go-git/go-git/v5"
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -319,11 +320,6 @@ func (gom *GitObjectManager) OpenRepository(ctx context.Context, owner, repo str
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	gom.logger.Debug("Successfully opened Git repository",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("path", repoPath))
-
 	return gitRepo, nil
 }
 
@@ -335,10 +331,6 @@ func (gom *GitObjectManager) GetRepositoryHead(ctx context.Context, repo *git.Re
 		return nil, fmt.Errorf("failed to get HEAD reference: %w", err)
 	}
 
-	gom.logger.Debug("Retrieved repository HEAD",
-		zap.String("ref", headRef.Name().String()),
-		zap.String("hash", headRef.Hash().String()))
-
 	return headRef, nil
 }
 
@@ -349,26 +341,27 @@ func (gom *GitObjectManager) ResolveReference(ctx context.Context, repo *git.Rep
 		// Validate that the hash exists in the repository
 		_, err := repo.CommitObject(hash)
 		if err == nil {
-			gom.logger.Debug("Resolved reference as direct hash",
-				zap.String("ref", ref),
-				zap.String("hash", hash.String()))
 			return hash, nil
 		}
 	}
 
 	// Try to resolve as a reference name
-	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
+	// If ref doesn't start with refs/, assume it's a branch name and add refs/heads/ prefix
+	refName := ref
+	if !strings.HasPrefix(ref, "refs/") {
+		refName = "refs/heads/" + ref
+	}
+
+	reference, err := repo.Reference(plumbing.ReferenceName(refName), true)
 	if err != nil {
 		gom.logger.Error("Failed to resolve reference",
 			zap.String("ref", ref),
+			zap.String("ref_name", refName),
 			zap.Error(err))
 		return plumbing.ZeroHash, fmt.Errorf("failed to resolve reference %s: %w", ref, err)
 	}
 
 	hash := reference.Hash()
-	gom.logger.Debug("Resolved reference",
-		zap.String("ref", ref),
-		zap.String("resolved_hash", hash.String()))
 
 	return hash, nil
 }
@@ -424,7 +417,6 @@ func (gom *GitObjectManager) ValidateFileChanges(ctx context.Context, changes []
 		}
 	}
 
-	gom.logger.Debug("File changes validation passed", zap.Int("change_count", len(changes)))
 	return nil
 }
 
@@ -434,7 +426,6 @@ func (gom *GitObjectManager) GetFileFromTree(ctx context.Context, tree *object.T
 	if err != nil {
 		// Check if it's a "file not found" error
 		if err == object.ErrFileNotFound {
-			gom.logger.Debug("File not found in tree", zap.String("path", path))
 			return nil, nil // Return nil without error for missing files
 		}
 		gom.logger.Error("Failed to get file from tree",
@@ -443,11 +434,24 @@ func (gom *GitObjectManager) GetFileFromTree(ctx context.Context, tree *object.T
 		return nil, fmt.Errorf("failed to get file %s from tree: %w", path, err)
 	}
 
-	gom.logger.Debug("Retrieved file from tree",
-		zap.String("path", path),
-		zap.String("hash", file.Hash.String()))
-
 	return file, nil
+}
+
+// GetTreeFromCommit gets a tree object from a commit hash
+func (gom *GitObjectManager) GetTreeFromCommit(ctx context.Context, repo *git.Repository, commitHash plumbing.Hash) (*object.Tree, error) {
+	// Get the commit object
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit object: %w", err)
+	}
+
+	// Get the tree from the commit
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tree from commit: %w", err)
+	}
+
+	return tree, nil
 }
 
 // CreateTreeFromChanges creates a new tree from a list of file changes
@@ -540,12 +544,6 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gi
 				result.CreatedFiles = append(result.CreatedFiles, change.Path)
 			}
 
-			gom.logger.Debug("Processed file operation",
-				zap.String("operation", string(change.Operation)),
-				zap.String("path", change.Path),
-				zap.String("blob_hash", blobHash.String()),
-				zap.Bool("is_update", isUpdate))
-
 		case FileOperationDelete:
 			// Check if file exists
 			if !treeBuilder.HasFile(change.Path) {
@@ -561,8 +559,6 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gi
 
 			result.DeletedFiles = append(result.DeletedFiles, change.Path)
 
-			gom.logger.Debug("Processed file deletion",
-				zap.String("path", change.Path))
 		}
 	}
 
@@ -573,12 +569,6 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gi
 	}
 
 	result.TreeHash = treeHash
-
-	gom.logger.Debug("Created new tree",
-		zap.String("tree_hash", treeHash.String()),
-		zap.Int("created_files", len(result.CreatedFiles)),
-		zap.Int("changed_files", len(result.ChangedFiles)),
-		zap.Int("deleted_files", len(result.DeletedFiles)))
 
 	return result, nil
 }
@@ -647,4 +637,37 @@ func (gom *GitObjectManager) CreateCommit(ctx context.Context, repo *git.Reposit
 		zap.Int("parent_count", len(commitInfo.Parents)))
 
 	return result, nil
+}
+
+// EnsureProperHEAD ensures HEAD points to a branch, not directly to a commit
+func (gom *GitObjectManager) EnsureProperHEAD(ctx context.Context, repo *gogit.Repository, branchName string) error {
+	// Check current HEAD state
+	headRef, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD: %w", err)
+	}
+
+	// If HEAD is already pointing to the correct branch, nothing to do
+	expectedTarget := plumbing.ReferenceName("refs/heads/" + branchName)
+	if headRef.Type() == plumbing.SymbolicReference && headRef.Target() == expectedTarget {
+		return nil
+	}
+
+	// Check if the target branch exists
+	branchRef, err := repo.Reference(expectedTarget, true)
+	if err != nil {
+		return fmt.Errorf("branch %s does not exist: %w", branchName, err)
+	}
+
+	// Update HEAD to point to the branch
+	newHeadRef := plumbing.NewSymbolicReference(plumbing.HEAD, branchRef.Name())
+	if err := repo.Storer.SetReference(newHeadRef); err != nil {
+		return fmt.Errorf("failed to update HEAD to branch %s: %w", branchName, err)
+	}
+
+	gom.logger.Info("Updated HEAD to point to branch",
+		zap.String("branch", branchName),
+		zap.String("previous_type", headRef.Type().String()))
+
+	return nil
 }

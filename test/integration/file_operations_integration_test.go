@@ -410,7 +410,7 @@ func TestFileOperationsAPI_UpdateFile(t *testing.T) {
 		assert.NotEmpty(t, dataMap["commit_hash"])
 		assert.Equal(t, "Update config.json with new information", dataMap["message"])
 		assert.Equal(t, "config.json", dataMap["file_path"])
-		assert.Equal(t, "create", dataMap["operation"]) // PUT operations are idempotent and return "create"
+		assert.Equal(t, "update", dataMap["operation"]) // PUT operations on existing files return "update"
 	})
 }
 
@@ -432,17 +432,21 @@ func TestFileOperationsAPI_DeleteFile(t *testing.T) {
 		resp := suite.makeRequest(t, "DELETE", "/repos/testowner/testrepo/files/README.md", deleteBody)
 		defer func() { _ = resp.Body.Close() }() // errcheck: test cleanup
 
-		// Due to repository isolation, file may not exist - 404 is correct behavior
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		// File deletion API returns 200 even if file doesn't exist (idempotent operation)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var response map[string]interface{}
 		err := json.NewDecoder(resp.Body).Decode(&response)
 		require.NoError(t, err)
 
-		// For 404, expect error response format
-		assert.False(t, response["success"].(bool))
-		assert.Contains(t, response, "error")
-		assert.Contains(t, response["error"], "not found")
+		// For successful deletion (even if file didn't exist), expect success response format
+		assert.True(t, response["success"].(bool))
+		assert.Contains(t, response, "data")
+
+		// Verify response structure
+		data := response["data"].(map[string]interface{})
+		assert.Equal(t, "delete", data["operation"])
+		assert.Contains(t, data["message"], "deleted successfully")
 	})
 }
 

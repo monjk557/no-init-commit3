@@ -310,12 +310,6 @@ func (h *SSHProtocolHandler) HandleSSHReceivePack(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Check permissions
-	if err := h.CheckSSHPermissions(r.Context(), sshReq); err != nil {
-		h.errorHandler.HandleError(w, r, err, "ssh_receive_pack")
-		return
-	}
-
 	// Ensure repository exists
 	repo, err := h.EnsureSSHRepository(r.Context(), sshReq)
 	if err != nil {
@@ -517,7 +511,7 @@ func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repo git.Reposito
 
 	if len(commits) > 0 {
 		// Write HEAD reference
-		headHash := commits[0].Hash
+		headHash := commits[0].Sha
 		refLine := fmt.Sprintf("%s HEAD\n", headHash)
 		pktLine := fmt.Sprintf("%04x%s", len(refLine)+4, refLine)
 

@@ -13,19 +13,13 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 )
 
 // TreeHandler handles Git tree REST API endpoints
 type TreeHandler struct {
 	pathConfig       *repository.PathConfig
 	permissionClient permissions.PermissionClient
-}
-
-// TreeEntry represents a tree entry in the JSON response
-type TreeEntryResponse struct {
-	Type string `json:"type"` // "tree" or "blob"
-	Name string `json:"name"` // Entry name
-	Path string `json:"path"` // Full path
 }
 
 // TreeRequestParams holds request parameters for tree endpoints
@@ -159,7 +153,7 @@ func (h *TreeHandler) validateTreeRequestAndPermissions(ctx context.Context, par
 }
 
 // getTreeStructure retrieves the tree structure using the Git repository interface
-func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref string) ([]TreeEntryResponse, error) {
+func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref string) (*responses.TreeEntriesResponse, error) {
 	// Open repository using the simple cache
 	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
@@ -174,7 +168,7 @@ func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref string
 	}
 
 	// Convert to response format
-	var responseEntries []TreeEntryResponse
+	var responseEntries []responses.TreeEntry
 	for _, entry := range entries {
 		// Convert type from git.EntryType to string expected by API
 		entryType := ""
@@ -191,14 +185,17 @@ func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref string
 			entryType = "blob"
 		}
 
-		responseEntries = append(responseEntries, TreeEntryResponse{
+		responseEntries = append(responseEntries, responses.TreeEntry{
 			Type: entryType,
 			Name: entry.Path, // In GetTree, Path contains just the name
 			Path: entry.Path, // For root level entries, name and path are the same
 		})
 	}
 
-	return responseEntries, nil
+	return &responses.TreeEntriesResponse{
+		Success: true,
+		Data:    responseEntries,
+	}, nil
 }
 
 // sendTreeJSONResponse sends a standardized JSON response for tree endpoints

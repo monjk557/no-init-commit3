@@ -28,6 +28,7 @@ type DiffHandler struct {
 
 // DiffResponse represents the response structure for diff endpoints
 type DiffResponse struct {
+	Success   bool         `json:"success"`
 	Base      string       `json:"base"`
 	Head      string       `json:"head"`
 	Files     []FileDiff   `json:"files"`
@@ -38,7 +39,8 @@ type DiffResponse struct {
 
 // SingleCommitDiffResponse represents the response structure for single commit diff endpoint
 type SingleCommitDiffResponse struct {
-	Commit *CommitMetadata `json:"commit"`
+	Success bool            `json:"success"`
+	Commit  *CommitMetadata `json:"commit"`
 	*DiffResponse
 }
 
@@ -120,9 +122,9 @@ func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate permissions and get repository path
-	repoPath, err := h.validateRequestAndPermissions(ctx, params)
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		handleDiffError(w, err, "invalid repository path: %w")
 		return
 	}
 
@@ -147,6 +149,7 @@ func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
 		response := &PaginatedDiffResponse{
+			Success: true,
 			DiffResponse: &DiffResponse{
 				Base:  diffResp.Base,
 				Head:  diffResp.Head,
@@ -210,6 +213,7 @@ func (h *DiffHandler) HandleBranchDiff(w http.ResponseWriter, r *http.Request) {
 		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
 		response := &PaginatedDiffResponse{
+			Success: true,
 			DiffResponse: &DiffResponse{
 				Base:  diffResp.Base,
 				Head:  diffResp.Head,
@@ -260,9 +264,9 @@ func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 	params.Head = head
 
 	// Validate permissions and get repository path
-	repoPath, err := h.validateRequestAndPermissions(ctx, params)
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		handleDiffError(w, fmt.Errorf("invalid repository path: %w", err), "invalid repository path: %w")
 		return
 	}
 
@@ -356,9 +360,9 @@ func (h *DiffHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate permissions and get repository path
-	repoPath, err := h.validateRequestAndPermissions(ctx, params)
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		handleDiffError(w, fmt.Errorf("invalid repository path: %w", err), "invalid repository path: %w")
 		return
 	}
 
@@ -454,10 +458,11 @@ func (h *DiffHandler) calculateCommitDiff(ctx context.Context, repoPath, base, h
 	}
 
 	return &DiffResponse{
-		Base:  base,
-		Head:  head,
-		Files: fileDiffs,
-		Stats: stats,
+		Success: true,
+		Base:    base,
+		Head:    head,
+		Files:   fileDiffs,
+		Stats:   stats,
 	}, nil
 }
 
@@ -513,6 +518,7 @@ func (h *DiffHandler) calculateSingleCommitDiff(ctx context.Context, repoPath, s
 	diffResp.Head = sha
 
 	return &SingleCommitDiffResponse{
+		Success:      true,
 		Commit:       commitMetadata,
 		DiffResponse: diffResp,
 	}, nil
@@ -844,6 +850,7 @@ func (h *DiffHandler) calculateBranchDiff(ctx context.Context, repoPath, baseBra
 	}
 
 	return &DiffResponse{
+		Success:   true,
 		Base:      baseBranch,
 		Head:      headBranch,
 		Files:     fileDiffs,
@@ -1037,10 +1044,11 @@ func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath,
 	stats.TotalDeletions = fileDiff.Deletions
 
 	return &DiffResponse{
-		Base:  base,
-		Head:  head,
-		Files: []FileDiff{fileDiff},
-		Stats: stats,
+		Success: true,
+		Base:    base,
+		Head:    head,
+		Files:   []FileDiff{fileDiff},
+		Stats:   stats,
 	}, nil
 }
 
@@ -1285,6 +1293,7 @@ type PaginationParams struct {
 
 // ErrorResponse represents a standardized error response
 type ErrorResponse struct {
+	Success bool   `json:"success"`
 	Error   string `json:"error"`
 	Code    string `json:"code,omitempty"`
 	Details string `json:"details,omitempty"`
@@ -1292,6 +1301,7 @@ type ErrorResponse struct {
 
 // PaginatedDiffResponse extends DiffResponse with pagination
 type PaginatedDiffResponse struct {
+	Success bool `json:"success"`
 	*DiffResponse
 	Pagination *PaginationParams `json:"pagination,omitempty"`
 }
@@ -1327,13 +1337,6 @@ func (h *DiffHandler) validateAndExtractParams(r *http.Request) (*RequestParams,
 // validateRequestAndPermissions performs common validation and permission checking
 func (h *DiffHandler) validateRequestAndPermissions(ctx context.Context, params *RequestParams) (string, error) {
 	// Check user permissions (read access for diff operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
-	if err != nil {
-		return "", fmt.Errorf("permission check failed: %w", err)
-	}
-	if !hasAccess {
-		return "", fmt.Errorf("access denied to repository")
-	}
 
 	// Get repository path and validate
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
@@ -1358,7 +1361,8 @@ func sendJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
 // sendErrorResponse sends a standardized error response
 func sendErrorResponse(w http.ResponseWriter, message string, statusCode int) {
 	errorResp := ErrorResponse{
-		Error: message,
+		Success: false,
+		Error:   message,
 	}
 	sendJSONResponse(w, errorResp, statusCode)
 }
