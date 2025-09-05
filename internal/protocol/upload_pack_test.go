@@ -319,7 +319,7 @@ func TestUploadPackHandler_writeReferences(t *testing.T) {
 		// Set up mock to return a commit
 		commits := []git.Commit{
 			{
-				Hash:    "abc123456789012345678901234567890123456",
+				Sha:     "abc123456789012345678901234567890123456",
 				Message: "Initial commit",
 			},
 		}

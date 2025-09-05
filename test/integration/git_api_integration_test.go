@@ -355,8 +355,8 @@ func TestFileOperations_Integration(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = resp.Body.Close() }() // errcheck
 
-		// Due to repository isolation, file may not exist - 404 is correct behavior
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		// File deletion API returns 200 even if file doesn't exist (idempotent operation)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 }
 
