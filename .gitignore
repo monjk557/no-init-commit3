@@ -24,7 +24,7 @@ go.work
 /build/
 
 # Configuration files (keep examples)
-config/config.yaml
+# config/config.yaml  # Commented out - needed for Docker build
 config/config.json
 !config/*.example
 !config/*.sample
