@@ -439,12 +439,12 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 		sshGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
 		{
 			// SSH-forwarded fetch operations
-			// POST /ssh/{owner}/{repo}/upload-pack
-			sshGroup.POST("/upload-pack", gin.WrapF(sshHandler.HandleSSHUploadPack))
+			// POST /ssh/{owner}/{repo}/git-upload-pack
+			sshGroup.POST("/git-upload-pack", gin.WrapF(sshHandler.HandleSSHUploadPack))
 
 			// SSH-forwarded push operations
-			// POST /ssh/{owner}/{repo}/receive-pack
-			sshGroup.POST("/receive-pack", gin.WrapF(sshHandler.HandleSSHReceivePack))
+			// POST /ssh/{owner}/{repo}/git-receive-pack
+			sshGroup.POST("/git-receive-pack", gin.WrapF(sshHandler.HandleSSHReceivePack))
 		}
 	}
 }
