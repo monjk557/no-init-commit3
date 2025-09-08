@@ -141,7 +141,7 @@ func (h *StreamingUploadPackHandler) HandleInfoRefsStreaming(w http.ResponseWrit
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Write service advertisement
-	_, _ = fmt.Fprintf(w, "001e# service=git-upload-pack\n")
+	_, _ = fmt.Fprintf(w, "001f# service=git-upload-pack\n")
 	_, _ = fmt.Fprintf(w, "0000") // flush packet
 
 	// Create Git streamer and stream references
