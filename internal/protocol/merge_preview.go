@@ -18,7 +18,6 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/collabops/git-executor/internal/schemas/common"
 )
@@ -26,7 +25,6 @@ import (
 // MergePreviewHandler handles REST API operations for Git merge preview operations
 type MergePreviewHandler struct {
 	pathConfig       *repository.PathConfig
-	permClient       permissions.PermissionClient
 	logger           *logging.Logger
 	errorMapper      *api.GitErrorMapper
 	objectManager    *git.GitObjectManager
@@ -34,12 +32,9 @@ type MergePreviewHandler struct {
 }
 
 // NewMergePreviewHandler creates a new merge preview handler
-func NewMergePreviewHandler(cfg *config.Config, permClient permissions.PermissionClient) (*MergePreviewHandler, error) {
+func NewMergePreviewHandler(cfg *config.Config) (*MergePreviewHandler, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
-	}
-	if permClient == nil {
-		return nil, fmt.Errorf("permission client cannot be nil")
 	}
 
 	logger, err := logging.NewLogger(cfg.Logging)
@@ -61,7 +56,6 @@ func NewMergePreviewHandler(cfg *config.Config, permClient permissions.Permissio
 
 	return &MergePreviewHandler{
 		pathConfig:       pathConfig,
-		permClient:       permClient,
 		logger:           logger,
 		errorMapper:      errorMapper,
 		objectManager:    objectManager,
