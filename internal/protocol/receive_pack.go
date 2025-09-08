@@ -123,7 +123,7 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Write service advertisement
-	_, _ = fmt.Fprintf(w, "001f# service=git-receive-pack\n")
+	_, _ = fmt.Fprintf(w, "0020# service=git-receive-pack\n")
 	_, _ = fmt.Fprintf(w, "0000") // flush packet
 
 	// Write repository references with capabilities

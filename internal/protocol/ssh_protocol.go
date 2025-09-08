@@ -273,6 +273,7 @@ func ParseSSHGitProtocolHeaders(r *http.Request) map[string]string {
 
 // HandleSSHUploadPack handles POST /ssh/upload-pack requests (SSH-forwarded git-upload-pack)
 func (h *SSHProtocolHandler) HandleSSHUploadPack(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("DEBUG: SSH HandleSSHUploadPack called for URL: %s\n", r.URL.Path)
 	// Validate SSH request
 	sshReq, err := h.ValidateSSHRequest(r, "git-upload-pack")
 	if err != nil {
@@ -327,8 +328,8 @@ func (h *SSHProtocolHandler) HandleSSHReceivePack(w http.ResponseWriter, r *http
 
 // processSSHUploadPack processes the SSH upload-pack operation (fetch)
 func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo git.Repository, opts *SSHStreamingOptions) {
-	// Set content type for SSH upload-pack
-	w.Header().Set("Content-Type", opts.ContentType)
+	// Set content type for SSH upload-pack (no service advertisement)
+	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 
 	// Create SSH protocol writer for streaming
 	writer := NewSSHProtocolWriter(w, opts.BufferSize)
@@ -434,11 +435,50 @@ func (h *SSHProtocolHandler) parseGitProtocolRequest(input io.ReadCloser) (map[s
 
 	if n > 0 {
 		content := string(buffer[:n])
-		// Parse the git protocol v2 command (e.g., "0014command=ls-refs\n0000")
-		if strings.Contains(content, "command=ls-refs") {
-			data["command"] = "ls-refs"
+		fmt.Printf("DEBUG: SSH received content: %q\n", content)
+
+		// Parse pkt-line format
+		// Example: "0032want 9b13bf533e90b50697bb5d466995991a637501e4 0000"
+		if len(content) >= 4 {
+			// Extract pkt-line length (first 4 characters)
+			lengthStr := content[:4]
+			fmt.Printf("DEBUG: SSH pkt-line length: %s\n", lengthStr)
+
+			// Parse length as hex
+			var length int
+			if _, err := fmt.Sscanf(lengthStr, "%x", &length); err == nil {
+				fmt.Printf("DEBUG: SSH parsed length: %d\n", length)
+
+				// Validate length to prevent slice bounds error
+				if length > 4 && length <= len(content) {
+					// Extract the actual data (skip the 4-byte length prefix)
+					pktData := content[4:length]
+					fmt.Printf("DEBUG: SSH pkt data: %q\n", pktData)
+
+					// Parse the command
+					if strings.Contains(pktData, "command=ls-refs") {
+						data["command"] = "ls-refs"
+					} else if strings.Contains(pktData, "want ") {
+						data["command"] = "upload-pack"
+						// Extract want hash
+						parts := strings.Fields(pktData)
+						for i, part := range parts {
+							if part == "want" && i+1 < len(parts) {
+								data["wants"] = parts[i+1]
+								fmt.Printf("DEBUG: SSH extracted want: %s\n", parts[i+1])
+								break
+							}
+						}
+					}
+				} else {
+					fmt.Printf("DEBUG: SSH invalid pkt-line length: %d (content length: %d)\n", length, len(content))
+				}
+			} else {
+				fmt.Printf("DEBUG: SSH failed to parse pkt-line length: %s\n", lengthStr)
+			}
+		} else {
+			fmt.Printf("DEBUG: SSH content too short: %d bytes\n", len(content))
 		}
-		// Add more command parsing as needed
 	}
 
 	return data, nil
@@ -461,8 +501,9 @@ func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, rep
 		return h.handleLsRefs(ctx, gitRepo, output)
 	}
 
-	// Handle other upload-pack commands as needed
-	return fmt.Errorf("unsupported upload-pack command")
+	// For SSH upload-pack, we need to handle want/have negotiation
+	// This is similar to HTTP upload-pack but without the HTTP-specific parts
+	return h.handleSSHWantHaveNegotiation(ctx, gitRepo, requestData, output)
 }
 
 // handleSSHReceivePackCommand handles git-receive-pack commands for SSH
@@ -490,6 +531,74 @@ func (h *SSHProtocolHandler) handleSSHReceivePackCommand(ctx context.Context, re
 	}
 
 	return output.Flush()
+}
+
+// handleSSHWantHaveNegotiation handles want/have negotiation for SSH upload-pack
+func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, repo git.Repository, requestData map[string]string, output *SSHProtocolWriter) error {
+	fmt.Printf("DEBUG: SSH handleSSHWantHaveNegotiation called with data: %+v\n", requestData)
+
+	// For SSH, we need to parse the want/have data from the request
+	// This is a simplified implementation - in production, you'd parse the full pkt-line format
+
+	// Check if we have want data
+	if wants, exists := requestData["wants"]; exists && wants != "" {
+		fmt.Printf("DEBUG: SSH processing wants: %s\n", wants)
+
+		// Parse wants (comma-separated hashes)
+		wantHashes := strings.Split(wants, ",")
+
+		// For each want, we need to send the commit and its history
+		for _, wantHash := range wantHashes {
+			wantHash = strings.TrimSpace(wantHash)
+			if wantHash == "" {
+				continue
+			}
+
+			fmt.Printf("DEBUG: SSH processing want hash: %s\n", wantHash)
+
+			// For SSH upload-pack, we need to send NAK (no common ancestor)
+			// This tells the client that we don't have any common commits
+			fmt.Printf("DEBUG: SSH sending NAK for want hash: %s\n", wantHash)
+
+			// Send NAK in pkt-line format
+			nakLine := "NAK\n"
+			pktLine := fmt.Sprintf("%04x%s", len(nakLine)+4, nakLine)
+
+			fmt.Printf("DEBUG: SSH writing pkt-line: %q\n", pktLine)
+
+			_, err := output.Write([]byte(pktLine))
+			if err != nil {
+				return err
+			}
+		}
+
+		// After NAK, we need to send a packfile
+		// For now, send an empty packfile (PACK header + trailer)
+		fmt.Printf("DEBUG: SSH sending empty packfile\n")
+
+		// PACK header: "PACK" + 4-byte version + 4-byte object count
+		packHeader := []byte("PACK\x00\x00\x00\x02\x00\x00\x00\x00")
+		_, err := output.Write(packHeader)
+		if err != nil {
+			return err
+		}
+
+		// Pack trailer: SHA-1 of the packfile
+		// For empty packfile, this is the SHA-1 of the header
+		packTrailer := []byte{0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09}
+		_, err = output.Write(packTrailer)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		fmt.Printf("DEBUG: SSH no wants found in request data\n")
+	}
+
+	// End with flush packet
+	fmt.Printf("DEBUG: SSH writing flush packet\n")
+	_, err := output.Write([]byte("0000"))
+	return err
 }
 
 // handleLsRefs handles the ls-refs command for SSH upload-pack

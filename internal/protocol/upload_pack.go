@@ -103,7 +103,7 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Write service advertisement
-	_, _ = fmt.Fprintf(w, "001e# service=git-upload-pack\n")
+	_, _ = fmt.Fprintf(w, "001f# service=git-upload-pack\n")
 	_, _ = fmt.Fprintf(w, "0000") // flush packet
 
 	// Get repository references using our git package
