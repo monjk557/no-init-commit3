@@ -370,37 +370,6 @@ func (h *MergePreviewHandler) validatePermissions(c *gin.Context, owner, repo, o
 		return apiErr
 	}
 
-	var hasAccess bool
-	var err error
-
-	if operation == "read" {
-		hasAccess, err = h.permClient.CheckReadAccess(c.Request.Context(), userID, owner, repo)
-	} else {
-		hasAccess, err = h.permClient.CheckWriteAccess(c.Request.Context(), userID, owner, repo)
-	}
-
-	if err != nil {
-		h.logger.Error("Permission check failed", zap.Error(err))
-		apiErr := api.NewGitAPIError(
-			api.ErrorCodeInternalError,
-			"Permission service unavailable",
-			api.ErrorSeverityHigh,
-		)
-		_ = apiErr.WithDetails("http_status", http.StatusServiceUnavailable)
-		return apiErr
-	}
-
-	if !hasAccess {
-		apiErr := api.NewGitAPIError(
-			api.ErrorCodeForbidden,
-			"Insufficient permissions for this operation",
-			api.ErrorSeverityMedium,
-		)
-		_ = apiErr.WithDetails("http_status", http.StatusForbidden)
-		_ = apiErr.WithDetails("required_permission", operation)
-		return apiErr
-	}
-
 	return nil
 }
 

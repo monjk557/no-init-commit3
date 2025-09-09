@@ -46,17 +46,11 @@ func TestNewMergePreviewHandler(t *testing.T) {
 		},
 	}
 
-	permClient := &mockPreviewPermissionClient{
-		readAccess:  true,
-		writeAccess: true,
-	}
-
-	handler, err := NewMergePreviewHandler(cfg, permClient)
+	handler, err := NewMergePreviewHandler(cfg)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, handler)
 	assert.NotNil(t, handler.pathConfig)
-	assert.NotNil(t, handler.permClient)
 	assert.NotNil(t, handler.logger)
 	assert.NotNil(t, handler.errorMapper)
 	assert.NotNil(t, handler.objectManager)
@@ -64,9 +58,8 @@ func TestNewMergePreviewHandler(t *testing.T) {
 }
 
 func TestNewMergePreviewHandler_NilConfig(t *testing.T) {
-	permClient := &mockPreviewPermissionClient{}
-
-	handler, err := NewMergePreviewHandler(nil, permClient)
+	
+	handler, err := NewMergePreviewHandler(nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, handler)
@@ -84,7 +77,7 @@ func TestNewMergePreviewHandler_NilPermissionClient(t *testing.T) {
 		},
 	}
 
-	handler, err := NewMergePreviewHandler(cfg, nil)
+	handler, err := NewMergePreviewHandler(cfg)
 
 	assert.Error(t, err)
 	assert.Nil(t, handler)
@@ -245,9 +238,9 @@ func TestMergePreviewHandler_ValidatePath(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	permClient := &mockPreviewPermissionClient{}
+	
 
-	handler, err := NewMergePreviewHandler(cfg, permClient)
+	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
 
 	tests := []struct {
@@ -305,9 +298,8 @@ func TestMergePreviewHandler_ValidateMergePreviewRequest(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	permClient := &mockPreviewPermissionClient{}
-
-	handler, err := NewMergePreviewHandler(cfg, permClient)
+	
+	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
 
 	tests := []struct {
@@ -434,9 +426,9 @@ func TestMergePreviewHandler_GenerateRecommendations(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	permClient := &mockPreviewPermissionClient{}
+	
 
-	handler, err := NewMergePreviewHandler(cfg, permClient)
+	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
 
 	tests := []struct {
@@ -523,9 +515,9 @@ func TestMergePreviewHandler_GenerateWarnings(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	permClient := &mockPreviewPermissionClient{}
+	
 
-	handler, err := NewMergePreviewHandler(cfg, permClient)
+	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
 
 	tests := []struct {
@@ -611,9 +603,8 @@ func TestMergePreviewHandler_CompareTreesBasic(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	permClient := &mockPreviewPermissionClient{}
-
-	handler, err := NewMergePreviewHandler(cfg, permClient)
+	
+	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
 
 	req := &MergePreviewRequest{

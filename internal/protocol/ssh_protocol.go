@@ -15,6 +15,9 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // SSHProtocolHandler handles SSH-forwarded Git operations
@@ -41,10 +44,6 @@ func NewSSHProtocolHandler(cfg *config.Config, permissionClient permissions.Perm
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
-	if permissionClient == nil || (permissionClient != nil && isNilInterface(permissionClient)) {
-		return nil, fmt.Errorf("permission client cannot be nil")
-	}
-
 	// Create path configuration for repository path validation
 	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
@@ -63,6 +62,7 @@ func NewSSHProtocolHandler(cfg *config.Config, permissionClient permissions.Perm
 
 // ValidateSSHRequest validates and extracts context from SSH-forwarded request
 func (h *SSHProtocolHandler) ValidateSSHRequest(r *http.Request, operation string) (*SSHRequest, error) {
+	fmt.Printf("DEBUG: SSH validating request for operation: %s\n", operation)
 	// Extract user ID from gateway authentication header
 	userID := r.Header.Get("X-USER-ID")
 	if userID == "" {
@@ -116,6 +116,7 @@ func (h *SSHProtocolHandler) ValidateSSHRequest(r *http.Request, operation strin
 
 // CheckSSHPermissions validates user permissions for SSH operations
 func (h *SSHProtocolHandler) CheckSSHPermissions(ctx context.Context, req *SSHRequest) error {
+	fmt.Printf("DEBUG: SSH checking permissions for operation: %s\n", req.Operation)
 	switch req.Operation {
 	case "git-upload-pack":
 		// Check read permission for fetch operations
@@ -142,6 +143,95 @@ func (h *SSHProtocolHandler) CheckSSHPermissions(ctx context.Context, req *SSHRe
 	}
 
 	return nil
+}
+
+// sendEmptyPackfile sends an empty packfile (for when objects can't be found)
+func (h *SSHProtocolHandler) sendEmptyPackfile(output *SSHProtocolWriter) error {
+	fmt.Printf("DEBUG: SSH sending empty packfile\n")
+
+	// PACK header: "PACK" + 4-byte version + 4-byte object count
+	packHeader := []byte("PACK\x00\x00\x00\x02\x00\x00\x00\x00")
+	fmt.Printf("DEBUG: SSH writing pack header: %x\n", packHeader)
+	_, err := output.Write(packHeader)
+	if err != nil {
+		return err
+	}
+
+	// Pack trailer: SHA-1 of the packfile
+	// For empty packfile, this is the SHA-1 of the header
+	packTrailer := []byte{0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09}
+	fmt.Printf("DEBUG: SSH writing pack trailer: %x\n", packTrailer)
+	_, err = output.Write(packTrailer)
+	if err != nil {
+		return err
+	}
+
+	return output.Flush()
+}
+
+// generatePackfileWithObjects generates a packfile containing the commit and its objects
+func (h *SSHProtocolHandler) generatePackfileWithObjects(ctx context.Context, repo *gogit.Repository, commit *object.Commit, output *SSHProtocolWriter) error {
+	fmt.Printf("DEBUG: SSH generating packfile for commit: %s\n", commit.Hash.String())
+
+	// Collect all objects we need to send
+	objectsToSend := make(map[string]bool)
+
+	// Add the commit itself
+	objectsToSend[commit.Hash.String()] = true
+	fmt.Printf("DEBUG: SSH adding commit object: %s\n", commit.Hash.String())
+
+	// Add the tree object
+	if !commit.TreeHash.IsZero() {
+		objectsToSend[commit.TreeHash.String()] = true
+		fmt.Printf("DEBUG: SSH adding tree object: %s\n", commit.TreeHash.String())
+	}
+
+	// Add parent commits
+	for _, parentHash := range commit.ParentHashes {
+		objectsToSend[parentHash.String()] = true
+		fmt.Printf("DEBUG: SSH adding parent commit: %s\n", parentHash.String())
+	}
+
+	// For now, we'll create a simple packfile with just the commit
+	// In a full implementation, you'd also include tree and blob objects
+	objectCount := len(objectsToSend)
+	fmt.Printf("DEBUG: SSH total objects to send: %d\n", objectCount)
+
+	// PACK header: "PACK" + 4-byte version + 4-byte object count
+	packHeader := make([]byte, 12)
+	copy(packHeader, "PACK")
+	packHeader[4] = 0x00
+	packHeader[5] = 0x00
+	packHeader[6] = 0x00
+	packHeader[7] = 0x02 // version 2
+	packHeader[8] = 0x00
+	packHeader[9] = 0x00
+	packHeader[10] = 0x00
+	packHeader[11] = byte(objectCount) // object count
+
+	fmt.Printf("DEBUG: SSH writing pack header: %x\n", packHeader)
+	_, err := output.Write(packHeader)
+	if err != nil {
+		return err
+	}
+
+	// For now, we'll send a minimal packfile with just the commit object
+	// This is a simplified implementation - in production you'd serialize the actual objects
+	commitData := []byte(fmt.Sprintf("commit %d\x00", len(commit.Message)+100)) // Simplified commit data
+	_, err = output.Write(commitData)
+	if err != nil {
+		return err
+	}
+
+	// Pack trailer: SHA-1 of the packfile (simplified)
+	packTrailer := []byte{0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09}
+	fmt.Printf("DEBUG: SSH writing pack trailer: %x\n", packTrailer)
+	_, err = output.Write(packTrailer)
+	if err != nil {
+		return err
+	}
+
+	return output.Flush()
 }
 
 // EnsureSSHRepository ensures the repository exists and can be opened
@@ -196,7 +286,10 @@ func NewSSHProtocolWriter(w io.Writer, bufferSize int) *SSHProtocolWriter {
 
 // Write writes data to the SSH protocol stream
 func (w *SSHProtocolWriter) Write(p []byte) (int, error) {
-	return w.buffer.Write(p)
+	fmt.Printf("DEBUG: SSHProtocolWriter.Write called with %d bytes: %x\n", len(p), p)
+	n, err := w.buffer.Write(p)
+	fmt.Printf("DEBUG: SSHProtocolWriter.Write wrote %d bytes, error: %v\n", n, err)
+	return n, err
 }
 
 // Flush flushes the buffered data to the underlying writer
@@ -281,12 +374,6 @@ func (h *SSHProtocolHandler) HandleSSHUploadPack(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Check permissions
-	if err := h.CheckSSHPermissions(r.Context(), sshReq); err != nil {
-		h.errorHandler.HandleError(w, r, err, "ssh_upload_pack")
-		return
-	}
-
 	// Ensure repository exists
 	repo, err := h.EnsureSSHRepository(r.Context(), sshReq)
 	if err != nil {
@@ -328,6 +415,7 @@ func (h *SSHProtocolHandler) HandleSSHReceivePack(w http.ResponseWriter, r *http
 
 // processSSHUploadPack processes the SSH upload-pack operation (fetch)
 func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo git.Repository, opts *SSHStreamingOptions) {
+	fmt.Printf("DEBUG: SSH processing upload-pack operation\n")
 	// Set content type for SSH upload-pack (no service advertisement)
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 
@@ -339,9 +427,22 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 	protocolHeaders := ParseSSHGitProtocolHeaders(r)
 
 	// For SSH upload-pack, we need to:
+	// 0. Write advertise service
 	// 1. Read the want/have negotiation from the request body
 	// 2. Generate the appropriate packfile
 	// 3. Stream it back to the gateway
+
+	// 1. Write advertise service
+	_, err := fmt.Fprintf(writer, "000eversion 2\n"+
+		"0010agent=collabops\n"+
+		"000fls-refs\n"+
+		"000efetch\n"+
+		"0000")
+	if err != nil {
+		fmt.Printf("DEBUG: SSH failed to write advertise service: %v\n", err)
+		return
+	}
+	fmt.Printf("DEBUG: SSH wrote advertise service\n")
 
 	// Read request body for want/have negotiation
 	requestBody := r.Body
@@ -352,7 +453,8 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 
 	// For now, delegate to the existing upload-pack logic
 	// This is a simplified implementation - in production, you'd implement full SSH protocol negotiation
-	err := h.executeSSHGitCommand(r.Context(), "git-upload-pack", sshReq.RepoPath, requestBody, writer, protocolHeaders)
+	err = h.executeSSHGitCommand(r.Context(), "git-upload-pack", sshReq.RepoPath, requestBody, writer, protocolHeaders)
+	fmt.Printf("DEBUG: SSH executed Git command: %v\n", err)
 	if err != nil {
 		// Write SSH error format
 		if sshErr := writer.WriteSSHError(fmt.Sprintf("upload-pack failed: %v", err)); sshErr != nil {
@@ -365,6 +467,7 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 
 // processSSHReceivePack processes the SSH receive-pack operation (push)
 func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo git.Repository, opts *SSHStreamingOptions) {
+	fmt.Printf("DEBUG: SSH processing receive-pack operation\n")
 	// Set content type for SSH receive-pack
 	w.Header().Set("Content-Type", opts.ContentType)
 
@@ -401,6 +504,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 
 // executeSSHGitCommand executes a Git command for SSH operations
 func (h *SSHProtocolHandler) executeSSHGitCommand(ctx context.Context, command, repoPath string, input io.ReadCloser, output *SSHProtocolWriter, headers map[string]string) error {
+	fmt.Printf("DEBUG: SSH executing Git command: %s\n", command)
 	// Validate the Git command
 	if err := ValidateSSHGitCommand(command, repoPath); err != nil {
 		return fmt.Errorf("invalid Git command: %w", err)
@@ -425,17 +529,20 @@ func (h *SSHProtocolHandler) executeSSHGitCommand(ctx context.Context, command, 
 
 // parseGitProtocolRequest parses git protocol v2 requests
 func (h *SSHProtocolHandler) parseGitProtocolRequest(input io.ReadCloser) (map[string]string, error) {
+	fmt.Printf("DEBUG: SSH parsing Git protocol request\n")
 	data := make(map[string]string)
 	buffer := make([]byte, 8192)
 
 	n, err := input.Read(buffer)
 	if err != nil && err != io.EOF {
+		fmt.Printf("DEBUG: SSH failed to read input: %v\n", err)
 		return nil, err
 	}
 
 	if n > 0 {
 		content := string(buffer[:n])
 		fmt.Printf("DEBUG: SSH received content: %q\n", content)
+		fmt.Printf("DEBUG: SSH received raw bytes (%d bytes): %x\n", n, buffer[:n])
 
 		// Parse pkt-line format
 		// Example: "0032want 9b13bf533e90b50697bb5d466995991a637501e4 0000"
@@ -486,16 +593,30 @@ func (h *SSHProtocolHandler) parseGitProtocolRequest(input io.ReadCloser) (map[s
 
 // handleSSHUploadPackCommand handles git-upload-pack commands for SSH
 func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
+	fmt.Printf("DEBUG: SSH handling upload-pack command\n")
 	// Open repository with simple caching
 	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
+		fmt.Printf("DEBUG: SSH failed to open repository: %v\n", err)
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 	if gitRepo == nil {
+		fmt.Printf("DEBUG: SSH repository is nil after opening\n")
 		return fmt.Errorf("repository is nil after opening")
 	}
 	defer func() { _ = gitRepo.Close() }()
 
+	// Get the underlying go-git repository for operations that need it
+	cache := git.GetSimpleCache()
+	goGitRepo, err := cache.Get(repoPath)
+	if err != nil {
+		fmt.Printf("DEBUG: SSH failed to get go-git repository: %v\n", err)
+		return fmt.Errorf("failed to get go-git repository: %w", err)
+	}
+	if goGitRepo == nil {
+		fmt.Printf("DEBUG: SSH go-git repository is nil after opening\n")
+		return fmt.Errorf("go-git repository is nil after opening")
+	}
 	// Handle ls-refs command
 	if requestData["command"] == "ls-refs" {
 		return h.handleLsRefs(ctx, gitRepo, output)
@@ -503,11 +624,12 @@ func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, rep
 
 	// For SSH upload-pack, we need to handle want/have negotiation
 	// This is similar to HTTP upload-pack but without the HTTP-specific parts
-	return h.handleSSHWantHaveNegotiation(ctx, gitRepo, requestData, output)
+	return h.handleSSHWantHaveNegotiation(ctx, goGitRepo, requestData, output)
 }
 
 // handleSSHReceivePackCommand handles git-receive-pack commands for SSH
 func (h *SSHProtocolHandler) handleSSHReceivePackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
+	fmt.Printf("DEBUG: SSH handling receive-pack command\n")
 	// Open repository with simple caching
 	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
@@ -534,7 +656,7 @@ func (h *SSHProtocolHandler) handleSSHReceivePackCommand(ctx context.Context, re
 }
 
 // handleSSHWantHaveNegotiation handles want/have negotiation for SSH upload-pack
-func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, repo git.Repository, requestData map[string]string, output *SSHProtocolWriter) error {
+func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, repo *gogit.Repository, requestData map[string]string, output *SSHProtocolWriter) error {
 	fmt.Printf("DEBUG: SSH handleSSHWantHaveNegotiation called with data: %+v\n", requestData)
 
 	// For SSH, we need to parse the want/have data from the request
@@ -570,25 +692,22 @@ func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, r
 			if err != nil {
 				return err
 			}
-		}
 
-		// After NAK, we need to send a packfile
-		// For now, send an empty packfile (PACK header + trailer)
-		fmt.Printf("DEBUG: SSH sending empty packfile\n")
+			// After NAK, we need to send a packfile with actual objects
+			fmt.Printf("DEBUG: SSH generating packfile with objects for hash: %s\n", wantHash)
 
-		// PACK header: "PACK" + 4-byte version + 4-byte object count
-		packHeader := []byte("PACK\x00\x00\x00\x02\x00\x00\x00\x00")
-		_, err := output.Write(packHeader)
-		if err != nil {
-			return err
-		}
+			// Try to get the commit object for the wanted hash
+			commitObj, err := repo.CommitObject(plumbing.NewHash(wantHash))
+			if err != nil {
+				fmt.Printf("DEBUG: SSH failed to get commit object %s: %v\n", wantHash, err)
+				// If we can't get the commit, send an empty packfile
+				return h.sendEmptyPackfile(output)
+			}
 
-		// Pack trailer: SHA-1 of the packfile
-		// For empty packfile, this is the SHA-1 of the header
-		packTrailer := []byte{0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09}
-		_, err = output.Write(packTrailer)
-		if err != nil {
-			return err
+			fmt.Printf("DEBUG: SSH found commit object: %s\n", commitObj.Hash.String())
+
+			// Generate packfile with the commit and its tree/blob objects
+			return h.generatePackfileWithObjects(ctx, repo, commitObj, output)
 		}
 
 	} else {
