@@ -129,7 +129,7 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 	mergeOpsHandler, err := protocol.NewMergeOperationsHandler(cfg, permClient)
 	require.NoError(t, err)
 
-	mergePreviewHandler, err := protocol.NewMergePreviewHandler(cfg, permClient)
+	mergePreviewHandler, err := protocol.NewMergePreviewHandler(cfg)
 	require.NoError(t, err)
 
 	// Repository group endpoints
