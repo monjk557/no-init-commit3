@@ -22,6 +22,7 @@ type Config struct {
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
 	Port            int           `mapstructure:"port" validate:"required,min=1,max=65535"`
+	TCPGitPort      int           `mapstructure:"tcp_git_port" validate:"min=1,max=65535"`
 	BasePath        string        `mapstructure:"base_path" validate:"required"`
 	Host            string        `mapstructure:"host"`
 	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
@@ -139,6 +140,7 @@ func Load(configPath string) (*Config, error) {
 func setDefaults() {
 	// Server defaults
 	viper.SetDefault("server.port", 5001)
+	viper.SetDefault("server.tcp_git_port", 5222)
 	viper.SetDefault("server.base_path", "/repos")
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.read_timeout", "30s")

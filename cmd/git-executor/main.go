@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
@@ -45,15 +48,50 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Create and start server
+	// Create HTTP server
 	srv, err := server.New(cfg)
 	if err != nil {
 		logger.Error("Failed to create server", zap.Error(err))
 		os.Exit(1)
 	}
 
-	if err := srv.Start(); err != nil {
-		logger.Error("Server failed to start", zap.Error(err))
+	// Create TCP server
+	tcpSrv, err := server.NewDuplexTCPServer(cfg)
+	if err != nil {
+		logger.Error("Failed to create TCP server", zap.Error(err))
 		os.Exit(1)
 	}
+
+	// Start HTTP server in goroutine
+	go func() {
+		if err := srv.Start(); err != nil {
+			logger.Error("HTTP server failed to start", zap.Error(err))
+			os.Exit(1)
+		}
+	}()
+
+	// Start TCP server in goroutine
+	go func() {
+		if err := tcpSrv.Start(); err != nil {
+			logger.Error("TCP server failed to start", zap.Error(err))
+			os.Exit(1)
+		}
+	}()
+
+	// Wait for signals to shutdown both servers
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Info("Received shutdown signal, shutting down gracefully")
+
+	// Shutdown both servers
+	ctx := context.Background()
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Error("Failed to shutdown HTTP server", zap.Error(err))
+	}
+	if err := tcpSrv.Stop(); err != nil {
+		logger.Error("Failed to shutdown TCP server", zap.Error(err))
+	}
+
 }

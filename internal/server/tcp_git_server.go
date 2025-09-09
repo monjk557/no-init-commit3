@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repository"
@@ -21,6 +22,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"go.uber.org/zap"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -51,6 +53,7 @@ type DuplexTCPServer struct {
 	listener         net.Listener
 	connections      map[net.Conn]*DuplexConnection
 	mu               sync.RWMutex
+	logger           *logging.Logger
 }
 
 // DuplexConnection represents a bidirectional connection
@@ -71,37 +74,58 @@ func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 		return nil, fmt.Errorf("failed to create permission client: %w", err)
 	}
 
+	// Initialize logger
+	logger, err := logging.NewLogger(config.Logging)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %w", err)
+	}
+
 	return &DuplexTCPServer{
 		config:           config,
 		permissionClient: permClient,
 		connections:      make(map[net.Conn]*DuplexConnection),
+		logger:           logger,
 	}, nil
 }
 
-// Start starts the TCP server on port 22
+// Start starts the TCP server on configured port
 func (s *DuplexTCPServer) Start() error {
-	listener, err := net.Listen("tcp", ":22")
+	port := s.config.Server.TCPGitPort
+	if port == 0 {
+		port = 5222 // fallback to default
+	}
+
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		return fmt.Errorf("failed to listen on port 22: %w", err)
+		return fmt.Errorf("failed to listen on port %d: %w", port, err)
 	}
 
 	s.listener = listener
-	fmt.Printf("🚀 Duplex TCP Server started on port 22\n")
 
-	// Start connection cleanup goroutine
-	go s.cleanupConnections()
+	// Start TCP server in a goroutine
+	go func() {
+		s.logger.Info("TCP Git Server starting",
+			zap.Int("port", port),
+			zap.String("address", fmt.Sprintf(":%d", port)))
 
-	// Accept connections
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Printf("❌ Failed to accept connection: %v\n", err)
-			continue
+		// Start connection cleanup goroutine
+		go s.cleanupConnections()
+
+		// Accept connections
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				s.logger.Error("Failed to accept connection", zap.Error(err))
+				continue
+			}
+
+			s.logger.Info("New TCP connection accepted",
+				zap.String("remote_addr", conn.RemoteAddr().String()))
+			go s.handleConnection(conn)
 		}
+	}()
 
-		fmt.Printf("🔌 New connection from: %s\n", conn.RemoteAddr())
-		go s.handleConnection(conn)
-	}
+	return nil
 }
 
 // Stop stops the TCP server
@@ -134,12 +158,15 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 		s.mu.Lock()
 		delete(s.connections, conn)
 		s.mu.Unlock()
-		fmt.Printf("🔌 Connection closed: %s\n", conn.RemoteAddr())
+		s.logger.Info("TCP connection closed",
+			zap.String("remote_addr", conn.RemoteAddr().String()))
 	}()
 
 	// Handle Git protocol negotiation
 	if err := s.handleGitProtocol(duplexConn); err != nil {
-		fmt.Printf("❌ Git protocol error: %v\n", err)
+		s.logger.Error("Git protocol error",
+			zap.String("remote_addr", conn.RemoteAddr().String()),
+			zap.Error(err))
 		return
 	}
 }
@@ -153,7 +180,9 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 	}
 
 	line = strings.TrimSpace(line)
-	fmt.Printf("📨 Received Git command: %s\n", line)
+	s.logger.Info("Received Git command",
+		zap.String("remote_addr", conn.conn.RemoteAddr().String()),
+		zap.String("command", line))
 
 	// Parse Git command (e.g., "git-upload-pack 'owner/repo.git'")
 	parts := strings.Fields(line)

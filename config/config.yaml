@@ -3,7 +3,8 @@
 
 # HTTP Server Configuration
 server:
-  port: 5001
+  port: 5080
+  tcp_git_port: 5222
   host: "0.0.0.0"
   base_path: "/"
   read_timeout: "60s"
