@@ -58,7 +58,7 @@ func TestNewMergePreviewHandler(t *testing.T) {
 }
 
 func TestNewMergePreviewHandler_NilConfig(t *testing.T) {
-	
+
 	handler, err := NewMergePreviewHandler(nil)
 
 	assert.Error(t, err)
@@ -238,7 +238,6 @@ func TestMergePreviewHandler_ValidatePath(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	
 
 	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
@@ -298,7 +297,7 @@ func TestMergePreviewHandler_ValidateMergePreviewRequest(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	
+
 	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
 
@@ -426,7 +425,6 @@ func TestMergePreviewHandler_GenerateRecommendations(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	
 
 	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
@@ -515,7 +513,6 @@ func TestMergePreviewHandler_GenerateWarnings(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	
 
 	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
@@ -603,7 +600,7 @@ func TestMergePreviewHandler_CompareTreesBasic(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
 		Git:     config.GitConfig{RepoRoot: "/test"},
 	}
-	
+
 	handler, err := NewMergePreviewHandler(cfg)
 	assert.NoError(t, err)
 
