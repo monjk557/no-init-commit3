@@ -15,7 +15,6 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/gin-gonic/gin"
@@ -92,16 +91,8 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	// Note: Simple cache initializes itself automatically on first use
 
-	// Create permission client
-	permConfig := permissions.DefaultConfig()
-	permConfig.APIServiceURL = "http://localhost:8082" // Use mock permission service for testing
-	permClient, err := permissions.NewPermissionClient(permConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create permission client: %w", err)
-	}
-
-	// Initialize observability manager
-	obsManager, err := observability.NewManager(cfg, permClient, "1.0.0")
+	// Initialize observability manager (without permission client)
+	obsManager, err := observability.NewManager(cfg, nil, "1.0.0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create observability manager: %w", err)
 	}
