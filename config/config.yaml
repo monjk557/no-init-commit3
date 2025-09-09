@@ -34,3 +34,15 @@ log:
   format: "json"
   output: "stdout"
   development: false
+
+# Observability Configuration
+observability:
+  tracing:
+    enabled: false
+    endpoint: ""
+    service_name: "collabops-git-executor"
+    service_version: "1.0.0"
+  metrics:
+    enabled: false
+    endpoint: ""
+    port: 9090

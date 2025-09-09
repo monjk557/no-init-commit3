@@ -11,11 +11,12 @@ import (
 
 // Config represents the complete application configuration
 type Config struct {
-	Server  ServerConfig  `mapstructure:"server" validate:"required"`
-	Git     GitConfig     `mapstructure:"git" validate:"required"`
-	JWT     JWTConfig     `mapstructure:"jwt" validate:"required"`
-	Logging LoggingConfig `mapstructure:"logging"`
-	mu      sync.RWMutex
+	Server        ServerConfig        `mapstructure:"server" validate:"required"`
+	Git           GitConfig           `mapstructure:"git" validate:"required"`
+	JWT           JWTConfig           `mapstructure:"jwt" validate:"required"`
+	Logging       LoggingConfig       `mapstructure:"logging"`
+	Observability ObservabilityConfig `mapstructure:"observability"`
+	mu            sync.RWMutex
 }
 
 // ServerConfig holds HTTP server configuration
@@ -53,6 +54,27 @@ type LoggingConfig struct {
 	Format      string `mapstructure:"format"`
 	Output      string `mapstructure:"output"`
 	Development bool   `mapstructure:"development"`
+}
+
+// ObservabilityConfig holds observability configuration
+type ObservabilityConfig struct {
+	Tracing TracingConfig `mapstructure:"tracing"`
+	Metrics MetricsConfig `mapstructure:"metrics"`
+}
+
+// TracingConfig holds tracing configuration
+type TracingConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	Endpoint       string `mapstructure:"endpoint"`
+	ServiceName    string `mapstructure:"service_name"`
+	ServiceVersion string `mapstructure:"service_version"`
+}
+
+// MetricsConfig holds metrics configuration
+type MetricsConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	Endpoint string `mapstructure:"endpoint"`
+	Port     int    `mapstructure:"port"`
 }
 
 // PermissionsConfig holds permission service configuration
@@ -144,6 +166,15 @@ func setDefaults() {
 	viper.SetDefault("logging.format", "json")
 	viper.SetDefault("logging.output", "stdout")
 	viper.SetDefault("logging.development", false)
+
+	// Observability defaults
+	viper.SetDefault("observability.tracing.enabled", false)
+	viper.SetDefault("observability.tracing.endpoint", "")
+	viper.SetDefault("observability.tracing.service_name", "collabops-git-executor")
+	viper.SetDefault("observability.tracing.service_version", "1.0.0")
+	viper.SetDefault("observability.metrics.enabled", false)
+	viper.SetDefault("observability.metrics.endpoint", "")
+	viper.SetDefault("observability.metrics.port", 9090)
 }
 
 // validate performs configuration validation
@@ -260,6 +291,13 @@ func (c *Config) GetLogging() LoggingConfig {
 	return c.Logging
 }
 
+// GetObservability returns a copy of the observability configuration (thread-safe)
+func (c *Config) GetObservability() ObservabilityConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Observability
+}
+
 // Reload reloads the configuration from file (thread-safe)
 func (c *Config) Reload() error {
 	c.mu.Lock()
@@ -286,6 +324,7 @@ func (c *Config) Reload() error {
 	c.Git = newConfig.Git
 	c.JWT = newConfig.JWT
 	c.Logging = newConfig.Logging
+	c.Observability = newConfig.Observability
 
 	return nil
 }
