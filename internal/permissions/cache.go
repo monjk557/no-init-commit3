@@ -1,3 +1,5 @@
+// permissions 패키지는 사용자 권한 검증과 캐싱 기능을 제공합니다.
+// 권한 결과 캐싱, 서킷 브레이커, 외부 권한 서비스 클라이언트를 포함합니다.
 package permissions
 
 import (
@@ -5,15 +7,15 @@ import (
 	"time"
 )
 
-// PermissionCache provides thread-safe caching of permission check results.
-// It uses sync.Map for concurrent access and includes TTL-based expiration.
+// PermissionCache는 권한 검사 결과의 스레드 안전한 캐싱을 제공합니다.
+// 동시 액세스를 위해 sync.Map을 사용하고 TTL 기반 만료을 포함합니다.
 type PermissionCache struct {
 	cache sync.Map
 	ttl   time.Duration
 	// We could add a cleanup goroutine here in the future for automatic expiration
 }
 
-// NewPermissionCache creates a new permission cache with the specified TTL.
+// NewPermissionCache는 지정된 TTL로 새로운 권한 캐시를 생성합니다.
 func NewPermissionCache(ttl time.Duration) *PermissionCache {
 	return &PermissionCache{
 		cache: sync.Map{},
@@ -21,8 +23,8 @@ func NewPermissionCache(ttl time.Duration) *PermissionCache {
 	}
 }
 
-// Get retrieves a permission result from the cache.
-// Returns nil if the key doesn't exist.
+// Get은 캐시에서 권한 결과를 가져옵니다.
+// 키가 존재하지 않으면 nil을 반환합니다.
 func (pc *PermissionCache) Get(key string) *PermissionResult {
 	value, exists := pc.cache.Load(key)
 	if !exists {
@@ -64,8 +66,8 @@ func (pc *PermissionCache) Close() {
 	// Future: Stop any background cleanup goroutines
 }
 
-// CleanupExpired removes expired entries from the cache.
-// This is a manual cleanup method that can be called periodically.
+// CleanupExpired는 캐시에서 만료된 항목을 제거합니다.
+// 주기적으로 호출할 수 있는 수동 정리 메소드입니다.
 func (pc *PermissionCache) CleanupExpired() {
 	now := time.Now()
 	pc.cache.Range(func(key, value interface{}) bool {

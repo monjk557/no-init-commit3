@@ -1,3 +1,4 @@
+// Git 프로토콜의 공통 유틸리티 함수들
 package protocol
 
 import (
@@ -13,18 +14,18 @@ var (
 	ginTestModeOnce sync.Once
 )
 
-// ensureGinTestMode safely sets Gin to test mode only once
+// ensureGinTestMode - Gin을 테스트 모드로 안전하게 한 번만 설정
 func ensureGinTestMode() {
 	ginTestModeOnce.Do(func() {
 		gin.SetMode(gin.TestMode)
 	})
 }
 
-// GinContextKey for storing Gin context in request context
+// GinContextKey - 요청 컨텍스트에 Gin 컨텍스트를 저장하기 위한 키
 type GinContextKey struct{}
 
-// URLParam extracts URL parameters from Gin context stored in request context
-// Pure Gin implementation - no Chi compatibility needed
+// URLParam - 요청 컨텍스트에 저장된 Gin 컨텍스트에서 URL 파라미터 추출
+// 순수 Gin 구현 (Chi 호환성 불필요)
 func URLParam(r *http.Request, key string) string {
 	// Extract Gin context from request context
 	if ginCtx := r.Context().Value(GinContextKey{}); ginCtx != nil {
@@ -36,8 +37,8 @@ func URLParam(r *http.Request, key string) string {
 	return ""
 }
 
-// SetupTestRequestWithGinParams creates a test request with Gin context and URL parameters
-// This replaces Chi context setup in tests with pure Gin approach
+// SetupTestRequestWithGinParams - Gin 컨텍스트와 URL 파라미터로 테스트 요청 생성
+// 테스트에서 Chi 컨텍스트 설정을 순수 Gin 방식으로 대체
 func SetupTestRequestWithGinParams(method, url string, params map[string]string) *http.Request {
 	req := httptest.NewRequest(method, url, nil)
 

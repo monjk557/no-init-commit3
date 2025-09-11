@@ -1,51 +1,34 @@
-// Package repository provides secure path management for Git repositories.
+// repository 패키지는 Git 저장소의 안전한 경로 관리를 제공합니다.
 //
-// This package implements a comprehensive repository path management system
-// with multi-layered security validation to prevent path traversal attacks,
-// invalid repository access, and unauthorized filesystem operations.
+// 이 패키지는 경로 트래버설 공격, 잘못된 저장소 접근, 무단 파일시스템 작업을 방지하는
+// 다층 보안 검증을 통해 포괄적인 저장소 경로 관리 시스템을 구현합니다.
 //
-// Key Features:
-//   - Secure path generation and validation
-//   - Git repository structure verification
-//   - Cross-platform compatibility
-//   - Thread-safe operations
-//   - Comprehensive error handling
+// 주요 기능:
+//   - 안전한 경로 생성 및 검증
+//   - Git 저장소 구조 검증
+//   - 크로스 플랫폼 호환성
+//   - 스레드 안전 작업
+//   - 포괄적인 에러 처리
 //
-// Basic Usage:
+// 기본 사용법:
 //
-//	// Create configuration
+//	// 설정 생성
 //	config, err := repository.NewPathConfig("/var/lib/git/repos")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //
-//	// Generate and validate repository path
+//	// 저장소 경로 생성 및 검증
 //	path, err := repository.GetRepoPath(config, "user", "project")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //
-//	// Verify repository exists
+//	// 저장소 존재 확인
 //	err = repository.EnsureRepoExists(config, path)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//
-// Thread Safety:
-//
-// All functions in this package are thread-safe and can be used concurrently.
-// The PathConfig struct is immutable after creation, making it safe for
-// concurrent access across multiple goroutines.
-//
-// Security:
-//
-// This package implements comprehensive security measures including:
-//   - Path traversal prevention (../ attacks)
-//   - Absolute path injection prevention
-//   - Invalid character filtering
-//   - Windows reserved name validation
-//   - Repository boundary enforcement
-//   - Git structure verification
 package repository
 
 import (
@@ -58,7 +41,7 @@ import (
 
 // Custom error types for better error handling and classification
 
-// PathError represents path-related errors with additional context
+// PathError는 추가 컨텍스트와 함께 경로 관련 에러를 나타냅니다.
 type PathError struct {
 	Op   string // Operation that caused the error (e.g., "validate", "generate", "check")
 	Path string // The path that caused the error
@@ -76,7 +59,7 @@ func (e *PathError) Unwrap() error {
 	return e.Err
 }
 
-// ValidationError represents validation-specific errors
+// ValidationError는 검증 관련 에러를 나타냅니다.
 type ValidationError struct {
 	Component string // Component being validated (e.g., "owner", "repo", "path")
 	Value     string // The value that failed validation
@@ -90,7 +73,7 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("validation failed for %s: %s", e.Component, e.Reason)
 }
 
-// RepositoryError represents repository structure-related errors
+// RepositoryError는 저장소 구조 관련 에러를 나타냅니다.
 type RepositoryError struct {
 	Path   string // Repository path
 	Type   string // Type of repository error (e.g., "not_found", "invalid_structure", "permission_denied")
@@ -183,13 +166,13 @@ const (
 	PathSeparator = "/"
 )
 
-// PathConfig holds configuration for repository path management
+// PathConfig는 저장소 경로 관리를 위한 설정을 담는 구조체입니다.
 type PathConfig struct {
 	// RepoRoot is the base directory where all repositories are stored
 	RepoRoot string
 }
 
-// NewPathConfig creates a new PathConfig with validation
+// NewPathConfig는 검증을 통해 새로운 PathConfig를 생성합니다.
 func NewPathConfig(repoRoot string) (*PathConfig, error) {
 	if repoRoot == "" {
 		return nil, fmt.Errorf("repository root path cannot be empty")
@@ -226,8 +209,8 @@ func (pc *PathConfig) FormatRepoPath(owner, repo string) string {
 	return filepath.Join(pc.RepoRoot, owner, repo+RepoExtension)
 }
 
-// GetRepoPath returns the filesystem path for a given repository
-// This function validates the owner and repo components and constructs the full path
+// GetRepoPath는 주어진 저장소에 대한 파일시스템 경로를 반환합니다.
+// 이 함수는 소유자와 저장소 컴포넌트를 검증하고 전체 경로를 구성합니다.
 func GetRepoPath(pathConfig *PathConfig, owner, repo string) (string, error) {
 	// Validate path components for security
 	if err := ValidatePathComponents(owner, repo); err != nil {
@@ -377,8 +360,8 @@ func validateComponent(component, componentType string) error {
 	return nil
 }
 
-// EnsureRepoExists checks if a Git repository exists at the given path
-// This function validates the path and checks for repository structure
+// EnsureRepoExists는 주어진 경로에 Git 저장소가 존재하는지 확인합니다.
+// 이 함수는 경로를 검증하고 저장소 구조를 확인합니다.
 func EnsureRepoExists(pathConfig *PathConfig, repoPath string) error {
 	// First validate the path using our security validation
 	if err := ValidateRepoPath(pathConfig, repoPath); err != nil {
@@ -629,7 +612,7 @@ func VerifyRepositoryAccessWithDefault(owner, repo string) (string, error) {
 	return VerifyRepositoryAccess(config, owner, repo)
 }
 
-// RepositoryInfo holds metadata about a repository
+// RepositoryInfo는 저장소에 대한 메타데이터를 담는 구조체입니다.
 type RepositoryInfo struct {
 	Owner        string // Repository owner
 	Name         string // Repository name

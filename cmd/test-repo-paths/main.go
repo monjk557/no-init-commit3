@@ -1,3 +1,4 @@
+// 리포지토리 경로 관리 테스트 유틸리티
 package main
 
 import (
@@ -10,11 +11,11 @@ import (
 	"github.com/collabops/git-executor/internal/repository"
 )
 
-// Test 7: Package Integration Features
+// 테스트 7: 패키지 통합 기능 테스트
 func testPackageIntegration() {
 	fmt.Println("\n🔧 Test 7: Package Integration Features")
 
-	// Create temporary directory for testing
+	// 테스트용 임시 디렉토리 생성
 	tempDir, err := os.MkdirTemp("", "integration-test-")
 	if err != nil {
 		fmt.Printf("❌ Failed to create temp dir: %v\n", err)
@@ -22,24 +23,24 @@ func testPackageIntegration() {
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
-	// Create test config
+	// 테스트 설정 생성
 	testConfig, err := repository.NewPathConfig(tempDir)
 	if err != nil {
 		fmt.Printf("❌ Failed to create test config: %v\n", err)
 		return
 	}
 
-	// Set as global config
+	// 전역 설정으로 지정
 	err = repository.SetGlobalConfig(testConfig)
 	if err != nil {
 		fmt.Printf("❌ Failed to set global config: %v\n", err)
 		return
 	}
 
-	// Test high-level integration functions
+	// 고수준 통합 함수 테스트
 	fmt.Println("\n🚀 High-Level Integration Functions:")
 
-	// 1. GetAndValidateRepoPath
+	// 1. 리포지토리 경로 가져오기 및 검증
 	path, err := repository.GetAndValidateRepoPath(testConfig, "integration", "test")
 	if err != nil {
 		fmt.Printf("❌ GetAndValidateRepoPath failed: %v\n", err)
@@ -47,7 +48,7 @@ func testPackageIntegration() {
 		fmt.Printf("✅ GetAndValidateRepoPath: %s\n", path)
 	}
 
-	// 2. Create a mock repository for testing
+	// 2. 테스트용 Mock 리포지토리 생성
 	repoPath := filepath.Join(tempDir, "integration", "valid-repo.git")
 	err = createMockBareRepo(repoPath)
 	if err != nil {
@@ -55,7 +56,7 @@ func testPackageIntegration() {
 		return
 	}
 
-	// 3. VerifyRepositoryAccess
+	// 3. 리포지토리 접근 권한 확인
 	verifiedPath, err := repository.VerifyRepositoryAccess(testConfig, "integration", "valid-repo")
 	if err != nil {
 		fmt.Printf("❌ VerifyRepositoryAccess failed: %v\n", err)
@@ -63,7 +64,7 @@ func testPackageIntegration() {
 		fmt.Printf("✅ VerifyRepositoryAccess: %s\n", verifiedPath)
 	}
 
-	// 4. GetRepositoryInfo
+	// 4. 리포지토리 정보 조회
 	info, err := repository.GetRepositoryInfo(testConfig, "integration", "valid-repo")
 	if err != nil {
 		fmt.Printf("❌ GetRepositoryInfo failed: %v\n", err)
@@ -77,10 +78,10 @@ func testPackageIntegration() {
 		fmt.Printf("   IsAccessible: %v\n", info.IsAccessible)
 	}
 
-	// Test default configuration functions
+	// 기본 설정 함수 테스트
 	fmt.Println("\n🌐 Default Configuration Functions:")
 
-	// Using global config
+	// 전역 설정 사용
 	defaultPath, err := repository.GetAndValidateRepoPathWithDefault("global", "test")
 	if err != nil {
 		fmt.Printf("❌ GetAndValidateRepoPathWithDefault failed: %v\n", err)
@@ -88,10 +89,10 @@ func testPackageIntegration() {
 		fmt.Printf("✅ GetAndValidateRepoPathWithDefault: %s\n", defaultPath)
 	}
 
-	// Test batch operations
+	// 배치 작업 테스트
 	fmt.Println("\n📦 Batch Operations:")
 
-	// Create multiple test repositories
+	// 여러 테스트 리포지토리 생성
 	_ = createMockNonBareRepo(filepath.Join(tempDir, "batch", "repo1.git"))
 
 	repos := []struct{ Owner, Repo string }{
@@ -112,10 +113,10 @@ func testPackageIntegration() {
 			i+1, repo.Owner, repo.Name, repo.Exists, repo.IsValid, repo.IsAccessible)
 	}
 
-	// Test error handling
+	// 에러 처리 테스트
 	fmt.Println("\n🚫 Error Handling:")
 
-	// Try invalid path
+	// 잘못된 경로 시도
 	_, err = repository.GetAndValidateRepoPath(testConfig, "../invalid", "repo")
 	if err != nil {
 		fmt.Printf("✅ CORRECTLY BLOCKED invalid path: %v\n", err)
@@ -123,7 +124,7 @@ func testPackageIntegration() {
 		fmt.Printf("❌ SECURITY ISSUE: Invalid path was allowed!\n")
 	}
 
-	// Try non-existent repository access
+	// 존재하지 않는 리포지토리 접근 시도
 	_, err = repository.VerifyRepositoryAccess(testConfig, "missing", "repo")
 	if err != nil {
 		fmt.Printf("✅ CORRECTLY BLOCKED missing repo access: %v\n", err)
@@ -233,22 +234,22 @@ func main() {
 		fmt.Printf("✅ Default config path: %s\n", defaultPath)
 	}
 
-	// Test 6: Repository Existence Checking
+	// 테스트 6: 리포지토리 존재 여부 확인
 	fmt.Println("\n📁 Test 6: Repository Existence Checking")
 
-	// Create temporary directory for testing
+	// 테스트용 임시 디렉토리 생성
 	tempDir, err := os.MkdirTemp("", "git-repo-test-")
 	if err != nil {
 		fmt.Printf("❌ Failed to create temp dir: %v\n", err)
 	} else {
 		defer func() { _ = os.RemoveAll(tempDir) }()
 
-		// Create test config
+		// 테스트 설정 생성
 		testConfig, err := repository.NewPathConfig(tempDir)
 		if err != nil {
 			fmt.Printf("❌ Failed to create test config: %v\n", err)
 		} else {
-			// Test non-existent repository
+			// 존재하지 않는 리포지토리 테스트
 			nonExistentPath := filepath.Join(tempDir, "user", "missing.git")
 			err = repository.EnsureRepoExists(testConfig, nonExistentPath)
 			if err != nil {
@@ -257,7 +258,7 @@ func main() {
 				fmt.Printf("❌ SECURITY ISSUE: Non-existent repo was allowed!\n")
 			}
 
-			// Create a mock Git repository structure (bare)
+			// Mock Git 리포지토리 구조 생성 (bare)
 			bareRepoPath := filepath.Join(tempDir, "user", "bare-repo.git")
 			err = createMockBareRepo(bareRepoPath)
 			if err != nil {
@@ -271,7 +272,7 @@ func main() {
 				}
 			}
 
-			// Create a mock non-bare repository
+			// Mock non-bare 리포지토리 생성
 			nonBareRepoPath := filepath.Join(tempDir, "user", "regular-repo.git")
 			err = createMockNonBareRepo(nonBareRepoPath)
 			if err != nil {
@@ -285,7 +286,7 @@ func main() {
 				}
 			}
 
-			// Test invalid repository (empty directory)
+			// 잘못된 리포지토리 테스트 (빈 디렉토리)
 			invalidRepoPath := filepath.Join(tempDir, "user", "invalid.git")
 			_ = os.MkdirAll(invalidRepoPath, 0755)
 			err = repository.EnsureRepoExists(testConfig, invalidRepoPath)
@@ -297,21 +298,22 @@ func main() {
 		}
 	}
 
-	// Test 7: Package Integration Features
+	// 테스트 7: 패키지 통합 기능
 	testPackageIntegration()
 
 	fmt.Println("\n🎉 Complete package integration testing finished!")
 }
 
-// Helper functions to create mock Git repositories for testing
+// 테스트용 Mock Git 리포지토리 생성 헬퍼 함수
 
+// Bare 리포지토리 생성 (웹 인터페이스용)
 func createMockBareRepo(repoPath string) error {
-	// Create directory structure
+	// 디렉토리 구조 생성
 	if err := os.MkdirAll(repoPath, 0755); err != nil {
 		return err
 	}
 
-	// Create required directories
+	// 필수 디렉토리 생성
 	dirs := []string{"refs", "refs/heads", "refs/tags", "objects", "objects/info", "objects/pack"}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(filepath.Join(repoPath, dir), 0755); err != nil {
@@ -319,7 +321,7 @@ func createMockBareRepo(repoPath string) error {
 		}
 	}
 
-	// Create required files
+	// 필수 파일 생성
 	files := map[string]string{
 		"HEAD":        "ref: refs/heads/main\n",
 		"config":      "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n",
@@ -335,19 +337,20 @@ func createMockBareRepo(repoPath string) error {
 	return nil
 }
 
+// Non-bare 리포지토리 생성 (일반 작업 디렉토리용)
 func createMockNonBareRepo(repoPath string) error {
-	// Create directory structure
+	// 디렉토리 구조 생성
 	if err := os.MkdirAll(repoPath, 0755); err != nil {
 		return err
 	}
 
-	// Create .git directory
+	// .git 디렉토리 생성
 	gitDir := filepath.Join(repoPath, ".git")
 	if err := os.MkdirAll(gitDir, 0755); err != nil {
 		return err
 	}
 
-	// Create required directories inside .git
+	// .git 내부에 필수 디렉토리 생성
 	dirs := []string{"refs", "refs/heads", "refs/tags", "objects", "objects/info", "objects/pack"}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(filepath.Join(gitDir, dir), 0755); err != nil {
@@ -355,7 +358,7 @@ func createMockNonBareRepo(repoPath string) error {
 		}
 	}
 
-	// Create required files inside .git
+	// .git 내부에 필수 파일 생성
 	files := map[string]string{
 		"HEAD":        "ref: refs/heads/main\n",
 		"config":      "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n",

@@ -1,4 +1,5 @@
-// Package git provides Git repository operations using go-git
+// Package git - go-git를 사용한 Git 리포지토리 작업 처리
+// 이 패키지는 Git 리포지토리에 대한 모든 작업을 추상화하고 캐싱을 제공함
 package git
 
 import (
@@ -6,98 +7,98 @@ import (
 	"time"
 )
 
-// Repository represents a Git repository interface for operations
+// Repository - Git 리포지토리 작업을 위한 인터페이스
 type Repository interface {
-	// Path returns the filesystem path of the repository
+	// Path - 리포지토리의 파일시스템 경로 반환
 	Path() string
 
-	// GetTree retrieves the directory structure at a given reference
+	// GetTree - 특정 참조(ref)에서 디렉토리 구조 조회
 	GetTree(ctx context.Context, ref string) ([]TreeEntry, error)
 
-	// GetBlob retrieves the contents of a file at a specific path and reference
+	// GetBlob - 특정 경로와 참조에서 파일 내용 조회
 	GetBlob(ctx context.Context, path, ref string) ([]byte, error)
 
-	// GetCommits retrieves commit history with pagination
+	// GetCommits - 페이지네이션을 사용한 커밋 히스토리 조회
 	GetCommits(ctx context.Context, ref string, limit, skip int) ([]Commit, error)
 
-	// Close releases any resources held by the repository
+	// Close - 리포지토리가 보유한 리소스 해제
 	Close() error
 }
 
-// TreeEntry represents an entry in a Git tree (directory listing)
+// TreeEntry - Git 트리의 항목 (디렉토리 리스팅)
 type TreeEntry struct {
-	// Path is the relative path of the entry within the tree
+	// Path - 트리 내에서의 상대 경로
 	Path string `json:"path"`
 
-	// Mode represents the file mode (permissions and type)
+	// Mode - 파일 모드 (권한 및 타입)
 	Mode string `json:"mode"`
 
-	// Type indicates the type of the entry (blob, tree, commit)
+	// Type - 항목 타입 (blob: 파일, tree: 디렉토리, commit: 서브모듈)
 	Type EntryType `json:"type"`
 
-	// Hash is the Git object hash
+	// Hash - Git 객체 해시
 	Hash string `json:"hash"`
 
-	// Size is the size of the entry in bytes (for blobs)
+	// Size - 파일 크기 (바이트 단위, blob일 때만)
 	Size int64 `json:"size"`
 }
 
-// EntryType represents the type of a Git tree entry
+// EntryType - Git 트리 항목의 타입
 type EntryType string
 
 const (
-	// EntryTypeBlob represents a file
+	// EntryTypeBlob - 파일
 	EntryTypeBlob EntryType = "blob"
 
-	// EntryTypeTree represents a directory
+	// EntryTypeTree - 디렉토리
 	EntryTypeTree EntryType = "tree"
 
-	// EntryTypeCommit represents a submodule commit
+	// EntryTypeCommit - 서브모듈 커밋
 	EntryTypeCommit EntryType = "commit"
 )
 
-// Commit represents a Git commit
+// Commit - Git 커밋 정보
 type Commit struct {
-	// Hash is the commit hash
+	// Sha - 커밋 해시
 	Sha string `json:"sha"`
 
-	// Author is the commit author information
+	// Author - 커밋 작성자 정보
 	Author CommitAuthor `json:"author"`
 
-	// Committer is the committer information
+	// Committer - 커밋 실행자 정보
 	Committer CommitAuthor `json:"committer"`
 
-	// Message is the commit message
+	// Message - 커밋 메시지
 	Message string `json:"message"`
 
-	// ParentHashes are the hashes of parent commits
+	// ParentHashes - 부모 커밋들의 해시
 	ParentHashes []string `json:"parent_hashes"`
 
-	// TreeHash is the hash of the commit's tree object
+	// TreeHash - 커밋의 트리 객체 해시
 	TreeHash string `json:"tree_hash"`
 }
 
-// CommitAuthor represents author/committer information
+// CommitAuthor - 커밋 작성자/실행자 정보
 type CommitAuthor struct {
-	// Name is the author/committer name
+	// Name - 작성자/실행자 이름
 	Name string `json:"name"`
 
-	// Email is the author/committer email
+	// Email - 작성자/실행자 이메일
 	Email string `json:"email"`
 
-	// Date is the timestamp of the commit
+	// Date - 커밋 타임스탬프
 	Date time.Time `json:"date"`
 }
 
-// OpenRepositoryFunc is a function type for opening repositories
+// OpenRepositoryFunc - 리포지토리를 여는 함수 타입
 type OpenRepositoryFunc func(path string) (Repository, error)
 
-// RepositoryManager provides high-level repository management operations
+// RepositoryManager - 고수준 리포지토리 관리 작업 제공
 type RepositoryManager interface {
-	// CreateRepository creates a new Git repository at the specified path
+	// CreateRepository - 지정된 경로에 새 Git 리포지토리 생성
 	CreateRepository(ctx context.Context, options *CreateRepositoryOptions) (*RepositoryInfo, error)
 
-	// OpenRepository opens an existing Git repository
+	// OpenRepository - 기존 Git 리포지토리 열기
 	OpenRepository(ctx context.Context, path string) (Repository, error)
 
 	// RepositoryExists checks if a repository exists at the given path

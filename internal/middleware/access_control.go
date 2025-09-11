@@ -1,4 +1,5 @@
-// Package middleware implements HTTP middleware for the Git executor
+// middleware 패키지는 Git executor를 위한 HTTP 미들웨어를 구현합니다.
+// 접근 제어, API 검증, 보안 미들웨어 등을 포함합니다.
 package middleware
 
 import (
@@ -11,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// SourceType represents the type of calling component
+// SourceType은 호출하는 컴포넌트의 유형을 나타냅니다.
 type SourceType string
 
 const (
@@ -23,7 +24,7 @@ const (
 	SourceOrchestrator SourceType = "orchestrator"
 )
 
-// EndpointType represents the type of endpoint being accessed
+// EndpointType은 액세스되는 엔드포인트의 유형을 나타냅니다.
 type EndpointType string
 
 const (
@@ -37,14 +38,14 @@ const (
 	EndpointCommon EndpointType = "common"
 )
 
-// AccessControlRule defines access permissions for source-endpoint combinations
+// AccessControlRule은 소스-엔드포인트 조합에 대한 접근 권한을 정의합니다.
 type AccessControlRule struct {
 	Source   SourceType
 	Endpoint EndpointType
 	Allowed  bool
 }
 
-// AccessControlConfig configures the access control middleware
+// AccessControlConfig는 접근 제어 미들웨어를 설정합니다.
 type AccessControlConfig struct {
 	// Rules defines the access control matrix
 	Rules []AccessControlRule
@@ -54,7 +55,7 @@ type AccessControlConfig struct {
 	LogSecurityEvents bool
 }
 
-// AccessControlMiddleware enforces endpoint access control based on X-Source header
+// AccessControlMiddleware는 X-Source 헤더를 기반으로 엔드포인트 접근 제어를 강제합니다.
 type AccessControlMiddleware struct {
 	config *AccessControlConfig
 	logger *logging.Logger
@@ -66,7 +67,7 @@ type AccessControlMiddleware struct {
 	commonPattern      *regexp.Regexp
 }
 
-// NewAccessControlMiddleware creates a new access control middleware
+// NewAccessControlMiddleware는 새로운 접근 제어 미들웨어를 생성합니다.
 func NewAccessControlMiddleware(config *AccessControlConfig, logger *logging.Logger) (*AccessControlMiddleware, error) {
 	if config == nil {
 		config = DefaultAccessControlConfig()
@@ -134,7 +135,7 @@ func DefaultAccessControlConfig() *AccessControlConfig {
 	}
 }
 
-// Middleware returns the HTTP middleware function
+// Middleware는 HTTP 미들웨어 함수를 반환합니다.
 func (acm *AccessControlMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Extract X-Source header

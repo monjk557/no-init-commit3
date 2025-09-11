@@ -10,37 +10,37 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Repository represents a cached Git repository with its metadata
+// Repository는 메타데이터와 함께 캐시된 Git 저장소를 나타냅니다
 type Repository struct {
-	// GitRepo is the actual go-git repository object
+	// GitRepo는 실제 go-git 저장소 객체입니다
 	GitRepo *gogit.Repository
 
-	// Path is the filesystem path to the repository
+	// Path는 저장소의 파일시스템 경로입니다
 	Path string
 
-	// CreatedAt tracks when this repository was cached
+	// CreatedAt은 이 저장소가 캐시된 시간을 추적합니다
 	CreatedAt time.Time
 
-	// LastAccessed tracks when this repository was last accessed
+	// LastAccessed는 이 저장소가 마지막으로 접근된 시간을 추적합니다
 	LastAccessed time.Time
 
-	// AccessCount tracks how many times this repository has been accessed
+	// AccessCount는 이 저장소가 접근된 횟수를 추적합니다
 	AccessCount int64
 
-	// mutex protects concurrent access to LastAccessed and AccessCount
+	// mutex는 LastAccessed와 AccessCount에 대한 동시 접근을 보호합니다
 	mutex sync.RWMutex
 }
 
-// Close properly closes the repository and releases resources
+// Close는 저장소를 제대로 닫고 자원을 해제합니다
 func (r *Repository) Close() error {
-	// go-git repositories don't require explicit closing in most cases.
-	// We don't set GitRepo to nil here because there might be active
-	// references to this repository that would fail with "repository is closed".
-	// The Go garbage collector will clean up when there are no more references.
+	// go-git 저장소는 대부분의 경우 명시적 닫기가 필요하지 않습니다.
+	// 이 저장소에 대한 활성 참조가 있을 수 있고,
+	// GitRepo를 nil로 설정하면 "저장소가 닫혔습니다" 오류로 실패할 수 있습니다.
+	// Go 가비지 컩렉터가 참조가 더 이상 없을 때 정리합니다.
 	return nil
 }
 
-// UpdateAccess updates the last accessed time and increments access count
+// UpdateAccess는 마지막 접근 시간을 업데이트하고 접근 횟수를 증가시킵니다
 func (r *Repository) UpdateAccess() {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
@@ -48,54 +48,54 @@ func (r *Repository) UpdateAccess() {
 	r.AccessCount++
 }
 
-// GetLastAccessed returns the last accessed time in a thread-safe manner
+// GetLastAccessed는 스레드 안전한 방식으로 마지막 접근 시간을 반환합니다
 func (r *Repository) GetLastAccessed() time.Time {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 	return r.LastAccessed
 }
 
-// GetAccessCount returns the access count in a thread-safe manner
+// GetAccessCount는 스레드 안전한 방식으로 접근 횟수를 반환합니다
 func (r *Repository) GetAccessCount() int64 {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 	return r.AccessCount
 }
 
-// IsExpired checks if the repository has exceeded its TTL
+// IsExpired는 저장소가 TTL을 초과했는지 확인합니다
 func (r *Repository) IsExpired(ttl time.Duration) bool {
 	if ttl <= 0 {
-		return false // No expiration if TTL is zero or negative
+		return false // TTL이 0 또는 음수이면 만료되지 않음
 	}
 	return time.Since(r.CreatedAt) > ttl
 }
 
-// LRUCache implements a thread-safe LRU cache for Git repositories
+// LRUCache는 Git 저장소를 위한 스레드 안전한 LRU 캐시를 구현합니다
 type LRUCache struct {
-	// cache is the underlying LRU cache
+	// cache는 기본 LRU 캐시입니다
 	cache *lru.Cache[string, *Repository]
 
-	// config holds the cache configuration
+	// config는 캐시 설정을 저장합니다
 	config *CacheConfig
 
-	// mutex protects concurrent access to the cache
+	// mutex는 캐시에 대한 동시 접근을 보호합니다
 	mutex sync.RWMutex
 
-	// metrics holds cache statistics
+	// metrics는 캐시 통계를 저장합니다
 	metrics *CacheMetrics
 
-	// prometheusMetrics holds Prometheus metrics (optional)
+	// prometheusMetrics는 Prometheus 메트릭을 저장합니다 (선택사항)
 	prometheusMetrics *PrometheusMetrics
 
-	// onEvicted is called when a repository is evicted from the cache
+	// onEvicted는 저장소가 캐시에서 제거될 때 호출됩니다
 	onEvicted func(key string, repository *Repository)
 
-	// TTL cleanup goroutine management
+	// TTL 정리 고루틴 관리
 	stopCleanup chan struct{}
 	cleanupDone chan struct{}
 }
 
-// CacheMetrics tracks cache performance statistics
+// CacheMetrics는 캐시 성능 통계를 추적합니다
 type CacheMetrics struct {
 	Hits      int64 `json:"hits"`
 	Misses    int64 `json:"misses"`
@@ -104,7 +104,7 @@ type CacheMetrics struct {
 	mutex     sync.RWMutex
 }
 
-// NewLRUCache creates a new LRU cache with the given configuration
+// NewLRUCache는 주어진 설정으로 새로운 LRU 캐시를 생성합니다
 func NewLRUCache(config *CacheConfig) (*LRUCache, error) {
 	if config == nil {
 		return nil, fmt.Errorf("cache config cannot be nil")

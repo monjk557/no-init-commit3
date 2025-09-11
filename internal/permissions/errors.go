@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-// PermissionError represents errors that occur during permission checking.
+// PermissionError는 권한 검사 중 발생하는 에러를 나타냅니다.
 type PermissionError struct {
 	Operation  Operation
 	UserID     string
@@ -33,7 +33,7 @@ func (e *PermissionError) IsRetryable() bool {
 	return e.Retryable
 }
 
-// NewPermissionError creates a new PermissionError.
+// NewPermissionError는 새로운 PermissionError를 생성합니다.
 func NewPermissionError(operation Operation, userID, repoOwner, repoName string, err error) *PermissionError {
 	return &PermissionError{
 		Operation: operation,
@@ -79,14 +79,14 @@ func isRetryableStatusCode(statusCode int) bool {
 	}
 }
 
-// APIResponse represents the response from the API-Service.
+// APIResponse는 API 서비스로부터의 응답을 나타냅니다.
 type APIResponse struct {
 	Allowed bool   `json:"allowed"`
 	Reason  string `json:"reason,omitempty"`
 }
 
-// ServiceUnavailableError represents an error when the API-Service is unavailable
-// and fallback policies are applied.
+// ServiceUnavailableError는 API 서비스를 사용할 수 없고
+// 폴백 정책이 적용되는 상황의 에러를 나타냅니다.
 type ServiceUnavailableError struct {
 	Operation      Operation
 	UserID         string

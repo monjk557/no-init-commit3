@@ -15,13 +15,13 @@ import (
 	"github.com/collabops/git-executor/internal/repository"
 )
 
-// ConflictDetector provides merge conflict detection and analysis capabilities
+// ConflictDetector는 맨지 충돌 감지 및 분석 기능을 제공합니다.
 type ConflictDetector struct {
 	pathConfig *repository.PathConfig
 	logger     *logging.Logger
 }
 
-// NewConflictDetector creates a new conflict detector instance
+// NewConflictDetector는 새로운 충돌 감지기 인스턴스를 생성합니다.
 func NewConflictDetector(pathConfig *repository.PathConfig, logger *logging.Logger) *ConflictDetector {
 	return &ConflictDetector{
 		pathConfig: pathConfig,
@@ -29,7 +29,7 @@ func NewConflictDetector(pathConfig *repository.PathConfig, logger *logging.Logg
 	}
 }
 
-// ConflictType represents the type of merge conflict
+// ConflictType은 맨지 충돌의 유형을 나타냅니다.
 type ConflictType string
 
 const (
@@ -42,7 +42,7 @@ const (
 	ConflictTypeSymlink   ConflictType = "symlink"   // Symlink conflicts
 )
 
-// ConflictSeverity represents the severity level of a conflict
+// ConflictSeverity는 충돌의 심각도 수준을 나타냅니다.
 type ConflictSeverity string
 
 const (
@@ -52,7 +52,7 @@ const (
 	ConflictSeverityCritical ConflictSeverity = "critical" // Conflicts that may cause data loss if resolved incorrectly
 )
 
-// MergeStrategy represents different merge strategies
+// MergeStrategy는 다양한 맨지 전략을 나타냅니다.
 type MergeStrategy string
 
 const (
@@ -64,7 +64,7 @@ const (
 	MergeStrategySubtree   MergeStrategy = "subtree"   // Subtree merge strategy
 )
 
-// ConflictRegion represents a specific conflict within a file
+// ConflictRegion은 파일 내의 특정 충돌을 나타냅니다.
 type ConflictRegion struct {
 	StartLine    int    `json:"start_line"`    // Starting line number of conflict
 	EndLine      int    `json:"end_line"`      // Ending line number of conflict
@@ -74,7 +74,7 @@ type ConflictRegion struct {
 	MarkerStyle  string `json:"marker_style"`  // Conflict marker style (<<<, ===, >>>)
 }
 
-// FileConflict represents conflicts within a single file
+// FileConflict는 단일 파일 내의 충돌을 나타냅니다.
 type FileConflict struct {
 	FilePath       string                 `json:"file_path"`            // Path to the conflicted file
 	ConflictType   ConflictType           `json:"conflict_type"`        // Type of conflict
@@ -88,7 +88,7 @@ type FileConflict struct {
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`   // Additional metadata
 }
 
-// FileVersion represents a version of a file at a specific commit
+// FileVersion은 특정 커밋에서의 파일 버전을 나타냅니다.
 type FileVersion struct {
 	Hash        plumbing.Hash `json:"hash"`              // Object hash
 	Mode        uint32        `json:"mode"`              // File mode (permissions)

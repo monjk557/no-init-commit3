@@ -1,3 +1,4 @@
+// Git Executor 서비스의 메인 진입점
 package main
 
 import (
@@ -12,46 +13,45 @@ import (
 )
 
 func main() {
-	// Parse CLI flags
-	// Go실행할때 port를 준다던지, 읽어준다는지 하는 거를 cli option으로 줌.
-	// Viper가 다 해줌.
+	// CLI 플래그 파싱 - 설정 파일 경로와 헬스체크 옵션을 처리
 	var (
 		configPath  = flag.String("config", "", "Path to configuration file")
 		healthCheck = flag.Bool("health-check", false, "Perform health check and exit")
 	)
 	flag.Parse()
 
-	// Load configuration
+	// 설정 파일 로드 - YAML 형식의 설정 파일을 읽어서 Config 구조체로 변환
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Initialize logger
+	// 로거 초기화 - zap 로거를 생성하고 설정
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
-	// 이 프로그램에서 이 로거를 전역으로 쓸것이다. 함수로 쓰면 불편하니까 어디서든 쓸수있게.
+	// 전역 로거 설정 - 애플리케이션 전체에서 사용할 수 있도록 설정
 	logging.SetGlobal(logger)
 
-	// Handle health check
+	// 헬스체크 모드 처리 - health-check 플래그가 있으면 상태 확인 후 종료
 	if *healthCheck {
-		// TODO: Implement actual health check logic
-		// For now, just check if we can load config and initialize logger
+		// TODO: 실제 헬스체크 로직 구현 필요
+		// 현재는 설정 로드와 로거 초기화만 확인
 		logger.Info("Health check passed")
 		os.Exit(0)
 	}
 
-	// Create and start server
+	// Git 서버 생성 - HTTP/SSH Git 프로토콜을 처리하는 서버 인스턴스 생성
 	srv, err := server.New(cfg)
 	if err != nil {
 		logger.Error("Failed to create server", zap.Error(err))
 		os.Exit(1)
 	}
 
+	// 서버 시작 - 설정된 포트에서 요청 수신 시작
 	if err := srv.Start(); err != nil {
 		logger.Error("Server failed to start", zap.Error(err))
 		os.Exit(1)

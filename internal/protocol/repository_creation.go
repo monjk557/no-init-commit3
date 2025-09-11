@@ -1,3 +1,5 @@
+// Package protocol은 Git 저장소 생성 작업을 처리합니다.
+// 새로운 Git 저장소를 만들고 초기 커밋을 설정하는 REST API 기능을 제공합니다.
 package protocol
 
 import (
@@ -18,7 +20,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// RepositoryCreationHandler handles repository creation operations
+// RepositoryCreationHandler는 저장소 생성 작업을 처리합니다.
+// Git 저장소 초기화, 기본 브랜치 설정, 초기 파일 생성 등을 처리합니다.
 type RepositoryCreationHandler struct {
 	config             *config.Config
 	logger             *logging.Logger
@@ -30,7 +33,8 @@ type RepositoryCreationHandler struct {
 	errorMapper        *api.GitErrorMapper
 }
 
-// NewRepositoryCreationHandler creates a new repository creation handler
+// NewRepositoryCreationHandler는 새로운 저장소 생성 핸들러를 생성합니다.
+// 설정을 바탕으로 필요한 컴포너트들을 초기화합니다.
 func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandler, error) {
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
@@ -70,7 +74,8 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 	}, nil
 }
 
-// CreateRepositoryRequest represents the JSON payload for repository creation
+// CreateRepositoryRequest는 저장소 생성을 위한 JSON 페이로드를 나타냅니다.
+// 저장소 설명, 기본 브랜치, 초기 파일 및 메타데이터를 포함합니다.
 type CreateRepositoryRequest struct {
 	Description   string                 `json:"description,omitempty"`
 	Private       bool                   `json:"private,omitempty"`

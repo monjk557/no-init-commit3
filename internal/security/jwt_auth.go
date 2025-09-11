@@ -1,3 +1,5 @@
+// security 패키지는 Git executor의 보안 기능을 제공합니다.
+// JWT 인증, 속도 제한, TLS 설정, 입력 검증 등을 포함합니다.
 package security
 
 import (
@@ -14,7 +16,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 )
 
-// JWTAuthMiddleware provides JWT-based authentication and authorization
+// JWTAuthMiddleware는 JWT 기반 인증 및 인가를 제공합니다.
 type JWTAuthMiddleware struct {
 	config      *JWTConfig
 	logger      *logging.Logger
@@ -22,7 +24,7 @@ type JWTAuthMiddleware struct {
 	trustedKeys map[string]*rsa.PublicKey // Multiple trusted keys for key rotation
 }
 
-// JWTConfig holds configuration for JWT authentication
+// JWTConfig는 JWT 인증을 위한 설정을 담는 구조체입니다.
 type JWTConfig struct {
 	Enabled               bool          `yaml:"enabled" json:"enabled"`
 	PublicKeyPath         string        `yaml:"public_key_path" json:"public_key_path"`
@@ -56,7 +58,7 @@ func DefaultJWTConfig() *JWTConfig {
 	}
 }
 
-// JWTClaims represents the claims in a JWT token
+// JWTClaims는 JWT 토큰의 클레임을 나타냅니다.
 type JWTClaims struct {
 	UserID      string   `json:"sub"`
 	Username    string   `json:"preferred_username"`
@@ -70,7 +72,7 @@ type JWTClaims struct {
 	jwt.RegisteredClaims
 }
 
-// AuthContext contains authenticated user information
+// AuthContext는 인증된 사용자 정보를 담는 구조체입니다.
 type AuthContext struct {
 	UserID      string
 	Username    string
@@ -84,7 +86,7 @@ type AuthContext struct {
 	AuthTime    time.Time
 }
 
-// NewJWTAuthMiddleware creates a new JWT authentication middleware
+// NewJWTAuthMiddleware는 새로운 JWT 인증 미들웨어를 생성합니다.
 func NewJWTAuthMiddleware(config *JWTConfig, logger *logging.Logger) (*JWTAuthMiddleware, error) {
 	if config == nil {
 		config = DefaultJWTConfig()
@@ -137,7 +139,7 @@ func (j *JWTAuthMiddleware) loadPublicKey() error {
 	return nil
 }
 
-// AuthenticationMiddleware returns a Gin middleware for JWT authentication
+// AuthenticationMiddleware는 JWT 인증을 위한 Gin 미들웨어를 반환합니다.
 func (j *JWTAuthMiddleware) AuthenticationMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Skip authentication if disabled
@@ -468,7 +470,7 @@ func (j *JWTAuthMiddleware) RequireRoles(requiredRoles ...string) gin.HandlerFun
 	}
 }
 
-// GetAuthContext retrieves the authentication context from Gin context
+// GetAuthContext는 Gin 컨텍스트에서 인증 컨텍스트를 가져옵니다.
 func GetAuthContext(c *gin.Context) *AuthContext {
 	authCtx, exists := c.Get("auth_context")
 	if !exists {

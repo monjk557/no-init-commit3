@@ -1,3 +1,5 @@
+// Package protocol은 파일 관리를 위한 REST API 작업을 구현합니다.
+// 파일 생성, 수정, 삭제 및 다중 파일 커밋 기능을 제공합니다.
 package protocol
 
 import (
@@ -25,7 +27,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// FileOperationsHandler handles REST API operations for file management
+// FileOperationsHandler는 파일 관리를 위한 REST API 작업을 처리합니다.
+// 파일 CRUD 작업과 다중 파일 커밋을 지원하는 핸들러입니다.
 type FileOperationsHandler struct {
 	config             *config.Config
 	logger             *logging.Logger
@@ -39,7 +42,8 @@ type FileOperationsHandler struct {
 	refNamePattern     *regexp.Regexp
 }
 
-// NewFileOperationsHandler creates a new file operations handler
+// NewFileOperationsHandler는 새로운 파일 작업 핸들러를 생성합니다.
+// 설정과 권한 클라이언트를 사용하여 필요한 컴포너트들을 초기화합니다.
 func NewFileOperationsHandler(cfg *config.Config, permClient permissions.PermissionClient) (*FileOperationsHandler, error) {
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
@@ -80,7 +84,8 @@ func NewFileOperationsHandler(cfg *config.Config, permClient permissions.Permiss
 	}, nil
 }
 
-// FileOperationRequest represents the JSON payload for file operations
+// FileOperationRequest는 파일 작업을 위한 JSON 페이로드를 나타냅니다.
+// 파일 내용, 커밋 메시지, 브랜치 정보 등을 포함합니다.
 type FileOperationRequest struct {
 	Content   string            `json:"content" binding:"required"`
 	Message   string            `json:"message" binding:"required"`
@@ -109,7 +114,8 @@ type MultiFileOperation struct {
 	Mode      string `json:"mode,omitempty"`               // optional file mode
 }
 
-// MultiFileCommitRequest represents the JSON payload for multi-file commit operations
+// MultiFileCommitRequest는 다중 파일 커밋 작업을 위한 JSON 페이로드를 나타냅니다.
+// 여러 파일에 대한 작업을 하나의 커밋으로 묶어서 처리할 때 사용합니다.
 type MultiFileCommitRequest struct {
 	Message    string               `json:"message" binding:"required"`
 	Branch     string               `json:"branch,omitempty"`

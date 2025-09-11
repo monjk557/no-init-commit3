@@ -7,7 +7,7 @@ import (
 	"github.com/go-git/go-git/v5"
 )
 
-// SimpleRepoCache is a thread-safe, simple repository cache
+// SimpleRepoCache는 스레드 안전한 간단한 저장소 캐시입니다.
 type SimpleRepoCache struct {
 	mu    sync.RWMutex
 	repos map[string]*cachedRepo
@@ -24,7 +24,7 @@ var (
 	initOnce          sync.Once
 )
 
-// GetSimpleCache returns the global simple cache instance
+// GetSimpleCache는 전역 간단 캐시 인스턴스를 반환합니다.
 func GetSimpleCache() *SimpleRepoCache {
 	initOnce.Do(func() {
 		globalSimpleCache = &SimpleRepoCache{
@@ -36,7 +36,7 @@ func GetSimpleCache() *SimpleRepoCache {
 	return globalSimpleCache
 }
 
-// Get retrieves a repository from cache or opens it if not cached
+// Get은 캐시에서 저장소를 가져오거나 캐시되어 있지 않으면 엽니다.
 func (c *SimpleRepoCache) Get(path string) (*git.Repository, error) {
 	c.mu.RLock()
 	if cached, exists := c.repos[path]; exists {
@@ -89,7 +89,7 @@ func (c *SimpleRepoCache) cleanup() {
 	}
 }
 
-// OpenRepositorySimple opens a repository with simple caching
+// OpenRepositorySimple은 간단한 캐싱으로 저장소를 엽니다.
 func OpenRepositorySimple(path string) (Repository, error) {
 	cache := GetSimpleCache()
 	gitRepo, err := cache.Get(path)

@@ -1,3 +1,5 @@
+// Package performance는 Git executor 서비스의 종합적인 성능 최적화와 리소스 관리 기능을 제공합니다.
+// 메모리 및 연결 관리, 저장소 캐시, 요청 추적, 성능 모니터링 등을 포함합니다.
 package performance
 
 import (
@@ -16,7 +18,8 @@ import (
 	"github.com/collabops/git-executor/internal/repository"
 )
 
-// ResourceManager provides comprehensive resource management and performance optimization
+// ResourceManager는 포괄적인 리소스 관리와 성능 최적화를 제공합니다.
+// 저장소 풀, 메모리 모니터, 연결 풀, 요청 추적기 등을 통합 관리합니다.
 type ResourceManager struct {
 	config           *ResourceConfig
 	logger           *logging.Logger
@@ -28,7 +31,8 @@ type ResourceManager struct {
 	metricsCollector *MetricsCollector
 }
 
-// ResourceConfig contains configuration for resource management
+// ResourceConfig는 리소스 관리를 위한 설정을 포함합니다.
+// 저장소 풀, 메모리, 연결, 요청 관리 및 캐시 설정을 정의합니다.
 type ResourceConfig struct {
 	// Repository Pool Configuration
 	MaxRepositories int           `json:"max_repositories"` // Maximum cached repositories
@@ -85,7 +89,8 @@ func DefaultResourceConfig() *ResourceConfig {
 	}
 }
 
-// NewResourceManager creates a new resource manager instance
+// NewResourceManager는 새로운 리소스 매니저 인스턴스를 생성합니다.
+// 설정을 바탕으로 모든 리소스 관리 컴포너트들을 초기화합니다.
 func NewResourceManager(cfg *config.Config) (*ResourceManager, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
@@ -131,7 +136,8 @@ func NewResourceManager(cfg *config.Config) (*ResourceManager, error) {
 	return rm, nil
 }
 
-// RepositoryPool manages a pool of Git repository instances
+// RepositoryPool은 Git 저장소 인스턴스들의 풀을 관리합니다.
+// 빈번하게 사용되는 저장소들을 메모리에 캐시하여 성능을 향상시킵니다.
 type RepositoryPool struct {
 	config     *ResourceConfig
 	pathConfig *repository.PathConfig
@@ -269,7 +275,8 @@ func (rp *RepositoryPool) Cleanup() {
 	}
 }
 
-// MemoryMonitor monitors and manages memory usage
+// MemoryMonitor는 메모리 사용량을 모니터링하고 관리합니다.
+// 메모리 사용량을 백그라운드에서 감시하고 필요시 GC를 트리거합니다.
 type MemoryMonitor struct {
 	config   *ResourceConfig
 	logger   *logging.Logger

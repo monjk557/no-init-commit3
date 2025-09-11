@@ -8,34 +8,34 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// Global singleton for default prometheus metrics to avoid duplicate registrations
+// 중복 등록을 방지하기 위한 기본 Prometheus 메트릭용 전역 싱글턴
 var (
 	defaultPrometheusMetrics *PrometheusMetrics
 	defaultMetricsOnce       sync.Once
 )
 
-// PrometheusMetrics holds all Prometheus metrics for the cache
+// PrometheusMetrics는 캐시에 대한 모든 Prometheus 메트릭을 저장합니다
 type PrometheusMetrics struct {
-	// Counter metrics for tracking cache operations
+	// 캐시 작업 추적을 위한 카운터 메트릭
 	CacheHitsTotal      prometheus.Counter
 	CacheMissesTotal    prometheus.Counter
 	CacheEvictionsTotal prometheus.Counter
 
-	// Gauge metrics for current state
+	// 현재 상태를 위한 게이지 메트릭
 	CacheEntriesCurrent prometheus.Gauge
 	CacheMemoryBytes    prometheus.Gauge
 
-	// Additional detailed metrics
-	CacheOperationsTotal prometheus.CounterVec   // labeled by operation type
-	CacheAccessDuration  prometheus.HistogramVec // cache access latency
+	// 추가 세부 메트릭
+	CacheOperationsTotal prometheus.CounterVec   // 작업 타입별 레이블
+	CacheAccessDuration  prometheus.HistogramVec // 캐시 접근 레이턴시
 }
 
-// NewPrometheusMetrics creates and registers all Prometheus metrics for cache monitoring
-// This uses a singleton pattern to avoid duplicate registrations with the default registry
+// NewPrometheusMetrics는 캐시 모니터링을 위한 모든 Prometheus 메트릭을 생성하고 등록합니다
+// 기본 레지스트리에서 중복 등록을 방지하기 위해 싱글턴 패턴을 사용합니다
 func NewPrometheusMetrics() *PrometheusMetrics {
 	defaultMetricsOnce.Do(func() {
 		defaultPrometheusMetrics = &PrometheusMetrics{
-			// Basic cache operation counters
+			// 기본 캐시 작업 카운터
 			CacheHitsTotal: promauto.NewCounter(prometheus.CounterOpts{
 				Name: "cache_hits_total",
 				Help: "Total number of cache hits",
@@ -51,7 +51,7 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 				Help: "Total number of cache evictions",
 			}),
 
-			// Current state gauges
+			// 현재 상태 게이지
 			CacheEntriesCurrent: promauto.NewGauge(prometheus.GaugeOpts{
 				Name: "cache_entries_current",
 				Help: "Current number of entries in the cache",
@@ -62,30 +62,30 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 				Help: "Estimated memory usage of the cache in bytes",
 			}),
 
-			// Detailed operation metrics
+			// 세부 작업 메트릭
 			CacheOperationsTotal: *promauto.NewCounterVec(
 				prometheus.CounterOpts{
 					Name: "cache_operations_total",
 					Help: "Total number of cache operations by type",
 				},
-				[]string{"operation"}, // labels: get, set, evict, cleanup
+				[]string{"operation"}, // 레이블: get, set, evict, cleanup
 			),
 
-			// Performance metrics
+			// 성능 메트릭
 			CacheAccessDuration: *promauto.NewHistogramVec(
 				prometheus.HistogramOpts{
 					Name:    "cache_access_duration_seconds",
 					Help:    "Duration of cache access operations",
 					Buckets: prometheus.DefBuckets,
 				},
-				[]string{"operation", "result"}, // operation: get/set, result: hit/miss/success
+				[]string{"operation", "result"}, // 작업: get/set, 결과: hit/miss/success
 			),
 		}
 	})
 	return defaultPrometheusMetrics
 }
 
-// NewPrometheusMetricsWithRegistry creates metrics with a custom registry (useful for testing)
+// NewPrometheusMetricsWithRegistry는 사용자 정의 레지스트리로 메트릭을 생성합니다 (테스트에 유용)
 func NewPrometheusMetricsWithRegistry(registry prometheus.Registerer) *PrometheusMetrics {
 	return &PrometheusMetrics{
 		CacheHitsTotal: prometheus.NewCounter(prometheus.CounterOpts{
@@ -132,7 +132,7 @@ func NewPrometheusMetricsWithRegistry(registry prometheus.Registerer) *Prometheu
 	}
 }
 
-// RegisterMetrics registers all metrics with the provided registry
+// RegisterMetrics는 제공된 레지스트리에 모든 메트릭을 등록합니다
 func (m *PrometheusMetrics) RegisterMetrics(registry prometheus.Registerer) error {
 	collectors := []prometheus.Collector{
 		m.CacheHitsTotal,
@@ -153,50 +153,50 @@ func (m *PrometheusMetrics) RegisterMetrics(registry prometheus.Registerer) erro
 	return nil
 }
 
-// RecordHit records a cache hit
+// RecordHit은 캐시 히트를 기록합니다
 func (m *PrometheusMetrics) RecordHit() {
 	m.CacheHitsTotal.Inc()
 	m.CacheOperationsTotal.WithLabelValues("get").Inc()
 }
 
-// RecordMiss records a cache miss
+// RecordMiss는 캐시 미스를 기록합니다
 func (m *PrometheusMetrics) RecordMiss() {
 	m.CacheMissesTotal.Inc()
 	m.CacheOperationsTotal.WithLabelValues("get").Inc()
 }
 
-// RecordEviction records a cache eviction
+// RecordEviction은 캐시 제거를 기록합니다
 func (m *PrometheusMetrics) RecordEviction() {
 	m.CacheEvictionsTotal.Inc()
 	m.CacheOperationsTotal.WithLabelValues("evict").Inc()
 }
 
-// RecordSet records a cache set operation
+// RecordSet은 캐시 설정 작업을 기록합니다
 func (m *PrometheusMetrics) RecordSet() {
 	m.CacheOperationsTotal.WithLabelValues("set").Inc()
 }
 
-// RecordCleanup records a cleanup operation
+// RecordCleanup은 정리 작업을 기록합니다
 func (m *PrometheusMetrics) RecordCleanup() {
 	m.CacheOperationsTotal.WithLabelValues("cleanup").Inc()
 }
 
-// UpdateEntries updates the current number of cache entries
+// UpdateEntries는 현재 캐시 항목 수를 업데이트합니다
 func (m *PrometheusMetrics) UpdateEntries(count int64) {
 	m.CacheEntriesCurrent.Set(float64(count))
 }
 
-// UpdateMemoryUsage updates the estimated memory usage
+// UpdateMemoryUsage는 추정 메모리 사용량을 업데이트합니다
 func (m *PrometheusMetrics) UpdateMemoryUsage(bytes int64) {
 	m.CacheMemoryBytes.Set(float64(bytes))
 }
 
-// RecordAccessDuration records the duration of a cache access operation
+// RecordAccessDuration은 캐시 접근 작업의 지속 시간을 기록합니다
 func (m *PrometheusMetrics) RecordAccessDuration(operation, result string, duration float64) {
 	m.CacheAccessDuration.WithLabelValues(operation, result).Observe(duration)
 }
 
-// GetHitRate calculates and returns the current cache hit rate
+// GetHitRate는 현재 캐시 히트율을 계산하고 반환합니다
 func (m *PrometheusMetrics) GetHitRate() float64 {
 	hits := getCounterValue(m.CacheHitsTotal)
 	misses := getCounterValue(m.CacheMissesTotal)
@@ -209,7 +209,7 @@ func (m *PrometheusMetrics) GetHitRate() float64 {
 	return hits / total
 }
 
-// Helper function to get counter value (for testing and monitoring)
+// getCounterValue는 카운터 값을 가져오는 도우미 함수입니다 (테스트 및 모니터링용)
 func getCounterValue(counter prometheus.Counter) float64 {
 	pb := &dto.Metric{}
 	if err := counter.Write(pb); err != nil {

@@ -1,3 +1,5 @@
+// server 패키지는 HTTP 서버와 라우팅 설정을 제공합니다.
+// 스트리밍 경로, API 엔드포인트, 미들웨어 설정을 포함합니다.
 package server
 
 // TODO: Streaming optimization features - commenting out unused functions for now

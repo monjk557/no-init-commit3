@@ -1,6 +1,6 @@
-// Package protocol implements Git Smart HTTP protocol handlers for the executor.
-// These handlers receive requests forwarded from the collabops-git-http gateway
-// and implement the core Git protocol logic using go-git.
+// Package protocol - Git Smart HTTP 프로토콜 핸들러 구현
+// collabops-git-http 게이트웨이로부터 전달받은 요청을 처리하고
+// go-git를 사용하여 핵심 Git 프로토콜 로직을 구현함
 package protocol
 
 import (
@@ -22,28 +22,28 @@ import (
 	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
-// UploadPackRequest represents a parsed upload-pack request from the client
+// UploadPackRequest - 클라이언트로부터 파싱된 upload-pack 요청
 type UploadPackRequest struct {
-	Wants        []string
-	Haves        []string
-	Capabilities []string
-	Done         bool
+	Wants        []string // 클라이언트가 원하는 객체 ID들
+	Haves        []string // 클라이언트가 이미 가진 객체 ID들
+	Capabilities []string // 클라이언트 기능 목록
+	Done         bool     // 요청 완료 플래그
 }
 
-// pktLineWriter helps write Git protocol packet lines
+// pktLineWriter - Git 프로토콜 패킷 라인 작성 헬퍼
 type pktLineWriter struct {
 	w io.Writer
 }
 
-// UploadPackHandler handles Git Smart HTTP protocol for fetch operations (executor side)
+// UploadPackHandler - Git fetch 작업을 위한 Smart HTTP 프로토콜 핸들러 (git clone/pull)
 type UploadPackHandler struct {
-	pathConfig       *repository.PathConfig
-	permissionClient permissions.PermissionClient
+	pathConfig       *repository.PathConfig        // 리포지토리 경로 설정
+	permissionClient permissions.PermissionClient // 권한 확인 클라이언트
 }
 
-// NewUploadPackHandler creates a new upload-pack handler for the executor
+// NewUploadPackHandler - 새 upload-pack 핸들러 생성
 func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
-	// Initialize path configuration
+	// 리포지토리 경로 설정 초기화
 	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
@@ -54,23 +54,23 @@ func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
 	}, nil
 }
 
-// HandleInfoRefs handles GET /repos/:owner/:repo/info/refs?service=git-upload-pack
-// This endpoint advertises references and capabilities to the gateway (which forwards to client)
+// HandleInfoRefs - GET /repos/:owner/:repo/info/refs?service=git-upload-pack 처리
+// 리포지토리의 참조(refs)와 기능을 게이트웨이로 전달 (클라이언트에게 전달됨)
 func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Extract path parameters from gateway-forwarded request
+	// 게이트웨이로부터 전달받은 경로 파라미터 추출
 	owner := URLParam(r, "owner")
 	repo := URLParam(r, "repo")
 	service := r.URL.Query().Get("service")
 
-	// Validate service parameter
+	// 서비스 파라미터 검증
 	if service != "git-upload-pack" {
 		http.Error(w, "Invalid service parameter", http.StatusBadRequest)
 		return
 	}
 
-	// Get user ID from gateway context (forwarded header)
+	// 게이트웨이에서 전달한 사용자 ID 확인
 	userID := r.Header.Get("X-USER-ID")
 	if userID == "" {
 		http.Error(w, "Missing user authentication context", http.StatusUnauthorized)

@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// GitError represents errors that occur during Git operations
+// GitError는 Git 작업 중 발생하는 에러를 나타냅니다.
 type GitError struct {
 	// Operation is the Git operation that failed
 	Operation string
@@ -35,7 +35,7 @@ func (e *GitError) Unwrap() error {
 	return e.Err
 }
 
-// NewGitError creates a new GitError
+// NewGitError는 새로운 GitError를 생성합니다.
 func NewGitError(operation, path, ref, message string, err error) *GitError {
 	return &GitError{
 		Operation: operation,
@@ -46,7 +46,7 @@ func NewGitError(operation, path, ref, message string, err error) *GitError {
 	}
 }
 
-// RepositoryNotFoundError indicates that a repository was not found
+// RepositoryNotFoundError는 저장소를 찾을 수 없음을 나타냅니다.
 type RepositoryNotFoundError struct {
 	Path string
 }
@@ -56,7 +56,7 @@ func (e *RepositoryNotFoundError) Error() string {
 	return fmt.Sprintf("repository not found at path: %s", e.Path)
 }
 
-// ReferenceNotFoundError indicates that a Git reference was not found
+// ReferenceNotFoundError는 Git 참조를 찾을 수 없음을 나타냅니다.
 type ReferenceNotFoundError struct {
 	Ref  string
 	Path string
@@ -67,7 +67,7 @@ func (e *ReferenceNotFoundError) Error() string {
 	return fmt.Sprintf("reference %q not found in repository at %s", e.Ref, e.Path)
 }
 
-// PathNotFoundError indicates that a path was not found in a Git tree
+// PathNotFoundError는 Git 트리에서 경로를 찾을 수 없음을 나타냅니다.
 type PathNotFoundError struct {
 	Path string
 	Ref  string
@@ -79,7 +79,7 @@ func (e *PathNotFoundError) Error() string {
 	return fmt.Sprintf("path %q not found at ref %q in repository %s", e.Path, e.Ref, e.Repo)
 }
 
-// InvalidRepositoryError indicates that a directory is not a valid Git repository
+// InvalidRepositoryError는 디렉토리가 유효한 Git 저장소가 아님을 나타냅니다.
 type InvalidRepositoryError struct {
 	Path   string
 	Reason string
