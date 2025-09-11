@@ -264,7 +264,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection) error {
 		return fmt.Errorf("flush advert: %w", err)
 	}
 	// v2 세션을 동기 상태머신으로 처리 (duplex 루프 사용 금지)
-	return s.runV2UploadPackSession(conn)
+	return nil
 }
 
 // handleReceivePack handles git-receive-pack (push) operations
