@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
@@ -37,11 +38,8 @@ func (p *pktLineWriter) writeLine(data string) error {
 	// Calculate length: 4 bytes for length + data (data should NOT include \n)
 	length := len(data) + 4
 	line := fmt.Sprintf("%04x%s", length, data)
-
-	fmt.Printf("🔍🔍🔍 DEBUG: Writing data: %s\n", data)
-	fmt.Printf("🔍🔍🔍 DEBUG: Writing line: %s\n", line)
-
 	_, err := p.writer.Write([]byte(line))
+	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: writeLine: %v\n", line)
 	return err
 }
 
@@ -179,6 +177,7 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 
 // handleGitProtocol handles Git protocol negotiation and duplex communication
 func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: handleGitProtocol\n")
 	s.logger.Info("handleGitProtocol", zap.String("remote_addr", conn.conn.RemoteAddr().String()))
 
 	// 1) 첫 pkt-line (service line) 읽기
@@ -230,7 +229,6 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 	}
 	owner := pathParts[0]
 	repo := strings.TrimSuffix(pathParts[1], ".git")
-
 	conn.owner = owner
 	conn.repo = repo
 
@@ -247,7 +245,7 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 	// 4) 서비스별 처리 (기존 로직 재사용)
 	switch service {
 	case "git-upload-pack":
-		return s.handleUploadPack(conn)
+		return s.handleUploadPack(conn, owner, repo)
 	case "git-receive-pack":
 		return s.handleReceivePack(conn)
 	default:
@@ -256,24 +254,318 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 }
 
 // handleUploadPack handles git-upload-pack (fetch) operations
-func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection) error {
-	if err := protocol.WriteV2Advert(conn.writer, "git-executor", "ls-refs", "fetch"); err != nil {
+func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo string) error {
+	if err := protocol.WriteV2Advert(conn.writer, "git-executor/0.1.0", "ls-refs", "fetch"); err != nil {
 		return fmt.Errorf("failed to send advert: %w", err)
 	}
 	if err := conn.writer.Flush(); err != nil {
 		return fmt.Errorf("flush advert: %w", err)
 	}
 	// v2 세션을 동기 상태머신으로 처리 (duplex 루프 사용 금지)
-	return nil
+	for {
+		// 2) 섹션 하나 읽기 (flush까지)
+		cmds, err := s.readV2Section(conn.reader) // pkt-line 기반
+		fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: cmds: %v\n", cmds)
+		if err != nil {
+			return err
+		}
+		if len(cmds) == 0 {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(cmds[0], "command=ls-refs"):
+			// Parse ls-refs options using helper
+			lsRefsReq, err := protocol.ParseLsRefsSection(cmds)
+			if err != nil {
+				return fmt.Errorf("failed to parse ls-refs section: %w", err)
+			}
+			if err := s.handleLsRefs(conn, owner, repo, lsRefsReq); err != nil { // pkt-line로 refs... 그리고 반드시 flush + conn.writer.Flush()
+				return err
+			}
+			return nil // ls-refs 처리 완료 후 종료
+
+		case strings.HasPrefix(cmds[0], "command=fetch"):
+			// Fetch command detected, read the actual fetch options from next section
+			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: cmd detected fetch: %v\n", cmds)
+
+			// Read the actual fetch options (second section after delimiter)
+			fetchCmds, err := s.readV2Section(conn.reader)
+			if err != nil {
+				return fmt.Errorf("failed to read fetch options: %w", err)
+			}
+			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: fetch options: %v\n", fetchCmds)
+
+			// Parse fetch options using helper
+			fetchReq, err := protocol.ParseFetchSection(fetchCmds)
+			if err != nil {
+				return fmt.Errorf("failed to parse fetch section: %w", err)
+			}
+
+			// Validate fetch support
+			if err := protocol.ValidateFetchSupport(fetchReq); err != nil {
+				return fmt.Errorf("fetch not supported: %w", err)
+			}
+
+			// Get repository for packfile generation
+			pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+			if err != nil {
+				return fmt.Errorf("failed to create path config: %w", err)
+			}
+
+			repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repo)
+			if err != nil {
+				return fmt.Errorf("failed to get repository path: %w", err)
+			}
+
+			// Open repository using our git package
+			gitRepo, err := git.OpenRepository(repoPath)
+			if err != nil {
+				// Send error response according to Git protocol
+				pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
+				if err := pw.Err("repository not found"); err != nil {
+					return fmt.Errorf("failed to write error response: %w", err)
+				}
+				conn.writer.Flush()
+				return nil
+			}
+			defer gitRepo.Close()
+
+			// Get the underlying go-git repository for storer access
+			goGitRepo, ok := gitRepo.(*git.GoGitRepository)
+			if !ok {
+				return fmt.Errorf("repository is not a GoGitRepository")
+			}
+			underlyingRepo := goGitRepo.GetGoGitRepo()
+
+			// Build object list for packfile
+			objectHashes, err := protocol.BuildFetchObjectList(underlyingRepo.Storer, gitRepo, fetchReq)
+			if err != nil {
+				return fmt.Errorf("failed to build fetch object list: %w", err)
+			}
+
+			// packfile 섹션 헤더
+			if err := protocol.WritePackfileSectionHeader(conn.writer); err != nil {
+				return fmt.Errorf("failed to write packfile section header: %w", err)
+			}
+
+			// Write packfile
+			if err := protocol.WritePackfile(conn.writer, underlyingRepo.Storer, objectHashes); err != nil {
+				return fmt.Errorf("failed to write packfile: %w", err)
+			}
+
+			conn.writer.Flush()
+			return nil // 보통 fetch 후 종료
+		}
+	}
+}
+
+// readV2Section reads a v2 section from the reader until flush packet
+func (s *DuplexTCPServer) readV2Section(reader *bufio.Reader) ([]string, error) {
+	var commands []string
+
+	for {
+		// 1) 4바이트 길이 헤더 (hex)
+		hdr := make([]byte, 4)
+
+		if _, err := io.ReadFull(reader, hdr); err != nil {
+			return nil, fmt.Errorf("read len hdr: %w", err)
+		}
+
+		// 2) flush 패킷인지 확인
+		if string(hdr) == "0000" {
+			// 섹션 끝 → 루프 탈출
+			break
+		}
+
+		// 3) 길이 파싱
+		n64, err := strconv.ParseUint(string(hdr), 16, 16)
+		if err != nil {
+			return nil, fmt.Errorf("bad pkt-len %q: %w", string(hdr), err)
+		}
+		n := int(n64)
+
+		// 0001은 delimiter 패킷 (capabilities와 데이터 구분)
+		// delimiter를 만나면 현재 섹션을 종료하고 반환
+		if n == 1 {
+			break
+		}
+
+		if n < 4 {
+			return nil, fmt.Errorf("invalid pkt-len: %d", n)
+		}
+
+		// 4) payload 정확히 n-4바이트 읽기
+		payload := make([]byte, n-4)
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			return nil, fmt.Errorf("read payload: %w", err)
+		}
+
+		// 5) 명령 추가
+		commands = append(commands, string(payload))
+	}
+	return commands, nil
+}
+
+// handleLsRefs handles ls-refs command
+func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo string, lsRefsReq *protocol.LsRefsReq) error {
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: handleLsRefs called with owner=%s, repo=%s, options=%+v\n", owner, repo, lsRefsReq)
+
+	// ls-refs 응답 형식:
+	// 1. capabilities (peel, symrefs 등)
+	// 2. 실제 refs 목록
+	// 3. flush packet
+
+	// capabilities 전송 (클라이언트가 요청한 것만)
+	capabilities := []string{}
+	if lsRefsReq.Peel {
+		capabilities = append(capabilities, "peel")
+	}
+	if lsRefsReq.Symrefs {
+		capabilities = append(capabilities, "symrefs")
+	}
+
+	for _, cap := range capabilities {
+		if err := s.writePktLine(conn, cap); err != nil {
+			return fmt.Errorf("failed to write capability: %w", err)
+		}
+	}
+
+	// 실제 repository에서 refs 가져오기
+	// Create path config
+	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	if err != nil {
+		return fmt.Errorf("failed to create path config: %w", err)
+	}
+
+	// Get repository path
+	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repo)
+	if err != nil {
+		return fmt.Errorf("failed to get repository path: %w", err)
+	}
+
+	// Open repository
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		// Send error response according to Git protocol
+		pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
+		if err := pw.Err("repository not found"); err != nil {
+			return fmt.Errorf("failed to write error response: %w", err)
+		}
+		return conn.writer.Flush()
+	}
+
+	// Get repository references
+	refs, err := gitRepo.References()
+	if err != nil {
+		return fmt.Errorf("failed to get repository references: %w", err)
+	}
+
+	// List references in ls-refs format with filtering
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		refName := ref.Name().String()
+
+		// Apply ref-prefix filtering if specified
+		if len(lsRefsReq.RefPrefix) > 0 {
+			matched := false
+			for _, prefix := range lsRefsReq.RefPrefix {
+				if strings.HasPrefix(refName, prefix) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil // Skip this ref
+			}
+		}
+
+		// Handle different reference types
+		if ref.Type() == plumbing.HashReference {
+			// Regular hash reference
+			hash := ref.Hash().String()
+			if lsRefsReq.Peel && strings.HasPrefix(refName, "refs/tags/") {
+				// For tags with peel option, get the peeled hash (actual object hash)
+				if tagObj, err := gitRepo.TagObject(ref.Hash()); err == nil && tagObj != nil {
+					hash = tagObj.Target.String()
+				}
+			}
+
+			// Format: <hash> <refname>
+			refLine := fmt.Sprintf("%s %s", hash, refName)
+			return s.writePktLine(conn, refLine)
+
+		} else if ref.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
+			// Symbolic reference (e.g., HEAD -> refs/heads/main)
+			target := ref.Target().String()
+			refLine := fmt.Sprintf("@%s %s", target, refName)
+			return s.writePktLine(conn, refLine)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to list references: %w", err)
+	}
+
+	// flush packet 전송 (0000)
+	pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
+	if err := pw.Flush(); err != nil {
+		return fmt.Errorf("failed to write flush packet: %w", err)
+	}
+
+	return conn.writer.Flush()
+}
+
+// parseFetchSection parses fetch section commands using helper
+func (s *DuplexTCPServer) parseFetchSection(commands []string) (*protocol.UploadPackRequest, error) {
+
+	// Use helper's ParseFetchSection function
+	fetchReq, err := protocol.ParseFetchSection(commands)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse fetch section: %w", err)
+	}
+
+	// Convert helper's FetchReq to UploadPackRequest
+	req := &protocol.UploadPackRequest{
+		Wants: make([]string, len(fetchReq.Wants)),
+		Haves: make([]string, len(fetchReq.Haves)),
+	}
+
+	// Convert plumbing.Hash to string
+	for i, want := range fetchReq.Wants {
+		req.Wants[i] = want.String()
+	}
+
+	for i, have := range fetchReq.Haves {
+		req.Haves[i] = have.String()
+	}
+
+	if fetchReq.Done {
+	}
+
+	return req, nil
+}
+
+// writePktLine writes a pkt-line to the connection
+func (s *DuplexTCPServer) writePktLine(conn *DuplexConnection, data string) error {
+	// pkt-line 형식: [4자리 hex 길이][데이터]\n
+	length := len(data) + 4
+	line := fmt.Sprintf("%04x%s", length, data)
+	_, err := conn.writer.WriteString(line)
+	if err != nil {
+		fmt.Printf("⛔️⛔️⛔️ ⛔️⛔️⛔️ ⛔️⛔️⛔️ ERROR: writePktLine: %v\n", err)
+	}
+	return err
 }
 
 // handleReceivePack handles git-receive-pack (push) operations
 func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection) error {
 
 	// Send Git protocol advertisement
-	advertisement := "000eversion 2\n" +
-		"0010agent=git-executor\n" +
-		"000freceive-pack\n" +
+	advertisement := "000eversion 2" +
+		"0010agent=git-executor" +
+		"000freceive-pack" +
 		"0000"
 
 	if _, err := conn.writer.WriteString(advertisement); err != nil {
@@ -450,7 +742,6 @@ func (s *DuplexTCPServer) processUploadPackTCP(conn *DuplexConnection, data []by
 	// Process want/have negotiation directly using Git filesystem access
 	err = s.processWantHaveNegotiationDirect(conn, gogitRepo, uploadReq, pktWriter)
 	if err != nil {
-		fmt.Printf("❌ Failed to process want/have negotiation: %v\n", err)
 		return s.createErrorResponse("Failed to process negotiation")
 	}
 
@@ -517,7 +808,6 @@ func (s *DuplexTCPServer) processWantHaveNegotiationDirect(conn *DuplexConnectio
 		// Get commit object
 		commit, err := repo.CommitObject(hash)
 		if err != nil {
-			fmt.Printf("⚠️  Commit not found: %s\n", wantHash)
 			continue
 		}
 
@@ -619,13 +909,15 @@ func (s *DuplexTCPServer) processGitDataWithSSH(conn *DuplexConnection, data []b
 func (s *DuplexTCPServer) parseGitCommand(data []byte) (string, error) {
 	dataStr := string(data)
 
-	// 디버깅: 실제 데이터 출력
-	fmt.Printf("🔍 DEBUG: Received TCP data:\n%s\n", dataStr)
-	fmt.Printf("�� DEBUG: Data length: %d bytes\n", len(data))
-
 	// Look for actual command from client (not advertisement)
 	if strings.Contains(dataStr, "command=ls-refs") {
 		fmt.Printf("✅ DEBUG: Found ls-refs command\n")
+		return "ls-refs", nil
+	}
+
+	// Also check for direct ls-refs command (from client advertisement)
+	if strings.Contains(dataStr, "ls-refs") && !strings.Contains(dataStr, "version 2") {
+		fmt.Printf("✅ DEBUG: Found ls-refs command (direct)\n")
 		return "ls-refs", nil
 	}
 
@@ -684,36 +976,48 @@ func (s *DuplexTCPServer) createSSHAuth() (transport.AuthMethod, error) {
 // ls-refs 명령을 처리하는 함수 (ls-refs란 명령은 저장소의 모든 브랜치와 태그를 나열하는 명령)
 func (s *DuplexTCPServer) processLsRefsWithSSH(data []byte, owner, repoName string) []byte {
 	// Create path config
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: processLsRefsWithSSH\n")
+
 	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
 		return s.createErrorResponse("Failed to create path config")
 	}
 
+	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: pathConfig: %v\n", pathConfig)
+
 	// Get repository path
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Getting repository path\n")
 	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repoName)
 	if err != nil {
 		return s.createErrorResponse("Invalid repository path")
 	}
+	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: repoPath: %v\n", repoPath)
 
 	// Open repository
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Opening repository\n")
 	gitRepo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		return s.createErrorResponse("Failed to open repository")
 	}
+	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: gitRepo: %v\n", gitRepo)
 
 	// Get repository references
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Getting repository references\n")
 	refs, err := gitRepo.References()
 	if err != nil {
 		return s.createErrorResponse("Failed to get repository references")
 	}
+	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: refs: %v\n", refs)
 
 	// Create response buffer
 	var responseBuffer strings.Builder
 	pktWriter := &pktLineWriter{writer: &responseBuffer}
+	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: pktWriter: %v\n", pktWriter)
 
 	// List references in ls-refs format
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		if ref.Type() == plumbing.HashReference {
+			fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Ref: %v\n", ref)
 			// Format: <hash> <refname>
 			refLine := fmt.Sprintf("%s %s", ref.Hash().String(), ref.Name().String())
 			return pktWriter.writeLine(refLine)
@@ -725,8 +1029,12 @@ func (s *DuplexTCPServer) processLsRefsWithSSH(data []byte, owner, repoName stri
 		return s.createErrorResponse("Failed to list references")
 	}
 
+	fmt.Fprintf(pktWriter.writer, "") // no-op
+
 	// End with flush packet
 	pktWriter.flush()
+
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Wrote references\n")
 
 	return []byte(responseBuffer.String())
 }
