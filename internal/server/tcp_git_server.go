@@ -2,7 +2,7 @@ package server
 
 import (
 	"bufio"
-	"context"
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +20,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/revlist"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"go.uber.org/zap"
@@ -33,9 +34,13 @@ type pktLineWriter struct {
 
 // writeLine writes a packet line in Git protocol format
 func (p *pktLineWriter) writeLine(data string) error {
-	// Calculate length: 4 bytes for length + data + 1 for newline
-	length := len(data) + 1
-	line := fmt.Sprintf("%04x%s\n", length, data)
+	// Calculate length: 4 bytes for length + data (data should NOT include \n)
+	length := len(data) + 4
+	line := fmt.Sprintf("%04x%s", length, data)
+
+	fmt.Printf("🔍🔍🔍 DEBUG: Writing data: %s\n", data)
+	fmt.Printf("🔍🔍🔍 DEBUG: Writing line: %s\n", line)
+
 	_, err := p.writer.Write([]byte(line))
 	return err
 }
@@ -64,6 +69,7 @@ type DuplexConnection struct {
 	owner    string
 	repo     string
 	lastUsed time.Time
+	protoV2  bool
 }
 
 // NewDuplexTCPServer creates a new duplex TCP server
@@ -161,7 +167,7 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 		s.logger.Info("TCP connection closed",
 			zap.String("remote_addr", conn.RemoteAddr().String()))
 	}()
-
+	s.logger.Info("handleConnection", zap.String("remote_addr", conn.RemoteAddr().String()))
 	// Handle Git protocol negotiation
 	if err := s.handleGitProtocol(duplexConn); err != nil {
 		s.logger.Error("Git protocol error",
@@ -173,77 +179,96 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 
 // handleGitProtocol handles Git protocol negotiation and duplex communication
 func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
-	// Read initial Git command
-	line, err := conn.reader.ReadString('\n')
+	s.logger.Info("handleGitProtocol", zap.String("remote_addr", conn.conn.RemoteAddr().String()))
+
+	// 1) 첫 pkt-line (service line) 읽기
+	line, isFlush, err := readPktLine(conn.reader)
 	if err != nil {
-		return fmt.Errorf("failed to read Git command: %w", err)
+		return fmt.Errorf("failed to read first pkt-line: %w", err)
+	}
+	if isFlush {
+		return fmt.Errorf("unexpected flush before service line")
+	}
+	s.logger.Info("Received service pkt-line", zap.ByteString("payload", line))
+
+	// 2) (선택) 추가 pkt-line 수집: 예) "version=2"
+	var protoV2 bool
+	for {
+		l, flush, err := readPktLine(conn.reader)
+		if err != nil {
+			return fmt.Errorf("failed to read subsequent pkt-line: %w", err)
+		}
+		if flush {
+			break // 핸드셰이크 종료
+		}
+		if bytes.Equal(l, []byte("version=2")) {
+			protoV2 = true
+		}
 	}
 
-	line = strings.TrimSpace(line)
-	s.logger.Info("Received Git command",
-		zap.String("remote_addr", conn.conn.RemoteAddr().String()),
-		zap.String("command", line))
-
-	// Parse Git command (e.g., "git-upload-pack 'owner/repo.git'")
-	parts := strings.Fields(line)
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid Git command format: %s", line)
+	// 3) service line 파싱: "<service> /owner/repo.git\0host=..\0"
+	// NUL(\x00) 기준으로 쪼갬
+	parts0 := bytes.Split(line, []byte{0x00})
+	if len(parts0) == 0 || len(parts0[0]) == 0 {
+		return fmt.Errorf("invalid service line (empty)")
 	}
+	// 첫 토큰: "<service> /owner/repo.git"
+	svcAndPath := parts0[0]
+	sp := bytes.IndexByte(svcAndPath, ' ')
+	if sp <= 0 || sp >= len(svcAndPath)-1 {
+		return fmt.Errorf("invalid service+path format: %q", string(svcAndPath))
+	}
+	service := string(svcAndPath[:sp])
+	repoPath := strings.TrimSpace(string(svcAndPath[sp+1:]))
 
-	command := parts[0]
-	repoPath := strings.Trim(parts[1], "'")
-
-	// Extract owner and repo from path
+	// repoPath 정규화: "/owner/repo.git" -> owner/repo
+	repoPath = strings.Trim(repoPath, "'")
+	repoPath = strings.TrimPrefix(repoPath, "/")
 	pathParts := strings.Split(repoPath, "/")
 	if len(pathParts) < 2 {
 		return fmt.Errorf("invalid repository path: %s", repoPath)
 	}
-
 	owner := pathParts[0]
 	repo := strings.TrimSuffix(pathParts[1], ".git")
 
 	conn.owner = owner
 	conn.repo = repo
 
-	fmt.Printf("📁 Repository: %s/%s\n", owner, repo)
+	s.logger.Info("Parsed handshake",
+		zap.String("service", service),
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Bool("proto_v2", protoV2),
+	)
 
-	// Handle different Git commands
-	switch command {
+	// (원하면) proto_v2를 이후 단계에서 환경변수로 넘길 수 있도록 conn에 표시
+	conn.protoV2 = protoV2 // 필요 시 DuplexConnection에 bool 필드 추가
+
+	// 4) 서비스별 처리 (기존 로직 재사용)
+	switch service {
 	case "git-upload-pack":
 		return s.handleUploadPack(conn)
 	case "git-receive-pack":
 		return s.handleReceivePack(conn)
 	default:
-		return fmt.Errorf("unsupported Git command: %s", command)
+		return fmt.Errorf("unsupported Git service: %s", service)
 	}
 }
 
 // handleUploadPack handles git-upload-pack (fetch) operations
 func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection) error {
-	fmt.Printf("⬇️  Handling git-upload-pack for %s/%s\n", conn.owner, conn.repo)
-
-	// Send Git protocol advertisement
-	advertisement := "000eversion 2\n" +
-		"0010agent=git-executor\n" +
-		"000fls-refs\n" +
-		"000efetch\n" +
-		"0000"
-
-	if _, err := conn.writer.WriteString(advertisement); err != nil {
-		return fmt.Errorf("failed to send advertisement: %w", err)
+	if err := protocol.WriteV2Advert(conn.writer, "git-executor", "ls-refs", "fetch"); err != nil {
+		return fmt.Errorf("failed to send advert: %w", err)
 	}
-
 	if err := conn.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush advertisement: %w", err)
+		return fmt.Errorf("flush advert: %w", err)
 	}
-
-	// Start duplex communication
-	return s.startDuplexCommunication(conn, "upload-pack")
+	// v2 세션을 동기 상태머신으로 처리 (duplex 루프 사용 금지)
+	return s.runV2UploadPackSession(conn)
 }
 
 // handleReceivePack handles git-receive-pack (push) operations
 func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection) error {
-	fmt.Printf("⬆️  Handling git-receive-pack for %s/%s\n", conn.owner, conn.repo)
 
 	// Send Git protocol advertisement
 	advertisement := "000eversion 2\n" +
@@ -263,9 +288,36 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection) error {
 	return s.startDuplexCommunication(conn, "receive-pack")
 }
 
+/************** pkt-line helpers **************/
+
+// readPktLine: pkt-line 한 프레임을 읽는다.
+// 반환: payload, isFlush(0000), error
+func readPktLine(r *bufio.Reader) ([]byte, bool, error) {
+	// 4바이트 길이 헤더 (hex)
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(r, hdr); err != nil {
+		return nil, false, err
+	}
+	if bytes.Equal(hdr, []byte("0000")) {
+		return nil, true, nil // flush
+	}
+	n, err := strconv.ParseUint(string(hdr), 16, 16)
+	if err != nil {
+		return nil, false, fmt.Errorf("bad pkt-len: %q", string(hdr))
+	}
+	if n < 4 {
+		return nil, false, fmt.Errorf("invalid pkt-len: %d", n)
+	}
+	payloadLen := int(n) - 4
+	buf := make([]byte, payloadLen)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, false, err
+	}
+	return buf, false, nil
+}
+
 // startDuplexCommunication starts bidirectional communication
 func (s *DuplexTCPServer) startDuplexCommunication(conn *DuplexConnection, operation string) error {
-	fmt.Printf("🔄 Starting duplex communication for %s\n", operation)
 
 	// Create channels for bidirectional communication
 	clientToServer := make(chan []byte, 100)
@@ -285,7 +337,6 @@ func (s *DuplexTCPServer) startDuplexCommunication(conn *DuplexConnection, opera
 			n, err := conn.reader.Read(buffer)
 			if err != nil {
 				if err != io.EOF {
-					fmt.Printf("❌ Error reading from client: %v\n", err)
 				}
 				break
 			}
@@ -303,7 +354,7 @@ func (s *DuplexTCPServer) startDuplexCommunication(conn *DuplexConnection, opera
 
 		for data := range clientToServer {
 			// Process the data (here you would implement actual Git protocol logic)
-			processedData := s.processGitData(data, operation, conn.owner, conn.repo)
+			processedData := s.processGitData(conn, data, operation, conn.owner, conn.repo)
 
 			if len(processedData) > 0 {
 				serverToClient <- processedData
@@ -318,12 +369,10 @@ func (s *DuplexTCPServer) startDuplexCommunication(conn *DuplexConnection, opera
 
 		for data := range serverToClient {
 			if _, err := conn.writer.Write(data); err != nil {
-				fmt.Printf("❌ Error writing to client: %v\n", err)
 				break
 			}
 
 			if err := conn.writer.Flush(); err != nil {
-				fmt.Printf("❌ Error flushing to client: %v\n", err)
 				break
 			}
 		}
@@ -331,34 +380,30 @@ func (s *DuplexTCPServer) startDuplexCommunication(conn *DuplexConnection, opera
 
 	// Wait for all goroutines to complete
 	wg.Wait()
-	fmt.Printf("✅ Duplex communication completed for %s\n", operation)
 
 	return nil
 }
 
 // processGitData processes incoming Git protocol data using upload-pack methods
-func (s *DuplexTCPServer) processGitData(data []byte, operation, owner, repo string) []byte {
-	fmt.Printf("📦 Processing %d bytes for %s/%s (%s)\n", len(data), owner, repo, operation)
+func (s *DuplexTCPServer) processGitData(conn *DuplexConnection, data []byte, operation, owner, repo string) []byte {
 
 	// Check if we should use SSH transport (you can add a flag or config option)
-	useSSH := os.Getenv("USE_SSH_TRANSPORT") == "true"
+	useSSH := os.Getenv("USE_SSH_TRANSPORT") == "true" || true // 임시로 항상 true
 
 	if useSSH {
-		fmt.Printf("🔐 Using SSH transport for Git operations\n")
-		return s.processGitDataWithSSH(data, operation, owner, repo)
+		return s.processGitDataWithSSH(conn, data, operation, owner, repo)
 	}
 
 	// Use local filesystem access (existing method)
 	uploadHandler, err := protocol.NewUploadPackHandler(s.config)
 	if err != nil {
-		fmt.Printf("❌ Failed to create upload-pack handler: %v\n", err)
 		return s.createErrorResponse("Failed to create upload-pack handler")
 	}
 
 	// Route to appropriate handler based on operation
 	switch operation {
 	case "upload-pack":
-		return s.processUploadPackTCP(data, owner, repo, uploadHandler)
+		return s.processUploadPackTCP(conn, data, owner, repo, uploadHandler)
 	case "receive-pack":
 		// For now, return error for receive-pack (push operations)
 		return s.createErrorResponse("Receive-pack not implemented yet")
@@ -367,39 +412,34 @@ func (s *DuplexTCPServer) processGitData(data []byte, operation, owner, repo str
 	}
 }
 
-// processUploadPackTCP processes upload-pack using existing upload-pack handler
-func (s *DuplexTCPServer) processUploadPackTCP(data []byte, owner, repo string, uploadHandler *protocol.UploadPackHandler) []byte {
+// upload-pack 명령을 처리하는 함수 (upload-pack이란 Git에서 객체를 업로드(전송)하는 명령어)
+func (s *DuplexTCPServer) processUploadPackTCP(conn *DuplexConnection, data []byte, owner, repo string, uploadHandler *protocol.UploadPackHandler) []byte {
 	// Create path config directly
 	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
-		fmt.Printf("❌ Failed to create path config: %v\n", err)
 		return s.createErrorResponse("Failed to create path config")
 	}
 
 	// Get repository path
 	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repo)
 	if err != nil {
-		fmt.Printf("❌ Invalid repository path: %v\n", err)
 		return s.createErrorResponse("Invalid repository path")
 	}
 
 	// Ensure repository exists
 	if err := repository.EnsureRepoExists(pathConfig, repoPath); err != nil {
-		fmt.Printf("❌ Repository not found: %v\n", err)
 		return s.createErrorResponse("Repository not found")
 	}
 
 	// Open repository using go-git directly
 	gogitRepo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
-		fmt.Printf("❌ Failed to open repository: %v\n", err)
 		return s.createErrorResponse("Failed to open repository")
 	}
 
 	// Parse the upload-pack request from TCP data
 	uploadReq, err := s.parseUploadPackRequestFromTCP(data)
 	if err != nil {
-		fmt.Printf("❌ Failed to parse upload-pack request: %v\n", err)
 		return s.createErrorResponse("Invalid upload-pack request")
 	}
 
@@ -408,8 +448,7 @@ func (s *DuplexTCPServer) processUploadPackTCP(data []byte, owner, repo string, 
 	pktWriter := &pktLineWriter{writer: &responseBuffer}
 
 	// Process want/have negotiation directly using Git filesystem access
-	ctx := context.Background()
-	err = s.processWantHaveNegotiationDirect(ctx, gogitRepo, uploadReq, pktWriter)
+	err = s.processWantHaveNegotiationDirect(conn, gogitRepo, uploadReq, pktWriter)
 	if err != nil {
 		fmt.Printf("❌ Failed to process want/have negotiation: %v\n", err)
 		return s.createErrorResponse("Failed to process negotiation")
@@ -463,7 +502,7 @@ func (s *DuplexTCPServer) parseUploadPackRequestFromTCP(data []byte) (*protocol.
 }
 
 // processWantHaveNegotiationDirect processes want/have negotiation directly using Git filesystem
-func (s *DuplexTCPServer) processWantHaveNegotiationDirect(ctx context.Context, repo *gogit.Repository, req *protocol.UploadPackRequest, pktWriter *pktLineWriter) error {
+func (s *DuplexTCPServer) processWantHaveNegotiationDirect(conn *DuplexConnection, repo *gogit.Repository, req *protocol.UploadPackRequest, pktWriter *pktLineWriter) error {
 
 	// Collect objects to send
 	objectsToSend := make(map[string]*object.Commit)
@@ -485,29 +524,43 @@ func (s *DuplexTCPServer) processWantHaveNegotiationDirect(ctx context.Context, 
 		// Walk commit history to collect all reachable commits
 		err = s.walkCommitHistory(repo, commit, objectsToSend, req.Haves)
 		if err != nil {
+			fmt.Errorf("failed to walk commit history: %w", err)
 			return fmt.Errorf("failed to walk commit history: %w", err)
 		}
 	}
-
-	// Send packfile header
-	packfileHeader := fmt.Sprintf("# pack with %d objects\n", len(objectsToSend))
-	if err := pktWriter.writeLine(packfileHeader); err != nil {
-		return err
+	// 1) 섹션 헤더 (pkt-line)
+	if err := protocol.WritePackfileSectionHeader(conn.writer); err != nil {
+		return fmt.Errorf("failed to write packfile section header: %w", err)
 	}
 
-	// Send object information
-	for hash, commit := range objectsToSend {
-		objectInfo := fmt.Sprintf("commit %s %s", hash, commit.Message)
-		if err := pktWriter.writeLine(objectInfo); err != nil {
-			return err
-		}
+	// 2) 전송할 해시 집합 계산 (want/have → 전체 객체 폐쇄)
+	var wants, haves []plumbing.Hash
+	for _, w := range req.Wants {
+		wants = append(wants, plumbing.NewHash(w))
+	}
+	for _, h := range req.Haves {
+		haves = append(haves, plumbing.NewHash(h))
 	}
 
-	// End with flush packet
-	return pktWriter.flush()
+	objs, err := revlist.Objects(repo.Storer, wants, haves)
+	if err != nil {
+		return fmt.Errorf("revlist.Objects failed: %w", err)
+	}
+
+	// 3) RAW PACK 전송 (pkt-line 아님)
+	if err := protocol.WritePackfile(conn.writer, repo.Storer, objs); err != nil {
+		return fmt.Errorf("failed to encode packfile: %w", err)
+	}
+
+	// 4) bufio.Writer라면 flush
+	if err := conn.writer.Flush(); err != nil {
+		return fmt.Errorf("flush failed: %w", err)
+	}
+
+	return nil
 }
 
-// walkCommitHistory walks the commit history and collects commits
+// 커밋 히스토리 순회하며, 커밋 조각을 모으는 함수
 func (s *DuplexTCPServer) walkCommitHistory(repo *gogit.Repository, commit *object.Commit, collected map[string]*object.Commit, haves []string) error {
 	hash := commit.Hash.String()
 
@@ -544,49 +597,48 @@ func (s *DuplexTCPServer) walkCommitHistory(repo *gogit.Repository, commit *obje
 }
 
 // processGitDataWithSSH processes Git data using go-git SSH transport
-func (s *DuplexTCPServer) processGitDataWithSSH(data []byte, operation, owner, repo string) []byte {
-	fmt.Printf("🔐 Processing %d bytes for %s/%s (%s) using SSH transport\n", len(data), owner, repo, operation)
-
-	// Create SSH authentication
-	sshAuth, err := s.createSSHAuth()
+func (s *DuplexTCPServer) processGitDataWithSSH(conn *DuplexConnection, data []byte, operation, owner, repo string) []byte {
+	// Parse the first few pkt-lines to determine the command
+	command, err := s.parseGitCommand(data)
 	if err != nil {
-		fmt.Printf("❌ Failed to create SSH auth: %v\n", err)
-		return s.createErrorResponse("Failed to create SSH authentication")
+		return s.createErrorResponse("Failed to parse Git command")
 	}
 
-	// Create remote repository URL
-	remoteURL := fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
-
-	// Create temporary directory for cloning
-	tempDir := fmt.Sprintf("/tmp/git-temp-%s-%s-%d", owner, repo, time.Now().UnixNano())
-	defer func() {
-		// Clean up temporary directory
-		os.RemoveAll(tempDir)
-	}()
-
-	// Clone repository using SSH
-	gitRepo, err := gogit.PlainClone(tempDir, false, &gogit.CloneOptions{
-		URL:      remoteURL,
-		Auth:     sshAuth,
-		Progress: os.Stdout,
-	})
-	if err != nil {
-		fmt.Printf("❌ Failed to clone repository via SSH: %v\n", err)
-		return s.createErrorResponse("Failed to clone repository via SSH")
-	}
-
-	// Process the operation based on type
-	switch operation {
-	case "upload-pack":
-		return s.processUploadPackWithSSH(gitRepo, data, owner, repo)
-	case "receive-pack":
-		return s.processReceivePackWithSSH(gitRepo, data, owner, repo)
+	// Route based on the actual Git command
+	switch command {
+	case "ls-refs":
+		return s.processLsRefsWithSSH(data, owner, repo)
+	case "fetch":
+		return s.processUploadPackWithSSH(conn, data, owner, repo)
 	default:
-		return s.createErrorResponse("Unsupported operation: " + operation)
+		return s.createErrorResponse("Unsupported Git command: " + command)
 	}
 }
 
-// createSSHAuth creates SSH authentication for go-git
+// parseGitCommand parses the Git command from TCP data
+func (s *DuplexTCPServer) parseGitCommand(data []byte) (string, error) {
+	dataStr := string(data)
+
+	// 디버깅: 실제 데이터 출력
+	fmt.Printf("🔍 DEBUG: Received TCP data:\n%s\n", dataStr)
+	fmt.Printf("�� DEBUG: Data length: %d bytes\n", len(data))
+
+	// Look for actual command from client (not advertisement)
+	if strings.Contains(dataStr, "command=ls-refs") {
+		fmt.Printf("✅ DEBUG: Found ls-refs command\n")
+		return "ls-refs", nil
+	}
+
+	// Look for fetch command (want/have negotiation)
+	if strings.Contains(dataStr, "want ") {
+		fmt.Printf("✅ DEBUG: Found fetch command\n")
+		return "fetch", nil
+	}
+
+	return "", fmt.Errorf("unknown Git command")
+}
+
+// go-git을 위한 ssh
 func (s *DuplexTCPServer) createSSHAuth() (transport.AuthMethod, error) {
 	// Try to use SSH key from default location
 	sshKeyPath := os.Getenv("HOME") + "/.ssh/id_rsa"
@@ -629,12 +681,29 @@ func (s *DuplexTCPServer) createSSHAuth() (transport.AuthMethod, error) {
 	return auth, nil
 }
 
-// processUploadPackWithSSH processes upload-pack using SSH transport
-func (s *DuplexTCPServer) processUploadPackWithSSH(gitRepo *gogit.Repository, data []byte, owner, repoName string) []byte {
+// ls-refs 명령을 처리하는 함수 (ls-refs란 명령은 저장소의 모든 브랜치와 태그를 나열하는 명령)
+func (s *DuplexTCPServer) processLsRefsWithSSH(data []byte, owner, repoName string) []byte {
+	// Create path config
+	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	if err != nil {
+		return s.createErrorResponse("Failed to create path config")
+	}
+
+	// Get repository path
+	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repoName)
+	if err != nil {
+		return s.createErrorResponse("Invalid repository path")
+	}
+
+	// Open repository
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return s.createErrorResponse("Failed to open repository")
+	}
+
 	// Get repository references
 	refs, err := gitRepo.References()
 	if err != nil {
-		fmt.Printf("❌ Failed to get references: %v\n", err)
 		return s.createErrorResponse("Failed to get repository references")
 	}
 
@@ -642,26 +711,17 @@ func (s *DuplexTCPServer) processUploadPackWithSSH(gitRepo *gogit.Repository, da
 	var responseBuffer strings.Builder
 	pktWriter := &pktLineWriter{writer: &responseBuffer}
 
-	// Write Git protocol advertisement
-	advertisement := "000eversion 2\n" +
-		"0010agent=git-executor-ssh\n" +
-		"000fls-refs\n" +
-		"000efetch\n" +
-		"0000"
-
-	responseBuffer.WriteString(advertisement)
-
-	// List references
+	// List references in ls-refs format
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		if ref.Type() == plumbing.HashReference {
-			refLine := fmt.Sprintf("%s %s\n", ref.Hash().String(), ref.Name().String())
+			// Format: <hash> <refname>
+			refLine := fmt.Sprintf("%s %s", ref.Hash().String(), ref.Name().String())
 			return pktWriter.writeLine(refLine)
 		}
 		return nil
 	})
 
 	if err != nil {
-		fmt.Printf("❌ Failed to list references: %v\n", err)
 		return s.createErrorResponse("Failed to list references")
 	}
 
@@ -671,13 +731,50 @@ func (s *DuplexTCPServer) processUploadPackWithSSH(gitRepo *gogit.Repository, da
 	return []byte(responseBuffer.String())
 }
 
-// processReceivePackWithSSH processes receive-pack using SSH transport
+// upload-pack 명령을 처리하는 함수 (upload-pack이란 Git에서 객체를 업로드(전송)하는 명령어)
+func (s *DuplexTCPServer) processUploadPackWithSSH(conn *DuplexConnection, data []byte, owner, repoName string) []byte {
+	// Create path config
+	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	if err != nil {
+		return s.createErrorResponse("Failed to create path config")
+	}
+
+	// Get repository path
+	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repoName)
+	if err != nil {
+		return s.createErrorResponse("Invalid repository path")
+	}
+
+	// Open repository
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return s.createErrorResponse("Failed to open repository")
+	}
+
+	// Parse upload-pack request
+	uploadReq, err := s.parseUploadPackRequestFromTCP(data)
+	if err != nil {
+		return s.createErrorResponse("Invalid upload-pack request")
+	}
+
+	// Create response buffer
+	var responseBuffer strings.Builder
+	pktWriter := &pktLineWriter{writer: &responseBuffer}
+
+	// Process want/have negotiation
+	err = s.processWantHaveNegotiationDirect(conn, gitRepo, uploadReq, pktWriter)
+	if err != nil {
+		return s.createErrorResponse("Failed to process negotiation")
+	}
+
+	return []byte(responseBuffer.String())
+}
+
+// receive-pack 명령을 처리하는 함수 (receive-pack이란 Git에서 객체를 수신(받는)하는 명령어)
 func (s *DuplexTCPServer) processReceivePackWithSSH(gitRepo *gogit.Repository, data []byte, owner, repoName string) []byte {
 	// For receive-pack, we would need to parse the incoming pack data
 	// and apply it to the repository
 	// This is more complex and would require implementing the full receive-pack protocol
-
-	fmt.Printf("📤 Processing receive-pack via SSH for %s/%s\n", owner, repoName)
 
 	// For now, return a simple acknowledgment
 	response := "000eversion 2\n" +
