@@ -37,7 +37,7 @@ type pktLineWriter struct {
 
 // UploadPackHandler - Git fetch 작업을 위한 Smart HTTP 프로토콜 핸들러 (git clone/pull)
 type UploadPackHandler struct {
-	pathConfig       *repository.PathConfig        // 리포지토리 경로 설정
+	pathConfig       *repository.PathConfig       // 리포지토리 경로 설정
 	permissionClient permissions.PermissionClient // 권한 확인 클라이언트
 }
 

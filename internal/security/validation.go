@@ -20,19 +20,19 @@ import (
 // ValidationConfig - 검증 프레임워크 설정
 type ValidationConfig struct {
 	MaxFileSize             int64    `yaml:"max_file_size" json:"max_file_size"`                         // 최대 파일 크기
-	MaxCommitMessageLength  int      `yaml:"max_commit_message_length" json:"max_commit_message_length"`   // 커밋 메시지 최대 길이
+	MaxCommitMessageLength  int      `yaml:"max_commit_message_length" json:"max_commit_message_length"` // 커밋 메시지 최대 길이
 	MaxPathLength           int      `yaml:"max_path_length" json:"max_path_length"`                     // 경로 최대 길이
-	MaxFilesPerCommit       int      `yaml:"max_files_per_commit" json:"max_files_per_commit"`             // 커밋당 최대 파일 수
-	AllowedFileExtensions   []string `yaml:"allowed_file_extensions" json:"allowed_file_extensions"`       // 허용된 파일 확장자
-	BannedFileExtensions    []string `yaml:"banned_file_extensions" json:"banned_file_extensions"`         // 금지된 파일 확장자
+	MaxFilesPerCommit       int      `yaml:"max_files_per_commit" json:"max_files_per_commit"`           // 커밋당 최대 파일 수
+	AllowedFileExtensions   []string `yaml:"allowed_file_extensions" json:"allowed_file_extensions"`     // 허용된 파일 확장자
+	BannedFileExtensions    []string `yaml:"banned_file_extensions" json:"banned_file_extensions"`       // 금지된 파일 확장자
 	EnableContentValidation bool     `yaml:"enable_content_validation" json:"enable_content_validation"` // 컨텐츠 검증 활성화
 	EnablePathCleaning      bool     `yaml:"enable_path_cleaning" json:"enable_path_cleaning"`           // 경로 정리 활성화
 }
 
 // ValidationFramework - validator/v10을 사용한 종합 검증 프레임워크
 type ValidationFramework struct {
-	config    *ValidationConfig // 검증 설정
-	logger    *logging.Logger   // 로거
+	config    *ValidationConfig   // 검증 설정
+	logger    *logging.Logger     // 로거
 	validator *validator.Validate // 검증자
 
 	// Git 전용 검증을 위한 컴파일된 정규식 패턴
@@ -48,7 +48,7 @@ type ValidationFramework struct {
 type FileOperationRequest struct {
 	Content        string `json:"content" validate:"required"`                       // 파일 내용 (필수)
 	CommitMessage  string `json:"commit_message" validate:"required,min=1,max=2048"` // 커밋 메시지 (필수, 1-2048자)
-	Branch         string `json:"branch" validate:"required,git_branch"`            // 브랜치 이름 (필수, Git 브랜치 형식)
+	Branch         string `json:"branch" validate:"required,git_branch"`             // 브랜치 이름 (필수, Git 브랜치 형식)
 	AuthorName     string `json:"author_name" validate:"required,min=1,max=100"`
 	AuthorEmail    string `json:"author_email" validate:"required,email"`
 	CommitterName  string `json:"committer_name,omitempty" validate:"omitempty,min=1,max=100"`

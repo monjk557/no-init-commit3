@@ -83,10 +83,10 @@ func ginContextMiddleware() gin.HandlerFunc {
 
 // Server - 통합 모니터링을 갖춘 HTTP 서버 구조체
 type Server struct {
-	server               *http.Server              // 실제 HTTP 서버 인스턴스
-	config               *config.Config            // 애플리케이션 설정
-	logger               *logging.Logger           // 로거
-	observabilityManager *observability.Manager    // 모니터링 매니저 (메트릭, 추적, 헬스체크)
+	server               *http.Server           // 실제 HTTP 서버 인스턴스
+	config               *config.Config         // 애플리케이션 설정
+	logger               *logging.Logger        // 로거
+	observabilityManager *observability.Manager // 모니터링 매니저 (메트릭, 추적, 헬스체크)
 }
 
 // New - 모니터링 기능을 갖춘 새 HTTP 서버 인스턴스 생성
