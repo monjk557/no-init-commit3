@@ -177,7 +177,6 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 
 // handleGitProtocol handles Git protocol negotiation and duplex communication
 func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: handleGitProtocol\n")
 	s.logger.Info("handleGitProtocol", zap.String("remote_addr", conn.conn.RemoteAddr().String()))
 
 	// 1) 첫 pkt-line (service line) 읽기
@@ -265,7 +264,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 	for {
 		// 2) 섹션 하나 읽기 (flush까지)
 		cmds, err := s.readV2Section(conn.reader) // pkt-line 기반
-		fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: cmds: %v\n", cmds)
+
 		if err != nil {
 			return err
 		}
@@ -283,7 +282,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			if err := s.handleLsRefs(conn, owner, repo, lsRefsReq); err != nil { // pkt-line로 refs... 그리고 반드시 flush + conn.writer.Flush()
 				return err
 			}
-			return nil // ls-refs 처리 완료 후 종료
+			continue
 
 		case strings.HasPrefix(cmds[0], "command=fetch"):
 			// Fetch command detected, read the actual fetch options from next section
@@ -409,7 +408,6 @@ func (s *DuplexTCPServer) readV2Section(reader *bufio.Reader) ([]string, error) 
 
 // handleLsRefs handles ls-refs command
 func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo string, lsRefsReq *protocol.LsRefsReq) error {
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: handleLsRefs called with owner=%s, repo=%s, options=%+v\n", owner, repo, lsRefsReq)
 
 	// ls-refs 응답 형식:
 	// 1. capabilities (peel, symrefs 등)
@@ -911,19 +909,16 @@ func (s *DuplexTCPServer) parseGitCommand(data []byte) (string, error) {
 
 	// Look for actual command from client (not advertisement)
 	if strings.Contains(dataStr, "command=ls-refs") {
-		fmt.Printf("✅ DEBUG: Found ls-refs command\n")
 		return "ls-refs", nil
 	}
 
 	// Also check for direct ls-refs command (from client advertisement)
 	if strings.Contains(dataStr, "ls-refs") && !strings.Contains(dataStr, "version 2") {
-		fmt.Printf("✅ DEBUG: Found ls-refs command (direct)\n")
 		return "ls-refs", nil
 	}
 
 	// Look for fetch command (want/have negotiation)
 	if strings.Contains(dataStr, "want ") {
-		fmt.Printf("✅ DEBUG: Found fetch command\n")
 		return "fetch", nil
 	}
 
@@ -976,48 +971,37 @@ func (s *DuplexTCPServer) createSSHAuth() (transport.AuthMethod, error) {
 // ls-refs 명령을 처리하는 함수 (ls-refs란 명령은 저장소의 모든 브랜치와 태그를 나열하는 명령)
 func (s *DuplexTCPServer) processLsRefsWithSSH(data []byte, owner, repoName string) []byte {
 	// Create path config
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: processLsRefsWithSSH\n")
 
 	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
 		return s.createErrorResponse("Failed to create path config")
 	}
 
-	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: pathConfig: %v\n", pathConfig)
-
 	// Get repository path
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Getting repository path\n")
 	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repoName)
 	if err != nil {
 		return s.createErrorResponse("Invalid repository path")
 	}
-	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: repoPath: %v\n", repoPath)
 
 	// Open repository
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Opening repository\n")
 	gitRepo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		return s.createErrorResponse("Failed to open repository")
 	}
-	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: gitRepo: %v\n", gitRepo)
 
 	// Get repository references
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Getting repository references\n")
 	refs, err := gitRepo.References()
 	if err != nil {
 		return s.createErrorResponse("Failed to get repository references")
 	}
-	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: refs: %v\n", refs)
 
 	// Create response buffer
 	var responseBuffer strings.Builder
 	pktWriter := &pktLineWriter{writer: &responseBuffer}
-	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: pktWriter: %v\n", pktWriter)
 
 	// List references in ls-refs format
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		if ref.Type() == plumbing.HashReference {
-			fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Ref: %v\n", ref)
 			// Format: <hash> <refname>
 			refLine := fmt.Sprintf("%s %s", ref.Hash().String(), ref.Name().String())
 			return pktWriter.writeLine(refLine)
@@ -1033,8 +1017,6 @@ func (s *DuplexTCPServer) processLsRefsWithSSH(data []byte, owner, repoName stri
 
 	// End with flush packet
 	pktWriter.flush()
-
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Wrote references\n")
 
 	return []byte(responseBuffer.String())
 }
