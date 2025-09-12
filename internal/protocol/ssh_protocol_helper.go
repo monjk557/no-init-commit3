@@ -94,20 +94,16 @@ func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
 }
 
 func WritePackfile(w io.Writer, st storer.EncodedObjectStorer, hashes []plumbing.Hash) error {
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: WritePackfile called with %d objects\n", len(hashes))
 
 	// Use go-git's packfile encoder with the correct signature
 	enc := packfile.NewEncoder(w, st, true) // ref-delta 사용 여부
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Encoder created, starting encode...\n")
 
 	// The encoder.Encode method expects []plumbing.Hash, not []*ObjectToPack
-	packHash, err := enc.Encode(hashes, 0) // packWindow=0이면 델타 탐색 비활성화
+	_, err := enc.Encode(hashes, 0)
 	if err != nil {
-		fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Encode failed: %v\n", err)
 		return err
 	}
 
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Encode successful, pack hash: %s\n", packHash.String())
 	return nil
 }
 
@@ -117,7 +113,7 @@ func WritePackfileSectionHeader(w io.Writer) error {
 	if err := pw.WriteLine("packfile"); err != nil {
 		return err
 	}
-	return pw.Flush() // 0000
+	return nil // 0000
 }
 
 // pkt-line 프로토콜 작성을 위한 라이브러리

@@ -41,7 +41,6 @@ func (p *pktLineWriter) writeLine(data string) error {
 	length := len(data) + 4
 	line := fmt.Sprintf("%04x%s", length, data)
 	_, err := p.writer.Write([]byte(line))
-	fmt.Printf("✅✅✅ ✅✅✅ ✅✅✅ DEBUG: writeLine: %v\n", line)
 	return err
 }
 
@@ -275,6 +274,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 		}
 
 		switch {
+		// ls-refs 명령
 		case strings.HasPrefix(cmds[0], "command=ls-refs"):
 			// Parse ls-refs options using helper
 			lsRefsReq, err := protocol.ParseLsRefsSection(cmds)
@@ -286,40 +286,40 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			}
 			continue
 
+		// fetch 명령
 		case strings.HasPrefix(cmds[0], "command=fetch"):
-			// Fetch command detected, read the actual fetch options from next section
-			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: cmd detected fetch: %v\n", cmds)
+			// fetch 명령 감지, 실제 fetch 옵션 읽기
 
 			// Read the actual fetch options (second section after delimiter)
 			fetchCmds, err := s.readV2Section(conn.reader)
 			if err != nil {
 				return fmt.Errorf("failed to read fetch options: %w", err)
 			}
-			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: fetch options: %v\n", fetchCmds)
 
-			// Parse fetch options using helper
+			// fetch 옵션 파싱
 			fetchReq, err := protocol.ParseFetchSection(fetchCmds)
 			if err != nil {
 				return fmt.Errorf("failed to parse fetch section: %w", err)
 			}
 
-			// Validate fetch support
+			// fetch 지원 여부 확인
 			if err := protocol.ValidateFetchSupport(fetchReq); err != nil {
 				return fmt.Errorf("fetch not supported: %w", err)
 			}
 
-			// Get repository for packfile generation
+			// 팩파일 생성을 위한 저장소 가져오기
 			pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 			if err != nil {
 				return fmt.Errorf("failed to create path config: %w", err)
 			}
 
+			// 저장소 경로 가져오기
 			repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repo)
 			if err != nil {
 				return fmt.Errorf("failed to get repository path: %w", err)
 			}
 
-			// Open repository using our git package
+			// 저장소 열기
 			gitRepo, err := git.OpenRepository(repoPath)
 			if err != nil {
 				// Send error response according to Git protocol
@@ -332,30 +332,27 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			}
 			defer gitRepo.Close()
 
-			// Get the underlying go-git repository for storer access
+			// 실제 go-git 저장소 가져오기
 			goGitRepo, ok := gitRepo.(*git.GoGitRepository)
 			if !ok {
 				return fmt.Errorf("repository is not a GoGitRepository")
 			}
 			underlyingRepo := goGitRepo.GetGoGitRepo()
+			// 객체 목록 생성
 
-			// Build object list for packfile
-			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Building fetch object list\n")
-			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Wants: %v\n", fetchReq.Wants)
-			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Haves: %v\n", fetchReq.Haves)
-
+			// 팩파일 생성을 위한 객체 목록 생성
 			objectHashes, err := protocol.BuildFetchObjectList(underlyingRepo.Storer, gitRepo, fetchReq)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch object list: %w", err)
 			}
-			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Found %d objects to send\n", len(objectHashes))
 
 			// packfile 섹션 헤더
 			if err := protocol.WritePackfileSectionHeader(conn.writer); err != nil {
 				return fmt.Errorf("failed to write packfile section header: %w", err)
 			}
 
-			// Write packfile using sideband format for Git V2 protocol
+			// 팩파일 전송
+			fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: packfile sent %v\n", objectHashes)
 			if err := s.writePackfileWithSideband(conn, underlyingRepo.Storer, objectHashes, fetchReq); err != nil {
 				return fmt.Errorf("failed to write packfile: %w", err)
 			}
@@ -368,40 +365,78 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 	}
 }
 
-// writePackfileWithSideband writes packfile using sideband format for Git V2 protocol
-func (s *DuplexTCPServer) writePackfileWithSideband(conn *DuplexConnection, st storer.EncodedObjectStorer, hashes []plumbing.Hash, fetchReq *protocol.FetchReq) error {
+type sidebandWriter struct {
+	w         io.Writer
+	channel   byte // 1=pack, 2=progress, 3=fatal
+	chunkSize int  // payload(채널 포함) 최대 길이
+}
 
-	useRefDelta := !fetchReq.OfsDelta // ofs-delta 요청 → ref-delta 비활성화
+func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
+	// pkt-line 총 길이(4바이트 헤더 포함) 최대 65520.
+	// payload = length-4, 그 중 1바이트는 채널이 차지.
+	// 안전하게 payload(채널 포함) 65515 사용.
+	return &sidebandWriter{w: w, channel: 0x01, chunkSize: 65515}
+}
 
-	// 1) 섹션 헤더 (공통)
-	if err := s.writePackfileSectionHeader(conn.writer); err != nil {
-		return fmt.Errorf("packfile header: %w", err)
+func (sb *sidebandWriter) Write(p []byte) (int, error) {
+	total := 0
+	for len(p) > 0 {
+		n := sb.chunkSize - 1 // 채널 바이트(1)를 뺀 실제 데이터 공간
+		if n > len(p) {
+			n = len(p)
+		}
+		chunk := p[:n]
+		p = p[n:]
+
+		payloadLen := 1 + len(chunk) // [channel][data...]
+		length := payloadLen + 4     // pkt-line 총 길이
+		if _, err := fmt.Fprintf(sb.w, "%04x", length); err != nil {
+			return total, err
+		}
+		if _, err := sb.w.Write([]byte{sb.channel}); err != nil {
+			return total, err
+		}
+		if _, err := sb.w.Write(chunk); err != nil {
+			return total, err
+		}
+		total += len(chunk)
+	}
+	return total, nil
+}
+
+func (sb *sidebandWriter) Flush() error {
+	_, err := sb.w.Write([]byte("0000")) // sideband 스트림 종료
+	return err
+}
+
+// --- main: v2 side-band-64k로 PACK 전송 ---
+func (s *DuplexTCPServer) writePackfileWithSideband(
+	conn *DuplexConnection,
+	st storer.EncodedObjectStorer,
+	hashes []plumbing.Hash,
+	fetchReq *protocol.FetchReq,
+) error {
+	// v2 packfile 스트림은 항상 side-band-64k.
+	// OfsDelta 요청 시 보통 ref-delta를 끔.
+	useRefDelta := !fetchReq.OfsDelta
+
+	// 채널 1(sideband=pack data) writer
+	sbw := newSidebandWriter(conn.writer, 0x01)
+
+	enc := packfile.NewEncoder(sbw, st, useRefDelta)
+
+	// go-git v5: Encode(hashes []plumbing.Hash, packWindow uint)
+	packWindow := uint(0) // Disable delta search for now
+	if _, err := enc.Encode(hashes, packWindow); err != nil {
+		return fmt.Errorf("encode pack (sideband): %w", err)
 	}
 
-	// 2) 본문 전송
-	if fetchReq.SidebandAll {
-		// sideband 채널 1로 pkt-line 프레이밍하여 전송
-		sbw := newSidebandWriter(conn.writer, 0x01)
-
-		enc := packfile.NewEncoder(sbw, st, useRefDelta)
-		if _, err := enc.Encode(&HashIter{St: st, Hashes: hashes}); err != nil {
-			// sideband 채널 3(fatal)로 에러 메시지를 보낼 수도 있으나
-			// 여기선 단순 리턴
-			return fmt.Errorf("encode pack (sideband): %w", err)
-		}
-		// sideband 스트림 종료
-		if err := sbw.Flush(); err != nil {
-			return fmt.Errorf("sideband flush: %w", err)
-		}
-	} else {
-		// RAW 스트리밍 (pkt-line 절대 금지)
-		enc := packfile.NewEncoder(conn.writer, st, useRefDelta)
-		if _, err := enc.Encode(&HashIter{St: st, Hashes: hashes}); err != nil {
-			return fmt.Errorf("encode pack (raw): %w", err)
-		}
+	// sideband 스트림 종료
+	if err := sbw.Flush(); err != nil {
+		return fmt.Errorf("sideband flush: %w", err)
 	}
 
-	// 3) bufio.Writer라면 마지막 flush
+	// bufio.Writer면 최종 flush
 	if err := conn.writer.Flush(); err != nil {
 		return fmt.Errorf("socket flush: %w", err)
 	}
@@ -562,36 +597,6 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 	}
 
 	return conn.writer.Flush()
-}
-
-// parseFetchSection parses fetch section commands using helper
-func (s *DuplexTCPServer) parseFetchSection(commands []string) (*protocol.UploadPackRequest, error) {
-
-	// Use helper's ParseFetchSection function
-	fetchReq, err := protocol.ParseFetchSection(commands)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse fetch section: %w", err)
-	}
-
-	// Convert helper's FetchReq to UploadPackRequest
-	req := &protocol.UploadPackRequest{
-		Wants: make([]string, len(fetchReq.Wants)),
-		Haves: make([]string, len(fetchReq.Haves)),
-	}
-
-	// Convert plumbing.Hash to string
-	for i, want := range fetchReq.Wants {
-		req.Wants[i] = want.String()
-	}
-
-	for i, have := range fetchReq.Haves {
-		req.Haves[i] = have.String()
-	}
-
-	if fetchReq.Done {
-	}
-
-	return req, nil
 }
 
 // writePktLine writes a pkt-line to the connection
