@@ -1,3 +1,5 @@
+// Package git은 go-git 라이브러리를 사용한 Git 저장소 인터페이스 구현을 제공합니다.
+// Repository 인터페이스의 구체적인 구현체로서 Git 작업을 수행합니다.
 package git
 
 import (
@@ -14,19 +16,22 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// GoGitRepository implements the Repository interface using go-git
+// GoGitRepository는 go-git을 사용하여 Repository 인터페이스를 구현합니다.
+// 내부적으로 go-git 라이브러리를 사용하여 Git 작업을 수행합니다.
 type GoGitRepository struct {
 	path string
 	repo *git.Repository
 	mu   sync.RWMutex // Protects concurrent access to repo
 }
 
-// OpenRepository opens a Git repository at the specified path
+// OpenRepository는 지정된 경로에서 Git 저장소를 엽니다.
+// 캐시를 사용하지 않는 기본 오픈 방식입니다.
 func OpenRepository(path string) (Repository, error) {
 	return openRepositoryInternal(path, false)
 }
 
-// OpenRepositoryWithCache opens a Git repository at the specified path using the global cache
+// OpenRepositoryWithCache는 전역 캐시를 사용하여 지정된 경로에서 Git 저장소를 엽니다.
+// 성능 향상을 위해 저장소 인스턴스를 캐시합니다.
 func OpenRepositoryWithCache(path string) (Repository, error) {
 	return openRepositoryInternal(path, true)
 }
@@ -331,7 +336,8 @@ func convertFileMode(mode filemode.FileMode) EntryType {
 	}
 }
 
-// convertCommit converts a go-git commit to our Commit format
+// convertCommit은 go-git 커밋을 내부 Commit 형식으로 변환합니다.
+// 커밋 메시지를 정리하고 작성자/커밋터 정보를 설정합니다.
 func convertCommit(c *object.Commit) Commit {
 	var parentHashes []string
 	for _, parent := range c.ParentHashes {

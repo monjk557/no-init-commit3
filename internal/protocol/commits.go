@@ -1,5 +1,5 @@
-// Package protocol implements Git commit log REST API endpoints for the executor.
-// This file handles commit history operations that return paginated commit data.
+// Package protocol은 Git 커밋 로그 REST API 엔드포인트를 구현합니다.
+// 페이지네이션이 적용된 커밋 데이터를 반환하는 커밋 히스토리 작업을 처리합니다.
 package protocol
 
 import (
@@ -16,7 +16,8 @@ import (
 	"github.com/collabops/git-executor/internal/repository"
 )
 
-// CommitsHandler handles Git commit log REST API endpoints
+// CommitsHandler는 Git 커밋 로그 REST API 엔드포인트를 처리합니다.
+// 커밋 히스토리 조회 요청을 받아서 페이지네이션과 함께 응답합니다.
 type CommitsHandler struct {
 	pathConfig       *repository.PathConfig
 	permissionClient permissions.PermissionClient
@@ -32,7 +33,8 @@ type CommitsRequestParams struct {
 	UserID string
 }
 
-// CommitsResponse represents the response structure for commit log endpoints
+// CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.
+// 커밋 목록과 함께 페이지네이션 정보를 포함합니다.
 type CommitsResponse struct {
 	Success    bool           `json:"success"`
 	Message    string         `json:"message"`
@@ -40,7 +42,8 @@ type CommitsResponse struct {
 	Pagination PaginationInfo `json:"pagination"`
 }
 
-// PaginationInfo represents pagination information in commit responses
+// PaginationInfo는 커밋 응답의 페이지네이션 정보를 나타냅니다.
+// Python PaginatedResponse와 호환되는 필드들을 포함합니다.
 type PaginationInfo struct {
 	// Python PaginatedResponse compatible fields
 	Count       int     `json:"count"`        // Total number of items
@@ -90,7 +93,8 @@ func buildPagination(totalCount, currentPage, pageSize int, baseURL string) Pagi
 	}
 }
 
-// NewCommitsHandler creates a new commits handler
+// NewCommitsHandler는 새로운 commits 핸들러를 생성합니다.
+// 설정과 권한 클라이언트를 사용하여 초기화합니다.
 func NewCommitsHandler(cfg *config.Config, permClient permissions.PermissionClient) (*CommitsHandler, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")

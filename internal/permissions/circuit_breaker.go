@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// CircuitBreakerState represents the state of the circuit breaker.
+// CircuitBreakerState는 서킷 브레이커의 상태를 나타냅니다.
 type CircuitBreakerState int
 
 const (
@@ -31,7 +31,7 @@ func (s CircuitBreakerState) String() string {
 	}
 }
 
-// CircuitBreakerConfig holds configuration for the circuit breaker.
+// CircuitBreakerConfig는 서킷 브레이커의 설정 정보를 담는 구조체입니다.
 type CircuitBreakerConfig struct {
 	// FailureThreshold is the number of failures required to open the circuit.
 	FailureThreshold int
@@ -52,7 +52,8 @@ func DefaultCircuitBreakerConfig() *CircuitBreakerConfig {
 	}
 }
 
-// CircuitBreaker implements the circuit breaker pattern.
+// CircuitBreaker는 서킷 브레이커 패턴을 구현하는 구조체입니다.
+// 외부 서비스 장애 시 자동으로 요청을 차단합니다.
 type CircuitBreaker struct {
 	config          *CircuitBreakerConfig
 	state           CircuitBreakerState
@@ -63,7 +64,7 @@ type CircuitBreaker struct {
 	mutex           sync.RWMutex
 }
 
-// NewCircuitBreaker creates a new circuit breaker with the given configuration.
+// NewCircuitBreaker는 주어진 설정으로 새로운 서킷 브레이커를 생성합니다.
 func NewCircuitBreaker(config *CircuitBreakerConfig) *CircuitBreaker {
 	if config == nil {
 		config = DefaultCircuitBreakerConfig()
@@ -75,7 +76,7 @@ func NewCircuitBreaker(config *CircuitBreakerConfig) *CircuitBreaker {
 	}
 }
 
-// Execute runs the given function if the circuit allows it.
+// Execute는 서킷이 허용할 때 주어진 함수를 실행합니다.
 func (cb *CircuitBreaker) Execute(ctx context.Context, fn func(context.Context) error) error {
 	if !cb.canExecute() {
 		return &CircuitBreakerError{
@@ -234,7 +235,7 @@ func (e *CircuitBreakerError) Error() string {
 	return e.Message
 }
 
-// FallbackPolicy defines the behavior when the API-Service is unavailable.
+// FallbackPolicy는 API 서비스를 사용할 수 없을 때의 동작을 정의합니다.
 type FallbackPolicy int
 
 const (

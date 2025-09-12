@@ -1,3 +1,4 @@
+// Git 프로토콜을 처리하는 HTTP 서버 구현
 package server
 
 import (
@@ -23,7 +24,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// setupSwaggerRoutes configures Swagger documentation routes with proper base path support
+// setupSwaggerRoutes - Swagger 문서 라우트 설정 (API 문서화용)
 func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
 	if !s.config.Server.EnableDocs {
 		return
@@ -70,7 +71,7 @@ func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
 	))
 }
 
-// ginContextMiddleware stores the Gin context in the request context for protocol handlers
+// ginContextMiddleware - Gin 컨텍스트를 요청 컨텍스트에 저장하는 미들웨어
 func ginContextMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Store Gin context directly in request context for protocol handlers to access
@@ -79,17 +80,17 @@ func ginContextMiddleware() gin.HandlerFunc {
 	}
 }
 
-// Server represents the HTTP server with integrated observability
+// Server - 통합 모니터링을 갖춘 HTTP 서버 구조체
 type Server struct {
-	server               *http.Server
-	config               *config.Config
-	logger               *logging.Logger
-	observabilityManager *observability.Manager
+	server               *http.Server           // 실제 HTTP 서버 인스턴스
+	config               *config.Config         // 애플리케이션 설정
+	logger               *logging.Logger        // 로거
+	observabilityManager *observability.Manager // 모니터링 매니저 (메트릭, 추적, 헬스체크)
 }
 
-// New creates a new HTTP server instance with observability
+// New - 모니터링 기능을 갖춘 새 HTTP 서버 인스턴스 생성
 func New(cfg *config.Config) (*Server, error) {
-	// Note: Simple cache initializes itself automatically on first use
+	// 심플 캐시는 첫 사용 시 자동으로 초기화됨
 
 	// Initialize observability manager (without permission client)
 	obsManager, err := observability.NewManager(cfg, nil, "1.0.0")
@@ -104,21 +105,21 @@ func New(cfg *config.Config) (*Server, error) {
 	}, nil
 }
 
-// Start initializes and starts the HTTP server
+// Start - HTTP 서버 초기화 및 시작
 func (s *Server) Start() error {
-	// Create router
+	// 라우터 생성 (모든 엔드포인트 설정)
 	router := s.SetupRouter()
 
-	// Create HTTP server
+	// HTTP 서버 인스턴스 생성
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
 		Handler:      router,
-		ReadTimeout:  s.config.Server.ReadTimeout,
-		WriteTimeout: s.config.Server.WriteTimeout,
-		IdleTimeout:  s.config.Server.IdleTimeout,
+		ReadTimeout:  s.config.Server.ReadTimeout,  // 요청 읽기 타임아웃
+		WriteTimeout: s.config.Server.WriteTimeout, // 응답 쓰기 타임아웃
+		IdleTimeout:  s.config.Server.IdleTimeout,  // 유휴 연결 타임아웃
 	}
 
-	// Start server in a goroutine
+	// 고루틴에서 서버 시작 (비블로킹)
 	go func() {
 		s.logger.Info("Server starting",
 			zap.String("address", s.server.Addr),
@@ -129,7 +130,7 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	// Wait for shutdown signal
+	// 종료 시그널 대기 (SIGINT, SIGTERM)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

@@ -26,7 +26,7 @@ install:
 # Used: config/docker/compose/local.yml
 # Options: bg (run in background)
 .PHONY: local
-local: ensure-keys
+local:
 	@make check-docker
 	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
 		docker-compose -f config/docker/compose/local.yml up --build -d; \
@@ -39,7 +39,7 @@ local: ensure-keys
 # Used: config/docker/compose/local-it.yml
 # Options: bg (run in background)
 .PHONY: local-it
-local-it: ensure-keys
+local-it:
 	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
 		docker-compose -f config/docker/compose/local-it.yml up --build -d; \
 	else \
@@ -51,7 +51,7 @@ local-it: ensure-keys
 # Used: config/docker/compose/build-it.yml
 # Options: bg (run in background)
 .PHONY: build-it
-build-it: ensure-keys
+build-it:
 	@if [ "$(filter bg,$(MAKECMDGOALS))" ]; then \
 		docker-compose -f config/docker/compose/build-it.yml up --build -d; \
 	else \
@@ -112,47 +112,44 @@ lint:
 	fi
 	@echo "✅ Linting complete!"
 
-# [MANUAL 5] make test all|unit|api|integration|e2e [internal|protocol|server|git]
-# Description: Run tests with flexible categorization
+# [MANUAL 5] make test all|unit|api|integration|e2e [core|config|util|perf]
+# Description: Run tests with new organized structure
 # Options:
 #   - all: Run all tests in Docker
-#   - unit: Run unit tests (with optional subcategories: internal, protocol, server, git)
+#   - unit: Run unit tests (with optional subcategories: core, api, config, util, perf)
 #   - api: Run API endpoint tests
 #   - integration: Run integration tests
 #   - e2e: Run end-to-end tests
-.PHONY: test all unit api integration e2e internal protocol server git
-test: ensure-keys
+.PHONY: test all unit api integration e2e core config util perf
+test:
 	@if [ "$(filter all,$(MAKECMDGOALS))" ]; then \
 		docker-compose -f config/docker/compose/local-it.yml up --build --abort-on-container-exit --exit-code-from collabops-git-executor; \
 	elif [ "$(filter unit,$(MAKECMDGOALS))" ]; then \
-		if [ "$(filter internal,$(MAKECMDGOALS))" ]; then \
-			go test -v ./internal/...; \
-		elif [ "$(filter protocol,$(MAKECMDGOALS))" ]; then \
-			go test -v ./internal/protocol/...; \
-		elif [ "$(filter server,$(MAKECMDGOALS))" ]; then \
-			go test -v ./internal/server/...; \
-		elif [ "$(filter git,$(MAKECMDGOALS))" ]; then \
-			go test -v ./internal/git/...; \
+		cd tests && \
+		if [ "$(filter core,$(MAKECMDGOALS))" ]; then \
+			go test -v ./unit/core/...; \
+		elif [ "$(filter api,$(MAKECMDGOALS))" ]; then \
+			go test -v ./unit/api/...; \
+		elif [ "$(filter config,$(MAKECMDGOALS))" ]; then \
+			go test -v ./unit/config/...; \
+		elif [ "$(filter util,$(MAKECMDGOALS))" ]; then \
+			go test -v ./unit/util/...; \
+		elif [ "$(filter perf,$(MAKECMDGOALS))" ]; then \
+			go test -v ./unit/perf/...; \
 		else \
-			go test -v ./internal/...; \
+			go test -v ./unit/...; \
 		fi; \
 	elif [ "$(filter api,$(MAKECMDGOALS))" ]; then \
-		go test -v ./internal/server/... ./internal/api/...; \
+		cd tests && go test -v ./unit/api/...; \
 	elif [ "$(filter integration,$(MAKECMDGOALS))" ]; then \
-		go test -v ./test/integration/...; \
+		cd tests && go test -v ./integration/...; \
 	elif [ "$(filter e2e,$(MAKECMDGOALS))" ]; then \
 		$(MAKE) local-it bg; \
 		sleep 10; \
-		go test -v -tags=e2e ./test/...; \
+		cd tests && go test -v -tags=e2e ./e2e/...; \
 	else \
-		go test -race -v ./...; \
+		cd tests && go test -race -v ./...; \
 	fi
-
-# [MANUAL 6] make test-fast
-# Description: Run tests quickly without coverage
-.PHONY: test-fast
-test-fast: ensure-keys
-	@go test -short ./...
 
 # [MANUAL 7] make clean
 # Description: Gracefully stop all services and clean up everything
@@ -168,19 +165,9 @@ clean:
 	@lsof -ti:2345,3000,8000,8001,9091 | xargs kill -15 2>/dev/null || true
 	@echo "✅ All cleanup complete!"
 
-# [HELPER] Ensure RSA keys exist before running tests
-.PHONY: ensure-keys
-ensure-keys:
-	@if [ ! -f "keys/private_key.pem" ] || [ ! -f "keys/public_key.pem" ]; then \
-		mkdir -p keys; \
-		openssl genrsa -out keys/private_key.pem 2048; \
-		openssl rsa -in keys/private_key.pem -pubout -out keys/public_key.pem; \
-		echo "✅ RSA keys were missing, generated successfully"; \
-	fi
-
 # [HELPER] Dummy targets for command arguments
-.PHONY: bg all e2e base qa stage prod internal protocol server git
-bg all e2e base qa stage prod internal protocol server git:
+.PHONY: bg all e2e base qa stage prod core config util perf
+bg all e2e base qa stage prod core config util perf:
 	@:
 
 # [HELPER] Check Docker status

@@ -1,5 +1,5 @@
-// Package protocol implements Git Smart HTTP capability negotiation
-// for proper protocol compliance and feature advertisement.
+// Package protocol은 Git Smart HTTP 프로토콜의 기능 협상을 구현합니다.
+// 서버와 클라이언트 간의 기능 단어와 프로토콜 호환성을 처리합니다.
 package protocol
 
 import (
@@ -10,7 +10,8 @@ import (
 	"strings"
 )
 
-// ServerCapabilities represents the capabilities advertised by the server
+// ServerCapabilities는 서버가 광고하는 기능들을 나타냅니다.
+// Git 프로토콜에서 지원하는 다양한 기능들을 해드필드로 정의합니다.
 type ServerCapabilities struct {
 	// Core capabilities
 	MultiAck         bool // multi_ack
@@ -39,7 +40,8 @@ type ServerCapabilities struct {
 	SymRef string // symref=HEAD:refs/heads/main
 }
 
-// DefaultServerCapabilities returns the default capabilities for the executor
+// DefaultServerCapabilities는 실행기의 기본 기능들을 반환합니다.
+// 대부분의 기능을 활성화한 기본 설정을 제공합니다.
 func DefaultServerCapabilities() *ServerCapabilities {
 	return &ServerCapabilities{
 		MultiAck:         true,
@@ -133,7 +135,8 @@ func (sc *ServerCapabilities) String() string {
 	return strings.Join(caps, " ")
 }
 
-// ClientCapabilities represents capabilities sent by the client
+// ClientCapabilities는 클라이언트가 보낸 기능들을 나타냅니다.
+// 클라이언트가 요청한 기능과 참조 정보를 포함합니다.
 type ClientCapabilities struct {
 	Capabilities map[string]string // capability name -> value (empty string if no value)
 	WantedRefs   []string          // refs the client wants
@@ -172,7 +175,8 @@ type Reference struct {
 	Name string // Reference name (e.g., refs/heads/main)
 }
 
-// CapabilityNegotiator handles capability negotiation between client and server
+// CapabilityNegotiator는 클라이언트와 서버 간의 기능 협상을 처리합니다.
+// 양쪽이 지원하는 기능을 결정하고 프로토콜 네고시에이션을 수행합니다.
 type CapabilityNegotiator struct {
 	serverCaps *ServerCapabilities
 	logger     Logger

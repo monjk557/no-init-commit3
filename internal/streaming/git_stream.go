@@ -1,6 +1,6 @@
-// Package streaming provides efficient streaming mechanisms for Git operations
-// to handle large repository data transfers without loading everything into memory.
-// Optimized for gateway forwarding patterns.
+// streaming 패키지는 Git 작업을 위한 효율적인 스트리밍 메커니즘을 제공합니다.
+// 모든 데이터를 메모리에 로드하지 않고 대용량 저장소 데이터 전송을 처리합니다.
+// 게이트웨이 포워딩 패턴에 최적화되어 있습니다.
 package streaming
 
 import (
@@ -14,27 +14,27 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// GitStreamer provides streaming functionality for Git operations
+// GitStreamer는 Git 작업을 위한 스트리밍 기능을 제공합니다.
 type GitStreamer struct {
 	repo *gogit.Repository
 }
 
-// NewGitStreamer creates a new GitStreamer for the given repository
+// NewGitStreamer는 주어진 저장소에 대한 새로운 GitStreamer를 생성합니다.
 func NewGitStreamer(repo *gogit.Repository) *GitStreamer {
 	return &GitStreamer{
 		repo: repo,
 	}
 }
 
-// PackfileStreamRequest represents a request for streaming a packfile
+// PackfileStreamRequest는 팩파일 스트리밍 요청을 나타냅니다.
 type PackfileStreamRequest struct {
 	Wants        []string // Object hashes that the client wants
 	Haves        []string // Object hashes that the client already has
 	Capabilities []string // Client capabilities
 }
 
-// StreamPackfile streams a packfile to the provided writer using efficient streaming
-// without loading all objects into memory at once
+// StreamPackfile은 모든 객체를 한 번에 메모리에 로드하지 않고
+// 효율적인 스트리밍을 사용하여 제공된 writer에 팩파일을 스트리밍합니다.
 func (gs *GitStreamer) StreamPackfile(ctx context.Context, req *PackfileStreamRequest, w io.Writer) error {
 	// Validate inputs
 	if gs.repo == nil {
@@ -220,7 +220,7 @@ func (gs *GitStreamer) clientHasObject(objectHash string, haves []string) bool {
 	return false
 }
 
-// StreamingPktLineWriter provides packet line writing for streaming operations
+// StreamingPktLineWriter는 스트리밍 작업을 위한 팩킷 라인 쓰기를 제공합니다.
 type StreamingPktLineWriter struct {
 	w  io.Writer
 	mu sync.Mutex // Protect concurrent writes
@@ -248,7 +248,7 @@ func (p *StreamingPktLineWriter) flush() error {
 	return err
 }
 
-// StreamRefs streams repository references for info/refs endpoint
+// StreamRefs는 info/refs 엔드포인트를 위해 저장소 참조를 스트리밍합니다.
 func (gs *GitStreamer) StreamRefs(ctx context.Context, w io.Writer, capabilities []string) error {
 	pktWriter := &StreamingPktLineWriter{w: w}
 

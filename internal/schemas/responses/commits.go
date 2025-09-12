@@ -1,8 +1,11 @@
+// Package responses는 Git 커밋 관련 HTTP 응답의 JSON 스키마를 정의합니다.
+// 다중 파일 커밋 작업의 결과와 개별 작업 결과를 반환하는 데이터 구조체들을 포함합니다.
 package responses
 
 import "time"
 
-// OperationResult represents the result of a single file operation
+// OperationResult는 개별 파일 작업의 결과를 나타냅니다.
+// 각 파일에 대한 작업 상태와 오류 메시지를 포함합니다.
 type OperationResult struct {
 	Path      string `json:"path"`
 	Operation string `json:"operation"`
@@ -10,7 +13,8 @@ type OperationResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// MultiFileCommitResponse represents the response for multi-file commit operations
+// MultiFileCommitResponse는 다중 파일 커밋 작업에 대한 응답을 나타냅니다.
+// 트랜잭션 ID, 전체 작업 현황, 개별 작업 결과 및 실행 시간을 포함합니다.
 type MultiFileCommitResponse struct {
 	Success          bool                   `json:"success"`
 	CommitSHA        string                 `json:"commit_sha,omitempty"`
@@ -25,6 +29,8 @@ type MultiFileCommitResponse struct {
 	Details          map[string]interface{} `json:"details,omitempty"`
 }
 
+// OperationResultResponse는 작업 결과 응답을 나타냅니다.
+// OperationResult와 동일한 구조를 가지며 호환성을 위해 사용됩니다.
 type OperationResultResponse struct {
 	Path      string `json:"path"`
 	Operation string `json:"operation"`

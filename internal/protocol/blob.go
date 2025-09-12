@@ -1,5 +1,5 @@
-// Package protocol implements Git blob REST API endpoints for the executor.
-// This file handles blob operations that return file content with appropriate Content-Type headers.
+// Package protocol은 Git blob REST API 엔드포인트를 구현합니다.
+// 적절한 Content-Type 헤더와 함께 파일 내용을 반환하는 blob 작업을 처리합니다.
 package protocol
 
 import (
@@ -17,13 +17,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// BlobHandler handles Git blob REST API endpoints
+// BlobHandler는 Git blob REST API 엔드포인트를 처리합니다.
+// 파일 내용 조회 요청을 받아서 적절한 형식으로 응답합니다.
 type BlobHandler struct {
 	pathConfig       *repository.PathConfig
 	permissionClient permissions.PermissionClient
 }
 
-// BlobRequestParams holds request parameters for blob endpoints
+// BlobRequestParams는 blob 엔드포인트의 요청 매개변수들을 포함합니다.
+// 소유자, 저장소, 파일 경로, 참조 및 사용자 ID를 포함합니다.
 type BlobRequestParams struct {
 	Owner  string
 	Repo   string
@@ -39,7 +41,8 @@ type BlobErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
-// NewBlobHandler creates a new blob handler
+// NewBlobHandler는 새로운 blob 핸들러를 생성합니다.
+// 경로 설정과 권한 클라이언트를 사용하여 초기화합니다.
 func NewBlobHandler(pathConfig *repository.PathConfig, permClient permissions.PermissionClient) (*BlobHandler, error) {
 	if pathConfig == nil {
 		var err error

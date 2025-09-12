@@ -8,14 +8,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// ResponseWriter interface for wrapped response writers
+// ResponseWriter는 신팩된 response writer들을 위한 인터페이스입니다.
 type ResponseWriter interface {
 	http.ResponseWriter
 	Status() int
 	BytesWritten() int
 }
 
-// responseWriterWrapper wraps http.ResponseWriter to capture status and bytes written
+// responseWriterWrapper는 HTTP 응답의 상태 코드와 전송 바이트를 캡처하기 위해 http.ResponseWriter를 감시니다.
 type responseWriterWrapper struct {
 	http.ResponseWriter
 	status       int
@@ -53,7 +53,7 @@ func NewWrapResponseWriter(w http.ResponseWriter) ResponseWriter {
 	}
 }
 
-// RequestIDMiddleware generates and adds request IDs to the context
+// RequestIDMiddleware는 요청 ID를 생성하고 컨텍스트에 추가하는 미들웨어입니다.
 func RequestIDMiddleware(generator RequestIDGenerator) func(http.Handler) http.Handler {
 	if generator == nil {
 		generator = &DefaultRequestIDGenerator{}
@@ -75,7 +75,7 @@ func RequestIDMiddleware(generator RequestIDGenerator) func(http.Handler) http.H
 	}
 }
 
-// CorrelationIDMiddleware extracts correlation ID from headers and adds to context
+// CorrelationIDMiddleware는 헤더에서 상관 ID를 추출하고 컨텍스트에 추가하는 미들웨어입니다.
 func CorrelationIDMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +100,7 @@ func CorrelationIDMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// LoggingMiddleware logs HTTP requests with context
+// LoggingMiddleware는 컨텍스트와 함께 HTTP 요청을 로깅하는 미들웨어입니다.
 func LoggingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +127,7 @@ func LoggingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// ErrorHandlingMiddleware provides centralized error handling and logging
+// ErrorHandlingMiddleware는 중앙집중식 에러 처리와 로깅을 제공하는 미들웨어입니다.
 func ErrorHandlingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,6 @@
-// Package observability provides comprehensive health check endpoints
-// for monitoring service liveness and readiness in production environments.
+// observability 패키지는 프로덕션 환경에서 서비스 liveness와 readiness 모니터링을 위한
+// 종합적인 헬스 체크 엔드포인트를 제공합니다.
+// 메트릭, 추적, 통합 모니터링 기능을 포함합니다.
 package observability
 
 import (
@@ -15,7 +16,7 @@ import (
 	"github.com/collabops/git-executor/internal/permissions"
 )
 
-// HealthStatus represents the overall health status
+// HealthStatus는 전반적인 헬스 상태를 나타냅니다.
 type HealthStatus string
 
 const (
@@ -27,7 +28,7 @@ const (
 	StatusDegraded HealthStatus = "degraded"
 )
 
-// HealthResponse represents the health check response
+// HealthResponse는 헬스 체크 응답을 나타냅니다.
 type HealthResponse struct {
 	Status    HealthStatus           `json:"status"`
 	Timestamp time.Time              `json:"timestamp"`
@@ -37,7 +38,7 @@ type HealthResponse struct {
 	Details   map[string]interface{} `json:"details,omitempty"`
 }
 
-// CheckResult represents the result of an individual health check
+// CheckResult는 개별 헬스 체크의 결과를 나타냅니다.
 type CheckResult struct {
 	Status      HealthStatus `json:"status"`
 	Message     string       `json:"message,omitempty"`
@@ -46,7 +47,7 @@ type CheckResult struct {
 	Error       string       `json:"error,omitempty"`
 }
 
-// HealthChecker manages health checks for the application
+// HealthChecker는 애플리케이션의 헬스 체크를 관리합니다.
 type HealthChecker struct {
 	config           *config.Config
 	permissionClient permissions.PermissionClient
@@ -54,7 +55,7 @@ type HealthChecker struct {
 	version          string
 }
 
-// NewHealthChecker creates a new health checker
+// NewHealthChecker는 새로운 헬스 체커를 생성합니다.
 func NewHealthChecker(cfg *config.Config, permClient permissions.PermissionClient, version string) *HealthChecker {
 	return &HealthChecker{
 		config:           cfg,
@@ -64,8 +65,8 @@ func NewHealthChecker(cfg *config.Config, permClient permissions.PermissionClien
 	}
 }
 
-// LivenessHandler handles liveness probe requests (GET /health/liveness)
-// Liveness checks verify that the application is running and able to process requests
+// LivenessHandler는 liveness 프로브 요청을 처리합니다 (GET /health/liveness).
+// Liveness 체크는 애플리케이션이 실행 중이고 요청을 처리할 수 있는지 확인합니다.
 func (h *HealthChecker) LivenessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -83,8 +84,8 @@ func (h *HealthChecker) LivenessHandler() http.HandlerFunc {
 	}
 }
 
-// ReadinessHandler handles readiness probe requests (GET /health/readiness)
-// Readiness checks verify that the application is ready to handle traffic
+// ReadinessHandler는 readiness 프로브 요청을 처리합니다 (GET /health/readiness).
+// Readiness 체크는 애플리케이션이 트래픽을 처리할 준비가 되어 있는지 확인합니다.
 func (h *HealthChecker) ReadinessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

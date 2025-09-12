@@ -1,4 +1,5 @@
-// Package protocol provides branch operations for Git REST API endpoints.
+// Package protocol은 Git REST API 엔드포인트의 브랜치 작업을 제공합니다.
+// 브랜치 생성, 업데이트, 삭제 등의 Git 브랜치 관리 기능을 구현합니다.
 package protocol
 
 import (
@@ -23,7 +24,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// BranchOperationsHandler handles Git branch operations
+// BranchOperationsHandler는 Git 브랜치 작업을 처리합니다.
+// 브랜치 생성, 업데이트, 삭제 요청을 처리하고 적절한 응답을 제공합니다.
 type BranchOperationsHandler struct {
 	config             *config.Config
 	logger             *logging.Logger
@@ -36,7 +38,8 @@ type BranchOperationsHandler struct {
 	branchNamePattern  *regexp.Regexp
 }
 
-// NewBranchOperationsHandler creates a new branch operations handler
+// NewBranchOperationsHandler는 새로운 브랜치 작업 핸들러를 생성합니다.
+// 설정과 권한 클라이언트를 사용하여 필요한 컴포너트들을 초기화합니다.
 func NewBranchOperationsHandler(cfg *config.Config, permClient permissions.PermissionClient) (*BranchOperationsHandler, error) {
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
@@ -241,7 +244,8 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// validateBranchName validates a Git branch name according to Git naming rules
+// validateBranchName은 Git 브랜치 명명 규칙에 따라 브랜치 이름을 검증합니다.
+// 예약어, 잠재적 문제가 있는 문자 및 패턴을 검사합니다.
 func (h *BranchOperationsHandler) validateBranchName(name string) error {
 	if name == "" {
 		return fmt.Errorf("branch name cannot be empty")

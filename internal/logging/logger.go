@@ -13,17 +13,13 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 )
 
-// Logger wraps zap.Logger with additional functionality
+// Logger는 zap.Logger를 감싸고 추가 기능을 제공하는 구조체입니다.
+// 컨텍스트 기반 로깅, 요청 ID 추적, HTTP 요청 로깅 등의 기능을 포함합니다.
 type Logger struct {
-	// library를 썼는데, 파이썬이나 Go나 Rust나 로깅패턴이 있음.
-	// 로그를 생성하는데 Create Or Get으로 생성함. 빈값으로 로그를 불러오면 Create가 됨.
-	// 예전에 생성했던거를 하면 Get을 함.
-	// Aspsect of Programming (AOP) 로거를 마치 전역함수처럼 씀. 전역으로 써도 안전함. 처음에 setting을 해두고 복잡하게 쓰지않는 이상 디버깅 용으로 로거를 쓰기때문에
-	// Create or Get할때 Project이름은 줌. 로거를 하나만 생성하는데, 그것을 전역으로 씀.
 	*zap.Logger
 }
 
-// ContextKey is used for context keys to avoid collisions
+// ContextKey는 컨텍스트 키 충돌을 피하기 위한 타입입니다.
 type ContextKey string
 
 const (
@@ -35,7 +31,7 @@ const (
 	SkipLoggingKey ContextKey = "skip_logging"
 )
 
-// RequestIDGenerator generates unique request IDs
+// RequestIDGenerator는 고유한 요청 ID를 생성하는 인터페이스입니다.
 type RequestIDGenerator interface {
 	Generate() string
 }
@@ -48,7 +44,7 @@ func (g *DefaultRequestIDGenerator) Generate() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-// NewLogger creates a new logger instance with the given configuration
+// NewLogger는 주어진 설정으로 새로운 로거 인스턴스를 생성합니다.
 func NewLogger(cfg config.LoggingConfig) (*Logger, error) {
 	// Create encoder config
 	encoderConfig := zapcore.EncoderConfig{
@@ -151,7 +147,7 @@ func (l *Logger) WithContext(ctx context.Context) *zap.Logger {
 	return logger
 }
 
-// HTTPRequest logs HTTP request details
+// HTTPRequest는 HTTP 요청 상세 정보를 로깅합니다.
 func (l *Logger) HTTPRequest(ctx context.Context, method, path, userAgent, remoteAddr string, statusCode int, duration time.Duration) {
 	logger := l.WithContext(ctx)
 
@@ -173,7 +169,7 @@ func (l *Logger) HTTPRequest(ctx context.Context, method, path, userAgent, remot
 	}
 }
 
-// LogError logs an error with context and additional fields
+// LogError는 컨텍스트와 추가 필드를 포함해 에러를 로깅합니다.
 func (l *Logger) LogError(ctx context.Context, err error, message string, fields ...zap.Field) {
 	logger := l.WithContext(ctx)
 

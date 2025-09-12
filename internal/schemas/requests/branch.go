@@ -1,6 +1,9 @@
+// Package requests는 Git 브랜치 관련 HTTP 요청의 JSON 스키마를 정의합니다.
+// Git 브랜치 생성 및 업데이트 작업을 위한 데이터 구조체들을 포함합니다.
 package requests
 
-// CreateBranchRequest represents the JSON payload for branch creation
+// CreateBranchRequest는 브랜치 생성을 위한 JSON 페이로드를 나타냅니다.
+// 새로운 Git 브랜치를 만들 때 필요한 모든 정보를 포함합니다.
 type CreateBranchRequest struct {
 	Name         string            `json:"name" binding:"required"`
 	Source       string            `json:"source,omitempty"`        // for unit test compatibility
@@ -12,7 +15,8 @@ type CreateBranchRequest struct {
 	Metadata     map[string]string `json:"metadata,omitempty"`      // additional metadata
 }
 
-// UpdateBranchRequest represents the JSON payload for branch updates
+// UpdateBranchRequest는 브랜치 업데이트를 위한 JSON 페이로드를 나타냅니다.
+// 기존 브랜치의 포인터를 다른 커밋으로 변경할 때 사용됩니다.
 type UpdateBranchRequest struct {
 	Target  string `json:"target" binding:"required"` // commit SHA or branch name to point to
 	Force   bool   `json:"force,omitempty"`           // force update even if not fast-forward

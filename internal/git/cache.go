@@ -1,3 +1,5 @@
+// git 패키지는 Git 저장소 작업과 캐싱 기능을 제공합니다.
+// 저장소 캐시, 트랜잭션 관리, 파일 작업, 충돌 감지 등의 기능을 포함합니다.
 package git
 
 import (
@@ -6,7 +8,7 @@ import (
 	"time"
 )
 
-// RepositoryCache manages cached Repository instances with LRU eviction
+// RepositoryCache는 LRU 제거를 사용하여 캐시된 Repository 인스턴스를 관리합니다.
 type RepositoryCache struct {
 	mu      sync.RWMutex
 	items   map[string]*cacheItem
@@ -16,7 +18,7 @@ type RepositoryCache struct {
 	onEvict func(path string, repo Repository)
 }
 
-// cacheItem represents a cached repository with metadata
+// cacheItem은 메타데이터와 함께 캐시된 저장소를 나타냅니다.
 type cacheItem struct {
 	path      string
 	repo      Repository
@@ -25,7 +27,7 @@ type cacheItem struct {
 	element   *list.Element
 }
 
-// CacheConfig holds configuration for the repository cache
+// CacheConfig는 저장소 캐시의 설정을 담는 구조체입니다.
 type CacheConfig struct {
 	// MaxSize is the maximum number of repositories to cache (0 for unlimited)
 	MaxSize int
@@ -51,7 +53,7 @@ func DefaultCacheConfig() *CacheConfig {
 	}
 }
 
-// NewRepositoryCache creates a new repository cache with the given configuration
+// NewRepositoryCache는 주어진 설정으로 새로운 저장소 캐시를 생성합니다.
 func NewRepositoryCache(config *CacheConfig) *RepositoryCache {
 	if config == nil {
 		config = DefaultCacheConfig()
@@ -66,7 +68,7 @@ func NewRepositoryCache(config *CacheConfig) *RepositoryCache {
 	}
 }
 
-// Get retrieves a repository from the cache
+// Get은 캐시에서 저장소를 가져옵니다.
 func (c *RepositoryCache) Get(path string) (Repository, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -89,7 +91,7 @@ func (c *RepositoryCache) Get(path string) (Repository, bool) {
 	return item.repo, true
 }
 
-// Put stores a repository in the cache
+// Put은 저장소를 캐시에 저장합니다.
 func (c *RepositoryCache) Put(path string, repo Repository) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -191,7 +193,7 @@ func (c *RepositoryCache) Stats() CacheStats {
 	return stats
 }
 
-// CleanupExpired removes all expired items from the cache
+// CleanupExpired는 캐시에서 만료된 모든 항목을 제거합니다.
 func (c *RepositoryCache) CleanupExpired() int {
 	if c.maxAge <= 0 {
 		return 0 // No expiration configured
@@ -251,7 +253,7 @@ func (c *RepositoryCache) evictIfNeeded() {
 	}
 }
 
-// CacheStats provides statistics about the cache
+// CacheStats는 캐시에 대한 통계 정보를 제공합니다.
 type CacheStats struct {
 	Size      int           `json:"size"`
 	MaxSize   int           `json:"max_size"`

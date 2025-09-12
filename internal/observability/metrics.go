@@ -1,5 +1,5 @@
-// Package observability provides comprehensive metrics, logging, and monitoring capabilities
-// for the Git executor service, building upon existing cache metrics infrastructure.
+// Package observability는 Git executor 서비스를 위한 포괄적인 메트릭, 로깅, 모니터링 기능을 제공합니다.
+// 기존 캐시 메트릭 인프라를 기반으로 구축된 종합적인 모니터링 시스템입니다.
 package observability
 
 import (
@@ -19,7 +19,8 @@ var (
 	globalMetricsOnce sync.Once
 )
 
-// ApplicationMetrics holds all application-wide Prometheus metrics
+// ApplicationMetrics는 애플리케이션 전반에 걸친 Prometheus 메트릭들을 보유합니다.
+// HTTP 요청, Git 작업, 오류, 리소스 사용량 등 모든 주요 메트릭을 포함합니다.
 type ApplicationMetrics struct {
 	// HTTP Request Metrics
 	HTTPRequestsTotal     prometheus.CounterVec   // Total HTTP requests by method, endpoint, status
@@ -57,7 +58,8 @@ type ApplicationMetrics struct {
 	APIServiceCallsTotal    prometheus.CounterVec   // API service calls by endpoint, result
 }
 
-// MetricsConfig holds configuration for metrics collection
+// MetricsConfig는 메트릭 수집을 위한 설정을 보유합니다.
+// 메트릭 활성화 여부, 네임스페이스, 수집 간격 등을 설정합니다.
 type MetricsConfig struct {
 	Enabled         bool                  `mapstructure:"enabled"`
 	Namespace       string                `mapstructure:"namespace"`
@@ -75,7 +77,8 @@ func DefaultMetricsConfig() MetricsConfig {
 	}
 }
 
-// NewApplicationMetrics creates and registers all application metrics
+// NewApplicationMetrics는 모든 애플리케이션 메트릭을 생성하고 등록합니다.
+// 싱글톤 패턴을 사용하여 중복 등록을 방지합니다.
 func NewApplicationMetrics() *ApplicationMetrics {
 	globalMetricsOnce.Do(func() {
 		globalMetrics = &ApplicationMetrics{
@@ -318,7 +321,8 @@ func (m *ApplicationMetrics) collectResourceMetrics() {
 	// This is a simplified implementation
 }
 
-// RecordHTTPRequest records metrics for an HTTP request
+// RecordHTTPRequest는 HTTP 요청에 대한 메트릭을 기록합니다.
+// 요청 수, 지속 시간, 요청/응답 크기 등을 기록합니다.
 func (m *ApplicationMetrics) RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, requestSize, responseSize int64) {
 	status := http.StatusText(statusCode)
 

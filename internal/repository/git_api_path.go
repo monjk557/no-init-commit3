@@ -1,5 +1,5 @@
-// Package repository provides secure path management for Git repositories.
-// This file extends the base path validation for Git REST API operations.
+// repository 패키지는 Git 저장소의 안전한 경로 관리를 제공합니다.
+// 이 파일은 Git REST API 작업을 위한 기본 경로 검증을 확장합니다.
 package repository
 
 import (
@@ -8,19 +8,19 @@ import (
 	"strings"
 )
 
-// GitAPIPathValidator provides specialized path validation for Git REST API operations
+// GitAPIPathValidator는 Git REST API 작업을 위한 특수한 경로 검증을 제공합니다.
 type GitAPIPathValidator struct {
 	pathConfig *PathConfig
 }
 
-// NewGitAPIPathValidator creates a new Git API path validator
+// NewGitAPIPathValidator는 새로운 Git API 경로 검증기를 생성합니다.
 func NewGitAPIPathValidator(pathConfig *PathConfig) *GitAPIPathValidator {
 	return &GitAPIPathValidator{
 		pathConfig: pathConfig,
 	}
 }
 
-// ValidateFilePath validates file paths for Git API operations with additional checks
+// ValidateFilePath는 추가 검사를 통해 Git API 작업의 파일 경로를 검증합니다.
 func (v *GitAPIPathValidator) ValidateFilePath(filePath string) error {
 	// Basic validation first
 	if err := v.validateBasicPath(filePath); err != nil {
@@ -35,7 +35,7 @@ func (v *GitAPIPathValidator) ValidateFilePath(filePath string) error {
 	return nil
 }
 
-// ValidateRepoAPIPath validates repository paths for API operations
+// ValidateRepoAPIPath는 API 작업을 위한 저장소 경로를 검증합니다.
 func (v *GitAPIPathValidator) ValidateRepoAPIPath(owner, repo string) error {
 	// Use existing validation from path.go
 	if err := ValidatePathComponents(owner, repo); err != nil {
@@ -50,7 +50,7 @@ func (v *GitAPIPathValidator) ValidateRepoAPIPath(owner, repo string) error {
 	return nil
 }
 
-// ValidateBranchRef validates branch/tag references for API operations
+// ValidateBranchRef는 API 작업을 위한 브랜치/태그 참조를 검증합니다.
 func (v *GitAPIPathValidator) ValidateBranchRef(ref string) error {
 	if ref == "" {
 		return fmt.Errorf("reference cannot be empty")
@@ -69,7 +69,7 @@ func (v *GitAPIPathValidator) ValidateBranchRef(ref string) error {
 	return nil
 }
 
-// ValidateCommitHash validates commit hashes
+// ValidateCommitHash는 커밋 해시를 검증합니다.
 func (v *GitAPIPathValidator) ValidateCommitHash(hash string) error {
 	if hash == "" {
 		return fmt.Errorf("commit hash cannot be empty")
@@ -277,7 +277,7 @@ func (v *GitAPIPathValidator) validatePathPart(part string) error {
 	return nil
 }
 
-// GetSafeRepoPath generates a safe repository path for API operations
+// GetSafeRepoPath는 API 작업을 위한 안전한 저장소 경로를 생성합니다.
 func (v *GitAPIPathValidator) GetSafeRepoPath(owner, repo string) (string, error) {
 	// Validate components first
 	if err := v.ValidateRepoAPIPath(owner, repo); err != nil {

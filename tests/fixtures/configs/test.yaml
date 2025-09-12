@@ -1,0 +1,33 @@
+# 테스트용 설정 파일
+server:
+  port: 8080
+  host: "localhost"
+
+git:
+  repo_root: "/tmp/test-repos"
+  max_repo_size: "100MB"
+  timeout: "30s"
+
+logging:
+  level: "debug"
+  format: "json"
+  
+cache:
+  type: "memory"
+  max_size: 1000
+  ttl: "5m"
+
+security:
+  jwt:
+    secret: "test-secret-key"
+    expiry: "1h"
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+
+permissions:
+  service_url: "http://localhost:9000"
+  timeout: "5s"
+  circuit_breaker:
+    enabled: true
+    threshold: 5

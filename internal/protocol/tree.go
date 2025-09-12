@@ -1,5 +1,5 @@
-// Package protocol implements Git tree REST API endpoints for the executor.
-// This file handles tree operations that provide structured JSON responses.
+// Package protocol은 Git tree REST API 엔드포인트를 구현합니다.
+// 구조화된 JSON 응답을 제공하는 트리 작업을 처리합니다.
 package protocol
 
 import (
@@ -16,7 +16,8 @@ import (
 	"github.com/collabops/git-executor/internal/schemas/responses"
 )
 
-// TreeHandler handles Git tree REST API endpoints
+// TreeHandler는 Git tree REST API 엔드포인트를 처리합니다.
+// 디렉토리 구조 조회 요청을 받아서 JSON 형식으로 응답합니다.
 type TreeHandler struct {
 	pathConfig       *repository.PathConfig
 	permissionClient permissions.PermissionClient
@@ -37,7 +38,8 @@ type TreeErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
-// NewTreeHandler creates a new tree handler
+// NewTreeHandler는 새로운 tree 핸들러를 생성합니다.
+// 설정과 권한 클라이언트를 사용하여 초기화합니다.
 func NewTreeHandler(cfg *config.Config, permClient permissions.PermissionClient) (*TreeHandler, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
@@ -238,7 +240,8 @@ func (h *TreeHandler) handleTreeError(w http.ResponseWriter, err error, operatio
 
 // Validation helper functions
 
-// isValidRepoIdentifier checks if a repository identifier (owner/repo) is valid
+// isValidRepoIdentifier는 저장소 식별자(소유자/저장소)가 유효한지 확인합니다.
+// 영숫자, 하이픈, 언더스코어, 닷만 허용합니다.
 func isValidRepoIdentifier(identifier string) bool {
 	if identifier == "" {
 		return false
@@ -258,7 +261,8 @@ func isValidRepoIdentifier(identifier string) bool {
 	return true
 }
 
-// isValidGitRef checks if a Git reference is valid format
+// isValidGitRef는 Git 참조가 올바른 형식인지 확인합니다.
+// 브랜치명, 태그명, 커밋 해시 등을 검증합니다.
 func isValidGitRef(ref string) bool {
 	if ref == "" {
 		return false

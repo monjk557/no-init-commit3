@@ -19,9 +19,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 )
 
-// PermissionClient defines the interface for repository permission verification.
-// It provides methods to check read and write access permissions for users
-// on specific repositories.
+// PermissionClient는 저장소 권한 검증을 위한 인터페이스입니다.
+// 특정 저장소에 대한 사용자의 읽기 및 쓰기 권한을 검사하는 메소드를 제공합니다.
 type PermissionClient interface {
 	// CheckReadAccess verifies if a user has read access to a repository.
 	// Returns true if access is allowed, false if denied.
@@ -48,7 +47,7 @@ type PermissionClient interface {
 	Close() error
 }
 
-// Config holds configuration options for the permission client.
+// Config는 권한 클라이언트의 설정 옵션을 담는 구조체입니다.
 type Config struct {
 	// APIServiceURL is the base URL of the API-Service.
 	// Example: "http://api-service.local"
@@ -91,7 +90,7 @@ type Config struct {
 	EnableCircuitBreaker bool
 }
 
-// HTTPClientInterface defines the interface for HTTP clients to enable testing.
+// HTTPClientInterface는 테스트를 위해 HTTP 클라이언트의 인터페이스를 정의합니다.
 type HTTPClientInterface interface {
 	Do(req *http.Request) (*http.Response, error)
 }
@@ -135,7 +134,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// Operation represents the type of operation being requested.
+// Operation은 요청되는 작업의 유형을 나타냅니다.
 type Operation string
 
 const (
@@ -145,7 +144,7 @@ const (
 	OperationWrite Operation = "write"
 )
 
-// PermissionResult represents the result of a permission check.
+// PermissionResult는 권한 검사 결과를 나타내는 구조체입니다.
 type PermissionResult struct {
 	UserID    string
 	RepoOwner string
@@ -166,7 +165,8 @@ func (pr *PermissionResult) CacheKey() string {
 	return pr.UserID + ":" + pr.RepoOwner + ":" + pr.RepoName + ":" + string(pr.Operation)
 }
 
-// Client implements the PermissionClient interface.
+// Client는 PermissionClient 인터페이스를 구현하는 구조체입니다.
+// 외부 API 서비스와 통신하여 권한을 검증하고 결과를 캐싱합니다.
 type Client struct {
 	config         *Config
 	httpClient     HTTPClientInterface

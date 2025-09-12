@@ -1,5 +1,5 @@
-// Package api provides HTTP response handling utilities and middleware for standardized API responses.
-// This file contains response formatting, JSON error middleware, and helper functions for consistent output.
+// Package api는 표준화된 API 응답을 위한 HTTP 응답 처리 유틸리티와 미들웨어를 제공합니다.
+// 이 파일은 일관된 출력을 위한 응답 포매팅, JSON 에러 미들웨어, 도우미 함수들을 포함합니다.
 package api
 
 import (
@@ -13,49 +13,49 @@ import (
 	"go.uber.org/zap"
 )
 
-// APIResponse represents a standardized API response structure
+// APIResponse는 표준화된 API 응답 구조를 나타냅니다
 type APIResponse struct {
-	// Success indicates if the operation was successful
+	// Success는 작업이 성공했는지를 나타냅니다
 	Success bool `json:"success"`
-	// Message provides a human-readable description
+	// Message는 사람이 읽을 수 있는 설명을 제공합니다
 	Message string `json:"message,omitempty"`
-	// Data contains the response payload (only for successful responses)
+	// Data는 응답 페이로드를 포함합니다 (성공 응답에만)
 	Data interface{} `json:"data,omitempty"`
-	// Error contains error information (only for error responses)
+	// Error는 에러 정보를 포함합니다 (에러 응답에만)
 	Error *ErrorResponse `json:"error,omitempty"`
-	// Meta contains metadata about the response
+	// Meta는 응답에 대한 메타데이터를 포함합니다
 	Meta *ResponseMeta `json:"meta,omitempty"`
-	// Timestamp when the response was generated
+	// Timestamp는 응답이 생성된 시간입니다
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// ErrorResponse represents error information in API responses
+// ErrorResponse는 API 응답에서 에러 정보를 나타냅니다
 type ErrorResponse struct {
-	// Code is the standardized error code
+	// Code는 표준화된 에러 코드입니다
 	Code string `json:"code"`
-	// Message is the human-readable error message
+	// Message는 사람이 읽을 수 있는 에러 메시지입니다
 	Message string `json:"message"`
-	// Details provides additional context about the error
+	// Details는 에러에 대한 추가 컨텍스트를 제공합니다
 	Details map[string]interface{} `json:"details,omitempty"`
-	// Severity indicates the severity level of the error
+	// Severity는 에러의 심각도 수준을 나타냅니다
 	Severity string `json:"severity,omitempty"`
-	// TraceID for correlation across services
+	// TraceID는 서비스 간 상관관계를 위한 ID입니다
 	TraceID string `json:"trace_id,omitempty"`
-	// RequestID for tracking specific requests
+	// RequestID는 특정 요청을 추적하기 위한 ID입니다
 	RequestID string `json:"request_id,omitempty"`
-	// Operation that caused the error
+	// Operation은 에러를 발생시킨 작업입니다
 	Operation string `json:"operation,omitempty"`
-	// Resource that was being accessed
+	// Resource는 접근되고 있던 리소스입니다
 	Resource string `json:"resource,omitempty"`
 }
 
-// ResponseMeta contains metadata about the API response
+// ResponseMeta는 API 응답에 대한 메타데이터를 포함합니다
 type ResponseMeta struct {
-	// RequestID for correlation
+	// RequestID는 상관관계를 위한 ID입니다
 	RequestID string `json:"request_id,omitempty"`
-	// Duration of the operation in milliseconds
+	// Duration은 작업 소요 시간(밀리초)입니다
 	Duration int64 `json:"duration_ms,omitempty"`
-	// Version of the API
+	// Version은 API 버전입니다
 	Version string `json:"version,omitempty"`
 	// Pagination information for paginated responses
 	Pagination *PaginationMeta `json:"pagination,omitempty"`
@@ -77,16 +77,16 @@ type PaginationMeta struct {
 	HasPrev bool `json:"has_prev"`
 }
 
-// JSONResponseMiddleware provides standardized JSON response handling
+// JSONResponseMiddleware는 표준화된 JSON 응답 처리를 제공합니다
 type JSONResponseMiddleware struct {
 	logger  *logging.Logger
 	version string
 }
 
-// NewJSONResponseMiddleware creates a new JSON response middleware instance
+// NewJSONResponseMiddleware는 새로운 JSON 응답 미들웨어 인스턴스를 생성합니다
 func NewJSONResponseMiddleware(logger *logging.Logger, version string) *JSONResponseMiddleware {
 	if logger == nil {
-		// Use a default logger if none provided
+		// 제공되지 않은 경우 기본 로거 사용
 		cfg := config.LoggingConfig{Level: "info", Format: "text", Output: "stderr"}
 		logger, _ = logging.NewLogger(cfg)
 	}
@@ -100,7 +100,7 @@ func NewJSONResponseMiddleware(logger *logging.Logger, version string) *JSONResp
 	}
 }
 
-// ErrorHandler is the main middleware function for handling errors
+// ErrorHandler는 에러 처리를 위한 메인 미들웨어 함수입니다
 func (m *JSONResponseMiddleware) ErrorHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
@@ -175,7 +175,7 @@ func (m *JSONResponseMiddleware) handleInternalError(c *gin.Context, ginErr *gin
 	m.SendErrorResponse(c, apiErr, requestID, duration)
 }
 
-// SendSuccessResponse sends a standardized success response
+// SendSuccessResponse는 표준화된 성공 응답을 전송합니다
 func (m *JSONResponseMiddleware) SendSuccessResponse(c *gin.Context, data interface{}, message string) {
 	// Get request metadata
 	requestID, _ := c.Get("request_id")
@@ -234,7 +234,7 @@ func (m *JSONResponseMiddleware) SendSuccessResponseWithPagination(c *gin.Contex
 	c.JSON(http.StatusOK, response)
 }
 
-// SendErrorResponse sends a standardized error response
+// SendErrorResponse는 표준화된 에러 응답을 전송합니다
 func (m *JSONResponseMiddleware) SendErrorResponse(c *gin.Context, apiErr *GitAPIError, requestID string, duration int64) {
 	errorResponse := &ErrorResponse{
 		Code:      string(apiErr.Code),
