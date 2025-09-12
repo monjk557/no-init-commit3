@@ -80,10 +80,35 @@ func (it *HashIter) ForEach(cb func(plumbing.EncodedObject) error) error {
 	}
 }
 
+type sidebandWriter struct {
+	w         io.Writer
+	channel   byte // 1=pack, 2=progress, 3=fatal
+	chunkSize int  // payload (채널바이트 포함) 최대치
+}
+
+func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
+	// payload = length-4, 그중 1바이트는 채널이 차지 → 데이터는 payload-1
+	// 여유를 두고 64KB 근처에서 안전한 값으로 자른다.
+	// 여기선 payload(채널 포함) 65515로 사용 → length=65519, OK.
+	return &sidebandWriter{w: w, channel: channel, chunkSize: 65515}
+}
+
 func WritePackfile(w io.Writer, st storer.EncodedObjectStorer, hashes []plumbing.Hash) error {
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: WritePackfile called with %d objects\n", len(hashes))
+
+	// Use go-git's packfile encoder with the correct signature
 	enc := packfile.NewEncoder(w, st, true) // ref-delta 사용 여부
-	_, err := enc.Encode(hashes, 0)         // packWindow=0이면 델타 탐색 비활성화
-	return err
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Encoder created, starting encode...\n")
+
+	// The encoder.Encode method expects []plumbing.Hash, not []*ObjectToPack
+	packHash, err := enc.Encode(hashes, 0) // packWindow=0이면 델타 탐색 비활성화
+	if err != nil {
+		fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Encode failed: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: Encode successful, pack hash: %s\n", packHash.String())
+	return nil
 }
 
 // "packfile" 섹션 헤더 (pkt-line + flush)
@@ -134,7 +159,6 @@ func WriteV2Advert(w io.Writer, agent string, caps ...string) error {
 			return err
 		}
 	}
-	fmt.Printf("🔍🔍🔍 🔍🔍🔍 🔍🔍🔍 DEBUG: WriteV2Advert: %v", pw)
 	return pw.Flush()
 }
 

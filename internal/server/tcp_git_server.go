@@ -20,8 +20,10 @@ import (
 	"github.com/collabops/git-executor/internal/repository"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/revlist"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"go.uber.org/zap"
@@ -338,25 +340,72 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			underlyingRepo := goGitRepo.GetGoGitRepo()
 
 			// Build object list for packfile
+			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Building fetch object list\n")
+			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Wants: %v\n", fetchReq.Wants)
+			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Haves: %v\n", fetchReq.Haves)
+
 			objectHashes, err := protocol.BuildFetchObjectList(underlyingRepo.Storer, gitRepo, fetchReq)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch object list: %w", err)
 			}
+			fmt.Printf("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: Found %d objects to send\n", len(objectHashes))
 
 			// packfile 섹션 헤더
 			if err := protocol.WritePackfileSectionHeader(conn.writer); err != nil {
 				return fmt.Errorf("failed to write packfile section header: %w", err)
 			}
 
-			// Write packfile
-			if err := protocol.WritePackfile(conn.writer, underlyingRepo.Storer, objectHashes); err != nil {
+			// Write packfile using sideband format for Git V2 protocol
+			if err := s.writePackfileWithSideband(conn, underlyingRepo.Storer, objectHashes, fetchReq); err != nil {
 				return fmt.Errorf("failed to write packfile: %w", err)
 			}
 
-			conn.writer.Flush()
+			if err := conn.writer.Flush(); err != nil {
+				return fmt.Errorf("failed to flush writer: %w", err)
+			}
 			return nil // 보통 fetch 후 종료
 		}
 	}
+}
+
+// writePackfileWithSideband writes packfile using sideband format for Git V2 protocol
+func (s *DuplexTCPServer) writePackfileWithSideband(conn *DuplexConnection, st storer.EncodedObjectStorer, hashes []plumbing.Hash, fetchReq *protocol.FetchReq) error {
+
+	useRefDelta := !fetchReq.OfsDelta // ofs-delta 요청 → ref-delta 비활성화
+
+	// 1) 섹션 헤더 (공통)
+	if err := s.writePackfileSectionHeader(conn.writer); err != nil {
+		return fmt.Errorf("packfile header: %w", err)
+	}
+
+	// 2) 본문 전송
+	if fetchReq.SidebandAll {
+		// sideband 채널 1로 pkt-line 프레이밍하여 전송
+		sbw := newSidebandWriter(conn.writer, 0x01)
+
+		enc := packfile.NewEncoder(sbw, st, useRefDelta)
+		if _, err := enc.Encode(&HashIter{St: st, Hashes: hashes}); err != nil {
+			// sideband 채널 3(fatal)로 에러 메시지를 보낼 수도 있으나
+			// 여기선 단순 리턴
+			return fmt.Errorf("encode pack (sideband): %w", err)
+		}
+		// sideband 스트림 종료
+		if err := sbw.Flush(); err != nil {
+			return fmt.Errorf("sideband flush: %w", err)
+		}
+	} else {
+		// RAW 스트리밍 (pkt-line 절대 금지)
+		enc := packfile.NewEncoder(conn.writer, st, useRefDelta)
+		if _, err := enc.Encode(&HashIter{St: st, Hashes: hashes}); err != nil {
+			return fmt.Errorf("encode pack (raw): %w", err)
+		}
+	}
+
+	// 3) bufio.Writer라면 마지막 flush
+	if err := conn.writer.Flush(); err != nil {
+		return fmt.Errorf("socket flush: %w", err)
+	}
+	return nil
 }
 
 // readV2Section reads a v2 section from the reader until flush packet

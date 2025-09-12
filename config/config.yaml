@@ -3,7 +3,7 @@
 
 # HTTP Server Configuration
 server:
-  port: 5080
+  port: 5001
   tcp_git_port: 5222
   host: "0.0.0.0"
   base_path: "/"
