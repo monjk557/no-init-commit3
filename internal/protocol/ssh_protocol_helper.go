@@ -80,19 +80,6 @@ func (it *HashIter) ForEach(cb func(plumbing.EncodedObject) error) error {
 	}
 }
 
-type sidebandWriter struct {
-	w         io.Writer
-	channel   byte // 1=pack, 2=progress, 3=fatal
-	chunkSize int  // payload (채널바이트 포함) 최대치
-}
-
-func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
-	// payload = length-4, 그중 1바이트는 채널이 차지 → 데이터는 payload-1
-	// 여유를 두고 64KB 근처에서 안전한 값으로 자른다.
-	// 여기선 payload(채널 포함) 65515로 사용 → length=65519, OK.
-	return &sidebandWriter{w: w, channel: channel, chunkSize: 65515}
-}
-
 func WritePackfile(w io.Writer, st storer.EncodedObjectStorer, hashes []plumbing.Hash) error {
 
 	// Use go-git's packfile encoder with the correct signature
@@ -233,6 +220,11 @@ func ParseFetchSection(cmds []string) (*FetchReq, error) {
 		}
 	}
 	return r, nil
+}
+
+func ParsePushSection(cmds []string) error {
+
+	return nil
 }
 
 // 옵션 검증/정책: 지원 불가 옵션 앞단에서 차단(섹션 헤더 전 ERR)
