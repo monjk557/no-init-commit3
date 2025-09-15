@@ -53,10 +53,9 @@ func main() {
 		logger.Error("Failed to create server", zap.Error(err))
 		os.Exit(1)
 	}
-
-	// 서버 시작 - 설정된 포트에서 요청 수신 시작
-	if err := srv.Start(); err != nil {
-		logger.Error("Server failed to start", zap.Error(err))
+	tcpSrv, err := server.NewDuplexTCPServer(cfg)
+	if err != nil {
+		logger.Error("Failed to create TCP server", zap.Error(err))
 		os.Exit(1)
 	}
 
