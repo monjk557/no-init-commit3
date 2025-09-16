@@ -57,6 +57,11 @@ type FetchReq struct {
 	PackfileURIs bool
 }
 
+type PushReq struct {
+	Agent string
+	Push  bool
+}
+
 func (it *HashIter) Next() (plumbing.EncodedObject, error) {
 	if it.i >= len(it.Hashes) {
 		return nil, io.EOF
@@ -169,12 +174,14 @@ func ParseLsRefsSection(cmds []string) (*LsRefsReq, error) {
 			// 알 수 없는 옵션은 무시
 		}
 	}
+
 	return r, nil
 }
 
 func ParseFetchSection(cmds []string) (*FetchReq, error) {
 	r := &FetchReq{}
-	for _, c := range cmds {
+	for _, raw := range cmds {
+		c := strings.TrimSpace(raw)
 		switch {
 		case c == "command=fetch":
 		case strings.HasPrefix(c, "agent="):
@@ -186,7 +193,6 @@ func ParseFetchSection(cmds []string) (*FetchReq, error) {
 			r.Haves = append(r.Haves, plumbing.NewHash(strings.TrimSpace(c[5:])))
 		case c == "done":
 			r.Done = true
-
 		case c == "thin-pack":
 			r.ThinPack = true
 		case c == "ofs-delta":
@@ -223,7 +229,18 @@ func ParseFetchSection(cmds []string) (*FetchReq, error) {
 }
 
 func ParsePushSection(cmds []string) error {
-
+	r := &PushReq{}
+	for _, c := range cmds {
+		switch {
+		case c == "command=fetch":
+		case strings.HasPrefix(c, "agent="):
+			r.Agent = strings.TrimPrefix(c, "agent=")
+		case c == "push":
+			r.Push = true
+		default:
+			// 알 수 없는 옵션은 무시
+		}
+	}
 	return nil
 }
 
