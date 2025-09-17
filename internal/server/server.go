@@ -16,7 +16,6 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/gin-gonic/gin"
@@ -93,16 +92,8 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	// 심플 캐시는 첫 사용 시 자동으로 초기화됨
 
-	// 권한 클라이언트 생성 (Git 저장소 접근 권한 확인용)
-	permConfig := permissions.DefaultConfig()
-	permConfig.APIServiceURL = "http://localhost:8082" // 테스트용 Mock 권한 서비스 사용
-	permClient, err := permissions.NewPermissionClient(permConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create permission client: %w", err)
-	}
-
-	// 관찰성 매니저 초기화 (메트릭, 추적, 헬스체크 통합 관리)
-	obsManager, err := observability.NewManager(cfg, permClient, "1.0.0")
+	// Initialize observability manager (without permission client)
+	obsManager, err := observability.NewManager(cfg, nil, "1.0.0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create observability manager: %w", err)
 	}
@@ -440,12 +431,12 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 		sshGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
 		{
 			// SSH-forwarded fetch operations
-			// POST /ssh/{owner}/{repo}/upload-pack
-			sshGroup.POST("/upload-pack", gin.WrapF(sshHandler.HandleSSHUploadPack))
+			// POST /ssh/{owner}/{repo}/git-upload-pack
+			sshGroup.POST("/git-upload-pack", gin.WrapF(sshHandler.HandleSSHUploadPack))
 
 			// SSH-forwarded push operations
-			// POST /ssh/{owner}/{repo}/receive-pack
-			sshGroup.POST("/receive-pack", gin.WrapF(sshHandler.HandleSSHReceivePack))
+			// POST /ssh/{owner}/{repo}/git-receive-pack
+			sshGroup.POST("/git-receive-pack", gin.WrapF(sshHandler.HandleSSHReceivePack))
 		}
 	}
 }

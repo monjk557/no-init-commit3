@@ -11,16 +11,18 @@ import (
 
 // Config는 전체 애플리케이션 설정을 나타냅니다
 type Config struct {
-	Server  ServerConfig  `mapstructure:"server" validate:"required"`
-	Git     GitConfig     `mapstructure:"git" validate:"required"`
-	JWT     JWTConfig     `mapstructure:"jwt" validate:"required"`
-	Logging LoggingConfig `mapstructure:"logging"`
-	mu      sync.RWMutex
+	Server        ServerConfig        `mapstructure:"server" validate:"required"`
+	Git           GitConfig           `mapstructure:"git" validate:"required"`
+	JWT           JWTConfig           `mapstructure:"jwt" validate:"required"`
+	Logging       LoggingConfig       `mapstructure:"logging"`
+	Observability ObservabilityConfig `mapstructure:"observability"`
+	mu            sync.RWMutex
 }
 
 // ServerConfig는 HTTP 서버 설정을 저장합니다
 type ServerConfig struct {
 	Port            int           `mapstructure:"port" validate:"required,min=1,max=65535"`
+	TCPGitPort      int           `mapstructure:"tcp_git_port" validate:"min=1,max=65535"`
 	BasePath        string        `mapstructure:"base_path" validate:"required"`
 	Host            string        `mapstructure:"host"`
 	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
@@ -55,7 +57,28 @@ type LoggingConfig struct {
 	Development bool   `mapstructure:"development"`
 }
 
-// PermissionsConfig는 권한 서비스 설정을 저장합니다
+// ObservabilityConfig holds observability configuration
+type ObservabilityConfig struct {
+	Tracing TracingConfig `mapstructure:"tracing"`
+	Metrics MetricsConfig `mapstructure:"metrics"`
+}
+
+// TracingConfig holds tracing configuration
+type TracingConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	Endpoint       string `mapstructure:"endpoint"`
+	ServiceName    string `mapstructure:"service_name"`
+	ServiceVersion string `mapstructure:"service_version"`
+}
+
+// MetricsConfig holds metrics configuration
+type MetricsConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	Endpoint string `mapstructure:"endpoint"`
+	Port     int    `mapstructure:"port"`
+}
+
+// PermissionsConfig holds permission service configuration
 type PermissionsConfig struct {
 	APIServiceURL string `mapstructure:"api_service_url"`
 }
@@ -117,6 +140,7 @@ func Load(configPath string) (*Config, error) {
 func setDefaults() {
 	// 서버 기본값
 	viper.SetDefault("server.port", 5001)
+	viper.SetDefault("server.tcp_git_port", 5222)
 	viper.SetDefault("server.base_path", "/repos")
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.read_timeout", "30s")
@@ -144,6 +168,15 @@ func setDefaults() {
 	viper.SetDefault("logging.format", "json")
 	viper.SetDefault("logging.output", "stdout")
 	viper.SetDefault("logging.development", false)
+
+	// Observability defaults
+	viper.SetDefault("observability.tracing.enabled", false)
+	viper.SetDefault("observability.tracing.endpoint", "")
+	viper.SetDefault("observability.tracing.service_name", "collabops-git-executor")
+	viper.SetDefault("observability.tracing.service_version", "1.0.0")
+	viper.SetDefault("observability.metrics.enabled", false)
+	viper.SetDefault("observability.metrics.endpoint", "")
+	viper.SetDefault("observability.metrics.port", 9090)
 }
 
 // validate는 설정 유효성 검사를 수행합니다
@@ -260,7 +293,14 @@ func (c *Config) GetLogging() LoggingConfig {
 	return c.Logging
 }
 
-// Reload는 파일에서 설정을 다시 로드합니다 (스레드 안전)
+// GetObservability returns a copy of the observability configuration (thread-safe)
+func (c *Config) GetObservability() ObservabilityConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Observability
+}
+
+// Reload reloads the configuration from file (thread-safe)
 func (c *Config) Reload() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -286,6 +326,7 @@ func (c *Config) Reload() error {
 	c.Git = newConfig.Git
 	c.JWT = newConfig.JWT
 	c.Logging = newConfig.Logging
+	c.Observability = newConfig.Observability
 
 	return nil
 }

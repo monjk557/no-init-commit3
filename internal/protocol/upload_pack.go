@@ -103,8 +103,7 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Write service advertisement
-	_, _ = fmt.Fprintf(w, "001e# service=git-upload-pack\n")
-	_, _ = fmt.Fprintf(w, "0000") // flush packet
+	_, _ = fmt.Fprintf(w, "001f# service=git-upload-pack\n")
 
 	// Get repository references using our git package
 	// For now, we'll implement a basic version that gets HEAD and branches
@@ -116,7 +115,7 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// End with null packet
+	// End with null packet (only once, at the very end)
 	_, _ = fmt.Fprintf(w, "0000")
 }
 

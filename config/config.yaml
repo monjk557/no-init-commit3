@@ -4,6 +4,7 @@
 # HTTP Server Configuration
 server:
   port: 5001
+  tcp_git_port: 5222
   host: "0.0.0.0"
   base_path: "/"
   read_timeout: "60s"
@@ -34,3 +35,15 @@ log:
   format: "json"
   output: "stdout"
   development: false
+
+# Observability Configuration
+observability:
+  tracing:
+    enabled: false
+    endpoint: ""
+    service_name: "collabops-git-executor"
+    service_version: "1.0.0"
+  metrics:
+    enabled: false
+    endpoint: ""
+    port: 9090

@@ -74,18 +74,38 @@ func NewManager(cfg *config.Config, permClient permissions.PermissionClient, ver
 
 	obsConfig := DefaultObservabilityConfig()
 
+	// Override with config settings if provided
+	if cfg.Observability.Tracing.Enabled {
+		obsConfig.Tracing = TracingConfig{
+			Enabled:          cfg.Observability.Tracing.Enabled,
+			ExporterEndpoint: cfg.Observability.Tracing.Endpoint,
+			ServiceName:      cfg.Observability.Tracing.ServiceName,
+			ServiceVersion:   cfg.Observability.Tracing.ServiceVersion,
+		}
+	}
+
+	if cfg.Observability.Metrics.Enabled {
+		obsConfig.Metrics = MetricsConfig{
+			Enabled: cfg.Observability.Metrics.Enabled,
+		}
+	}
+
 	// Initialize metrics
 	metrics := NewApplicationMetrics()
 	// Start resource collection with default interval
 	metrics.StartResourceCollector(15 * time.Second)
 
-	// Initialize tracing
-	tracingManager, err := NewTracingManager(obsConfig.Tracing)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize tracing: %w", err)
+	// Initialize tracing only if enabled
+	var tracingManager *TracingManager
+	var err error
+	if obsConfig.Tracing.Enabled {
+		tracingManager, err = NewTracingManager(obsConfig.Tracing)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize tracing: %w", err)
+		}
 	}
 
-	// Initialize health checker
+	// Initialize health checker (with or without permission client)
 	healthChecker := NewHealthChecker(cfg, permClient, version)
 
 	// Initialize logger
@@ -120,8 +140,10 @@ func (m *Manager) SetupMiddleware(router *gin.Engine) {
 	// Add metrics middleware
 	router.Use(m.ginMetricsMiddleware())
 
-	// Add tracing middleware
-	router.Use(m.ginTracingMiddleware())
+	// Add tracing middleware only if tracing is enabled
+	if m.config.Tracing.Enabled && m.tracingManager != nil {
+		router.Use(m.ginTracingMiddleware())
+	}
 }
 
 // SetupRoutes configures observability routes (health checks, metrics)

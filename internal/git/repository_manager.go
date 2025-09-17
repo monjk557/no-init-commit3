@@ -12,6 +12,7 @@ import (
 	"github.com/collabops/git-executor/internal/repository"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
@@ -349,7 +350,7 @@ func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repositor
 		// Add to tree entries
 		treeEntries = append(treeEntries, object.TreeEntry{
 			Name: filename,
-			Mode: 0644,
+			Mode: filemode.Regular,
 			Hash: blobHash,
 		})
 	}

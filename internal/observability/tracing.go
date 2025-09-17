@@ -41,7 +41,7 @@ type TracingConfig struct {
 // DefaultTracingConfig returns default tracing configuration
 func DefaultTracingConfig() TracingConfig {
 	return TracingConfig{
-		Enabled:        true,
+		Enabled:        false,
 		ServiceName:    ServiceName,
 		ServiceVersion: ServiceVersion,
 		Environment:    "development",

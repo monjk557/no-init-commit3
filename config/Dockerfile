@@ -46,8 +46,8 @@ RUN mkdir -p /opt/repos /repos /config /tmp /specs && \
 # Switch to non-root user (commented out for debugging)
 # USER gituser
 
-# Expose the default port
-EXPOSE 5001
+# Expose the default ports
+EXPOSE 5001 5222
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
