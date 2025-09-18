@@ -388,8 +388,6 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		return fmt.Errorf("failed to read ref updates: %w", err)
 	}
 
-	s.logger.Info("Received ref updates", zap.Int("count", len(refUpdates)))
-
 	// 3) 실제 ref 업데이트 수행
 	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
@@ -420,6 +418,20 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 			zap.String("repo_path", repoPath),
 			zap.String("worktree_path", workTree.Filesystem.Root()))
 	}
+
+	// 4) packfile 데이터 읽기 및 unpack
+	scanner := packfile.NewScanner(conn.reader) // 중요: pkt-line 리더 말고, 원본 io.Reader
+	parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
+	if err != nil {
+		return err
+	}
+
+	// 여기서 실제로 PACK을 디코드하여 repo.Storer에 씁니다.
+	if _, err := parser.Parse(); err != nil {
+		return err
+	}
+
+	s.logger.Info("Successfully unpacked packfile")
 
 	// 각 ref 업데이트 처리
 	for _, refUpdate := range refUpdates {
