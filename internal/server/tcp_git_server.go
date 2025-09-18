@@ -245,7 +245,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 
 	// 2) 동기 상태머신 (한 섹션씩 처리)
 	for {
-		cmds, err := s.readV2Section(conn.reader) // delim/flush까지 읽어들임
+		cmds, err := s.readSection(conn.reader) // delim/flush까지 읽어들임
 		if err != nil {
 			return err
 		}
@@ -273,7 +273,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 		// ---------------------------
 		case strings.HasPrefix(cmds[0], "command=fetch"):
 			// fetch 옵션 섹션 읽기 (command 섹션 다음 섹션)
-			fetchCmds, err := s.readV2Section(conn.reader)
+			fetchCmds, err := s.readSection(conn.reader)
 			if err != nil {
 				return fmt.Errorf("failed to read fetch options: %w", err)
 			}
@@ -282,7 +282,6 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			if err != nil {
 				return fmt.Errorf("failed to parse fetch section: %w", err)
 			}
-			s.logger.Info("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹 DEBUG: fetchReq received", zap.Any("fetchReq", fetchReq))
 			if err := protocol.ValidateFetchSupport(fetchReq); err != nil {
 				return fmt.Errorf("fetch not supported: %w", err)
 			}
@@ -373,114 +372,188 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 
 // handleReceivePack : git-receive-pack (push) 처리
 func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo string) error {
-	if err := protocol.WriteV2Advert(conn.writer, "git-executor/0.1.0", "ls-refs", "push", "fetch"); err != nil {
+	// 1) V1 광고 전송
+	if err := protocol.WriteV1Advert(conn.writer); err != nil {
 		return fmt.Errorf("failed to send advert: %w", err)
 	}
 	if err := conn.writer.Flush(); err != nil {
 		return fmt.Errorf("flush advert: %w", err)
 	}
 
-	// v2 세션을 동기 상태머신으로 처리 (duplex 루프 사용 금지)
-	for {
-		// 2) 섹션 하나 읽기 (flush까지)
-		cmds, err := s.readV2Section(conn.reader) // pkt-line 기반
-		if err != nil {
-			return err
-		}
-		if len(cmds) == 0 {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(cmds[0], "command=ls-refs"):
-			// Parse ls-refs options using helper
-			lsRefsReq, err := protocol.ParseLsRefsSection(cmds)
+	// 2) V1 프로토콜로 ref updates 읽기
+	var refUpdates []string
 
-			if err != nil {
-				return fmt.Errorf("failed to parse ls-refs section: %w", err)
+	refUpdates, err := s.readSection(conn.reader)
+	if err != nil {
+		return fmt.Errorf("failed to read ref updates: %w", err)
+	}
+
+	// 3) 실제 ref 업데이트 수행
+	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	if err != nil {
+		return fmt.Errorf("failed to create path config: %w", err)
+	}
+
+	repoPath, err := repository.GetRepoPath(pathConfig, owner, repo)
+	if err != nil {
+		return fmt.Errorf("failed to get repo path: %w", err)
+	}
+
+	// Repository 열기
+	s.logger.Info("Opening repository", zap.String("repo_path", repoPath))
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		s.logger.Error("Failed to open repository",
+			zap.String("repo_path", repoPath),
+			zap.Error(err))
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// Repository 정보 로깅
+	workTree, err := gitRepo.Worktree()
+	if err != nil {
+		s.logger.Info("Repository is bare (no worktree)", zap.String("repo_path", repoPath))
+	} else {
+		s.logger.Info("Repository has worktree",
+			zap.String("repo_path", repoPath),
+			zap.String("worktree_path", workTree.Filesystem.Root()))
+	}
+
+	// 4) packfile 데이터 읽기 및 unpack
+	scanner := packfile.NewScanner(conn.reader) // 중요: pkt-line 리더 말고, 원본 io.Reader
+	parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
+	if err != nil {
+		return err
+	}
+
+	// 여기서 실제로 PACK을 디코드하여 repo.Storer에 씁니다.
+	if _, err := parser.Parse(); err != nil {
+		return err
+	}
+
+	s.logger.Info("Successfully unpacked packfile")
+
+	// 각 ref 업데이트 처리
+	for _, refUpdate := range refUpdates {
+		parts := strings.Fields(refUpdate)
+		if len(parts) >= 3 {
+			oldHash := parts[0]
+			newHash := parts[1]
+			refName := parts[2]
+
+			refName = strings.TrimSuffix(refName, "\x00")
+
+			s.logger.Info("Processing ref update",
+				zap.String("old_hash", oldHash),
+				zap.String("new_hash", newHash),
+				zap.String("ref_name", refName))
+
+			// ref 업데이트 수행
+			if err := s.updateRef(gitRepo, oldHash, newHash, refName); err != nil {
+				s.logger.Error("Failed to update ref",
+					zap.String("ref_name", refName),
+					zap.Error(err))
+
+				continue
 			}
 
-			if err := s.handleLsRefs(conn, owner, repo, lsRefsReq); err != nil { // pkt-line로 refs... 그리고 반드시 flush + conn.writer.Flush()
-				return err
-			}
-
-			// continue
-
-			// push 명령
-			// case strings.HasPrefix(cmds[0], "command=push"):
-			// 	// Read the actual push options (second section after delimiter)
-			// 	pushCmds, err := s.readV2Section(conn.reader)
-			// 	if err != nil {
-			// 		return fmt.Errorf("failed to read push options: %w", err)
-			// 	}
-
-			// 	// Parse push commands
-			// 	refUpdates := []string{}
-			// 	for _, cmd := range pushCmds {
-			// 		if cmd == "" {
-			// 			continue
-			// 		}
-
-			// 		// Parse ref update: "old_hash new_hash ref_name"
-			// 		parts := strings.Fields(cmd)
-			// 		if len(parts) >= 3 {
-			// 			oldHash := parts[0]
-			// 			newHash := parts[1]
-			// 			refName := parts[2]
-
-			// 			s.logger.Info("Push ref update",
-			// 				zap.String("old_hash", oldHash),
-			// 				zap.String("new_hash", newHash),
-			// 				zap.String("ref_name", refName))
-
-			// 			refUpdates = append(refUpdates, cmd)
-
-			// 			// TODO: Implement actual ref update logic
-			// 			// For now, just acknowledge the push
-			// 			_ = oldHash // Suppress unused variable warning
-			// 			_ = newHash // Suppress unused variable warning
-			// 		}
-			// 	}
-
-			// 	// Git receive-pack response format:
-			// 	// 1. unpack result
-			// 	// 2. ref update results
-			// 	// 3. flush packet
-
-			// 	// Send unpack result
-			// 	if err := s.writePktLine(conn, "unpack ok"); err != nil {
-			// 		return fmt.Errorf("failed to write unpack ok: %w", err)
-			// 	}
-
-			// 	// Send ref update results
-			// 	for _, refUpdate := range refUpdates {
-			// 		parts := strings.Fields(refUpdate)
-			// 		if len(parts) >= 3 {
-			// 			refName := parts[2]
-
-			// 			// Send ref update response
-			// 			response := fmt.Sprintf("ok %s", refName)
-			// 			if err := s.writePktLine(conn, response); err != nil {
-			// 				return fmt.Errorf("failed to write ref update response: %w", err)
-			// 			}
-			// 		}
-			// 	}
-
-			// 	// Send final flush packet (0000)
-			// 	if err := s.writePktLine(conn, ""); err != nil {
-			// 		return fmt.Errorf("failed to write final flush: %w", err)
-			// 	}
-
-			// 	// Flush writer buffer
-			// 	if err := conn.writer.Flush(); err != nil {
-			// 		return fmt.Errorf("failed to flush writer: %w", err)
-			// 	}
-
-			// 	s.logger.Info("Push request processed successfully")
-			// 	return nil // push 후 종료
 		}
+	}
+
+	// 성공 응답
+	pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
+	if err := pw.WriteLine("unpack ok\n"); err != nil {
+		return fmt.Errorf("failed to write ref update response: %w", err)
+	}
+
+	for _, refUpdate := range refUpdates {
+		// ... ref 업데이트 성공했다면:
+		// refname과 성공
+		refName := ""
+		parts := strings.Fields(refUpdate)
+		if len(parts) >= 3 {
+			refNameRaw := parts[2]
+			refName = strings.TrimSuffix(refNameRaw, "\x00")
+		}
+
+		if err := s.writePktLine(conn, fmt.Sprintf("ok %s\n", refName)); err != nil {
+			return fmt.Errorf("failed to write ref update response: %w", err)
+		}
+		// 실패면: protocol.WritePktLine(conn.writer, fmt.Sprintf("ng %s %s\n", refName, reason))
+	}
+
+	if err := pw.Flush(); err != nil {
+		return fmt.Errorf("failed to write flush packet: %w", err)
+	}
+
+	s.logger.Info("Push request processed successfully")
+	return nil
+}
+
+// updateRef updates a Git reference
+func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, refName string) error {
+	// Parse hashes
+	oldHashObj := plumbing.NewHash(oldHash)
+	newHashObj := plumbing.NewHash(newHash)
+	// Check if this is a delete operation (newHash is all zeros)
+	if newHash == "0000000000000000000000000000000000000000" {
+		// Delete the reference
+		ref := plumbing.ReferenceName(refName)
+		if err := repo.Storer.RemoveReference(ref); err != nil {
+			return fmt.Errorf("failed to delete reference %s: %w", refName, err)
+		}
+		s.logger.Info("Deleted reference", zap.String("ref_name", refName))
 		return nil
 	}
 
+	// Check if this is a create operation (oldHash is all zeros)
+	if oldHash == "0000000000000000000000000000000000000000" {
+		// Create new reference
+		s.logger.Info("Creating new reference",
+			zap.String("ref_name", refName),
+			zap.String("new_hash", newHash),
+			zap.String("new_hash_obj", newHashObj.String()))
+
+		ref := plumbing.NewHashReference(plumbing.ReferenceName(refName), newHashObj)
+		s.logger.Info("Created reference object",
+			zap.String("ref_name", ref.Name().String()),
+			zap.String("ref_target", ref.Target().String()))
+
+		if err := repo.Storer.SetReference(ref); err != nil {
+			s.logger.Error("Failed to set reference in storer",
+				zap.String("ref_name", refName),
+				zap.String("error", err.Error()),
+				zap.String("error_type", fmt.Sprintf("%T", err)))
+			return fmt.Errorf("failed to create reference %s: %w", refName, err)
+		}
+		s.logger.Info("Successfully created reference", zap.String("ref_name", refName), zap.String("hash", newHash))
+		return nil
+	}
+
+	// Update existing reference
+	// First check if the old hash matches the current reference
+	currentRef, err := repo.Reference(plumbing.ReferenceName(refName), true)
+	if err != nil {
+		return fmt.Errorf("failed to get current reference %s: %w", refName, err)
+	}
+
+	if currentRef.Hash() != oldHashObj {
+		return fmt.Errorf("reference %s hash mismatch: expected %s, got %s",
+			refName, oldHash, currentRef.Hash().String())
+	}
+
+	// Update the reference
+	ref := plumbing.NewHashReference(plumbing.ReferenceName(refName), newHashObj)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return fmt.Errorf("failed to update reference %s: %w", refName, err)
+	}
+
+	s.logger.Info("Updated reference",
+		zap.String("ref_name", refName),
+		zap.String("old_hash", oldHash),
+		zap.String("new_hash", newHash))
+
+	return nil
 }
 
 // handleLsRefs : ls-refs 명령 처리 (info/refs)
@@ -663,7 +736,7 @@ func (s *DuplexTCPServer) writePackfileWithSideband(
 }
 
 // readV2Section : v2 섹션 읽기 (flush 패킷 전까지)
-func (s *DuplexTCPServer) readV2Section(reader *bufio.Reader) ([]string, error) {
+func (s *DuplexTCPServer) readSection(reader *bufio.Reader) ([]string, error) {
 	var commands []string
 
 	for {

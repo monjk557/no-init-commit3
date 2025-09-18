@@ -150,6 +150,22 @@ func WriteV2Advert(w io.Writer, agent string, caps ...string) error {
 	return pw.Flush()
 }
 
+// Git V2 프로토콜 광고 작성을 위한 라이브러리
+// 프로토콜 광고란, 클라이언트가 지원하는 기능을 알려주는 메시지
+
+func WriteV1Advert(w io.Writer, caps ...string) error {
+	pw := &PktWriter{W: w, WithLF: false} // 광고는 사람 읽기 편하게 LF 포함으로 통일해도 OK
+	if err := pw.WriteLine("version 1"); err != nil {
+		return err
+	}
+	for _, c := range caps {
+		if err := pw.WriteLine(c); err != nil {
+			return err
+		}
+	}
+	return pw.Flush()
+}
+
 // 사용 예:
 // upload-pack: caps := []string{"ls-refs", "fetch"}
 // receive-pack: caps := []string{"receive-pack"}
