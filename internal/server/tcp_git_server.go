@@ -372,23 +372,8 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 
 // handleReceivePack : git-receive-pack (push) 처리
 func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo string) error {
-	// 1) V1 광고 전송
-	if err := protocol.WriteV1Advert(conn.writer); err != nil {
-		return fmt.Errorf("failed to send advert: %w", err)
-	}
-	if err := conn.writer.Flush(); err != nil {
-		return fmt.Errorf("flush advert: %w", err)
-	}
 
-	// 2) V1 프로토콜로 ref updates 읽기
-	var refUpdates []string
-
-	refUpdates, err := s.readSection(conn.reader)
-	if err != nil {
-		return fmt.Errorf("failed to read ref updates: %w", err)
-	}
-
-	// 3) 실제 ref 업데이트 수행
+	// 1) Repository 열기
 	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
 		return fmt.Errorf("failed to create path config: %w", err)
@@ -399,7 +384,6 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		return fmt.Errorf("failed to get repo path: %w", err)
 	}
 
-	// Repository 열기
 	s.logger.Info("Opening repository", zap.String("repo_path", repoPath))
 	gitRepo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
@@ -409,7 +393,23 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	// Repository 정보 로깅
+	// 2) V1 광고 전송
+	if err := protocol.WriteV1Advert(conn.writer, *gitRepo); err != nil {
+		return fmt.Errorf("failed to send advert: %w", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		return fmt.Errorf("flush advert: %w", err)
+	}
+
+	// 3) ref updates 읽기
+	var refUpdates []string
+
+	refUpdates, err = s.readSection(conn.reader)
+	if err != nil {
+		return fmt.Errorf("failed to read ref updates: %w", err)
+	}
+
+	// 4) 실제 ref 업데이트 수행
 	workTree, err := gitRepo.Worktree()
 	if err != nil {
 		s.logger.Info("Repository is bare (no worktree)", zap.String("repo_path", repoPath))
@@ -419,21 +419,21 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 			zap.String("worktree_path", workTree.Filesystem.Root()))
 	}
 
-	// 4) packfile 데이터 읽기 및 unpack
+	// 5) packfile 데이터 읽기 및 unpack
 	scanner := packfile.NewScanner(conn.reader) // 중요: pkt-line 리더 말고, 원본 io.Reader
 	parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
 	if err != nil {
 		return err
 	}
 
-	// 여기서 실제로 PACK을 디코드하여 repo.Storer에 씁니다.
+	// 6) packfile 데이터 디코드
 	if _, err := parser.Parse(); err != nil {
 		return err
 	}
 
 	s.logger.Info("Successfully unpacked packfile")
 
-	// 각 ref 업데이트 처리
+	// 7) 각 ref 업데이트 처리
 	for _, refUpdate := range refUpdates {
 		parts := strings.Fields(refUpdate)
 		if len(parts) >= 3 {
@@ -458,32 +458,6 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 			}
 
 		}
-	}
-
-	// 성공 응답
-	pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
-	if err := pw.WriteLine("unpack ok\n"); err != nil {
-		return fmt.Errorf("failed to write ref update response: %w", err)
-	}
-
-	for _, refUpdate := range refUpdates {
-		// ... ref 업데이트 성공했다면:
-		// refname과 성공
-		refName := ""
-		parts := strings.Fields(refUpdate)
-		if len(parts) >= 3 {
-			refNameRaw := parts[2]
-			refName = strings.TrimSuffix(refNameRaw, "\x00")
-		}
-
-		if err := s.writePktLine(conn, fmt.Sprintf("ok %s\n", refName)); err != nil {
-			return fmt.Errorf("failed to write ref update response: %w", err)
-		}
-		// 실패면: protocol.WritePktLine(conn.writer, fmt.Sprintf("ng %s %s\n", refName, reason))
-	}
-
-	if err := pw.Flush(); err != nil {
-		return fmt.Errorf("failed to write flush packet: %w", err)
 	}
 
 	s.logger.Info("Push request processed successfully")
