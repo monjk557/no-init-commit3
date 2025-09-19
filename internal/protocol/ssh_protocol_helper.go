@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/git"
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/revlist"
@@ -150,19 +151,109 @@ func WriteV2Advert(w io.Writer, agent string, caps ...string) error {
 	return pw.Flush()
 }
 
-// Git V2 프로토콜 광고 작성을 위한 라이브러리
-// 프로토콜 광고란, 클라이언트가 지원하는 기능을 알려주는 메시지
+// Git V1 프로토콜 광고 작성을 위한 펑션
+func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
+	pw := &PktWriter{W: w, WithLF: false}
 
-func WriteV1Advert(w io.Writer, caps ...string) error {
-	pw := &PktWriter{W: w, WithLF: false} // 광고는 사람 읽기 편하게 LF 포함으로 통일해도 OK
-	if err := pw.WriteLine("version 1"); err != nil {
-		return err
+	// refs 수집 (루스 + packed 모두 포함)
+	it, err := repo.References()
+	if err != nil {
+		return fmt.Errorf("iter refs: %w", err)
 	}
+	defer it.Close()
+
+	type advRef struct {
+		name string
+		oid  plumbing.Hash
+		kind int // 0=heads, 1=tags, 2=others
+	}
+	var lst []advRef
+
+	var headTarget string
+	// HEAD 심볼릭 대상
+	if headRef, err := repo.Storer.Reference(plumbing.HEAD); err == nil && headRef.Type() == plumbing.SymbolicReference {
+		headTarget = headRef.Target().String()
+	}
+
+	err = it.ForEach(func(r *plumbing.Reference) error {
+		switch r.Type() {
+		case plumbing.HashReference:
+			n := r.Name().String()
+			k := 2
+			if strings.HasPrefix(n, "refs/heads/") {
+				k = 0
+			} else if strings.HasPrefix(n, "refs/tags/") {
+				k = 1
+			} else {
+				// receive-pack 광고에서 remotes/*는 보통 제외
+				return nil
+			}
+			lst = append(lst, advRef{name: n, oid: r.Hash(), kind: k})
+		case plumbing.SymbolicReference:
+			// 심볼릭 라인은 광고 리스트에 넣지 않음 (HEAD는 capability로만 알림)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("foreach refs: %w", err)
+	}
+
+	// 빈 저장소: 그냥 flush
+	if len(lst) == 0 {
+		return pw.Flush()
+	}
+
+	// HEAD 타깃(refs/heads/main 등)을 첫 줄로 오게 정렬 (없으면 heads 우선)
+	sort.SliceStable(lst, func(i, j int) bool {
+		if headTarget != "" {
+			if lst[i].name == headTarget && lst[j].name != headTarget {
+				return true
+			}
+			if lst[j].name == headTarget && lst[i].name != headTarget {
+				return false
+			}
+		}
+		if lst[i].kind != lst[j].kind {
+			return lst[i].kind < lst[j].kind
+		}
+		return lst[i].name < lst[j].name
+	})
+
+	// capabilities 구성: 호출자가 준 caps + symref=HEAD:<target>(가능하면) 중복 제거
+	cset := make(map[string]struct{}, len(caps)+2)
+	var merged []string
 	for _, c := range caps {
-		if err := pw.WriteLine(c); err != nil {
-			return err
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if _, ok := cset[c]; ok {
+			continue
+		}
+		cset[c] = struct{}{}
+		merged = append(merged, c)
+	}
+	if headTarget != "" {
+		sym := "symref=HEAD:" + headTarget
+		if _, ok := cset[sym]; !ok {
+			merged = append(merged, sym)
 		}
 	}
+
+	// 첫 줄: "<oid> <ref>\x00cap1 cap2 ...\n"
+	first := lst[0]
+	firstLine := fmt.Sprintf("%s %s\x00%s\n", first.oid.String(), first.name, strings.Join(merged, " "))
+	if err := pw.WriteLine(firstLine); err != nil {
+		return fmt.Errorf("write first advert: %w", err)
+	}
+
+	// 나머지 라인
+	for _, r := range lst[1:] {
+		if err := pw.WriteLine(fmt.Sprintf("%s %s\n", r.oid.String(), r.name)); err != nil {
+			return fmt.Errorf("write advert line: %w", err)
+		}
+	}
+
 	return pw.Flush()
 }
 
