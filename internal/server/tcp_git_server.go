@@ -460,33 +460,6 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		}
 	}
 
-	// 8) 성공 응답
-	// // pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
-	// // if err := pw.WriteLine("unpack ok\n"); err != nil {
-	// // 	return fmt.Errorf("failed to write ref update response: %w", err)
-	// // }
-
-	// // // 9) 각 ref 업데이트 성공 응답
-	// // for _, refUpdate := range refUpdates {
-	// // 	// ... ref 업데이트 성공했다면:
-	// // 	// refname과 성공
-	// // 	refName := ""
-	// // 	parts := strings.Fields(refUpdate)
-	// // 	if len(parts) >= 3 {
-	// // 		refNameRaw := parts[2]
-	// // 		refName = strings.TrimSuffix(refNameRaw, "\x00")
-	// // 	}
-
-	// // 	if err := s.writePktLine(conn, fmt.Sprintf("ok %s\n", refName)); err != nil {
-	// // 		return fmt.Errorf("failed to write ref update response: %w", err)
-	// // 	}
-	// // 	// 실패면: protocol.WritePktLine(conn.writer, fmt.Sprintf("ng %s %s\n", refName, reason))
-	// // }
-
-	// if err := pw.Flush(); err != nil {
-	// 	return fmt.Errorf("failed to write flush packet: %w", err)
-	// }
-
 	s.logger.Info("Push request processed successfully")
 	return nil
 }
