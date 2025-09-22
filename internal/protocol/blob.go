@@ -197,14 +197,6 @@ func (h *BlobHandler) validateFilePath(path string) error {
 
 // validateBlobRequestAndPermissions performs validation and permission checking for blob requests
 func (h *BlobHandler) validateBlobRequestAndPermissions(ctx context.Context, params *BlobRequestParams) (string, error) {
-	// Check user permissions (read access for blob operations)
-	hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
-	if err != nil {
-		return "", fmt.Errorf("permission check failed: %w", err)
-	}
-	if !hasAccess {
-		return "", fmt.Errorf("access denied to repository")
-	}
 
 	// Get repository path and validate
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
@@ -226,6 +218,7 @@ func (h *BlobHandler) getBlobContent(ctx context.Context, repoPath, path, ref st
 
 	// Get blob content from Git repository interface
 	content, err := gitRepo.GetBlob(ctx, path, ref)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get blob: %w", err)
 	}
