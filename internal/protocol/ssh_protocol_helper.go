@@ -175,6 +175,11 @@ func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
 		headTarget = headRef.Target().String()
 	}
 
+	// 로직설명:
+	// 1. 모든 ref를 순회하며, ref의 타입에 따라 분류
+	// 2. ref의 타입이 head 이면 0
+	// 3. ref의 타입이 tag 이면 1
+	// 4. ref의 타입이 나머지 이면 2
 	err = it.ForEach(func(r *plumbing.Reference) error {
 		switch r.Type() {
 		case plumbing.HashReference:

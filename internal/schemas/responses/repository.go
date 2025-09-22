@@ -12,7 +12,7 @@ type CreateRepositoryResponse struct {
 	Owner         string                 `json:"owner"`
 	Name          string                 `json:"name"`
 	Path          string                 `json:"path,omitempty"`
-	Description   string                 `json:"description,omitempty"`
+	Description   string                 `json:"description"`
 	DefaultBranch string                 `json:"default_branch"`
 	InitialCommit string                 `json:"initial_commit,omitempty"`
 	CreatedAt     time.Time              `json:"created_at"`
