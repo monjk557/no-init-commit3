@@ -68,7 +68,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: config/Dockerfile
+          file: config/docker/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -147,7 +147,7 @@ jobs:
 
           # Check required files
           echo "Checking required files..."
-          [ -f "config/Dockerfile" ] && echo "✓ Dockerfile exists" || { echo "✗ Dockerfile not found" ; exit 1; }
+          [ -f "config/docker/Dockerfile" ] && echo "✓ Dockerfile exists" || { echo "✗ Dockerfile not found" ; exit 1; }
           [ -f "go.mod" ] && echo "✓ go.mod exists" || { echo "✗ go.mod not found" ; exit 1; }
           [ -f "Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
 
@@ -216,7 +216,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: config/Dockerfile
+          file: config/docker/Dockerfile
           push: true
           build-args: |
             APP_ENV=prod
