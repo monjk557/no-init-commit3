@@ -483,23 +483,33 @@ func (s *DuplexTCPServer) handleUploadArchive(conn *DuplexConnection, owner, rep
 	}
 
 	// 1) 요청 인자 읽기 (argument ... 줄들을 flush까지)
-	args, err := s.readSection(conn.reader)
-	s.logger.Info("🏹🏹🏹 🏹🏹🏹 🏹🏹🏹  read upload-archive args", zap.String("args", strings.Join(args, " ")))
+	raw, err := s.readSection(conn.reader)
 	if err != nil {
 		return fmt.Errorf("read upload-archive args: %w", err)
 	}
-	if len(args) == 0 {
+	if len(raw) == 0 {
 		return fmt.Errorf("no arguments")
 	}
 
-	// 2) 인자 파싱 (최소: tree-ish 1개. 나머지는 pathspec/옵션)
+	// 2) 인자 정규화 (argument ... 줄들을 flush까지)
+	args := make([]string, 0, len(raw))
+	for _, line := range raw {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "argument ")
+		if line == "" {
+			continue
+		}
+		args = append(args, line)
+	}
 
-	// (선택) 2.5) 보안/유효성 체크
-	//  - tree-ish가 refs에 도달 가능한지(서버 정책에 따라 필수)
-	//  - pathspec에 '..' 등 차단, 허용 포맷 제한 등
-	// TODO: reachable 검증(go-git ResolveRevision or external `git rev-parse --verify --quiet <treeish>`)
+	// 3) 인자 파싱 (최소: tree-ish 1개. 나머지는 pathspec/옵션)
 
-	// 3) ACK + flush (프로토콜)
+	parsed, err := protocol.ParseUploadArchiveArgs(args)
+	if err != nil {
+		return fmt.Errorf("parse args: %w", err)
+	}
+
+	// 4) ACK + flush (프로토콜)
 	if err := s.writePktLine(conn, "ACK\n"); err != nil {
 		return err
 	}
@@ -507,19 +517,19 @@ func (s *DuplexTCPServer) handleUploadArchive(conn *DuplexConnection, owner, rep
 		return fmt.Errorf("flush ACK: %w", err)
 	}
 
-	// 4) 실제 아카이브 생성 스트리밍
+	// 5) 실제 아카이브 생성 스트리밍
 	// 외부 git을 이용 (권장: 호환성↑). tar/zip 등 포맷은 parsed.format 사용.
 	cmdArgs := []string{"-C", repoPath, "archive"}
-	// if args[0].Format != "" {
-	// 	cmdArgs = append(cmdArgs, "--format="+parsed.Format)
-	// }
-	// // --prefix 등 옵션
-	// if args[0].Prefix != "" {
-	// 	cmdArgs = append(cmdArgs, "--prefix="+args[0].Prefix)
-	// }
-	// // tree-ish + pathspecs
-	// cmdArgs = append(cmdArgs, args[0].Treeish)
-	// cmdArgs = append(cmdArgs, args[0].Pathspecs...)
+	if parsed.Format != "" {
+		cmdArgs = append(cmdArgs, "--format="+parsed.Format)
+	}
+	// --prefix 등 옵션
+	if parsed.Prefix != "" {
+		cmdArgs = append(cmdArgs, "--prefix="+parsed.Prefix)
+	}
+	// tree-ish + pathspecs
+	cmdArgs = append(cmdArgs, parsed.Treeish)
+	cmdArgs = append(cmdArgs, parsed.Pathspecs...)
 
 	cmd := exec.Command("git", cmdArgs...)
 	// 보안상 system/global config 영향 최소화
@@ -553,7 +563,7 @@ func (s *DuplexTCPServer) handleUploadArchive(conn *DuplexConnection, owner, rep
 		return err
 	}
 
-	// 정상 종료 (EOF로 마무리)
+	// 6) 정상 종료 (EOF로 마무리)
 	return nil
 }
 
