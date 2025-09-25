@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // MockRepository is a mock implementation of the Repository interface for testing
@@ -94,6 +95,46 @@ func (m *MockRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry, 
 	result := make([]TreeEntry, len(entries))
 	copy(result, entries)
 	return result, nil
+}
+
+// GetTreeWithCommits retrieves tree entries with their latest commit information
+func (m *MockRepository) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
+	// First get the basic tree entries using the existing GetTree method
+	entries, err := m.GetTree(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// For mock purposes, we'll add some sample commit information to blob entries
+	for i, entry := range entries {
+		if entry.Type == EntryTypeBlob {
+			// Add mock commit information
+			entries[i].LatestCommit = &Commit{
+				Sha: "mock-commit-hash",
+				Author: CommitAuthor{
+					Name:  "Mock Author",
+					Email: "mock@example.com",
+					Date:  m.getMockDate(),
+				},
+				Committer: CommitAuthor{
+					Name:  "Mock Committer",
+					Email: "mock@example.com",
+					Date:  m.getMockDate(),
+				},
+				Message:      fmt.Sprintf("Mock commit for %s", entry.Path),
+				ParentHashes: []string{"parent-hash"},
+				TreeHash:     "mock-tree-hash",
+			}
+		}
+	}
+
+	return entries, nil
+}
+
+// getMockDate returns a mock date for testing
+func (m *MockRepository) getMockDate() time.Time {
+	// Return a fixed date for consistency in tests
+	return time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 }
 
 // GetBlob retrieves the contents of a file at a specific path and reference

@@ -34,6 +34,12 @@ func (rw *repositoryWrapper) GetTree(ctx context.Context, ref string) ([]TreeEnt
 	return nil, fmt.Errorf("GetTree not implemented in repository wrapper")
 }
 
+// GetTreeWithCommits retrieves the directory structure with commit information at a given reference
+func (rw *repositoryWrapper) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetTreeWithCommits not implemented in repository wrapper")
+}
+
 // GetBlob retrieves the contents of a file at a specific path and reference
 func (rw *repositoryWrapper) GetBlob(ctx context.Context, path, ref string) ([]byte, error) {
 	// This is a simplified implementation - full implementation would be more complex

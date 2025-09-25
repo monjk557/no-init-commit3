@@ -108,8 +108,8 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		return
 	}
 
-	// 4. tree entries 가져오기
-	treeEntries, err := gitRepo.GetTree(ctx, ref)
+	// 4. tree entries 가져오기 (커밋 정보 포함)
+	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, ref)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})

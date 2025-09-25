@@ -15,6 +15,9 @@ type Repository interface {
 	// GetTree - 특정 참조(ref)에서 디렉토리 구조 조회
 	GetTree(ctx context.Context, ref string) ([]TreeEntry, error)
 
+	// GetTreeWithCommits - 특정 참조(ref)에서 디렉토리 구조와 각 파일의 최신 커밋 정보 조회
+	GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error)
+
 	// GetBlob - 특정 경로와 참조에서 파일 내용 조회
 	GetBlob(ctx context.Context, path, ref string) ([]byte, error)
 
@@ -53,6 +56,9 @@ type TreeEntry struct {
 
 	// Size - 파일 크기 (바이트 단위, blob일 때만)
 	Size int64 `json:"size"`
+
+	// LatestCommit - 이 파일의 최신 커밋 정보 (blob일 때만)
+	LatestCommit *Commit `json:"latest_commit,omitempty"`
 }
 
 // EntryType - Git 트리 항목의 타입

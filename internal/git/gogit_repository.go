@@ -137,6 +137,77 @@ func (r *GoGitRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry,
 	return entries, nil
 }
 
+// GetTreeWithCommits retrieves tree entries with their latest commit information
+func (r *GoGitRepository) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
+	// First get the basic tree entries using the existing GetTree method
+	entries, err := r.GetTree(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// For each blob entry, get the latest commit information
+	for i, entry := range entries {
+		if entry.Type == EntryTypeBlob {
+			latestCommit, err := r.getLatestCommitForFile(ctx, entry.Path, ref)
+			if err == nil {
+				entries[i].LatestCommit = latestCommit
+			}
+			// If we can't get the commit info, we continue without it
+		}
+	}
+
+	return entries, nil
+}
+
+// getLatestCommitForFile gets the latest commit that modified a specific file
+func (r *GoGitRepository) getLatestCommitForFile(ctx context.Context, filePath, ref string) (*Commit, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Get commit iterator for the file
+	commitIter, err := r.repo.Log(&git.LogOptions{
+		From: r.getCommitHash(ref),
+		PathFilter: func(path string) bool {
+			return path == filePath
+		},
+	})
+	if err != nil {
+		return nil, NewGitError("get_latest_commit_for_file", r.path, filePath, "failed to get commit iterator", err)
+	}
+	defer commitIter.Close()
+
+	// Get the first (latest) commit
+	commit, err := commitIter.Next()
+	if err != nil {
+		if err == io.EOF {
+			return nil, NewGitError("get_latest_commit_for_file", r.path, filePath, "no commits found for file", nil)
+		}
+		return nil, NewGitError("get_latest_commit_for_file", r.path, filePath, "failed to get commit", err)
+	}
+
+	// Convert to our Commit format
+	return &Commit{
+		Sha: commit.Hash.String(),
+		Author: CommitAuthor{
+			Name:  commit.Author.Name,
+			Email: commit.Author.Email,
+			Date:  commit.Author.When,
+		},
+		Committer: CommitAuthor{
+			Name:  commit.Committer.Name,
+			Email: commit.Committer.Email,
+			Date:  commit.Committer.When,
+		},
+		Message:      commit.Message,
+		ParentHashes: convertParentHashes(commit.ParentHashes),
+		TreeHash:     commit.TreeHash.String(),
+	}, nil
+}
+
 // GetBlob retrieves the contents of a file at a specific path and reference
 func (r *GoGitRepository) GetBlob(ctx context.Context, path, ref string) ([]byte, error) {
 	// Check for context cancellation
@@ -496,6 +567,28 @@ func (r *GoGitRepository) resolveCommit(ref string) (*object.Commit, error) {
 	}
 
 	return commit, nil
+}
+
+// resolveReference resolves a reference to a commit hash
+func (r *GoGitRepository) resolveReference(ref string) (plumbing.Hash, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.resolveReferenceUnsafe(ref)
+}
+
+// getCommitHash gets the commit hash for a reference
+func (r *GoGitRepository) getCommitHash(ref string) plumbing.Hash {
+	hash, _ := r.resolveReference(ref)
+	return hash
+}
+
+// convertParentHashes converts parent hashes to string slice
+func convertParentHashes(parents []plumbing.Hash) []string {
+	result := make([]string, len(parents))
+	for i, parent := range parents {
+		result[i] = parent.String()
+	}
+	return result
 }
 
 // resolveReferenceUnsafe is the same as resolveReference but without locking (for internal use)
