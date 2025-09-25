@@ -21,7 +21,6 @@ import (
 	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
@@ -364,6 +363,7 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 			Email: req.Committer.Email,
 			When:  now,
 		},
+		Parents: []plumbing.Hash{baseHash}, // Set parent commit
 	}
 
 	// Create new commit
@@ -1173,6 +1173,23 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		apiErr := h.errorMapper.MapError(err, "commit_transaction")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
+	}
+
+	// Update branch reference if transaction was successful
+	if result.State == git.TransactionStateCommitted && result.CommitResult != nil {
+		refName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", branch))
+		newRef := plumbing.NewHashReference(refName, result.CommitResult.Hash)
+		if err := repository.Storer.SetReference(newRef); err != nil {
+			h.logger.Error("Failed to update branch reference after successful commit",
+				zap.String("branch", branch),
+				zap.String("commit_hash", result.CommitResult.Hash.String()),
+				zap.Error(err))
+			// Don't fail the entire operation, but log the error
+		} else {
+			h.logger.Info("Updated branch reference",
+				zap.String("branch", branch),
+				zap.String("commit_hash", result.CommitResult.Hash.String()))
+		}
 	}
 
 	// Prepare response
