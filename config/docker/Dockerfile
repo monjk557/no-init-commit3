@@ -35,7 +35,7 @@ WORKDIR /app
 # Copy the binary from builder stage
 COPY --from=builder /app/git-executor .
 
-# Copy configuration file
+# # Copy configuration file
 COPY config/config.yaml /config/config.yaml
 
 # Create necessary directories with proper permissions

@@ -63,6 +63,13 @@ type PushReq struct {
 	Push  bool
 }
 
+type UploadArchiveSpec struct {
+	Format    string   // "tar" | "zip" ...
+	Prefix    string   // e.g. "repo-1/"
+	Treeish   string   // e.g. "HEAD" or "refs/heads/main"
+	Pathspecs []string // 선택: 포함할 경로들
+}
+
 func (it *HashIter) Next() (plumbing.EncodedObject, error) {
 	if it.i >= len(it.Hashes) {
 		return nil, io.EOF
@@ -260,6 +267,36 @@ func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
 	}
 
 	return pw.Flush()
+}
+
+func ParseUploadArchiveArgs(lines []string) (*UploadArchiveSpec, error) {
+	spec := &UploadArchiveSpec{}
+
+	for _, a := range lines {
+		if a == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(a, "--format="):
+			spec.Format = strings.TrimPrefix(a, "--format=")
+		case strings.HasPrefix(a, "--prefix="):
+			spec.Prefix = strings.TrimPrefix(a, "--prefix=")
+		case strings.HasPrefix(a, "--"):
+			// 다른 옵션은 필요 시 추가 처리
+		default:
+			// positional: 첫 번째는 tree-ish, 나머지는 pathspec
+			if spec.Treeish == "" {
+				spec.Treeish = a
+			} else {
+				spec.Pathspecs = append(spec.Pathspecs, a)
+			}
+		}
+	}
+	if spec.Treeish == "" {
+		return nil, fmt.Errorf("missing tree-ish")
+	}
+
+	return spec, nil
 }
 
 // 사용 예:

@@ -4,15 +4,17 @@ services:
   collabops-git-executor:
     build:
       context: ../../../../collabops-git-executor
-      dockerfile: deployments/Dockerfile
+      dockerfile: config/docker/Dockerfile
     ports:
       - "${GIT_EXECUTOR_PORT:-5001}:5001"
+      - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
     environment:
       - APP_ENV=${APP_ENV:-local}
       - APP_DEBUG=${APP_DEBUG:-true}
       - APP_NAME=${APP_NAME:-"Git Executor Service"}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-DEBUG}
       - PORT=5001
+      - SSH_PORT=5222
     volumes:  
       - ../../../../collabops-git-executor/specs:/app/specs:ro
       - repos_data:/opt/repos
