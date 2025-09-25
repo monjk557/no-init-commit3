@@ -8,6 +8,7 @@ import (
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -42,10 +43,20 @@ func NewRepositoryDetailHandler(cfg *config.Config) (*RepositoryDetailHandler, e
 	responseMiddleware := api.NewJSONResponseMiddleware(logger, "v1")
 	errorMapper := api.NewGitErrorMapper()
 
+	pathValidator := repository.NewGitAPIPathValidator(pathConfig)
+
+	repoManager, err := git.NewRepositoryManager(pathConfig, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create repository manager: %w", err)
+	}
+
 	return &RepositoryDetailHandler{
 		config:             cfg,
 		logger:             logger,
+		pathConfig:         pathConfig,
+		pathValidator:      pathValidator,
 		objectManager:      objectManager,
+		repoManager:        repoManager,
 		responseMiddleware: responseMiddleware,
 		errorMapper:        errorMapper,
 	}, nil
@@ -62,6 +73,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		ref = "main"
 	}
 
+	// 1. parameter 조합 검증
 	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_repository_path")
@@ -69,103 +81,105 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		return
 	}
 
+	// 2. repository 존재 확인
+	exists, err := h.repoManager.RepositoryExists(ctx, repoPath)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "check_repository_exists")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+	if !exists {
+		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
+		return
+	}
+
 	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "open_repository")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
-	defer func() { _ = gitRepo.Close() }()
 
-	// Get tree entries from Git repository interface
+	// 3. repository description 가져오기
+	description, err := gitRepo.GetDescription(ctx)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_description")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 4. tree entries 가져오기
 	treeEntries, err := gitRepo.GetTree(ctx, ref)
 	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_tree")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
-	h.logger.Info("treeEntries", zap.Any("treeEntries", treeEntries))
-	// //default branch
-	// headRef, err := refs[0]
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "get_head_ref")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return
-	// }
 
-	// 브랜치 로그 가져오기
+	// 5. commit history 가져오기
+	commits, err := gitRepo.GetCommits(ctx, ref, 10, 0)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_commits")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
 
-	// defer logIter.Close()
-	// // 순회
-	// err = logIter.ForEach(func(c *object.Commit) error {
-	// 	fmt.Printf("[%s] %s\n", c.Hash, c.Message)
-	// 	return nil
-	// })
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "iterate_commits")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return
-	// }
+	// 6. branches 가져오기
+	branches, err := gitRepo.GetBranches(ctx)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_branches")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
 
-	// //tree
-	// tree, err := h.getTreeStructure(ctx, repository.Path(), headRef.Name().String())
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "get_tree_structure")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return
-	// }
+	// 7. tags 가져오기
+	tags, err := gitRepo.GetTags(ctx)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_tags")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+	h.logger.Info("tags", zap.Any("tags", tags))
 
-	//tags
-	// tagIter, err := repository.Tags()
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "get_tag_iter")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return nil, err
-	// }
+	// 8. remotes 가져오기
+	remotes, err := gitRepo.GetRemotes(ctx)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_remotes")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+	h.logger.Info("remotes", zap.Any("remotes", remotes))
 
-	//remotes
-	// remoteIter, err := repository.Remotes()
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "get_remote_iter")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return nil, err
-	// }
+	// 9. readme 가져오기
+	readmeData, err := gitRepo.GetBlob(ctx, "README.md", ref)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_readme")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
 
-	// //hash count
-	// hashCount, err := repository.HashCount()
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "get_hash_count")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return
-	// }
+	// 10. response 생성
+	response := responses.RepositoryDetailResponse{
+		Repository:    fmt.Sprintf("%s/%s", owner, repo),
+		Owner:         owner,
+		Name:          repo,
+		Path:          repoPath,
+		Description:   description,
+		DefaultBranch: ref,
+		Tree:          treeEntries,
+		Commits:       commits,
+		Branches:      branches,
+		Tags:          tags,
+		Count: responses.RepositoryCount{
+			Commits:  len(commits),
+			Branches: len(branches),
+			Tags:     len(tags),
+			Remotes:  len(remotes),
+			Total:    len(commits) + len(branches) + len(tags) + len(remotes),
+		},
+		Readme: string(readmeData),
+	}
 
-	// //readme
-	// readme, err := tree.File("README.md")
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "get_readme")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return
-	// }
-
-	// readmeContent, err := readme.Contents()
-	// if err != nil {
-	// 	apiErr := h.errorMapper.MapError(err, "get_readme_content")
-	// 	c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-	// 	return
-	// }
-
-	// response := responses.RepositoryDetailResponse{
-	// 	Description: "description",
-	// 	// Tree:        treeEntries,
-	// 	Tags: []string{},
-	// 	// DefaultBranch: headRef.Name().String(),
-	// 	// Branches: "",
-	// 	Count: responses.RepositoryCount{
-	// 		Coomits:  1,
-	// 		Branches: 1,
-	// 		Tags:     1,
-	// 		Remotes:  1,
-	// 		Total:    1,
-	// 	},
-	// 	Readme: "readme",
-	// }
-
-	api.SendSuccess(c, "response", "Repository detail retrieved successfully")
+	api.SendSuccess(c, response, "Repository detail retrieved successfully")
 
 }
