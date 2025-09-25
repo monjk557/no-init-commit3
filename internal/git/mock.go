@@ -22,14 +22,30 @@ type MockRepository struct {
 	// commits maps ref -> []Commit
 	commits map[string][]Commit
 
+	// branches stores all branches
+	branches []Branch
+
+	// tags stores all tags
+	tags []Tag
+
+	// description stores repository description
+	description string
+
+	// remotes stores all remotes
+	remotes []Remote
+
 	// closed indicates if the repository has been closed
 	closed bool
 
 	// Mock control fields
-	GetTreeError    error
-	GetBlobError    error
-	GetCommitsError error
-	CloseError      error
+	GetTreeError        error
+	GetBlobError        error
+	GetCommitsError     error
+	GetBranchesError    error
+	GetTagsError        error
+	GetDescriptionError error
+	GetRemotesError     error
+	CloseError          error
 }
 
 // NewMockRepository creates a new mock repository
@@ -150,6 +166,107 @@ func (m *MockRepository) GetCommits(ctx context.Context, ref string, limit, skip
 	// Return a copy to prevent modifications
 	result := make([]Commit, end-skip)
 	copy(result, allCommits[skip:end])
+	return result, nil
+}
+
+// GetBranches retrieves all branches (mock implementation)
+func (m *MockRepository) GetBranches(ctx context.Context) ([]Branch, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	if m.GetBranchesError != nil {
+		return nil, m.GetBranchesError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Return a copy to prevent modifications
+	result := make([]Branch, len(m.branches))
+	copy(result, m.branches)
+	return result, nil
+}
+
+// GetTags retrieves all tags (mock implementation)
+func (m *MockRepository) GetTags(ctx context.Context) ([]Tag, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	if m.GetTagsError != nil {
+		return nil, m.GetTagsError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Return a copy to prevent modifications
+	result := make([]Tag, len(m.tags))
+	copy(result, m.tags)
+	return result, nil
+}
+
+// GetDescription retrieves the repository description (mock implementation)
+func (m *MockRepository) GetDescription(ctx context.Context) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return "", fmt.Errorf("repository is closed")
+	}
+
+	if m.GetDescriptionError != nil {
+		return "", m.GetDescriptionError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	return m.description, nil
+}
+
+// GetRemotes retrieves all remote repositories (mock implementation)
+func (m *MockRepository) GetRemotes(ctx context.Context) ([]Remote, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	if m.GetRemotesError != nil {
+		return nil, m.GetRemotesError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Return a copy to prevent modifications
+	result := make([]Remote, len(m.remotes))
+	copy(result, m.remotes)
 	return result, nil
 }
 
