@@ -21,6 +21,18 @@ type Repository interface {
 	// GetCommits - 페이지네이션을 사용한 커밋 히스토리 조회
 	GetCommits(ctx context.Context, ref string, limit, skip int) ([]Commit, error)
 
+	// GetBranches - 모든 브랜치 목록 조회
+	GetBranches(ctx context.Context) ([]Branch, error)
+
+	// GetTags - 모든 태그 목록 조회
+	GetTags(ctx context.Context) ([]Tag, error)
+
+	// GetDescription - 저장소 설명 조회
+	GetDescription(ctx context.Context) (string, error)
+
+	// GetRemotes - 모든 원격 저장소 목록 조회
+	GetRemotes(ctx context.Context) ([]Remote, error)
+
 	// Close - 리포지토리가 보유한 리소스 해제
 	Close() error
 }
@@ -88,6 +100,51 @@ type CommitAuthor struct {
 
 	// Date - 커밋 타임스탬프
 	Date time.Time `json:"date"`
+}
+
+// Branch - Git 브랜치 정보
+type Branch struct {
+	// Name - 브랜치 이름
+	Name string `json:"name"`
+
+	// Hash - 브랜치가 가리키는 커밋 해시
+	Hash string `json:"hash"`
+
+	// IsRemote - 원격 브랜치 여부
+	IsRemote bool `json:"is_remote"`
+
+	// IsCurrent - 현재 체크아웃된 브랜치 여부
+	IsCurrent bool `json:"is_current"`
+}
+
+// Tag - Git 태그 정보
+type Tag struct {
+	// Name - 태그 이름
+	Name string `json:"name"`
+
+	// Hash - 태그가 가리키는 커밋 해시
+	Hash string `json:"hash"`
+
+	// Message - 태그 메시지 (annotated tag인 경우)
+	Message string `json:"message,omitempty"`
+
+	// Tagger - 태그 작성자 정보 (annotated tag인 경우)
+	Tagger *CommitAuthor `json:"tagger,omitempty"`
+
+	// IsAnnotated - annotated tag 여부
+	IsAnnotated bool `json:"is_annotated"`
+}
+
+// Remote - Git 원격 저장소 정보
+type Remote struct {
+	// Name - 원격 저장소 이름 (예: origin, upstream)
+	Name string `json:"name"`
+
+	// URL - 원격 저장소 URL
+	URL string `json:"url"`
+
+	// IsDefault - 기본 원격 저장소 여부 (origin)
+	IsDefault bool `json:"is_default"`
 }
 
 // OpenRepositoryFunc - 리포지토리를 여는 함수 타입
