@@ -31,9 +31,9 @@ type RepositoryDetailResponse struct {
 	Path          string          `json:"path"`
 	Description   string          `json:"description"`
 	DefaultBranch string          `json:"default_branch,"`
-	Tree          []git.TreeEntry `json:"tree"`
-	Commits       []git.Commit    `json:"commits"`
-	Branches      []git.Branch    `json:"branches"`
+	Tree          []git.TreeEntry `json:"tree,"`
+	LatestCommits git.Commit      `json:"latest_commits,"`
+	Branches      []git.Branch    `json:"branches,"`
 	Tags          []git.Tag       `json:"tag,"`
 	Count         RepositoryCount `json:"count,"`
 	Readme        string          `json:"readme,"`

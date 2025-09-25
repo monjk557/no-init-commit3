@@ -167,7 +167,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		Description:   description,
 		DefaultBranch: ref,
 		Tree:          treeEntries,
-		Commits:       commits,
+		LatestCommits: commits[0],
 		Branches:      branches,
 		Tags:          tags,
 		Count: responses.RepositoryCount{
