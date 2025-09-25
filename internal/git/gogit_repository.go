@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -247,6 +248,219 @@ func (r *GoGitRepository) GetCommits(ctx context.Context, ref string, limit, ski
 	}
 
 	return commits, nil
+}
+
+// GetBranches retrieves all branches (local and remote)
+func (r *GoGitRepository) GetBranches(ctx context.Context) ([]Branch, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return nil, NewGitError("get_branches", r.path, "", "repository is closed", nil)
+	}
+
+	var branches []Branch
+
+	// Get local branches
+	refs, err := r.repo.References()
+	if err != nil {
+		return nil, NewGitError("get_branches", r.path, "", "failed to get references", err)
+	}
+
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		// Check for context cancellation during iteration
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Only process branch references
+		if ref.Name().IsBranch() {
+			branch := Branch{
+				Name:     ref.Name().Short(),
+				Hash:     ref.Hash().String(),
+				IsRemote: ref.Name().IsRemote(),
+			}
+
+			// Check if this is the current branch
+			head, err := r.repo.Head()
+			if err == nil && head.Name() == ref.Name() {
+				branch.IsCurrent = true
+			}
+
+			branches = append(branches, branch)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, NewGitError("get_branches", r.path, "", "failed to iterate references", err)
+	}
+
+	return branches, nil
+}
+
+// GetTags retrieves all tags
+func (r *GoGitRepository) GetTags(ctx context.Context) ([]Tag, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return nil, NewGitError("get_tags", r.path, "", "repository is closed", nil)
+	}
+
+	var tags []Tag
+
+	// Get all tag references
+	refs, err := r.repo.References()
+	if err != nil {
+		return nil, NewGitError("get_tags", r.path, "", "failed to get references", err)
+	}
+
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		// Check for context cancellation during iteration
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Only process tag references
+		if ref.Name().IsTag() {
+			tag := Tag{
+				Name: ref.Name().Short(),
+				Hash: ref.Hash().String(),
+			}
+
+			// Try to get tag object for annotated tags
+			tagObj, err := r.repo.TagObject(ref.Hash())
+			if err == nil {
+				// This is an annotated tag
+				tag.IsAnnotated = true
+				tag.Message = tagObj.Message
+				tag.Tagger = &CommitAuthor{
+					Name:  tagObj.Tagger.Name,
+					Email: tagObj.Tagger.Email,
+					Date:  tagObj.Tagger.When,
+				}
+			}
+
+			tags = append(tags, tag)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, NewGitError("get_tags", r.path, "", "failed to iterate references", err)
+	}
+
+	return tags, nil
+}
+
+// GetDescription retrieves the repository description
+func (r *GoGitRepository) GetDescription(ctx context.Context) (string, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return "", NewGitError("get_description", r.path, "", "repository is closed", nil)
+	}
+
+	// Read the description file
+	// For bare repositories, description is directly in the repo root
+	// For non-bare repositories, description is in .git/description
+	var descriptionPath string
+
+	// Check if it's a bare repository by looking for .git directory
+	gitDir := filepath.Join(r.path, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		// This is a bare repository, description is in the root
+		descriptionPath = filepath.Join(r.path, "description")
+	} else {
+		// This is a non-bare repository, description is in .git/description
+		descriptionPath = filepath.Join(r.path, ".git", "description")
+	}
+
+	// Check if description file exists
+	if _, err := os.Stat(descriptionPath); os.IsNotExist(err) {
+		// Return default description if file doesn't exist
+		return "Unnamed repository; edit this file 'description' to name the repository.", nil
+	}
+
+	// Read the description file
+	content, err := os.ReadFile(descriptionPath)
+	if err != nil {
+		return "", NewGitError("get_description", r.path, "", "failed to read description file", err)
+	}
+
+	description := strings.TrimSpace(string(content))
+
+	// Return default if description is empty or default
+	if description == "" || description == "Unnamed repository; edit this file 'description' to name the repository." {
+		return "", nil
+	}
+
+	return description, nil
+}
+
+// GetRemotes retrieves all remote repositories
+func (r *GoGitRepository) GetRemotes(ctx context.Context) ([]Remote, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return nil, NewGitError("get_remotes", r.path, "", "repository is closed", nil)
+	}
+
+	var remotes []Remote
+
+	// Get all remote references
+	remoteList, err := r.repo.Remotes()
+	if err != nil {
+		return nil, NewGitError("get_remotes", r.path, "", "failed to get remotes", err)
+	}
+
+	for _, remote := range remoteList {
+		remoteInfo := Remote{
+			Name:      remote.Config().Name,
+			URL:       remote.Config().URLs[0], // Get the first URL
+			IsDefault: remote.Config().Name == "origin",
+		}
+		remotes = append(remotes, remoteInfo)
+	}
+
+	return remotes, nil
 }
 
 // Close releases any resources held by the repository
