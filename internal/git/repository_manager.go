@@ -46,6 +46,30 @@ func (rw *repositoryWrapper) GetCommits(ctx context.Context, ref string, limit, 
 	return nil, fmt.Errorf("GetCommits not implemented in repository wrapper")
 }
 
+// GetBranches retrieves all branches
+func (rw *repositoryWrapper) GetBranches(ctx context.Context) ([]Branch, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetBranches not implemented in repository wrapper")
+}
+
+// GetTags retrieves all tags
+func (rw *repositoryWrapper) GetTags(ctx context.Context) ([]Tag, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetTags not implemented in repository wrapper")
+}
+
+// GetDescription retrieves the repository description
+func (rw *repositoryWrapper) GetDescription(ctx context.Context) (string, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return "", fmt.Errorf("GetDescription not implemented in repository wrapper")
+}
+
+// GetRemotes retrieves all remote repositories
+func (rw *repositoryWrapper) GetRemotes(ctx context.Context) ([]Remote, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetRemotes not implemented in repository wrapper")
+}
+
 // Close releases any resources held by the repository
 func (rw *repositoryWrapper) Close() error {
 	// go-git repositories don't need explicit closing
