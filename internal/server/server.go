@@ -284,6 +284,17 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	reposGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
 	reposGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
 	reposGroup.Use(jsonResponseMiddleware.ErrorHandler())
+
+	// Repository detail handler for repository detail APIs
+	repositoryDetailHandler, err := protocol.NewRepositoryDetailHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create repository detail handler", zap.Error(err))
+		return
+	}
+
+	apiGroup := router.Group("/api/v1")
+	apiGroup.GET("/repository/:owner/:repo", repositoryDetailHandler.HandleGetRepositoryDetail)
+
 	{
 		// Repository creation endpoint - separate from existing repos
 
