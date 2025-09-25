@@ -21,6 +21,7 @@ import (
 	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
@@ -666,8 +667,6 @@ func (h *FileOperationsHandler) HandleFileContent(c *gin.Context) {
 
 	linesParam := c.Query("lines")
 
-	// Validate permissions
-
 	// Validate file path
 	if err := h.pathValidator.ValidateFilePath(path); err != nil {
 		apiErr := h.errorMapper.MapError(err, "validate_path")
@@ -730,6 +729,15 @@ func (h *FileOperationsHandler) HandleFileContent(c *gin.Context) {
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{
 			"success": false,
 			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Check if file was found
+	if file == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "File not found",
 		})
 		return
 	}
