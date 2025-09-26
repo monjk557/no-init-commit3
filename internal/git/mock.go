@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // MockRepository is a mock implementation of the Repository interface for testing
@@ -22,23 +23,44 @@ type MockRepository struct {
 	// commits maps ref -> []Commit
 	commits map[string][]Commit
 
+	// branches stores all branches
+	branches []Branch
+
+	// tags stores all tags
+	tags []Tag
+
+	// description stores repository description
+	description string
+
+	// remotes stores all remotes
+	remotes []Remote
+
 	// closed indicates if the repository has been closed
 	closed bool
 
 	// Mock control fields
-	GetTreeError    error
-	GetBlobError    error
-	GetCommitsError error
-	CloseError      error
+	GetTreeError        error
+	GetBlobError        error
+	GetCommitsError     error
+	GetBranchesError    error
+	GetTagsError        error
+	GetDescriptionError error
+	GetRemotesError     error
+	GetRefsError        error
+	CloseError          error
+
+	// defaultRef is the default branch reference
+	defaultRef string
 }
 
 // NewMockRepository creates a new mock repository
 func NewMockRepository(path string) *MockRepository {
 	return &MockRepository{
-		path:    path,
-		trees:   make(map[string][]TreeEntry),
-		blobs:   make(map[string][]byte),
-		commits: make(map[string][]Commit),
+		path:       path,
+		trees:      make(map[string][]TreeEntry),
+		blobs:      make(map[string][]byte),
+		commits:    make(map[string][]Commit),
+		defaultRef: "main", // 기본값으로 "main" 설정
 	}
 }
 
@@ -78,6 +100,46 @@ func (m *MockRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry, 
 	result := make([]TreeEntry, len(entries))
 	copy(result, entries)
 	return result, nil
+}
+
+// GetTreeWithCommits retrieves tree entries with their latest commit information
+func (m *MockRepository) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
+	// First get the basic tree entries using the existing GetTree method
+	entries, err := m.GetTree(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// For mock purposes, we'll add some sample commit information to blob entries
+	for i, entry := range entries {
+		if entry.Type == EntryTypeBlob {
+			// Add mock commit information
+			entries[i].LatestCommit = &Commit{
+				Sha: "mock-commit-hash",
+				Author: CommitAuthor{
+					Name:  "Mock Author",
+					Email: "mock@example.com",
+					Date:  m.getMockDate(),
+				},
+				Committer: CommitAuthor{
+					Name:  "Mock Committer",
+					Email: "mock@example.com",
+					Date:  m.getMockDate(),
+				},
+				Message:      fmt.Sprintf("Mock commit for %s", entry.Path),
+				ParentHashes: []string{"parent-hash"},
+				TreeHash:     "mock-tree-hash",
+			}
+		}
+	}
+
+	return entries, nil
+}
+
+// getMockDate returns a mock date for testing
+func (m *MockRepository) getMockDate() time.Time {
+	// Return a fixed date for consistency in tests
+	return time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 }
 
 // GetBlob retrieves the contents of a file at a specific path and reference
@@ -151,6 +213,131 @@ func (m *MockRepository) GetCommits(ctx context.Context, ref string, limit, skip
 	result := make([]Commit, end-skip)
 	copy(result, allCommits[skip:end])
 	return result, nil
+}
+
+// GetBranches retrieves all branches (mock implementation)
+func (m *MockRepository) GetBranches(ctx context.Context) ([]Branch, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	if m.GetBranchesError != nil {
+		return nil, m.GetBranchesError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Return a copy to prevent modifications
+	result := make([]Branch, len(m.branches))
+	copy(result, m.branches)
+	return result, nil
+}
+
+// GetTags retrieves all tags (mock implementation)
+func (m *MockRepository) GetTags(ctx context.Context) ([]Tag, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	if m.GetTagsError != nil {
+		return nil, m.GetTagsError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Return a copy to prevent modifications
+	result := make([]Tag, len(m.tags))
+	copy(result, m.tags)
+	return result, nil
+}
+
+// GetDescription retrieves the repository description (mock implementation)
+func (m *MockRepository) GetDescription(ctx context.Context) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return "", fmt.Errorf("repository is closed")
+	}
+
+	if m.GetDescriptionError != nil {
+		return "", m.GetDescriptionError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	return m.description, nil
+}
+
+// GetRemotes retrieves all remote repositories (mock implementation)
+func (m *MockRepository) GetRemotes(ctx context.Context) ([]Remote, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	if m.GetRemotesError != nil {
+		return nil, m.GetRemotesError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Return a copy to prevent modifications
+	result := make([]Remote, len(m.remotes))
+	copy(result, m.remotes)
+	return result, nil
+}
+
+// GetRefs retrieves the default branch reference (HEAD)
+func (m *MockRepository) GetRefs(ctx context.Context) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return "", fmt.Errorf("repository is closed")
+	}
+
+	if m.GetRefsError != nil {
+		return "", m.GetRefsError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	// Return the configured default ref
+	return m.defaultRef, nil
 }
 
 // Close releases any resources held by the repository

@@ -15,11 +15,29 @@ type Repository interface {
 	// GetTree - 특정 참조(ref)에서 디렉토리 구조 조회
 	GetTree(ctx context.Context, ref string) ([]TreeEntry, error)
 
+	// GetTreeWithCommits - 특정 참조(ref)에서 디렉토리 구조와 각 파일의 최신 커밋 정보 조회
+	GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error)
+
 	// GetBlob - 특정 경로와 참조에서 파일 내용 조회
 	GetBlob(ctx context.Context, path, ref string) ([]byte, error)
 
 	// GetCommits - 페이지네이션을 사용한 커밋 히스토리 조회
 	GetCommits(ctx context.Context, ref string, limit, skip int) ([]Commit, error)
+
+	// GetBranches - 모든 브랜치 목록 조회
+	GetBranches(ctx context.Context) ([]Branch, error)
+
+	// GetTags - 모든 태그 목록 조회
+	GetTags(ctx context.Context) ([]Tag, error)
+
+	// GetDescription - 저장소 설명 조회
+	GetDescription(ctx context.Context) (string, error)
+
+	// GetRemotes - 모든 원격 저장소 목록 조회
+	GetRemotes(ctx context.Context) ([]Remote, error)
+
+	// GetRefs - 기본 브랜치 참조 조회 (HEAD가 가리키는 브랜치)
+	GetRefs(ctx context.Context) (string, error)
 
 	// Close - 리포지토리가 보유한 리소스 해제
 	Close() error
@@ -41,6 +59,9 @@ type TreeEntry struct {
 
 	// Size - 파일 크기 (바이트 단위, blob일 때만)
 	Size int64 `json:"size"`
+
+	// LatestCommit - 이 파일의 최신 커밋 정보 (blob일 때만)
+	LatestCommit *Commit `json:"latest_commit,omitempty"`
 }
 
 // EntryType - Git 트리 항목의 타입
@@ -88,6 +109,51 @@ type CommitAuthor struct {
 
 	// Date - 커밋 타임스탬프
 	Date time.Time `json:"date"`
+}
+
+// Branch - Git 브랜치 정보
+type Branch struct {
+	// Name - 브랜치 이름
+	Name string `json:"name"`
+
+	// Hash - 브랜치가 가리키는 커밋 해시
+	Hash string `json:"hash"`
+
+	// IsRemote - 원격 브랜치 여부
+	IsRemote bool `json:"is_remote"`
+
+	// IsCurrent - 현재 체크아웃된 브랜치 여부
+	IsCurrent bool `json:"is_current"`
+}
+
+// Tag - Git 태그 정보
+type Tag struct {
+	// Name - 태그 이름
+	Name string `json:"name"`
+
+	// Hash - 태그가 가리키는 커밋 해시
+	Hash string `json:"hash"`
+
+	// Message - 태그 메시지 (annotated tag인 경우)
+	Message string `json:"message,omitempty"`
+
+	// Tagger - 태그 작성자 정보 (annotated tag인 경우)
+	Tagger *CommitAuthor `json:"tagger,omitempty"`
+
+	// IsAnnotated - annotated tag 여부
+	IsAnnotated bool `json:"is_annotated"`
+}
+
+// Remote - Git 원격 저장소 정보
+type Remote struct {
+	// Name - 원격 저장소 이름 (예: origin, upstream)
+	Name string `json:"name"`
+
+	// URL - 원격 저장소 URL
+	URL string `json:"url"`
+
+	// IsDefault - 기본 원격 저장소 여부 (origin)
+	IsDefault bool `json:"is_default"`
 }
 
 // OpenRepositoryFunc - 리포지토리를 여는 함수 타입

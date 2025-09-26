@@ -34,6 +34,12 @@ func (rw *repositoryWrapper) GetTree(ctx context.Context, ref string) ([]TreeEnt
 	return nil, fmt.Errorf("GetTree not implemented in repository wrapper")
 }
 
+// GetTreeWithCommits retrieves the directory structure with commit information at a given reference
+func (rw *repositoryWrapper) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetTreeWithCommits not implemented in repository wrapper")
+}
+
 // GetBlob retrieves the contents of a file at a specific path and reference
 func (rw *repositoryWrapper) GetBlob(ctx context.Context, path, ref string) ([]byte, error) {
 	// This is a simplified implementation - full implementation would be more complex
@@ -44,6 +50,36 @@ func (rw *repositoryWrapper) GetBlob(ctx context.Context, path, ref string) ([]b
 func (rw *repositoryWrapper) GetCommits(ctx context.Context, ref string, limit, skip int) ([]Commit, error) {
 	// This is a simplified implementation - full implementation would be more complex
 	return nil, fmt.Errorf("GetCommits not implemented in repository wrapper")
+}
+
+// GetBranches retrieves all branches
+func (rw *repositoryWrapper) GetBranches(ctx context.Context) ([]Branch, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetBranches not implemented in repository wrapper")
+}
+
+// GetTags retrieves all tags
+func (rw *repositoryWrapper) GetTags(ctx context.Context) ([]Tag, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetTags not implemented in repository wrapper")
+}
+
+// GetDescription retrieves the repository description
+func (rw *repositoryWrapper) GetDescription(ctx context.Context) (string, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return "", fmt.Errorf("GetDescription not implemented in repository wrapper")
+}
+
+// GetRemotes retrieves all remote repositories
+func (rw *repositoryWrapper) GetRemotes(ctx context.Context) ([]Remote, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetRemotes not implemented in repository wrapper")
+}
+
+// GetRefs retrieves the default branch reference (HEAD)
+func (rw *repositoryWrapper) GetRefs(ctx context.Context) (string, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return "", fmt.Errorf("GetRefs not implemented in repository wrapper")
 }
 
 // Close releases any resources held by the repository
