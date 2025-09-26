@@ -112,8 +112,12 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		return
 	}
 
+	if refs == "" {
+		refs = defaultBranch
+	}
+
 	// 5. commit history 가져오기 (빈 저장소 확인용)
-	commits, err := gitRepo.GetCommits(ctx, defaultBranch, 10, 0)
+	commits, err := gitRepo.GetCommits(ctx, refs, 10, 0)
 	emptyRepository := false
 	if err != nil || len(commits) == 0 {
 		emptyRepository = true
@@ -149,7 +153,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	latestCommit := commits[0]
 
 	// 5. tree entries 가져오기 (커밋 정보 포함)
-	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, defaultBranch)
+	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, refs)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
