@@ -76,6 +76,12 @@ func (rw *repositoryWrapper) GetRemotes(ctx context.Context) ([]Remote, error) {
 	return nil, fmt.Errorf("GetRemotes not implemented in repository wrapper")
 }
 
+// GetRefs retrieves the default branch reference (HEAD)
+func (rw *repositoryWrapper) GetRefs(ctx context.Context) (string, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return "", fmt.Errorf("GetRefs not implemented in repository wrapper")
+}
+
 // Close releases any resources held by the repository
 func (rw *repositoryWrapper) Close() error {
 	// go-git repositories don't need explicit closing

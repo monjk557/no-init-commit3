@@ -36,6 +36,9 @@ type Repository interface {
 	// GetRemotes - 모든 원격 저장소 목록 조회
 	GetRemotes(ctx context.Context) ([]Remote, error)
 
+	// GetRefs - 기본 브랜치 참조 조회 (HEAD가 가리키는 브랜치)
+	GetRefs(ctx context.Context) (string, error)
+
 	// Close - 리포지토리가 보유한 리소스 해제
 	Close() error
 }

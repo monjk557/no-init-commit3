@@ -674,6 +674,58 @@ func convertCommit(c *object.Commit) Commit {
 	}
 }
 
+// GetRefs retrieves the default branch reference (HEAD)
+func (r *GoGitRepository) GetRefs(ctx context.Context) (string, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return "", NewGitError("get_refs", r.path, "", "repository is closed", nil)
+	}
+
+	// 먼저 go-git의 Head() 메서드 시도
+	head, err := r.repo.Head()
+	if err == nil {
+		// HEAD가 브랜치를 가리키는지 확인
+		if head.Name().IsBranch() {
+			return head.Name().Short(), nil
+		}
+		// HEAD가 직접 커밋을 가리키는 경우 (detached HEAD)
+		return head.Hash().String(), nil
+	}
+
+	// go-git에서 실패한 경우, 직접 HEAD 파일 읽기
+	headPath := filepath.Join(r.path, "HEAD")
+	headContent, err := os.ReadFile(headPath)
+	if err != nil {
+		// HEAD 파일도 없는 경우 기본값 반환
+		return "main", nil
+	}
+
+	// HEAD 파일 내용 파싱
+	headStr := strings.TrimSpace(string(headContent))
+	if strings.HasPrefix(headStr, "ref: refs/heads/") {
+		// ref: refs/heads/master -> master
+		branchName := strings.TrimPrefix(headStr, "ref: refs/heads/")
+		return branchName, nil
+	}
+
+	// HEAD가 직접 커밋 해시를 가리키는 경우
+	if len(headStr) == 40 { // SHA-1 해시 길이
+		return headStr, nil
+	}
+
+	// 기본값 반환
+	return "main", nil
+}
+
 // GetGoGitRepo returns the underlying go-git repository instance
 // This is useful for operations that need direct access to go-git APIs
 func (r *GoGitRepository) GetGoGitRepo() *git.Repository {

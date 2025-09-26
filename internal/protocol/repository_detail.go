@@ -67,11 +67,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := c.Query("ref")
-
-	if ref == "" {
-		ref = "main"
-	}
+	refs := c.Query("refs")
 
 	// 1. parameter 조합 검증
 	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repo)
@@ -108,18 +104,54 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		return
 	}
 
-	// 4. tree entries 가져오기 (커밋 정보 포함)
-	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, ref)
+	// 4. default branch 확인
+	defaultBranch, err := gitRepo.GetRefs(ctx)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_tree")
+		apiErr := h.errorMapper.MapError(err, "get_refs")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
-	// 5. commit history 가져오기
-	commits, err := gitRepo.GetCommits(ctx, ref, 10, 0)
+	// 5. commit history 가져오기 (빈 저장소 확인용)
+	commits, err := gitRepo.GetCommits(ctx, defaultBranch, 10, 0)
+	emptyRepository := false
+	if err != nil || len(commits) == 0 {
+		emptyRepository = true
+	}
+
+	// commit이 없는 빈 저장소인 경우 early return
+	if emptyRepository {
+		response := responses.RepositoryDetailResponse{
+			Repository:    fmt.Sprintf("%s/%s", owner, repo),
+			Owner:         owner,
+			Name:          repo,
+			Path:          repoPath,
+			Description:   description,
+			DefaultBranch: defaultBranch,
+			Tree:          []git.TreeEntry{},
+			LatestCommits: git.Commit{},
+			Branches:      []git.Branch{},
+			Tags:          []git.Tag{},
+			Count: responses.RepositoryCount{
+				Commits:  0,
+				Branches: 0,
+				Tags:     0,
+				Remotes:  0,
+				Total:    0,
+			},
+			Readme: "",
+		}
+		api.SendSuccess(c, response, "Empty repository - no commits found")
+		return
+	}
+
+	// commits는 이미 위에서 가져왔으므로 여기서는 tree entries 가져오기
+	latestCommit := commits[0]
+
+	// 5. tree entries 가져오기 (커밋 정보 포함)
+	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, defaultBranch)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_commits")
+		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
@@ -151,7 +183,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	h.logger.Info("remotes", zap.Any("remotes", remotes))
 
 	// 9. readme 가져오기
-	readmeData, err := gitRepo.GetBlob(ctx, "README.md", ref)
+	readmeData, err := gitRepo.GetBlob(ctx, "README.md", refs)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_readme")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
@@ -165,9 +197,9 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		Name:          repo,
 		Path:          repoPath,
 		Description:   description,
-		DefaultBranch: ref,
+		DefaultBranch: defaultBranch,
 		Tree:          treeEntries,
-		LatestCommits: commits[0],
+		LatestCommits: latestCommit,
 		Branches:      branches,
 		Tags:          tags,
 		Count: responses.RepositoryCount{
