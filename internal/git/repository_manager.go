@@ -52,6 +52,12 @@ func (rw *repositoryWrapper) GetCommits(ctx context.Context, ref string, limit, 
 	return nil, fmt.Errorf("GetCommits not implemented in repository wrapper")
 }
 
+// GetCommitsForFile retrieves commit history for a specific file with pagination
+func (rw *repositoryWrapper) GetCommitsForFile(ctx context.Context, filePath, ref string, limit, skip int) ([]Commit, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetCommitsForFile not implemented in repository wrapper")
+}
+
 // GetBranches retrieves all branches
 func (rw *repositoryWrapper) GetBranches(ctx context.Context) ([]Branch, error) {
 	// This is a simplified implementation - full implementation would be more complex

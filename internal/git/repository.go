@@ -24,6 +24,9 @@ type Repository interface {
 	// GetCommits - 페이지네이션을 사용한 커밋 히스토리 조회
 	GetCommits(ctx context.Context, ref string, limit, skip int) ([]Commit, error)
 
+	// GetCommitsForFile - 특정 파일에 대한 커밋 히스토리 조회
+	GetCommitsForFile(ctx context.Context, filePath, ref string, limit, skip int) ([]Commit, error)
+
 	// GetBranches - 모든 브랜치 목록 조회
 	GetBranches(ctx context.Context) ([]Branch, error)
 
@@ -41,6 +44,27 @@ type Repository interface {
 
 	// Close - 리포지토리가 보유한 리소스 해제
 	Close() error
+}
+
+// BlobInfo - Git blob(파일)의 상세 정보
+type BlobInfo struct {
+	// Content - 파일 내용
+	Content []byte `json:"content"`
+
+	// Size - 파일 크기 (바이트 단위)
+	Size int64 `json:"size"`
+
+	// LineCount - 파일의 라인 수
+	LineCount int `json:"line_count"`
+
+	// Hash - Git 객체 해시
+	Hash string `json:"hash"`
+
+	// Mode - 파일 모드 (권한 및 타입)
+	Mode string `json:"mode"`
+
+	// Path - 파일 경로
+	Path string `json:"path"`
 }
 
 // TreeEntry - Git 트리의 항목 (디렉토리 리스팅)
