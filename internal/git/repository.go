@@ -21,9 +21,6 @@ type Repository interface {
 	// GetBlob - 특정 경로와 참조에서 파일 내용 조회
 	GetBlob(ctx context.Context, path, ref string) ([]byte, error)
 
-	// GetBlobInfo - 특정 경로와 참조에서 파일 내용과 메타데이터 조회
-	GetBlobInfo(ctx context.Context, path, ref string) (*BlobInfo, error)
-
 	// GetCommits - 페이지네이션을 사용한 커밋 히스토리 조회
 	GetCommits(ctx context.Context, ref string, limit, skip int) ([]Commit, error)
 
