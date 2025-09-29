@@ -22,8 +22,23 @@ func setupTestRepository(t *testing.T) string {
 		t.Fatalf("Failed to init git repo: %v", err)
 	}
 
+	// 2.5. Git 사용자 정보 설정
+	cmd := exec.Command("git", "config", "user.name", "Test User")
+	cmd.Dir = repoPath
+	err = cmd.Run()
+	if err != nil {
+		t.Fatalf("Failed to set git user.name: %v", err)
+	}
+
+	cmd = exec.Command("git", "config", "user.email", "test@example.com")
+	cmd.Dir = repoPath
+	err = cmd.Run()
+	if err != nil {
+		t.Fatalf("Failed to set git user.email: %v", err)
+	}
+
 	// 3. 초기 커밋 생성 (빈 커밋)
-	cmd := exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
+	cmd = exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
 	cmd.Dir = repoPath
 	err = cmd.Run()
 	if err != nil {
