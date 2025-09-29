@@ -22,22 +22,34 @@ func setupTestRepository(t *testing.T) string {
 		t.Fatalf("Failed to init git repo: %v", err)
 	}
 
-	// 3. 테스트 파일 생성
-	readmePath := filepath.Join(repoPath, "README.md")
-	err = os.WriteFile(readmePath, []byte("Hello World"), 0644)
+	// 3. 초기 커밋 생성 (빈 커밋)
+	cmd := exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
+	cmd.Dir = repoPath
+	err = cmd.Run()
 	if err != nil {
-		t.Fatalf("Failed to create README: %v", err)
+		t.Fatalf("Failed to create initial commit: %v", err)
 	}
 
-	// 4. Git add & commit
-	err = exec.Command("git", "add", ".").Run()
+	// 4. Hello World 파일 생성
+	newFilePath := filepath.Join(repoPath, "newfile.txt")
+	err = os.WriteFile(newFilePath, []byte("Hello World"), 0644)
 	if err != nil {
-		t.Fatalf("Failed to git add: %v", err)
+		t.Fatalf("Failed to create newfile.txt: %v", err)
 	}
 
-	err = exec.Command("git", "commit", "-m", "Initial commit").Run()
+	// 5. 새 파일 추가 및 커밋
+	cmd = exec.Command("git", "add", "newfile.txt")
+	cmd.Dir = repoPath
+	err = cmd.Run()
 	if err != nil {
-		t.Fatalf("Failed to git commit: %v", err)
+		t.Fatalf("Failed to git add newfile.txt: %v", err)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "Add newfile.txt")
+	cmd.Dir = repoPath
+	err = cmd.Run()
+	if err != nil {
+		t.Fatalf("Failed to git commit newfile.txt: %v", err)
 	}
 
 	return repoPath
@@ -61,12 +73,34 @@ func TestGitBlobBasicFunctionality(t *testing.T) {
 	assert.NoError(t, err)
 	defer repo.Close()
 
-	// 3. Blob 조회 테스트
-	blob, err := repo.GetBlob(context.Background(), "README.md", "main")
-	assert.NoError(t, err)
-	assert.NotEmpty(t, blob)
+	t.Run("ExistingFileBlob", func(t *testing.T) {
+		// 3. 실존 파일 Blob 조회 테스트
+		blob, err := repo.GetBlob(context.Background(), "newfile.txt", "main")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, blob)
 
-	// 4. Blob 내용 확인
-	expectedContent := "Hello World"
-	assert.Equal(t, expectedContent, string(blob))
+		// 4. Blob 내용 확인
+		expectedContent := "Hello World"
+		assert.Equal(t, expectedContent, string(blob))
+	})
+
+	t.Run("NonExistentFileBlob", func(t *testing.T) {
+		// 5. 존재하지 않는 파일 Blob 조회 테스트
+		blob, err := repo.GetBlob(context.Background(), "nonexistent.txt", "main")
+		assert.Error(t, err)
+		assert.Empty(t, blob)
+	})
+
+	t.Run("FileCommitsHistory", func(t *testing.T) {
+		// 6. 레포 파일 관여 commits history 조회 테스트
+		commits, err := repo.GetCommitsForFile(context.Background(), "newfile.txt", "main", 10, 0)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, commits)
+	})
+
+	t.Run("RepositoryClose", func(t *testing.T) {
+		// 7. 레포 삭제
+		err := repo.Close()
+		assert.NoError(t, err)
+	})
 }
