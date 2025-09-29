@@ -443,7 +443,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	blob, err := gitRepo.GetBlob(ctx, path, refs)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_blob")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
@@ -455,7 +455,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	treeEntries, err := gitRepo.GetTree(ctx, refs)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
