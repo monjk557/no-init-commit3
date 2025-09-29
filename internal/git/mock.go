@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -172,6 +173,56 @@ func (m *MockRepository) GetBlob(ctx context.Context, path, ref string) ([]byte,
 	result := make([]byte, len(content))
 	copy(result, content)
 	return result, nil
+}
+
+// GetBlobInfo retrieves detailed information about a file including content, size, and line count
+func (m *MockRepository) GetBlobInfo(ctx context.Context, path, ref string) (*BlobInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	if m.GetBlobError != nil {
+		return nil, m.GetBlobError
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	key := fmt.Sprintf("%s:%s", path, ref)
+	content, exists := m.blobs[key]
+	if !exists {
+		return nil, &PathNotFoundError{Path: path, Ref: ref, Repo: m.path}
+	}
+
+	// Calculate line count
+	lineCount := 1 // At least one line even if empty
+	if len(content) > 0 {
+		lineCount = bytes.Count(content, []byte("\n"))
+		// If file doesn't end with newline, add one more line
+		if content[len(content)-1] != '\n' {
+			lineCount++
+		}
+	}
+
+	// Return a copy to prevent modifications
+	result := make([]byte, len(content))
+	copy(result, content)
+
+	return &BlobInfo{
+		Content:   result,
+		Size:      int64(len(result)),
+		LineCount: lineCount,
+		Hash:      fmt.Sprintf("mock-hash-%s", key),
+		Mode:      "100644",
+		Path:      path,
+	}, nil
 }
 
 // GetCommits retrieves commit history with pagination

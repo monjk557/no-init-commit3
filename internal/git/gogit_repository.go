@@ -3,6 +3,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -159,6 +160,61 @@ func (r *GoGitRepository) GetTreeWithCommits(ctx context.Context, ref string) ([
 	return entries, nil
 }
 
+func (r *GoGitRepository) GetCommitsForFile(ctx context.Context, filePath, ref string, limit, skip int) ([]Commit, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Get commit iterator for the file
+	commitIter, err := r.repo.Log(&git.LogOptions{
+		From: r.getCommitHash(ref),
+		PathFilter: func(path string) bool {
+			return path == filePath
+		},
+	})
+	if err != nil {
+		return nil, NewGitError("get_latest_commit_for_file", r.path, filePath, "failed to get commit iterator", err)
+	}
+	defer commitIter.Close()
+
+	var commits []Commit
+	current := 0
+
+	err = commitIter.ForEach(func(c *object.Commit) error {
+		// Check for context cancellation during iteration
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Skip commits if needed
+		if current < skip {
+			current++
+			return nil
+		}
+
+		// Check if we've reached the limit
+		if limit > 0 && len(commits) >= limit {
+			return io.EOF
+		}
+
+		commits = append(commits, convertCommit(c))
+		current++
+
+		return nil
+	})
+
+	if err != nil && err != io.EOF {
+		return nil, NewGitError("get_commits", r.path, ref, "failed to iterate commits", err)
+	}
+
+	return commits, nil
+}
+
 // getLatestCommitForFile gets the latest commit that modified a specific file
 func (r *GoGitRepository) getLatestCommitForFile(ctx context.Context, filePath, ref string) (*Commit, error) {
 	// Check for context cancellation
@@ -253,6 +309,76 @@ func (r *GoGitRepository) GetBlob(ctx context.Context, path, ref string) ([]byte
 	}
 
 	return content, nil
+}
+
+// GetBlobInfo retrieves detailed information about a file including content, size, and line count
+func (r *GoGitRepository) GetBlobInfo(ctx context.Context, path, ref string) (*BlobInfo, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Resolve the reference to a commit
+	commit, err := r.resolveCommit(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the file from the commit
+	file, err := commit.File(path)
+	if err != nil {
+		if err == object.ErrFileNotFound {
+			return nil, &PathNotFoundError{Path: path, Ref: ref, Repo: r.path}
+		}
+		return nil, NewGitError("get_blob_info", r.path, ref, fmt.Sprintf("failed to get file %s", path), err)
+	}
+
+	// Read the file contents
+	reader, err := file.Reader()
+	if err != nil {
+		return nil, NewGitError("get_blob_info", r.path, ref, fmt.Sprintf("failed to get reader for file %s", path), err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	// Check for context cancellation before reading
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Read all content
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, NewGitError("get_blob_info", r.path, ref, fmt.Sprintf("failed to read file %s", path), err)
+	}
+
+	// Calculate line count
+	lineCount := 1 // At least one line even if empty
+	if len(content) > 0 {
+		lineCount = bytes.Count(content, []byte("\n"))
+		// If file doesn't end with newline, add one more line
+		if content[len(content)-1] != '\n' {
+			lineCount++
+		}
+	}
+
+	// Get file mode
+	mode := file.Mode.String()
+
+	// Get blob hash
+	blob := file.Blob
+
+	return &BlobInfo{
+		Content:   content,
+		Size:      int64(len(content)),
+		LineCount: lineCount,
+		Hash:      blob.Hash.String(),
+		Mode:      mode,
+		Path:      path,
+	}, nil
 }
 
 // GetCommits retrieves commit history with pagination

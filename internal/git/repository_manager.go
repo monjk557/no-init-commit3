@@ -46,10 +46,22 @@ func (rw *repositoryWrapper) GetBlob(ctx context.Context, path, ref string) ([]b
 	return nil, fmt.Errorf("GetBlob not implemented in repository wrapper")
 }
 
+// GetBlobInfo retrieves detailed information about a file including content, size, and line count
+func (rw *repositoryWrapper) GetBlobInfo(ctx context.Context, path, ref string) (*BlobInfo, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetBlobInfo not implemented in repository wrapper")
+}
+
 // GetCommits retrieves commit history with pagination
 func (rw *repositoryWrapper) GetCommits(ctx context.Context, ref string, limit, skip int) ([]Commit, error) {
 	// This is a simplified implementation - full implementation would be more complex
 	return nil, fmt.Errorf("GetCommits not implemented in repository wrapper")
+}
+
+// GetCommitsForFile retrieves commit history for a specific file with pagination
+func (rw *repositoryWrapper) GetCommitsForFile(ctx context.Context, filePath, ref string, limit, skip int) ([]Commit, error) {
+	// This is a simplified implementation - full implementation would be more complex
+	return nil, fmt.Errorf("GetCommitsForFile not implemented in repository wrapper")
 }
 
 // GetBranches retrieves all branches

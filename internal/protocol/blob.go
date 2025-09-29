@@ -11,9 +11,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/schemas/responses"
 	"github.com/gin-gonic/gin"
 )
 
@@ -390,4 +392,95 @@ func isBlobRepositoryNotFoundError(err error) bool {
 	return strings.Contains(errStr, "repository not found") ||
 		strings.Contains(errStr, "no such file or directory") ||
 		strings.Contains(errStr, "not a git repository")
+}
+
+func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
+	ctx := c.Request.Context()
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	path := c.Query("path")
+	refs := c.Query("refs")
+
+	// Validate path parameter
+	if path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Missing required parameter: path",
+		})
+		return
+	}
+
+	// 1. parameter 조합 검증
+	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_repository_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 2. repository 존재 확인
+	exists, err := h.repoManager.RepositoryExists(ctx, repoPath)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "check_repository_exists")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+	if !exists {
+		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
+		return
+	}
+
+	// 3. repository 열기
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "open_repository")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 4. blob 가져오기
+	// Lines, Bytes
+	blob, err := gitRepo.GetBlob(ctx, path, refs)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_blob")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	lines := strings.Count(strings.ReplaceAll(string(blob), "\r\n", "\n"), "\n") + 1
+
+	size := int64(len(blob))
+
+	// 5. tree entries 가져오기
+	treeEntries, err := gitRepo.GetTree(ctx, refs)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_tree")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 6. 파일의 커밋 히스토리 가져오기
+	commits, err := gitRepo.GetCommitsForFile(ctx, path, refs, 10, 0)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_commits")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 7. 최신 히스토리
+	latestCommit := commits[0]
+
+	// 6. response 생성
+	response := responses.BlobDetailResponse{
+		Success:      true,
+		Content:      string(blob),
+		Lines:        lines,
+		Size:         size,
+		Tree:         treeEntries,
+		Commits:      commits,
+		LatestCommit: latestCommit,
+	}
+
+	api.SendSuccess(c, response, "Blob retrieved successfully")
+
 }
