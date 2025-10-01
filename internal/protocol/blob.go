@@ -511,14 +511,15 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 
 	// 6. response 생성
 	response := responses.BlobDetailResponse{
-		Success:      true,
-		Content:      string(blob),
-		Lines:        lines,
-		Size:         size,
-		Tree:         treeEntries,
-		Branches:     branches,
-		Commits:      commits,
-		LatestCommit: latestCommit,
+		Success:       true,
+		Content:       string(blob),
+		Lines:         lines,
+		Size:          size,
+		Tree:          treeEntries,
+		DefaultBranch: defaultBranch,
+		Branches:      branches,
+		Commits:       commits,
+		LatestCommit:  latestCommit,
 	}
 
 	api.SendSuccess(c, response, "Blob retrieved successfully")
