@@ -72,26 +72,27 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	// 1. parameter 조합 검증
 	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_repository_path")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		apiErr := h.errorMapper.MapError(err, "repository_not_found")
+		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 2. repository 존재 확인
 	exists, err := h.repoManager.RepositoryExists(ctx, repoPath)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "check_repository_exists")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		apiErr := h.errorMapper.MapError(err, "repository_not_found")
+		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 	if !exists {
-		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
+		apiErr := h.errorMapper.MapError(err, "repository_not_found")
+		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "open_repository")
+		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
@@ -99,7 +100,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	// 3. repository description 가져오기
 	description, err := gitRepo.GetDescription(ctx)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_description")
+		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
@@ -107,13 +108,42 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	// 4. default branch 확인
 	defaultBranch, err := gitRepo.GetRefs(ctx)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_refs")
+		apiErr := h.errorMapper.MapError(err, "branch_not_found")
+		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 5. refs가 생략되었으면 default branch 사용
+	if refs == "" {
+		refs = defaultBranch
+	}
+
+	// 6. branches 가져오기
+	branches, err := gitRepo.GetBranches(ctx)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
-	if refs == "" {
-		refs = defaultBranch
+	// 7. refs가 제공된 경우, 실존하는 브랜치인지 확인
+	if refs != "" {
+		branchExists := false
+		for _, branch := range branches {
+			if branch.Name == refs {
+				branchExists = true
+				break
+			}
+		}
+
+		if !branchExists {
+			refErr := fmt.Errorf("reference '%s' not found in repository", refs)
+			apiErr := h.errorMapper.MapError(refErr, "reference_not_found")
+			c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
+			return
+		}
+		h.logger.Info("refs validated successfully",
+			zap.String("refs", refs))
 	}
 
 	// 5. commit history 가져오기 (빈 저장소 확인용)
@@ -156,14 +186,6 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, refs)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
-	// 6. branches 가져오기
-	branches, err := gitRepo.GetBranches(ctx)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_branches")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
