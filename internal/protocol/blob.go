@@ -438,6 +438,45 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 		return
 	}
 
+	// 4. default branch 확인
+	defaultBranch, err := gitRepo.GetRefs(ctx)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "branch_not_found")
+		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 5. refs가 생략되었으면 default branch 사용
+	if refs == "" {
+		refs = defaultBranch
+	}
+
+	// 6. branches 가져오기
+	branches, err := gitRepo.GetBranches(ctx)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 7. refs가 제공된 경우, 실존하는 브랜치인지 확인
+	if refs != "" {
+		branchExists := false
+		for _, branch := range branches {
+			if branch.Name == refs {
+				branchExists = true
+				break
+			}
+		}
+
+		if !branchExists {
+			refErr := fmt.Errorf("reference '%s' not found in repository", refs)
+			apiErr := h.errorMapper.MapError(refErr, "reference_not_found")
+			c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
+			return
+		}
+	}
+
 	// 4. blob 가져오기
 	// Lines, Bytes
 	blob, err := gitRepo.GetBlob(ctx, path, refs)
@@ -472,13 +511,15 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 
 	// 6. response 생성
 	response := responses.BlobDetailResponse{
-		Success:      true,
-		Content:      string(blob),
-		Lines:        lines,
-		Size:         size,
-		Tree:         treeEntries,
-		Commits:      commits,
-		LatestCommit: latestCommit,
+		Success:       true,
+		Content:       string(blob),
+		Lines:         lines,
+		Size:          size,
+		Tree:          treeEntries,
+		DefaultBranch: defaultBranch,
+		Branches:      branches,
+		Commits:       commits,
+		LatestCommit:  latestCommit,
 	}
 
 	api.SendSuccess(c, response, "Blob retrieved successfully")
