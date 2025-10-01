@@ -29,6 +29,7 @@ type BlobDetailResponse struct {
 	Lines        int             `json:"lines"`
 	Size         int64           `json:"size"`
 	Tree         []git.TreeEntry `json:"tree"`
+	Branches     []git.Branch    `json:"branches"`
 	LatestCommit git.Commit      `json:"latest_commit"`
 	Commits      []git.Commit    `json:"commits"`
 }
