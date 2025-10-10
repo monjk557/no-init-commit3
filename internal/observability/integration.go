@@ -92,8 +92,8 @@ func NewManager(cfg *config.Config, permClient permissions.PermissionClient, ver
 
 	// Initialize metrics
 	metrics := NewApplicationMetrics()
-	// Start resource collection with default interval
-	metrics.StartResourceCollector(15 * time.Second)
+	// Start resource collection with configured interval
+	metrics.StartResourceCollector(cfg.Observability.Metrics.CollectInterval)
 
 	// Initialize tracing only if enabled
 	var tracingManager *TracingManager

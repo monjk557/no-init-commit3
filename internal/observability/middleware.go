@@ -275,7 +275,7 @@ type MetricsMiddlewareConfig struct {
 func DefaultMetricsMiddlewareConfig() MetricsMiddlewareConfig {
 	return MetricsMiddlewareConfig{
 		EnableResourceCollection:   true,
-		ResourceCollectionInterval: 15 * time.Second,
+		ResourceCollectionInterval: 15 * time.Second, // TODO: move to config
 		EndpointNormalization:      true,
 		MaxPathLength:              100,
 	}

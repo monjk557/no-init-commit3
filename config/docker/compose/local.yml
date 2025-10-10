@@ -8,12 +8,9 @@ services:
       dockerfile: deployments/Dockerfile
     ports:
       - "${GIT_EXECUTOR_PORT:-5001}:5001"
-    environment:
-      - APP_ENV=${APP_ENV:-local}
-      - APP_DEBUG=${APP_DEBUG:-true}
-      - APP_NAME=${APP_NAME:-"Git Executor Service"}
-      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-DEBUG}
-      - PORT=5001
+      - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
+    env_file:
+      - ../../env/local/git-executor.env
     volumes:  
       - ../../../specs:/app/specs:ro
     networks:

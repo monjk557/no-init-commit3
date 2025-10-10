@@ -78,9 +78,7 @@ func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 // Start starts the TCP server on configured port
 func (s *DuplexTCPServer) Start() error {
 	port := s.config.Server.TCPGitPort
-	if port == 0 {
-		port = 5222 // fallback to default
-	}
+	// TCPGitPort는 환경변수에서 필수로 로드되므로 fallback 불필요
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -899,7 +897,7 @@ func (s *DuplexTCPServer) writePktLine(conn *DuplexConnection, data string) erro
 
 // cleanupConnections : 유휴 연결 정리
 func (s *DuplexTCPServer) cleanupConnections() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(s.config.Performance.MemoryCheckInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {

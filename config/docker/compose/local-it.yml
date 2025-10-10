@@ -103,41 +103,12 @@ services:
       dockerfile: config/Dockerfile
     ports:
       - "${GIT_EXECUTOR_PORT:-5001}:5001"
-    environment:
-      # Server Configuration
-      - COLLABOPS_SERVER_HOST=0.0.0.0
-      - COLLABOPS_SERVER_PORT=5001
-      - COLLABOPS_SERVER_BASE_PATH=/opt/repos
-      - COLLABOPS_SERVER_READ_TIMEOUT=60s
-      - COLLABOPS_SERVER_WRITE_TIMEOUT=60s
-      - COLLABOPS_SERVER_IDLE_TIMEOUT=300s
-      - COLLABOPS_SERVER_HEALTH_CHECK_PATH=/health
-
-      # Git Configuration
-      - COLLABOPS_GIT_REPO_ROOT=/opt/repos
-      - COLLABOPS_GIT_ENABLE_PACKFILE=true
-      - COLLABOPS_GIT_MAX_CACHE_SIZE=100
-      - COLLABOPS_GIT_CACHE_TTL=5m
-
-      # JWT Configuration (for API authentication) - using RS256 default
-      - COLLABOPS_JWT_ALGORITHM=RS256
-      - COLLABOPS_JWT_PUBLIC_KEY_PATH=/dev/null
-
-      # Logging Configuration
-      - COLLABOPS_LOG_LEVEL=${GIT_EXECUTOR_LOG_LEVEL:-info}
-      - COLLABOPS_LOG_FORMAT=json
-      - COLLABOPS_LOG_OUTPUT=stdout
-      - COLLABOPS_LOG_DEVELOPMENT=false
-
-      # Integration Settings
-      - APP_ENV=${APP_ENV:-local}
-      - ENABLE_CORS=true
-      - CORS_ORIGINS=http://localhost:2345
-    volumes:
-      - ../../../config:/app/config:ro
+      - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
     env_file:
       - ../../env/local-it/common.env
       - ../../env/local-it/git-executor.env
+    volumes:
+      - ../../../config:/app/config:ro
     depends_on:
       collabops-api-service:
         condition: service_healthy
