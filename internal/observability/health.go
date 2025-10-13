@@ -69,7 +69,7 @@ func NewHealthChecker(cfg *config.Config, permClient permissions.PermissionClien
 // Liveness 체크는 애플리케이션이 실행 중이고 요청을 처리할 수 있는지 확인합니다.
 func (h *HealthChecker) LivenessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), h.config.Observability.Health.LivenessTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
 		response := h.performLivenessChecks(ctx)
@@ -88,7 +88,7 @@ func (h *HealthChecker) LivenessHandler() http.HandlerFunc {
 // Readiness 체크는 애플리케이션이 트래픽을 처리할 준비가 되어 있는지 확인합니다.
 func (h *HealthChecker) ReadinessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), h.config.Observability.Health.ReadinessTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 
 		response := h.performReadinessChecks(ctx)

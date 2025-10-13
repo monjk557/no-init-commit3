@@ -96,14 +96,23 @@ func NewIntegrationTestHarness(t *testing.T) *IntegrationTestHarness {
 	zapLogger := zaptest.NewLogger(t)
 	logger := &logging.Logger{Logger: zapLogger}
 
-	// 중앙에서 관리하는 설정을 사용하고, 테스트에 필요한 값들만 오버라이드
-	cfg := config.NewTestConfigWithOverrides(
-		tempDir,
-		config.WithPort(0), // Let the test server choose a port
-		config.WithLogging("debug", "text"),
-	)
-	// 테스트용 BasePath 오버라이드
-	cfg.Server.BasePath = "/"
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host:         "localhost",
+			Port:         0, // Let the test server choose a port
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			BasePath:     "/",
+		},
+		Git: config.GitConfig{
+			RepoRoot: tempDir,
+		},
+		Logging: config.LoggingConfig{
+			Level:  "debug",
+			Format: "text",
+			Output: "stdout",
+		},
+	}
 
 	permClient := &MockPermissionClient{
 		Permissions: make(map[string]bool),

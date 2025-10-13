@@ -48,8 +48,19 @@ func TestSSHProtocolWriterError(t *testing.T) {
 
 // TestNewDuplexTCPServer tests server creation
 func TestNewDuplexTCPServer(t *testing.T) {
-	// 중앙에서 관리하는 설정 사용
-	testConfig := config.NewTestConfig("/tmp/test-repos")
+	// Create test config
+	testConfig := &config.Config{
+		Server: config.ServerConfig{
+			TCPGitPort: 5222,
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+		},
+		Git: config.GitConfig{
+			RepoRoot: "/tmp/test-repos",
+		},
+	}
 
 	server, err := server.NewDuplexTCPServer(testConfig)
 	require.NoError(t, err)

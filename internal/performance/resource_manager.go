@@ -73,9 +73,9 @@ func DefaultResourceConfig() *ResourceConfig {
 		CleanupInterval:       5 * time.Minute,
 		MaxMemoryUsage:        1024 * 1024 * 1024, // 1GB
 		GCThreshold:           0.8,
-		MemoryCheckInterval:   30 * time.Second, // TODO: use config.Performance.MemoryCheckInterval
+		MemoryCheckInterval:   30 * time.Second,
 		MaxConnections:        1000,
-		ConnectionTimeout:     30 * time.Second, // TODO: use config.Performance.ConnectionTimeout
+		ConnectionTimeout:     30 * time.Second,
 		IdleTimeout:           5 * time.Minute,
 		MaxRequestDuration:    10 * time.Minute,
 		RequestQueueSize:      10000,

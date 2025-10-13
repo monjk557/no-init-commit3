@@ -61,7 +61,7 @@ func DefaultRateLimiterConfig() *RateLimiterConfig {
 		WindowSize:             1 * time.Minute,
 		WhitelistedIPs:         []string{"127.0.0.1", "::1"},
 		MaxConcurrentRequests:  500,
-		RequestTimeoutDuration: 30 * time.Second, // TODO: use config.Security.RateLimit.RequestTimeout
+		RequestTimeoutDuration: 30 * time.Second,
 		SlowlorisProtection:    true,
 		EndpointLimits: map[string]Limit{
 			"/api/auth":   {RPS: 5.0, BurstSize: 10},  // Authentication endpoints

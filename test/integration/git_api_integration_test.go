@@ -83,11 +83,19 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 	// Create initial commit to make repository valid
 	createInitialCommit(t, tempDir, testRepoPath)
 
-	// Setup configuration - 중앙에서 관리하는 설정 사용
-	cfg := config.NewTestConfigWithOverrides(
-		tempDir,
-		config.WithPort(8080),
-	)
+	// Setup configuration
+	cfg := &config.Config{
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+		},
+		Git: config.GitConfig{
+			RepoRoot: tempDir,
+		},
+		Server: config.ServerConfig{
+			Port: 8080,
+		},
+	}
 
 	// Create logger
 	logger, err := logging.NewLogger(cfg.Logging)

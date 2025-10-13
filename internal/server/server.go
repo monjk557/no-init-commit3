@@ -280,7 +280,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	jsonResponseMiddleware := api.NewJSONResponseMiddleware(s.logger, "v1")
 
 	// Git diff endpoints with enhanced middleware
-	reposGroup := router.Group(s.config.Server.BasePath)
+	reposGroup := router.Group("/repos")
 	reposGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
 	reposGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
 	reposGroup.Use(jsonResponseMiddleware.ErrorHandler())
