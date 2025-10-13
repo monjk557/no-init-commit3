@@ -44,10 +44,11 @@ type CircuitBreakerConfig struct {
 }
 
 // DefaultCircuitBreakerConfig returns a configuration with sensible defaults.
+// TODO: This should use central config values
 func DefaultCircuitBreakerConfig() *CircuitBreakerConfig {
 	return &CircuitBreakerConfig{
 		FailureThreshold:    5,
-		RecoveryTimeout:     30 * time.Second,
+		RecoveryTimeout:     30 * time.Second, // TODO: use config.Permissions.RecoveryTimeout
 		MaxHalfOpenRequests: 1,
 	}
 }

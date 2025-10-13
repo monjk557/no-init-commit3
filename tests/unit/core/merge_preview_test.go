@@ -11,15 +11,8 @@ import (
 
 // TestNewMergePreviewHandler tests merge preview handler creation
 func TestNewMergePreviewHandler(t *testing.T) {
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{
-			Level:  "info",
-			Format: "json",
-		},
-		Git: config.GitConfig{
-			RepoRoot: "/tmp/test-repos",
-		},
-	}
+	// 중앙에서 관리하는 설정 사용
+	cfg := config.NewTestConfig("/tmp/test-repos")
 
 	handler, err := protocol.NewMergePreviewHandler(cfg)
 	require.NoError(t, err)
@@ -36,15 +29,8 @@ func TestNewMergePreviewHandlerWithNilConfig(t *testing.T) {
 
 // TestMergePreviewHandlerStructure tests handler structure
 func TestMergePreviewHandlerStructure(t *testing.T) {
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{
-			Level:  "info",
-			Format: "json",
-		},
-		Git: config.GitConfig{
-			RepoRoot: "/tmp/test-repos",
-		},
-	}
+	// 중앙에서 관리하는 설정 사용
+	cfg := config.NewTestConfig("/tmp/test-repos")
 
 	handler, err := protocol.NewMergePreviewHandler(cfg)
 	require.NoError(t, err)
@@ -57,15 +43,8 @@ func TestMergePreviewHandlerStructure(t *testing.T) {
 
 // TestMergePreviewWithInvalidRepoRoot tests error handling for invalid repo root
 func TestMergePreviewWithInvalidRepoRoot(t *testing.T) {
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{
-			Level:  "info",
-			Format: "json",
-		},
-		Git: config.GitConfig{
-			RepoRoot: "", // Invalid empty repo root
-		},
-	}
+	// 중앙에서 관리하는 설정 사용하되, repo root를 빈 값으로 오버라이드
+	cfg := config.NewTestConfigWithOverrides("", config.WithRepoRoot(""))
 
 	handler, err := protocol.NewMergePreviewHandler(cfg)
 	// This might succeed or fail depending on implementation
@@ -79,15 +58,11 @@ func TestMergePreviewWithInvalidRepoRoot(t *testing.T) {
 
 // TestMergePreviewWithInvalidLoggingConfig tests error handling for invalid logging config
 func TestMergePreviewWithInvalidLoggingConfig(t *testing.T) {
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{
-			Level:  "invalid-level", // Invalid logging level
-			Format: "json",
-		},
-		Git: config.GitConfig{
-			RepoRoot: "/tmp/test-repos",
-		},
-	}
+	// 중앙에서 관리하는 설정 사용하되, invalid logging level로 오버라이드
+	cfg := config.NewTestConfigWithOverrides(
+		"/tmp/test-repos",
+		config.WithLogging("invalid-level", "json"),
+	)
 
 	handler, err := protocol.NewMergePreviewHandler(cfg)
 	// This might succeed or fail depending on implementation
@@ -101,15 +76,8 @@ func TestMergePreviewWithInvalidLoggingConfig(t *testing.T) {
 
 // BenchmarkNewMergePreviewHandler benchmarks handler creation
 func BenchmarkNewMergePreviewHandler(b *testing.B) {
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{
-			Level:  "info",
-			Format: "json",
-		},
-		Git: config.GitConfig{
-			RepoRoot: "/tmp/test-repos",
-		},
-	}
+	// 중앙에서 관리하는 설정 사용
+	cfg := config.NewTestConfig("/tmp/test-repos")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

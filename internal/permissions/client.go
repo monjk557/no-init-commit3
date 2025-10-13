@@ -96,13 +96,14 @@ type HTTPClientInterface interface {
 }
 
 // DefaultConfig returns a configuration with sensible default values.
+// TODO: This should be replaced with central config values
 func DefaultConfig() *Config {
 	return &Config{
-		APIServiceURL:        "http://api-service.local",
-		Timeout:              10 * time.Second,
+		APIServiceURL:        "http://api-service.local", // TODO: move to central config
+		Timeout:              10 * time.Second,           // TODO: use config.Permissions.Timeout
 		MaxRetries:           3,
 		InitialRetryDelay:    100 * time.Millisecond,
-		MaxRetryDelay:        5 * time.Second,
+		MaxRetryDelay:        5 * time.Second, // TODO: use config.Permissions.MaxRetryDelay
 		CacheTTL:             5 * time.Minute,
 		HTTPClient:           nil, // Will be created during client initialization
 		CircuitBreakerConfig: nil, // Will use default circuit breaker config
