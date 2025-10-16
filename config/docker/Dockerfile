@@ -16,6 +16,9 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Copy environment files
+COPY config/env/ /app/config/env/
+
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o git-executor ./cmd/git-executor
 
@@ -35,13 +38,13 @@ WORKDIR /app
 # Copy the binary from builder stage
 COPY --from=builder /app/git-executor .
 
-# # Copy configuration file
-COPY config/config.yaml /config/config.yaml
+# Copy environment files from builder stage
+COPY --from=builder /app/config/env/ /app/config/env/
 
 # Create necessary directories with proper permissions
-RUN mkdir -p /opt/repos /repos /config /tmp /specs && \
-    chown -R gituser:gituser /app /repos /config /tmp /specs /opt/repos /config/config.yaml && \
-    chmod -R 777 /opt/repos
+RUN mkdir -p /var/lib/git/repos /config /tmp /specs && \
+    chown -R gituser:gituser /app /var/lib/git/repos /config /tmp /specs  && \
+    chmod -R 777 /var/lib/git/repos
     
 # Switch to non-root user (commented out for debugging)
 # USER gituser
@@ -54,4 +57,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD ["./git-executor", "--health-check"] || exit 1
 
 # Run the binary
-CMD ["./git-executor", "--config", "/config/config.yaml"]
+CMD ["./git-executor"]

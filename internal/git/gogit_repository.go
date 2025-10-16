@@ -85,31 +85,46 @@ func (r *GoGitRepository) Path() string {
 	return r.path
 }
 
-// GetTree retrieves the directory structure at a given reference
-func (r *GoGitRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry, error) {
-	// Check for context cancellation
+// GetTree retrieves the directory structure at a given reference and optional path
+func (r *GoGitRepository) GetTree(ctx context.Context, ref string, path string) ([]TreeEntry, error) {
+	// 컨텍스트 취소 확인
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
 
-	// Resolve the reference to a commit
+	// 레퍼런스를 커밋으로 해석
 	commit, err := r.resolveCommit(ref)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get the tree from the commit
+	// 커밋에서 트리 가져오기
 	tree, err := commit.Tree()
 	if err != nil {
 		return nil, NewGitError("get_tree", r.path, ref, "failed to get tree from commit", err)
 	}
 
-	// Convert tree entries to our format
+	// 경로가 제공된 경우 하위 디렉토리로 이동
+	if path != "" && path != "/" {
+		// go-git의 tree.Tree()는 상대 경로를 기대하므로 앞의 슬래시 제거
+		cleanPath := strings.TrimPrefix(filepath.Clean(path), "/")
+		subTree, err := tree.Tree(cleanPath)
+		if err != nil {
+			// 경로를 찾을 수 없는 에러인지 확인
+			if err == object.ErrDirectoryNotFound || err == object.ErrEntryNotFound {
+				return nil, &PathNotFoundError{Path: path, Ref: ref, Repo: r.path}
+			}
+			return nil, NewGitError("get_tree", r.path, ref, fmt.Sprintf("failed to get subdirectory tree at path %s", path), err)
+		}
+		tree = subTree
+	}
+
+	// 트리 항목들을 우리 포맷으로 변환
 	var entries []TreeEntry
 	for _, entry := range tree.Entries {
-		// Check for context cancellation during iteration
+		// 반복 중 컨텍스트 취소 확인
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -119,7 +134,7 @@ func (r *GoGitRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry,
 		entryType := convertFileMode(entry.Mode)
 		size := int64(0)
 
-		// For blobs, try to get the size
+		// blob인 경우 크기를 가져오기 시도
 		if entryType == EntryTypeBlob {
 			if blob, err := r.repo.BlobObject(entry.Hash); err == nil {
 				size = blob.Size
@@ -138,22 +153,22 @@ func (r *GoGitRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry,
 	return entries, nil
 }
 
-// GetTreeWithCommits retrieves tree entries with their latest commit information
-func (r *GoGitRepository) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
-	// First get the basic tree entries using the existing GetTree method
-	entries, err := r.GetTree(ctx, ref)
+// GetTreeWithCommits는 트리 엔트리들과 각 파일의 최신 커밋 정보를 가져옵니다
+func (r *GoGitRepository) GetTreeWithCommits(ctx context.Context, ref string, path string) ([]TreeEntry, error) {
+	// 먼저 기본 트리 엔트리들을 GetTree 메서드로 가져오기
+	entries, err := r.GetTree(ctx, ref, path)
 	if err != nil {
 		return nil, err
 	}
 
-	// For each blob entry, get the latest commit information
+	// 각 blob 엔트리에 대해 최신 커밋 정보 가져오기
 	for i, entry := range entries {
 		if entry.Type == EntryTypeBlob {
 			latestCommit, err := r.getLatestCommitForFile(ctx, entry.Path, ref)
 			if err == nil {
 				entries[i].LatestCommit = latestCommit
 			}
-			// If we can't get the commit info, we continue without it
+			// 커밋 정보를 가져올 수 없는 경우에도 계속 진행
 		}
 	}
 

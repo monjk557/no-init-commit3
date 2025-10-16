@@ -72,8 +72,8 @@ func (m *MockRepository) Path() string {
 	return m.path
 }
 
-// GetTree retrieves the directory structure at a given reference
-func (m *MockRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry, error) {
+// GetTree retrieves the directory structure at a given reference and optional path
+func (m *MockRepository) GetTree(ctx context.Context, ref string, path string) ([]TreeEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -104,9 +104,9 @@ func (m *MockRepository) GetTree(ctx context.Context, ref string) ([]TreeEntry, 
 }
 
 // GetTreeWithCommits retrieves tree entries with their latest commit information
-func (m *MockRepository) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
-	// First get the basic tree entries using the existing GetTree method
-	entries, err := m.GetTree(ctx, ref)
+func (m *MockRepository) GetTreeWithCommits(ctx context.Context, ref string, path string) ([]TreeEntry, error) {
+	// First get the basic tree entries using the existing GetTree method (root path)
+	entries, err := m.GetTree(ctx, ref, path)
 	if err != nil {
 		return nil, err
 	}

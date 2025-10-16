@@ -1,6 +1,5 @@
 
 [build]
-  args_bin = ["--config=config/config.yaml"]
   bin = "./tmp/main"
   cmd = "go build -o ./tmp/main ./cmd/git-executor"
   delay = 1000
@@ -39,7 +38,3 @@
 [screen]
   clear_on_rebuild = false
   keep_scroll = true
-
-[env]
-  COLLABOPS_SERVER_PORT = "5001"
-  PORT = "5001"

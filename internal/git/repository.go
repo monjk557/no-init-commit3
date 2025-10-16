@@ -12,11 +12,12 @@ type Repository interface {
 	// Path - 리포지토리의 파일시스템 경로 반환
 	Path() string
 
-	// GetTree - 특정 참조(ref)에서 디렉토리 구조 조회
-	GetTree(ctx context.Context, ref string) ([]TreeEntry, error)
+	// GetTree - 특정 참조(ref)와 경로(path)에서 디렉토리 구조 조회
+	// path가 빈 문자열이면 루트 디렉토리 조회
+	GetTree(ctx context.Context, ref string, path string) ([]TreeEntry, error)
 
 	// GetTreeWithCommits - 특정 참조(ref)에서 디렉토리 구조와 각 파일의 최신 커밋 정보 조회
-	GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error)
+	GetTreeWithCommits(ctx context.Context, ref string, path string) ([]TreeEntry, error)
 
 	// GetBlob - 특정 경로와 참조에서 파일 내용 조회
 	GetBlob(ctx context.Context, path, ref string) ([]byte, error)

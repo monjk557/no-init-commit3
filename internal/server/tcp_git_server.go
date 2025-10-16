@@ -78,9 +78,6 @@ func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 // Start starts the TCP server on configured port
 func (s *DuplexTCPServer) Start() error {
 	port := s.config.Server.TCPGitPort
-	if port == 0 {
-		port = 5222 // fallback to default
-	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -230,8 +227,8 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 		return s.handleUploadPack(conn, owner, repo)
 	case "git-receive-pack":
 		return s.handleReceivePack(conn, owner, repo)
-	case "git-upload-archive":
-		return s.handleUploadArchive(conn, owner, repo)
+	// case "git-upload-archive":
+	// 	return s.handleUploadArchive(conn, owner, repo)
 	default:
 		return fmt.Errorf("unsupported Git service: %s", service)
 	}

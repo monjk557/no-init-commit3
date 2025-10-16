@@ -154,31 +154,6 @@ func ErrorHandlingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// HealthCheckMiddleware skips logging for health check endpoints
-func HealthCheckMiddleware(healthPaths ...string) func(http.Handler) http.Handler {
-	healthMap := make(map[string]bool)
-	for _, path := range healthPaths {
-		healthMap[path] = true
-	}
-	// Default health check paths
-	healthMap["/health"] = true
-	healthMap["/healthz"] = true
-	healthMap["/ping"] = true
-
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip logging for health check endpoints
-			if healthMap[r.URL.Path] {
-				// Add a marker to context to skip logging
-				ctx := context.WithValue(r.Context(), SkipLoggingKey, true)
-				next.ServeHTTP(w, r.WithContext(ctx))
-			} else {
-				next.ServeHTTP(w, r)
-			}
-		})
-	}
-}
-
 // ConditionalLoggingMiddleware only logs if the context doesn't have skip_logging
 func ConditionalLoggingMiddleware(logger *Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -212,15 +187,4 @@ func ConditionalLoggingMiddleware(logger *Logger) func(http.Handler) http.Handle
 func GetLoggerFromContext(ctx context.Context) *zap.Logger {
 	logger := GetGlobalLogger()
 	return logger.WithContext(ctx)
-}
-
-// LogMiddleware sets up the complete logging middleware stack
-func LogMiddleware(logger *Logger) []func(http.Handler) http.Handler {
-	return []func(http.Handler) http.Handler{
-		RequestIDMiddleware(nil), // Use default generator
-		CorrelationIDMiddleware(),
-		ErrorHandlingMiddleware(logger),
-		HealthCheckMiddleware(), // Skip logging for health checks
-		ConditionalLoggingMiddleware(logger),
-	}
 }

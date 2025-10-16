@@ -16,15 +16,14 @@ import (
 )
 
 func main() {
-	// CLI 플래그 파싱 - 설정 파일 경로와 헬스체크 옵션을 처리
+	// CLI 플래그 파싱 - 헬스체크 옵션을 처리
 	var (
-		configPath  = flag.String("config", "", "Path to configuration file")
 		healthCheck = flag.Bool("health-check", false, "Perform health check and exit")
 	)
 	flag.Parse()
 
-	// 설정 파일 로드 - YAML 형식의 설정 파일을 읽어서 Config 구조체로 변환
-	cfg, err := config.Load(*configPath)
+	// 환경변수 파일(.env) 로드 - OS의 환경변수를 읽거나 기본 변수를 사용하여 Config 구조체로 변환
+	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)

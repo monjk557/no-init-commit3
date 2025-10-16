@@ -68,6 +68,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	refs := c.Query("refs")
+	path := c.Query("path")
 
 	// 1. parameter 조합 검증
 	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repo)
@@ -93,7 +94,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		c.JSON(422, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
@@ -101,7 +102,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	description, err := gitRepo.GetDescription(ctx)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		c.JSON(422, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
@@ -122,7 +123,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	branches, err := gitRepo.GetBranches(ctx)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		c.JSON(422, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
@@ -183,7 +184,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	latestCommit := commits[0]
 
 	// 5. tree entries 가져오기 (커밋 정보 포함)
-	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, refs)
+	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, refs, path)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})

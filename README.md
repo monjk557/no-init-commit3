@@ -17,7 +17,6 @@
 server:
   enable_docs: true          # Enable/disable documentation routes
   docs_path: "/api-docs"     # Custom docs path (default: /api-docs)
-  base_path: "/repos"        # Base path for all routes
 ```
 
 **Access the complete interactive API documentation with:**
