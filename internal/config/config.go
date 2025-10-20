@@ -2,181 +2,269 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/spf13/viper"
 )
 
 // Config는 전체 애플리케이션 설정을 나타냅니다
 type Config struct {
-	Server        ServerConfig        `mapstructure:"server" validate:"required"`
-	Git           GitConfig           `mapstructure:"git" validate:"required"`
-	JWT           JWTConfig           `mapstructure:"jwt" validate:"required"`
-	Logging       LoggingConfig       `mapstructure:"logging"`
-	Observability ObservabilityConfig `mapstructure:"observability"`
-	mu            sync.RWMutex
+	Server        ServerConfig
+	Git           GitConfig
+	Logging       LoggingConfig
+	Observability ObservabilityConfig
+	Security      SecurityConfig
+	Permissions   PermissionsConfig
+	Performance   PerformanceConfig
 }
 
 // ServerConfig는 HTTP 서버 설정을 저장합니다
 type ServerConfig struct {
-	Port            int           `mapstructure:"port" validate:"required,min=1,max=65535"`
-	TCPGitPort      int           `mapstructure:"tcp_git_port" validate:"min=1,max=65535"`
-	BasePath        string        `mapstructure:"base_path" validate:"required"`
-	Host            string        `mapstructure:"host"`
-	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout    time.Duration `mapstructure:"write_timeout"`
-	IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
-	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
-	HealthCheckPath string        `mapstructure:"health_check_path"`
-	EnableDocs      bool          `mapstructure:"enable_docs"`
-	DocsPath        string        `mapstructure:"docs_path"`
+	Port            int
+	TCPGitPort      int
+	BasePath        string
+	Host            string
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
+	ShutdownTimeout time.Duration
+	HealthCheckPath string
+	EnableDocs      bool
+	DocsPath        string
 }
 
 // GitConfig는 Git 저장소 설정을 저장합니다
 type GitConfig struct {
-	RepoRoot       string        `mapstructure:"repo_root" validate:"required"`
-	EnablePackfile bool          `mapstructure:"enable_packfile"`
-	MaxCacheSize   int           `mapstructure:"max_cache_size"`
-	CacheTTL       time.Duration `mapstructure:"cache_ttl"`
-}
-
-// JWTConfig는 JWT 인증 설정을 저장합니다
-type JWTConfig struct {
-	Algorithm     string `mapstructure:"algorithm" validate:"required,oneof=RS256 HS256 ES256"`
-	PublicKeyPath string `mapstructure:"public_key_path"`
-	SecretKey     string `mapstructure:"secret_key"`
+	RepoRoot       string
+	EnablePackfile bool
+	MaxCacheSize   int
+	CacheTTL       time.Duration
 }
 
 // LoggingConfig는 로깅 설정을 저장합니다
 type LoggingConfig struct {
-	Level       string `mapstructure:"level"`
-	Format      string `mapstructure:"format"`
-	Output      string `mapstructure:"output"`
-	Development bool   `mapstructure:"development"`
+	Level       string
+	Format      string
+	Output      string
+	Development bool
 }
 
 // ObservabilityConfig holds observability configuration
 type ObservabilityConfig struct {
-	Tracing TracingConfig `mapstructure:"tracing"`
-	Metrics MetricsConfig `mapstructure:"metrics"`
+	Tracing TracingConfig
+	Metrics MetricsConfig
+	Health  HealthConfig
 }
 
 // TracingConfig holds tracing configuration
 type TracingConfig struct {
-	Enabled        bool   `mapstructure:"enabled"`
-	Endpoint       string `mapstructure:"endpoint"`
-	ServiceName    string `mapstructure:"service_name"`
-	ServiceVersion string `mapstructure:"service_version"`
+	Enabled        bool
+	Endpoint       string
+	ServiceName    string
+	ServiceVersion string
 }
 
 // MetricsConfig holds metrics configuration
 type MetricsConfig struct {
-	Enabled  bool   `mapstructure:"enabled"`
-	Endpoint string `mapstructure:"endpoint"`
-	Port     int    `mapstructure:"port"`
+	Enabled  bool
+	Endpoint string
+	Port     int
+}
+
+// HealthConfig holds health check configuration
+type HealthConfig struct {
+	LivenessTimeout  time.Duration
+	ReadinessTimeout time.Duration
+}
+
+// SecurityConfig holds security-related configuration
+type SecurityConfig struct {
+	TLS       TLSConfig       `json:"tls"`
+	RateLimit RateLimitConfig `json:"rate_limit"`
+}
+
+// TLSConfig holds TLS configuration
+type TLSConfig struct {
+	ReadTimeout       time.Duration `json:"read_timeout"`
+	WriteTimeout      time.Duration `json:"write_timeout"`
+	IdleTimeout       time.Duration `json:"idle_timeout"`
+	ReadHeaderTimeout time.Duration `json:"read_header_timeout"`
+}
+
+// RateLimitConfig holds rate limiting configuration
+type RateLimitConfig struct {
+	RequestTimeout time.Duration `json:"request_timeout"`
 }
 
 // PermissionsConfig holds permission service configuration
 type PermissionsConfig struct {
-	APIServiceURL string `mapstructure:"api_service_url"`
+	APIServiceURL   string        `json:"api_service_url"`
+	Timeout         time.Duration `json:"timeout"`
+	MaxRetryDelay   time.Duration `json:"max_retry_delay"`
+	RecoveryTimeout time.Duration `json:"recovery_timeout"`
 }
 
-// Load는 Viper로 파일에서 설정을 로드합니다
-func Load(configPath string) (*Config, error) {
-	// 깨끗한 상태를 보장하기 위해 Viper 리셋
-	viper.Reset()
+type PerformanceConfig struct {
+	MemoryCheckInterval time.Duration `json:"memory_check_interval"`
+	ConnectionTimeout   time.Duration `json:"connection_timeout"`
+}
 
-	// 먼저 기본값 설정
-	setDefaults()
+// Load는 환경변수에서 설정을 로드합니다
+func Load() (*Config, error) {
 
-	// Viper 설정
-	viper.SetConfigType("yaml")
-	viper.SetConfigName("config")
-
-	if configPath != "" {
-		viper.SetConfigFile(configPath)
-	} else {
-		// 설정 검색 경로 추가
-		viper.AddConfigPath("./config")
-		viper.AddConfigPath(".")
-		viper.AddConfigPath("/etc/collabops")
+	// ServerConfig, GitConfig는 환경변수에서 파싱합니다.
+	serverConfig, err := parseServerConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse server config: %w", err)
 	}
 
-	// 환경 변수 지원 활성화
-	viper.SetEnvPrefix("COLLABOPS")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
-
-	// 설정 파일 읽기
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			// 설정 파일을 찾을 수 없음; 기본값 사용
-			// 참고: 아직 초기화되지 않았기 때문에 여기서 로거를 사용할 수 없음
-		} else if strings.Contains(err.Error(), "no such file or directory") {
-			// 특정 파일 경로가 존재하지 않음; 기본값 사용
-			// 참고: 아직 초기화되지 않았기 때문에 여기서 로거를 사용할 수 없음
-		} else {
-			return nil, fmt.Errorf("failed to read config file: %w", err)
-		}
+	gitConfig, err := parseGitConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse git config: %w", err)
 	}
 
-	// 설정 언마샬
-	var config Config
-	if err := viper.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	// Loggint과 ObservabilityConfig는 환경변수에서 파싱하지 않고, 기본값을 사용합니다.
+	loggingConfig := parseLoggingConfig()
+	observabilityConfig := parseObservabilityConfig()
+
+	config := &Config{
+		Server:        serverConfig,
+		Git:           gitConfig,
+		Logging:       loggingConfig,
+		Observability: observabilityConfig,
 	}
 
 	// 설정 유효성 검사
-	if err := validate(&config); err != nil {
+	if err := validate(config); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
-	return &config, nil
+	return config, nil
 }
 
-// setDefaults는 기본 설정 값을 설정합니다
-func setDefaults() {
-	// 서버 기본값
-	viper.SetDefault("server.port", 5001)
-	viper.SetDefault("server.tcp_git_port", 5222)
-	viper.SetDefault("server.base_path", "/repos")
-	viper.SetDefault("server.host", "0.0.0.0")
-	viper.SetDefault("server.read_timeout", "30s")
-	viper.SetDefault("server.write_timeout", "30s")
-	viper.SetDefault("server.idle_timeout", "120s")
+// ------------------------------------------------------------
+// ServerConfig 파싱 (환경변수 + 하드코딩)
+// ------------------------------------------------------------
+func parseServerConfig() (ServerConfig, error) {
 
-	// Git 기본값
-	viper.SetDefault("git.repo_root", "/var/lib/git/repos")
-	viper.SetDefault("git.enable_packfile", true)
-	viper.SetDefault("git.max_cache_size", 100)
-	viper.SetDefault("git.cache_ttl", "5m")
+	// 필수 환경변수 파싱
+	port := os.Getenv("SERVER_PORT")
+	if port == "" {
+		return ServerConfig{}, fmt.Errorf("SERVER_PORT environment variable is required but not set")
+	}
+	portInt, err := strconv.Atoi(port)
+	if err != nil {
+		return ServerConfig{}, fmt.Errorf("SERVER_PORT environment variable is not a valid integer: %w", err)
+	}
 
-	// JWT 기본값
-	viper.SetDefault("jwt.algorithm", "RS256")
-	viper.SetDefault("jwt.public_key_path", "/etc/collabops/public.pem")
+	TCPGitPort := os.Getenv("SERVER_TCP_GIT_PORT")
+	if TCPGitPort == "" {
+		return ServerConfig{}, fmt.Errorf("SERVER_TCP_GIT_PORT environment variable is required but not set")
+	}
+	TCPGitPortInt, err := strconv.Atoi(TCPGitPort)
+	if err != nil {
+		return ServerConfig{}, fmt.Errorf("SERVER_TCP_GIT_PORT environment variable is not a valid integer: %w", err)
+	}
+	basePath := os.Getenv("SERVER_BASE_PATH")
+	if basePath == "" {
+		return ServerConfig{}, fmt.Errorf("SERVER_BASE_PATH environment variable is required but not set")
+	}
 
-	// 서버 추가 기본값
-	viper.SetDefault("server.shutdown_timeout", "30s")
-	viper.SetDefault("server.health_check_path", "/health")
-	viper.SetDefault("server.enable_docs", true)
-	viper.SetDefault("server.docs_path", "/api-docs")
+	// 기본값 하드코딩
+	host := "0.0.0.0"
+	readTimeout := 30 * time.Second
+	writeTimeout := 30 * time.Second
+	idleTimeout := 120 * time.Second
+	shutdownTimeout := 30 * time.Second
+	healthCheckPath := "/health"
+	enableDocs := true
+	docsPath := "/api-docs"
 
-	// 로깅 기본값
-	viper.SetDefault("logging.level", "info")
-	viper.SetDefault("logging.format", "json")
-	viper.SetDefault("logging.output", "stdout")
-	viper.SetDefault("logging.development", false)
+	return ServerConfig{
+		Port:            portInt,
+		TCPGitPort:      TCPGitPortInt,
+		BasePath:        basePath,
+		Host:            host,
+		ReadTimeout:     readTimeout,
+		WriteTimeout:    writeTimeout,
+		IdleTimeout:     idleTimeout,
+		ShutdownTimeout: shutdownTimeout,
+		HealthCheckPath: healthCheckPath,
+		EnableDocs:      enableDocs,
+		DocsPath:        docsPath,
+	}, nil
+}
 
-	// Observability defaults
-	viper.SetDefault("observability.tracing.enabled", false)
-	viper.SetDefault("observability.tracing.endpoint", "")
-	viper.SetDefault("observability.tracing.service_name", "collabops-git-executor")
-	viper.SetDefault("observability.tracing.service_version", "1.0.0")
-	viper.SetDefault("observability.metrics.enabled", false)
-	viper.SetDefault("observability.metrics.endpoint", "")
-	viper.SetDefault("observability.metrics.port", 9090)
+// ------------------------------------------------------------
+// GitConfig 파싱 (환경변수 + 하드코딩)
+// ------------------------------------------------------------
+func parseGitConfig() (GitConfig, error) {
+
+	repoRoot := os.Getenv("GIT_REPO_ROOT")
+	if repoRoot == "" {
+		return GitConfig{}, fmt.Errorf("GIT_REPO_ROOT environment variable is required but not set")
+	}
+
+	// 기본값 하드코딩
+	enablePackfile := true
+	maxCacheSize := 100
+	cacheTTL := 5 * time.Minute
+
+	return GitConfig{
+		RepoRoot:       repoRoot,
+		EnablePackfile: enablePackfile,
+		MaxCacheSize:   maxCacheSize,
+		CacheTTL:       cacheTTL,
+	}, nil
+}
+
+// ------------------------------------------------------------
+// LoggingConfig 파싱 (하드코딩)
+// ------------------------------------------------------------
+func parseLoggingConfig() LoggingConfig {
+
+	// 기본값 하드코딩
+	level := "info"
+	format := "json"
+	output := "stdout"
+	development := false
+
+	return LoggingConfig{
+		Level:       level,
+		Format:      format,
+		Output:      output,
+		Development: development,
+	}
+}
+
+// ------------------------------------------------------------
+// ObservabilityConfig 파싱 (하드코딩)
+// ------------------------------------------------------------
+func parseObservabilityConfig() ObservabilityConfig {
+
+	// 기본값 하드코딩
+	tracingEnabled := true
+	tracingEndpoint := ""
+	tracingServiceName := "collabops-git-executor"
+	tracingServiceVersion := "1.0.0"
+	metricsEnabled := true
+	metricsEndpoint := ""
+	metricsPort := 9090
+
+	return ObservabilityConfig{
+		Tracing: TracingConfig{
+			Enabled:        tracingEnabled,
+			Endpoint:       tracingEndpoint,
+			ServiceName:    tracingServiceName,
+			ServiceVersion: tracingServiceVersion,
+		},
+		Metrics: MetricsConfig{
+			Enabled:  metricsEnabled,
+			Endpoint: metricsEndpoint,
+			Port:     metricsPort,
+		},
+	}
 }
 
 // validate는 설정 유효성 검사를 수행합니다
@@ -203,29 +291,6 @@ func validate(config *Config) error {
 
 	if config.Git.MaxCacheSize < 0 {
 		errors = append(errors, "git.max_cache_size must be >= 0")
-	}
-
-	// JWT 설정 유효성 검사
-	validAlgorithms := []string{"RS256", "HS256", "ES256"}
-	algorithmValid := false
-	for _, alg := range validAlgorithms {
-		if config.JWT.Algorithm == alg {
-			algorithmValid = true
-			break
-		}
-	}
-	if !algorithmValid {
-		errors = append(errors, fmt.Sprintf("jwt.algorithm must be one of: %v", validAlgorithms))
-	}
-
-	// RS256과 ES256의 경우, 공개 키 경로 필요
-	if (config.JWT.Algorithm == "RS256" || config.JWT.Algorithm == "ES256") && config.JWT.PublicKeyPath == "" {
-		errors = append(errors, fmt.Sprintf("jwt.public_key_path is required for algorithm %s", config.JWT.Algorithm))
-	}
-
-	// HS256의 경우, 비밀 키 필요
-	if config.JWT.Algorithm == "HS256" && config.JWT.SecretKey == "" {
-		errors = append(errors, "jwt.secret_key is required for algorithm HS256")
 	}
 
 	// 로깅 설정 유효성 검사
@@ -256,77 +321,6 @@ func validate(config *Config) error {
 	if len(errors) > 0 {
 		return fmt.Errorf("validation errors: %s", strings.Join(errors, "; "))
 	}
-
-	return nil
-}
-
-// GetConfigPath는 사용 중인 설정 파일의 경로를 반환합니다
-func GetConfigPath() string {
-	return viper.ConfigFileUsed()
-}
-
-// GetServer는 서버 설정의 복사본을 반환합니다 (스레드 안전)
-func (c *Config) GetServer() ServerConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.Server
-}
-
-// GetGit은 git 설정의 복사본을 반환합니다 (스레드 안전)
-func (c *Config) GetGit() GitConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.Git
-}
-
-// GetJWT는 JWT 설정의 복사본을 반환합니다 (스레드 안전)
-func (c *Config) GetJWT() JWTConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.JWT
-}
-
-// GetLogging은 로깅 설정의 복사본을 반환합니다 (스레드 안전)
-func (c *Config) GetLogging() LoggingConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.Logging
-}
-
-// GetObservability returns a copy of the observability configuration (thread-safe)
-func (c *Config) GetObservability() ObservabilityConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.Observability
-}
-
-// Reload reloads the configuration from file (thread-safe)
-func (c *Config) Reload() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// 설정 다시 읽기
-	if err := viper.ReadInConfig(); err != nil {
-		return fmt.Errorf("failed to reload config: %w", err)
-	}
-
-	// 유효성 검사를 위한 임시 설정 생성
-	var newConfig Config
-	if err := viper.Unmarshal(&newConfig); err != nil {
-		return fmt.Errorf("failed to unmarshal reloaded config: %w", err)
-	}
-
-	// 새 설정 유효성 검사
-	if err := validate(&newConfig); err != nil {
-		return fmt.Errorf("reloaded config validation failed: %w", err)
-	}
-
-	// 필드 업데이트
-	c.Server = newConfig.Server
-	c.Git = newConfig.Git
-	c.JWT = newConfig.JWT
-	c.Logging = newConfig.Logging
-	c.Observability = newConfig.Observability
 
 	return nil
 }

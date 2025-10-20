@@ -254,15 +254,29 @@ func ValidateRepoPath(pathConfig *PathConfig, repoPath string) error {
 		return fmt.Errorf("failed to resolve absolute path for %s: %w", repoPath, err)
 	}
 
-	// Resolve symlinks to ensure consistent path comparison (fixes macOS /var -> /private/var issue)
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		// If symlink resolution fails, use the original absolute path
-		realPath = absPath
-	}
-
+	// Resolve symlinks for the repo root to ensure consistent comparison
 	// The repository root should already be resolved to real path by NewPathConfig
 	absRepoRoot := pathConfig.RepoRoot
+
+	// For the repository path, we need to handle the case where it doesn't exist yet
+	// Resolve symlinks for existing parent directories
+	realPath := absPath
+	tempPath := absPath
+	for tempPath != "/" && tempPath != "." {
+		if resolved, err := filepath.EvalSymlinks(tempPath); err == nil {
+			// Successfully resolved this level, reconstruct the full path
+			if tempPath != absPath {
+				// Add back the non-existent suffix
+				suffix := strings.TrimPrefix(absPath, tempPath)
+				realPath = filepath.Join(resolved, suffix)
+			} else {
+				realPath = resolved
+			}
+			break
+		}
+		// Move up one directory and try again
+		tempPath = filepath.Dir(tempPath)
+	}
 
 	// Normalize paths for consistent comparison (handles case sensitivity on Windows)
 	realPath = filepath.Clean(realPath)

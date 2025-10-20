@@ -28,14 +28,14 @@ func (rw *repositoryWrapper) Path() string {
 	return rw.path
 }
 
-// GetTree retrieves the directory structure at a given reference
-func (rw *repositoryWrapper) GetTree(ctx context.Context, ref string) ([]TreeEntry, error) {
+// GetTree retrieves the directory structure at a given reference and optional path
+func (rw *repositoryWrapper) GetTree(ctx context.Context, ref string, path string) ([]TreeEntry, error) {
 	// This is a simplified implementation - full implementation would be more complex
 	return nil, fmt.Errorf("GetTree not implemented in repository wrapper")
 }
 
 // GetTreeWithCommits retrieves the directory structure with commit information at a given reference
-func (rw *repositoryWrapper) GetTreeWithCommits(ctx context.Context, ref string) ([]TreeEntry, error) {
+func (rw *repositoryWrapper) GetTreeWithCommits(ctx context.Context, ref string, path string) ([]TreeEntry, error) {
 	// This is a simplified implementation - full implementation would be more complex
 	return nil, fmt.Errorf("GetTreeWithCommits not implemented in repository wrapper")
 }

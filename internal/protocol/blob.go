@@ -491,7 +491,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	size := int64(len(blob))
 
 	// 5. tree entries 가져오기
-	treeEntries, err := gitRepo.GetTree(ctx, refs)
+	treeEntries, err := gitRepo.GetTree(ctx, refs, "")
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
