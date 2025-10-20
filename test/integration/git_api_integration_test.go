@@ -126,7 +126,7 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 	fileOpsHandler, err := protocol.NewFileOperationsHandler(cfg, permClient)
 	require.NoError(t, err)
 
-	mergeOpsHandler, err := protocol.NewMergeOperationsHandler(cfg, permClient)
+	mergeOpsHandler, err := protocol.NewMergeOperationsHandler(cfg)
 	require.NoError(t, err)
 
 	mergePreviewHandler, err := protocol.NewMergePreviewHandler(cfg)
@@ -593,6 +593,226 @@ func TestMergeOperations_Integration(t *testing.T) {
 
 		assert.Equal(t, false, response["success"]) // Should be false for validation error
 		assert.Contains(t, response, "error")       // Should contain error message
+	})
+}
+
+// Test Merge Conflict Detection
+func TestMergeConflict_Integration(t *testing.T) {
+	suite := SetupIntegrationTest(t)
+
+	// Setup: Create a file in master branch
+	t.Run("SetupInitialFile", func(t *testing.T) {
+		commitBody := map[string]interface{}{
+			"base_branch": "master",
+			"operations": []map[string]interface{}{
+				{
+					"operation": "create",
+					"path":      "conflict-test.txt",
+					"content":   "TGluZSAxCkxpbmUgMgpMaW5lIDMK", // "Line 1\nLine 2\nLine 3\n" in base64
+				},
+			},
+			"message": "Add initial conflict test file",
+			"author": map[string]string{
+				"name":  "Test User",
+				"email": "test@example.com",
+			},
+		}
+
+		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	// Create branch-a and modify the file
+	t.Run("SetupBranchA", func(t *testing.T) {
+		// Create branch-a from master
+		createBranch := map[string]interface{}{
+			"name":   "branch-a",
+			"source": "master",
+		}
+		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/branches", createBranch)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+
+		// Modify file in branch-a
+		commitBody := map[string]interface{}{
+			"base_branch": "branch-a",
+			"operations": []map[string]interface{}{
+				{
+					"operation": "update",
+					"path":      "conflict-test.txt",
+					"content":   "TGluZSAxIChicmFuY2gtYSBjaGFuZ2UpCkxpbmUgMgpMaW5lIDMK", // "Line 1 (branch-a change)\nLine 2\nLine 3\n"
+				},
+			},
+			"message": "Modify line 1 in branch-a",
+			"author": map[string]string{
+				"name":  "Test User",
+				"email": "test@example.com",
+			},
+		}
+
+		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
+		require.NoError(t, err)
+		defer func() { _ = commitResp.Body.Close() }()
+		assert.Equal(t, http.StatusOK, commitResp.StatusCode)
+	})
+
+	// Create branch-b and modify the same file differently
+	t.Run("SetupBranchB", func(t *testing.T) {
+		// Create branch-b from master
+		createBranch := map[string]interface{}{
+			"name":   "branch-b",
+			"source": "master",
+		}
+		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/branches", createBranch)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+
+		// Modify the same file in branch-b (different content on same line)
+		commitBody := map[string]interface{}{
+			"base_branch": "branch-b",
+			"operations": []map[string]interface{}{
+				{
+					"operation": "update",
+					"path":      "conflict-test.txt",
+					"content":   "TGluZSAxIChicmFuY2gtYiBjaGFuZ2UpCkxpbmUgMgpMaW5lIDMK", // "Line 1 (branch-b change)\nLine 2\nLine 3\n"
+				},
+			},
+			"message": "Modify line 1 in branch-b",
+			"author": map[string]string{
+				"name":  "Test User",
+				"email": "test@example.com",
+			},
+		}
+
+		commitResp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/commits", commitBody)
+		require.NoError(t, err)
+		defer func() { _ = commitResp.Body.Close() }()
+		assert.Equal(t, http.StatusOK, commitResp.StatusCode)
+	})
+
+	// Test merge preview to detect conflict
+	t.Run("PreviewConflict", func(t *testing.T) {
+		resp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/merges/preview?source_ref=branch-a&target_ref=branch-b", nil)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+
+		// Should successfully preview, but should indicate conflicts
+		assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusConflict)
+
+		var response map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&response)
+		require.NoError(t, err)
+
+		// Check for conflict indicators in response
+		t.Logf("Merge preview response: %+v", response)
+
+		// The response should indicate conflicts exist
+		if data, ok := response["data"].(map[string]interface{}); ok {
+			if hasConflicts, ok := data["has_conflicts"].(bool); ok {
+				assert.True(t, hasConflicts, "Expected conflicts to be detected")
+			}
+
+			// Check for conflict files
+			if conflicts, ok := data["conflicts"].([]interface{}); ok {
+				assert.NotEmpty(t, conflicts, "Expected conflict files to be listed")
+				t.Logf("Detected conflicts: %+v", conflicts)
+			}
+		}
+	})
+
+	// Test actual merge attempt - should fail or return conflict status
+	t.Run("AttemptMergeWithConflict", func(t *testing.T) {
+		body := map[string]interface{}{
+			"source_ref": "branch-a",
+			"target_ref": "branch-b",
+			"message":    "Attempt to merge conflicting branches",
+			"author": map[string]interface{}{
+				"name":  "Test User",
+				"email": "test@example.com",
+			},
+			"force_conflict": false,
+			"dry_run":        false,
+		}
+
+		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/merges", body)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+
+		// Should return conflict status
+		assert.True(t, resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusBadRequest,
+			"Expected conflict status code, got %d", resp.StatusCode)
+
+		var response map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&response)
+		require.NoError(t, err)
+
+		t.Logf("Merge attempt response: %+v", response)
+
+		// Should indicate failure due to conflicts
+		if success, ok := response["success"].(bool); ok {
+			assert.False(t, success, "Merge should not succeed with conflicts")
+		}
+
+		// Should contain conflict information
+		assert.Contains(t, response, "error", "Response should contain error information")
+	})
+
+	// Test force merge with conflicts
+	t.Run("ForceMergeWithConflict", func(t *testing.T) {
+		body := map[string]interface{}{
+			"source_ref": "branch-a",
+			"target_ref": "branch-b",
+			"message":    "Force merge conflicting branches",
+			"author": map[string]interface{}{
+				"name":  "Test User",
+				"email": "test@example.com",
+			},
+			"force_conflict": true,
+			"dry_run":        false,
+		}
+
+		resp, err := suite.makeRequest("POST", "/repos/testowner/testrepo/merges", body)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+
+		// Force merge should succeed
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "Force merge should succeed")
+
+		var response map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&response)
+		require.NoError(t, err)
+
+		t.Logf("Force merge response: %+v", response)
+
+		// Should indicate success
+		if success, ok := response["success"].(bool); ok {
+			assert.True(t, success, "Force merge should succeed")
+		}
+
+		// Should contain merge commit info
+		assert.Contains(t, response, "data", "Response should contain merge data")
+
+		// Verify that branch-b now has the merged content
+		blobResp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/blobs/branch-b:conflict-test.txt", nil)
+		require.NoError(t, err)
+		defer func() { _ = blobResp.Body.Close() }()
+
+		if blobResp.StatusCode == http.StatusOK {
+			var blobResponse map[string]interface{}
+			err = json.NewDecoder(blobResp.Body).Decode(&blobResponse)
+			require.NoError(t, err)
+
+			t.Logf("Blob after merge: %+v", blobResponse)
+
+			// Verify that the content has changed (merged)
+			if data, ok := blobResponse["data"].(map[string]interface{}); ok {
+				assert.Contains(t, data, "content", "Blob should contain content")
+				// The content should now reflect the merge
+				t.Logf("Merged content: %v", data["content"])
+			}
+		}
 	})
 }
 

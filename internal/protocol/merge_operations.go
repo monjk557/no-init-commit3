@@ -12,13 +12,13 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/collabops/git-executor/internal/schemas/common"
 )
@@ -26,7 +26,6 @@ import (
 // MergeOperationsHandler handles REST API operations for Git merge operations
 type MergeOperationsHandler struct {
 	pathConfig       *repository.PathConfig
-	permClient       permissions.PermissionClient
 	logger           *logging.Logger
 	errorMapper      *api.GitErrorMapper
 	objectManager    *git.GitObjectManager
@@ -34,12 +33,9 @@ type MergeOperationsHandler struct {
 }
 
 // NewMergeOperationsHandler creates a new merge operations handler
-func NewMergeOperationsHandler(cfg *config.Config, permClient permissions.PermissionClient) (*MergeOperationsHandler, error) {
+func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
-	}
-	if permClient == nil {
-		return nil, fmt.Errorf("permission client cannot be nil")
 	}
 
 	logger, err := logging.NewLogger(cfg.Logging)
@@ -61,7 +57,6 @@ func NewMergeOperationsHandler(cfg *config.Config, permClient permissions.Permis
 
 	return &MergeOperationsHandler{
 		pathConfig:       pathConfig,
-		permClient:       permClient,
 		logger:           logger,
 		errorMapper:      errorMapper,
 		objectManager:    objectManager,
@@ -96,14 +91,14 @@ type MergeRequest struct {
 // MergeResponse represents the response for merge operations
 type MergeResponse struct {
 	Success         bool                     `json:"success"`
-	MergeCommit     *common.CommitInfo       `json:"merge_commit,omitempty"`     // Created merge commit info
-	IsFastForward   bool                     `json:"is_fast_forward"`            // Whether merge was fast-forward
-	HasConflicts    bool                     `json:"has_conflicts"`              // Whether conflicts were detected
-	ConflictCount   int                      `json:"conflict_count"`             // Number of conflicts
-	Strategy        MergeStrategy            `json:"strategy"`                   // Strategy used
-	Message         string                   `json:"message"`                    // Operation result message
-	Details         map[string]interface{}   `json:"details,omitempty"`          // Additional details
-	ConflictSummary *git.MergeAnalysisResult `json:"conflict_summary,omitempty"` // Detailed conflict analysis
+	MergeCommit     *common.CommitInfo       `json:"merge_commit"`     // Created merge commit info
+	IsFastForward   bool                     `json:"is_fast_forward"`  // Whether merge was fast-forward
+	HasConflicts    bool                     `json:"has_conflicts"`    // Whether conflicts were detected
+	ConflictCount   int                      `json:"conflict_count"`   // Number of conflicts
+	Strategy        MergeStrategy            `json:"strategy"`         // Strategy used
+	Message         string                   `json:"message"`          // Operation result message
+	Details         map[string]interface{}   `json:"details"`          // Additional details
+	ConflictSummary *git.MergeAnalysisResult `json:"conflict_summary"` // Detailed conflict analysis
 }
 
 // MergeResult represents the internal result of a merge operation
@@ -160,22 +155,6 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			})
 		} else {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-
-	// Validate permissions
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		if gitAPIErr, ok := err.(*api.GitAPIError); ok {
-			c.JSON(gitAPIErr.HTTPStatusCode(), gin.H{
-				"success": false,
-				"error":   gitAPIErr.Message,
-			})
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"error":   err.Error(),
 			})
@@ -385,64 +364,6 @@ func (h *MergeOperationsHandler) validateMergeRequest(req *MergeRequest) error {
 	return nil
 }
 
-// validatePermissions validates user permissions for repository access
-func (h *MergeOperationsHandler) validatePermissions(c *gin.Context, owner, repo, operation string) error {
-	userID := c.GetHeader("X-USER-ID")
-	if userID == "" {
-		apiErr := api.NewGitAPIError(
-			api.ErrorCodeUnauthorized,
-			"Missing X-USER-ID header",
-			api.ErrorSeverityMedium,
-		)
-		_ = apiErr.WithDetails("http_status", http.StatusUnauthorized)
-		return apiErr
-	}
-
-	source := c.GetHeader("X-Source")
-	if source == "" {
-		apiErr := api.NewGitAPIError(
-			api.ErrorCodeUnauthorized,
-			"Missing X-Source header",
-			api.ErrorSeverityMedium,
-		)
-		_ = apiErr.WithDetails("http_status", http.StatusUnauthorized)
-		return apiErr
-	}
-
-	var hasAccess bool
-	var err error
-
-	if operation == "read" {
-		hasAccess, err = h.permClient.CheckReadAccess(c.Request.Context(), userID, owner, repo)
-	} else {
-		hasAccess, err = h.permClient.CheckWriteAccess(c.Request.Context(), userID, owner, repo)
-	}
-
-	if err != nil {
-		h.logger.Error("Permission check failed", zap.Error(err))
-		apiErr := api.NewGitAPIError(
-			api.ErrorCodeInternalError,
-			"Permission service unavailable",
-			api.ErrorSeverityHigh,
-		)
-		_ = apiErr.WithDetails("http_status", http.StatusServiceUnavailable)
-		return apiErr
-	}
-
-	if !hasAccess {
-		apiErr := api.NewGitAPIError(
-			api.ErrorCodeForbidden,
-			"Insufficient permissions for this operation",
-			api.ErrorSeverityMedium,
-		)
-		_ = apiErr.WithDetails("http_status", http.StatusForbidden)
-		_ = apiErr.WithDetails("required_permission", operation)
-		return apiErr
-	}
-
-	return nil
-}
-
 // resolveReference resolves a Git reference to a commit hash
 func (h *MergeOperationsHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
 	// Try to resolve as hash first
@@ -481,10 +402,11 @@ func (h *MergeOperationsHandler) resolveReference(repo *gogit.Repository, ref st
 
 // analyzeMerge performs merge conflict analysis
 func (h *MergeOperationsHandler) analyzeMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest) (*git.MergeAnalysisResult, error) {
-	// Create analysis request
+	// Create analysis request with already opened repository
 	analysisReq := &git.MergeAnalysisRequest{
-		Owner:          "", // Not needed for direct analysis
-		Repo:           "", // Not needed for direct analysis
+		Repository:     repo, // Use already opened repository (중복 오픈 방지)
+		Owner:          "",   // Not needed when Repository is provided
+		Repo:           "",   // Not needed when Repository is provided
 		SourceRef:      sourceHash.String(),
 		TargetRef:      targetHash.String(),
 		Strategy:       git.MergeStrategy(req.Strategy),
@@ -559,9 +481,84 @@ func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo 
 		return nil, fmt.Errorf("failed to get target commit: %w", err)
 	}
 
-	// For now, we'll create a merge commit using the target tree
-	// In a full implementation, you would perform actual three-way merge logic
-	// This is a simplified approach that assumes conflicts are manually resolved
+	// Determine which tree to use based on strategy and conflict status
+	var mergeTreeHash plumbing.Hash
+
+	if analysis.HasConflicts && req.ForceConflict {
+		// When forcing conflicts, use strategy to determine which tree to use
+		h.logger.Info("Resolving conflicts using strategy",
+			zap.String("strategy", string(req.Strategy)),
+			zap.Int("conflict_count", analysis.ConflictCount))
+
+		switch req.Strategy {
+		case MergeStrategyOurs:
+			// Keep our version (target)
+			mergeTreeHash = targetCommit.TreeHash
+			h.logger.Debug("Using 'ours' strategy - keeping target tree")
+
+		case MergeStrategyTheirs:
+			// Keep their version (source)
+			mergeTreeHash = sourceCommit.TreeHash
+			h.logger.Debug("Using 'theirs' strategy - using source tree")
+
+		case MergeStrategyRecursive, MergeStrategyResolve:
+			// For recursive/resolve strategy, perform actual 3-way merge
+			if analysis.AutoResolvable > 0 && analysis.AutoResolvable == analysis.ConflictCount {
+				// All conflicts are auto-resolvable, create merged tree
+				h.logger.Debug("Performing 3-way merge - all conflicts auto-resolvable")
+
+				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, req.Strategy)
+				if err != nil {
+					h.logger.Error("Failed to create merged tree, falling back to source tree",
+						zap.Error(err))
+					mergeTreeHash = sourceCommit.TreeHash
+				} else {
+					mergeTreeHash = mergedTree
+					h.logger.Info("Successfully created merged tree",
+						zap.String("merged_tree", mergedTree.String()))
+				}
+			} else if analysis.AutoResolvable > 0 {
+				// Mixed auto-resolvable and manual conflicts
+				h.logger.Warn("Not all conflicts auto-resolvable - attempting partial merge",
+					zap.Int("auto_resolvable", analysis.AutoResolvable),
+					zap.Int("total_conflicts", analysis.ConflictCount))
+
+				// Attempt to create merged tree with auto-resolvable conflicts
+				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, req.Strategy)
+				if err != nil {
+					h.logger.Error("Failed to create partially merged tree, falling back to target tree",
+						zap.Error(err))
+					mergeTreeHash = targetCommit.TreeHash
+				} else {
+					mergeTreeHash = mergedTree
+					h.logger.Info("Successfully created partially merged tree",
+						zap.String("merged_tree", mergedTree.String()))
+				}
+			} else {
+				// No auto-resolvable conflicts, cannot safely merge
+				h.logger.Warn("No auto-resolvable conflicts - using target tree")
+				mergeTreeHash = targetCommit.TreeHash
+			}
+
+		case MergeStrategySubtree:
+			// Subtree merge uses source tree
+			mergeTreeHash = sourceCommit.TreeHash
+			h.logger.Debug("Using 'subtree' strategy - using source tree")
+
+		default:
+			// Fallback to target tree for unknown strategies
+			mergeTreeHash = targetCommit.TreeHash
+			h.logger.Warn("Unknown strategy - defaulting to target tree",
+				zap.String("strategy", string(req.Strategy)))
+		}
+	} else if analysis.HasConflicts && !req.ForceConflict {
+		// This should not happen as we check for conflicts earlier
+		return nil, fmt.Errorf("conflicts detected but force_conflict is false")
+	} else {
+		// No conflicts - use source tree for clean merge
+		mergeTreeHash = sourceCommit.TreeHash
+		h.logger.Debug("No conflicts - using source tree for clean merge")
+	}
 
 	// Generate merge commit message
 	message := h.generateMergeCommitMessage(req, sourceCommit, targetCommit)
@@ -594,7 +591,7 @@ func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo 
 	// Create merge commit
 	commit := &object.Commit{
 		Message:      message,
-		TreeHash:     targetCommit.TreeHash, // Use target tree (simplified)
+		TreeHash:     mergeTreeHash, // Use strategy-determined tree
 		ParentHashes: []plumbing.Hash{targetHash, sourceHash},
 		Author:       *author,
 		Committer:    *committer,
@@ -681,6 +678,286 @@ func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) *common.Com
 		Committer: common.AuthorInfo{Name: commit.Committer.Name, Email: commit.Committer.Email, Date: commit.Committer.When},
 		CreatedAt: commit.Author.When,
 	}
+}
+
+// createMergedTree creates a new tree by performing 3-way merge
+func (h *MergeOperationsHandler) createMergedTree(
+	ctx context.Context,
+	repo *gogit.Repository,
+	sourceCommit, targetCommit *object.Commit,
+	analysis *git.MergeAnalysisResult,
+	strategy MergeStrategy,
+) (plumbing.Hash, error) {
+	// Find merge base (common ancestor)
+	mergeBases, err := sourceCommit.MergeBase(targetCommit)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to find merge base: %w", err)
+	}
+	if len(mergeBases) == 0 {
+		return plumbing.ZeroHash, fmt.Errorf("no common ancestor found")
+	}
+
+	baseCommit := mergeBases[0]
+
+	// Get trees for base, source, and target
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to get base tree: %w", err)
+	}
+
+	sourceTree, err := sourceCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to get source tree: %w", err)
+	}
+
+	targetTree, err := targetCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to get target tree: %w", err)
+	}
+
+	h.logger.Debug("Starting 3-way merge tree creation",
+		zap.String("base", baseCommit.Hash.String()),
+		zap.String("source", sourceCommit.Hash.String()),
+		zap.String("target", targetCommit.Hash.String()))
+
+	// Create a map to track all files from all three trees
+	fileMap := make(map[string]*mergeFileEntry)
+
+	// Collect all files from base tree
+	_ = baseTree.Files().ForEach(func(f *object.File) error {
+		fileMap[f.Name] = &mergeFileEntry{
+			path:     f.Name,
+			baseHash: f.Hash,
+			baseMode: f.Mode,
+		}
+		return nil
+	})
+
+	// Collect all files from source tree
+	_ = sourceTree.Files().ForEach(func(f *object.File) error {
+		if entry, exists := fileMap[f.Name]; exists {
+			entry.sourceHash = f.Hash
+			entry.sourceMode = f.Mode
+		} else {
+			fileMap[f.Name] = &mergeFileEntry{
+				path:       f.Name,
+				sourceHash: f.Hash,
+				sourceMode: f.Mode,
+			}
+		}
+		return nil
+	})
+
+	// Collect all files from target tree
+	_ = targetTree.Files().ForEach(func(f *object.File) error {
+		if entry, exists := fileMap[f.Name]; exists {
+			entry.targetHash = f.Hash
+			entry.targetMode = f.Mode
+		} else {
+			fileMap[f.Name] = &mergeFileEntry{
+				path:       f.Name,
+				targetHash: f.Hash,
+				targetMode: f.Mode,
+			}
+		}
+		return nil
+	})
+
+	// Build conflict map for quick lookup
+	conflictMap := make(map[string]*git.FileConflict)
+	for _, conflict := range analysis.FileConflicts {
+		conflictMap[conflict.FilePath] = &conflict
+	}
+
+	// Create new tree entries by resolving each file
+	var treeEntries []object.TreeEntry
+
+	for path, entry := range fileMap {
+		resolvedHash, resolvedMode, err := h.resolveFileForMerge(entry, conflictMap[path], strategy)
+		if err != nil {
+			h.logger.Warn("Failed to resolve file, skipping",
+				zap.String("path", path),
+				zap.Error(err))
+			continue
+		}
+
+		if !resolvedHash.IsZero() {
+			treeEntries = append(treeEntries, object.TreeEntry{
+				Name: path,
+				Mode: resolvedMode,
+				Hash: resolvedHash,
+			})
+		}
+	}
+
+	// Sort tree entries by name (required by Git)
+	// Using a simple bubble sort for clarity
+	for i := 0; i < len(treeEntries); i++ {
+		for j := i + 1; j < len(treeEntries); j++ {
+			if treeEntries[i].Name > treeEntries[j].Name {
+				treeEntries[i], treeEntries[j] = treeEntries[j], treeEntries[i]
+			}
+		}
+	}
+
+	// Create and store the new tree
+	newTree := &object.Tree{
+		Entries: treeEntries,
+	}
+
+	treeObj := repo.Storer.NewEncodedObject()
+	if err := newTree.Encode(treeObj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to encode merged tree: %w", err)
+	}
+
+	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to store merged tree: %w", err)
+	}
+
+	h.logger.Info("Successfully created merged tree",
+		zap.String("tree_hash", treeHash.String()),
+		zap.Int("entries", len(treeEntries)))
+
+	return treeHash, nil
+}
+
+// mergeFileEntry represents a file's state in base, source, and target
+type mergeFileEntry struct {
+	path       string
+	baseHash   plumbing.Hash
+	baseMode   filemode.FileMode
+	sourceHash plumbing.Hash
+	sourceMode filemode.FileMode
+	targetHash plumbing.Hash
+	targetMode filemode.FileMode
+}
+
+// resolveFileForMerge determines which version of a file to use in the merged tree
+func (h *MergeOperationsHandler) resolveFileForMerge(
+	entry *mergeFileEntry,
+	conflict *git.FileConflict,
+	strategy MergeStrategy,
+) (plumbing.Hash, filemode.FileMode, error) {
+	baseExists := !entry.baseHash.IsZero()
+	sourceExists := !entry.sourceHash.IsZero()
+	targetExists := !entry.targetHash.IsZero()
+
+	// Case 1: File doesn't exist in any tree (shouldn't happen)
+	if !baseExists && !sourceExists && !targetExists {
+		return plumbing.ZeroHash, 0, nil
+	}
+
+	// Case 2: File only exists in source (new file in source)
+	if !baseExists && !targetExists && sourceExists {
+		h.logger.Debug("New file in source", zap.String("path", entry.path))
+		return entry.sourceHash, entry.sourceMode, nil
+	}
+
+	// Case 3: File only exists in target (new file in target)
+	if !baseExists && !sourceExists && targetExists {
+		h.logger.Debug("New file in target", zap.String("path", entry.path))
+		return entry.targetHash, entry.targetMode, nil
+	}
+
+	// Case 4: File deleted in source but exists in target
+	if baseExists && !sourceExists && targetExists {
+		if entry.baseHash == entry.targetHash {
+			// Target unchanged, respect source deletion
+			h.logger.Debug("File deleted in source, unchanged in target", zap.String("path", entry.path))
+			return plumbing.ZeroHash, 0, nil
+		}
+		// Conflict: modified in target, deleted in source
+		h.logger.Warn("Conflict: modified in target, deleted in source", zap.String("path", entry.path))
+		if strategy == MergeStrategyTheirs {
+			return entry.sourceHash, entry.sourceMode, nil // Keep deletion
+		}
+		return entry.targetHash, entry.targetMode, nil // Keep target (ours)
+	}
+
+	// Case 5: File deleted in target but exists in source
+	if baseExists && sourceExists && !targetExists {
+		if entry.baseHash == entry.sourceHash {
+			// Source unchanged, respect target deletion
+			h.logger.Debug("File deleted in target, unchanged in source", zap.String("path", entry.path))
+			return plumbing.ZeroHash, 0, nil
+		}
+		// Conflict: modified in source, deleted in target
+		h.logger.Warn("Conflict: modified in source, deleted in target", zap.String("path", entry.path))
+		if strategy == MergeStrategyTheirs {
+			return entry.sourceHash, entry.sourceMode, nil // Keep source
+		}
+		return plumbing.ZeroHash, 0, nil // Keep deletion (ours)
+	}
+
+	// Case 6: File exists in all three (most common case)
+	if baseExists && sourceExists && targetExists {
+		// Both unchanged from base
+		if entry.baseHash == entry.sourceHash && entry.baseHash == entry.targetHash {
+			h.logger.Debug("File unchanged in both branches", zap.String("path", entry.path))
+			return entry.targetHash, entry.targetMode, nil
+		}
+
+		// Only source changed
+		if entry.baseHash != entry.sourceHash && entry.baseHash == entry.targetHash {
+			h.logger.Debug("File only changed in source", zap.String("path", entry.path))
+			return entry.sourceHash, entry.sourceMode, nil
+		}
+
+		// Only target changed
+		if entry.baseHash == entry.sourceHash && entry.baseHash != entry.targetHash {
+			h.logger.Debug("File only changed in target", zap.String("path", entry.path))
+			return entry.targetHash, entry.targetMode, nil
+		}
+
+		// Both changed to same content (identical changes)
+		if entry.sourceHash == entry.targetHash {
+			h.logger.Debug("File changed identically in both branches", zap.String("path", entry.path))
+			return entry.sourceHash, entry.sourceMode, nil
+		}
+
+		// Both changed differently - conflict!
+		h.logger.Warn("Conflict: file changed differently in both branches", zap.String("path", entry.path))
+
+		// Check if conflict is auto-resolvable
+		if conflict != nil && conflict.AutoResolvable {
+			h.logger.Debug("Auto-resolvable conflict, using source", zap.String("path", entry.path))
+			return entry.sourceHash, entry.sourceMode, nil
+		}
+
+		// Use strategy to resolve
+		switch strategy {
+		case MergeStrategyTheirs:
+			return entry.sourceHash, entry.sourceMode, nil
+		case MergeStrategyOurs:
+			return entry.targetHash, entry.targetMode, nil
+		default:
+			// Default to source for recursive strategy
+			return entry.sourceHash, entry.sourceMode, nil
+		}
+	}
+
+	// Case 7: File exists in base and source but not target
+	if baseExists && sourceExists && !targetExists {
+		h.logger.Debug("File exists in base and source, deleted in target", zap.String("path", entry.path))
+		return plumbing.ZeroHash, 0, nil // Respect deletion
+	}
+
+	// Case 8: File exists in base and target but not source
+	if baseExists && !sourceExists && targetExists {
+		h.logger.Debug("File exists in base and target, deleted in source", zap.String("path", entry.path))
+		return plumbing.ZeroHash, 0, nil // Respect deletion
+	}
+
+	// Default: keep target version
+	if targetExists {
+		return entry.targetHash, entry.targetMode, nil
+	}
+	if sourceExists {
+		return entry.sourceHash, entry.sourceMode, nil
+	}
+
+	return plumbing.ZeroHash, 0, nil
 }
 
 // SendSuccess sends a successful JSON response

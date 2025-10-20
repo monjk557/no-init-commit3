@@ -276,6 +276,20 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	// Initialize merge handler for merge operations
+	mergeOpsHandler, err := protocol.NewMergeOperationsHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create merge handler", zap.Error(err))
+		return
+	}
+
+	// Initialize merge preview handler for merge preview operations
+	mergePreviewHandler, err := protocol.NewMergePreviewHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create merge preview handler", zap.Error(err))
+		return
+	}
+
 	// Initialize JSON response middleware for proper error handling
 	jsonResponseMiddleware := api.NewJSONResponseMiddleware(s.logger, "v1")
 
@@ -332,6 +346,15 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 				// Single commit diff endpoint
 				repoGroup.GET("/commits/:sha/diff", gin.WrapF(diffHandler.HandleSingleCommitDiff))
+
+				// Merge endpoints
+				mergeGroup := repoGroup.Group("/merges")
+				{
+					// Preview merge
+					mergeGroup.GET("/preview", mergePreviewHandler.HandleMergePreview)
+					// Perform merge
+					mergeGroup.POST("", mergeOpsHandler.HandleMerge)
+				}
 
 				// Patch endpoints
 				patchGroup := repoGroup.Group("/patch")

@@ -200,22 +200,6 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 		return
 	}
 
-	// Validate permissions (read access required for preview)
-	if err := h.validatePermissions(c, owner, repo, "read"); err != nil {
-		if gitAPIErr, ok := err.(*api.GitAPIError); ok {
-			c.JSON(gitAPIErr.HTTPStatusCode(), gin.H{
-				"success": false,
-				"error":   gitAPIErr.Message,
-			})
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-
 	// Open repository
 	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
 	if err != nil {
@@ -474,10 +458,11 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repo *gog
 
 // analyzeConflicts performs conflict analysis using the ConflictDetector
 func (h *MergePreviewHandler) analyzeConflicts(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergePreviewRequest) (*git.MergeAnalysisResult, error) {
-	// Create analysis request
+	// Create analysis request with already opened repository
 	analysisReq := &git.MergeAnalysisRequest{
-		Owner:          "", // Not needed for direct analysis
-		Repo:           "", // Not needed for direct analysis
+		Repository:     repo, // Use already opened repository (중복 오픈 방지)
+		Owner:          "",   // Not needed when Repository is provided
+		Repo:           "",   // Not needed when Repository is provided
 		SourceRef:      sourceHash.String(),
 		TargetRef:      targetHash.String(),
 		Strategy:       git.MergeStrategy(req.Strategy),

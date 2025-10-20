@@ -112,14 +112,15 @@ type ConflictResolution struct {
 
 // MergeAnalysisRequest represents a request for merge analysis
 type MergeAnalysisRequest struct {
-	Owner          string        `json:"owner"`           // Repository owner
-	Repo           string        `json:"repo"`            // Repository name
-	SourceRef      string        `json:"source_ref"`      // Source branch/commit to merge FROM
-	TargetRef      string        `json:"target_ref"`      // Target branch/commit to merge INTO
-	Strategy       MergeStrategy `json:"strategy"`        // Preferred merge strategy
-	AutoResolve    bool          `json:"auto_resolve"`    // Whether to attempt automatic resolution
-	IncludeContent bool          `json:"include_content"` // Whether to include file content in response
-	MaxFileSize    int64         `json:"max_file_size"`   // Maximum file size to analyze for content conflicts
+	Owner          string            `json:"owner"`           // Repository owner (optional if Repository is provided)
+	Repo           string            `json:"repo"`            // Repository name (optional if Repository is provided)
+	Repository     *gogit.Repository `json:"-"`               // Already opened repository (우선 사용, Owner/Repo보다 우선)
+	SourceRef      string            `json:"source_ref"`      // Source branch/commit to merge FROM
+	TargetRef      string            `json:"target_ref"`      // Target branch/commit to merge INTO
+	Strategy       MergeStrategy     `json:"strategy"`        // Preferred merge strategy
+	AutoResolve    bool              `json:"auto_resolve"`    // Whether to attempt automatic resolution
+	IncludeContent bool              `json:"include_content"` // Whether to include file content in response
+	MaxFileSize    int64             `json:"max_file_size"`   // Maximum file size to analyze for content conflicts
 }
 
 // MergeAnalysisResult represents the result of merge conflict analysis
@@ -168,11 +169,22 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 		zap.String("target_ref", req.TargetRef),
 		zap.String("strategy", string(req.Strategy)))
 
-	// Open repository
-	repoPath := cd.pathConfig.FormatRepoPath(req.Owner, req.Repo)
-	repo, err := gogit.PlainOpen(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %w", err)
+	// Use provided repository or open new one
+	var repo *gogit.Repository
+	var err error
+
+	if req.Repository != nil {
+		// Use already opened repository (효율적)
+		repo = req.Repository
+		cd.logger.Debug("Using provided repository instance")
+	} else {
+		// Open repository from path (기존 방식)
+		repoPath := cd.pathConfig.FormatRepoPath(req.Owner, req.Repo)
+		repo, err = gogit.PlainOpen(repoPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open repository: %w", err)
+		}
+		cd.logger.Debug("Opened repository from path", zap.String("path", repoPath))
 	}
 
 	// Resolve source and target commits
