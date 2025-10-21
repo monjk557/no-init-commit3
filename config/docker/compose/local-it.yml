@@ -106,6 +106,8 @@ services:
       - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
     env_file:
       - ../../env/local-it/git-executor.env
+    volumes:  
+      - git_executor_data:${GIT_REPO_ROOT:-/var/lib/git/repos}
     networks:
       - collabops-network
     restart: unless-stopped
@@ -218,7 +220,8 @@ volumes:
   api_service_redis_data:
   api_service_postgres_data:
   orchestrator_postgres_data:
-
+  git_executor_data:
+    
 networks:
   collabops-network:
     driver: bridge

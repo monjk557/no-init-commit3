@@ -11,8 +11,7 @@ services:
     env_file:
       - ../../env/build-it/git-executor.env
     volumes:  
-      - ../../../../collabops-git-executor/specs:/app/specs:ro
-      - repos_data:/opt/repos
+      - git_executor_data:${GIT_REPO_ROOT:-/var/lib/git/repos}
     networks:
       - collabops-network
     restart: unless-stopped
@@ -29,8 +28,7 @@ services:
       retries: 3
 
 volumes:
-  repos_data:
-    driver: local
+  git_executor_data:
 
 networks:
   collabops-network:

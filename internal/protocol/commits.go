@@ -123,10 +123,10 @@ func (h *CommitsHandler) HandleCommitsAPI(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Validate permissions and get repository path
-	repoPath, err := h.validateCommitsRequestAndPermissions(ctx, params)
+	// Get repository path and validate
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		h.handleCommitsError(w, err, "validate permissions")
+		h.handleCommitsError(w, err, "get repository path")
 		return
 	}
 
@@ -230,18 +230,6 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(r *http.Request) (*Comm
 		Skip:   skip,
 		UserID: userID,
 	}, nil
-}
-
-// validateCommitsRequestAndPermissions performs validation and permission checking for commit requests
-func (h *CommitsHandler) validateCommitsRequestAndPermissions(ctx context.Context, params *CommitsRequestParams) (string, error) {
-
-	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
-	if err != nil {
-		return "", fmt.Errorf("invalid repository path: %w", err)
-	}
-
-	return repoPath, nil
 }
 
 // getCommitHistory retrieves commit history using the Git repository interface
