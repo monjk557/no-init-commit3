@@ -107,7 +107,7 @@ services:
     env_file:
       - ../../env/local-it/git-executor.env
     volumes:  
-      - git_executor_data:${GIT_REPO_ROOT:-/var/lib/git/repos}
+      - git_executor_data:${GIT_REPO_ROOT}
     networks:
       - collabops-network
     restart: unless-stopped

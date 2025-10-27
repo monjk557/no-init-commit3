@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -28,13 +29,14 @@ type DiffHandler struct {
 
 // DiffResponse는 diff 엔드포인트의 응답 구조를 나타냅니다
 type DiffResponse struct {
-	Success   bool         `json:"success"`
-	Base      string       `json:"base"`
-	Head      string       `json:"head"`
-	Files     []FileDiff   `json:"files"`
-	Stats     DiffStats    `json:"stats"`
-	Commits   *CommitStats `json:"commits,omitempty"`    // 브랜치 diff용
-	MergeBase string       `json:"merge_base,omitempty"` // 브랜치 diff용
+	Success       bool            `json:"success"`
+	Base          string          `json:"base"`
+	Head          string          `json:"head"`
+	Files         []FileDiff      `json:"files"`
+	Stats         DiffStats       `json:"stats"`
+	Commits       *CommitStats    `json:"commits,omitempty"`         // 브랜치 diff용
+	CommitsByDate []CommitsByDate `json:"commits_by_date,omitempty"` // 날짜별 커밋 목록
+	MergeBase     string          `json:"merge_base,omitempty"`      // 브랜치 diff용
 }
 
 // SingleCommitDiffResponse는 단일 커밋 diff 엔드포인트의 응답 구조를 나타냅니다
@@ -58,6 +60,12 @@ type CommitMetadata struct {
 type CommitStats struct {
 	Ahead  int `json:"ahead"`  // base에 없는 head의 커밋들
 	Behind int `json:"behind"` // head에 없는 base의 커밋들
+}
+
+// CommitsByDate는 날짜별로 그룹화된 커밋 목록을 나타냅니다
+type CommitsByDate struct {
+	Date    string           `json:"date"`    // YYYY-MM-DD 형식의 날짜
+	Commits []CommitMetadata `json:"commits"` // 해당 날짜의 커밋 목록
 }
 
 // FileDiff는 단일 파일의 변경사항을 나타냅니다
@@ -704,15 +712,20 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 
 	// 바이너리가 아니고 contextLines > 0이면 라인 레벨 변경 생성
 	if !fileDiff.IsBinary && contextLines > 0 {
-		lineChanges := h.generateLineChanges(lines, contextLines)
+		lineChanges := h.GenerateLineChanges(lines, contextLines)
 		fileDiff.Changes = lineChanges
 	}
 
 	return fileDiff, nil
 }
 
-// generateLineChanges는 라인별 diff 정보를 생성합니다
-func (h *DiffHandler) generateLineChanges(lines []string, contextLines int) []LineChange {
+// GenerateLineChanges는 라인별 diff 정보를 생성합니다
+func (h *DiffHandler) GenerateLineChanges(lines []string, contextLines int) []LineChange {
+	return GenerateLineChanges(lines, contextLines)
+}
+
+// GenerateLineChanges는 라인별 diff 정보를 생성하는 공통 함수입니다
+func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 	var lineChanges []LineChange
 	lineNum := 1
 
@@ -849,14 +862,23 @@ func (h *DiffHandler) calculateBranchDiff(ctx context.Context, repoPath, baseBra
 		return nil, fmt.Errorf("failed to process changes: %w", err)
 	}
 
+	// 날짜별 커밋 목록 가져오기
+	commitsByDate, err := h.getCommitsByDate(gitRepo, mergeBase, headCommit)
+	if err != nil {
+		// 날짜별 커밋 목록 실패는 경고로 처리하고 계속 진행
+		fmt.Printf("Warning: failed to get commits by date: %v\n", err)
+		commitsByDate = []CommitsByDate{}
+	}
+
 	return &DiffResponse{
-		Success:   true,
-		Base:      baseBranch,
-		Head:      headBranch,
-		Files:     fileDiffs,
-		Stats:     stats,
-		Commits:   commitStats,
-		MergeBase: mergeBase.Hash.String(),
+		Success:       true,
+		Base:          baseBranch,
+		Head:          headBranch,
+		Files:         fileDiffs,
+		Stats:         stats,
+		Commits:       commitStats,
+		CommitsByDate: commitsByDate,
+		MergeBase:     mergeBase.Hash.String(),
 	}, nil
 }
 
@@ -915,6 +937,76 @@ func (h *DiffHandler) calculateCommitCounts(repo *gogit.Repository, baseCommit, 
 		Ahead:  ahead,
 		Behind: behind,
 	}, nil
+}
+
+// getCommitsByDate는 두 커밋 사이의 커밋들을 날짜별로 그룹화합니다
+func (h *DiffHandler) getCommitsByDate(repo *gogit.Repository, from, to *object.Commit) ([]CommitsByDate, error) {
+	if from.Hash == to.Hash {
+		return []CommitsByDate{}, nil
+	}
+
+	// 'to' 커밋에서 커밋 반복자 가져오기
+	commitIter, err := repo.Log(&gogit.LogOptions{
+		From: to.Hash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer commitIter.Close()
+
+	// 날짜별로 커밋을 그룹화할 맵
+	commitsByDate := make(map[string][]CommitMetadata)
+	fromHash := from.Hash.String()
+
+	err = commitIter.ForEach(func(commit *object.Commit) error {
+		if commit.Hash.String() == fromHash {
+			// 'from' 커밋에 도달하면 중지
+			return fmt.Errorf("stop iteration")
+		}
+
+		// 커밋 날짜를 YYYY-MM-DD 형식으로 변환
+		date := commit.Author.When.Format("2006-01-02")
+
+		// 커밋 메타데이터 생성
+		commitMeta := CommitMetadata{
+			SHA:     commit.Hash.String(),
+			Author:  commit.Author.Name,
+			Email:   commit.Author.Email,
+			Date:    commit.Author.When.Format("2006-01-02 15:04:05"),
+			Message: commit.Message,
+			Parents: make([]string, len(commit.ParentHashes)),
+		}
+
+		// 부모 커밋 해시들 추가
+		for i, parentHash := range commit.ParentHashes {
+			commitMeta.Parents[i] = parentHash.String()
+		}
+
+		// 날짜별로 그룹화
+		commitsByDate[date] = append(commitsByDate[date], commitMeta)
+		return nil
+	})
+
+	// 'from' 커밋을 찾아서 중지했는지 확인
+	if err != nil && err.Error() != "stop iteration" {
+		return nil, fmt.Errorf("failed to iterate commits: %w", err)
+	}
+
+	// 맵을 슬라이스로 변환 (날짜 순으로 정렬)
+	var result []CommitsByDate
+	for date, commits := range commitsByDate {
+		result = append(result, CommitsByDate{
+			Date:    date,
+			Commits: commits,
+		})
+	}
+
+	// 날짜 순으로 정렬 (최신 날짜가 먼저)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Date > result[j].Date
+	})
+
+	return result, nil
 }
 
 // countCommitsBetween은 두 커밋 사이의 커밋 수를 계산합니다 (from은 제외, to는 포함)

@@ -156,6 +156,11 @@ func (v *GitAPIPathValidator) validateGitSpecificPath(path string) error {
 		}
 	}
 
+	// Check for .git extension duplication in repository names
+	if strings.Contains(normalizedPath, ".git.git") {
+		return fmt.Errorf("repository name should not contain duplicated .git extension")
+	}
+
 	return nil
 }
 

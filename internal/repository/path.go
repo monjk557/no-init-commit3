@@ -206,6 +206,8 @@ func (pc *PathConfig) GetRepoRoot() string {
 // FormatRepoPath generates the expected path pattern for a repository
 // Format: {RepoRoot}/{owner}/{repo}.git
 func (pc *PathConfig) FormatRepoPath(owner, repo string) string {
+	// Remove .git extension if already present to prevent duplication
+	repo = strings.TrimSuffix(repo, RepoExtension)
 	return filepath.Join(pc.RepoRoot, owner, repo+RepoExtension)
 }
 
