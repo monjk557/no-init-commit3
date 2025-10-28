@@ -1062,6 +1062,40 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		return
 	}
 
+	// Check for file existence conflicts for create operations
+	for _, op := range req.Operations {
+		if op.Operation == "create" {
+			// Get commit and tree
+			commit, err := repository.CommitObject(baseHash)
+			if err != nil {
+				apiErr := h.errorMapper.MapError(err, "get_commit_object")
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+
+			tree, err := commit.Tree()
+			if err != nil {
+				apiErr := h.errorMapper.MapError(err, "get_commit_tree")
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+
+			// Check if file exists using tree.File() method
+			_, err = tree.File(op.Path)
+			if err == nil {
+				// File exists, return conflict error
+				c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("File already exists: %s", op.Path)})
+				return
+			} else if err != object.ErrFileNotFound {
+				// Some other error occurred
+				apiErr := h.errorMapper.MapError(err, "check_file_exists")
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+			// If err == object.ErrFileNotFound, file doesn't exist, which is what we want for create operation
+		}
+	}
+
 	// Prepare transaction options
 	options := git.TransactionOptions{
 		Timeout:            30 * time.Minute, // default timeout
