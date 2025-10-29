@@ -95,6 +95,16 @@ type MergePreviewResponse struct {
 	Commits       *CommitStats    `json:"commits,omitempty"`         // Commit statistics (ahead/behind)
 	Contributors  []string        `json:"contributors,omitempty"`    // List of contributors
 	CommitsByDate []CommitsByDate `json:"commits_by_date,omitempty"` // Commits grouped by date
+
+	// Simple count summary for UI display
+	CountSummary *CountSummary `json:"count_summary,omitempty"` // Simple count summary
+}
+
+// CountSummary provides simple count summary for UI display
+type CountSummary struct {
+	Commits      int `json:"commits"`      // Total commits count
+	Files        int `json:"files"`        // Total files changed count
+	Contributors int `json:"contributors"` // Total contributors count
 }
 
 // ChangesSummary provides high-level statistics about merge changes
@@ -433,6 +443,19 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repo *gog
 		commitsByDate = []CommitsByDate{}
 	}
 
+	// Calculate simple count summary for UI display
+	filesCount := 0
+	if changesSummary != nil {
+		filesCount = changesSummary.TotalFiles
+	}
+
+	// Count summary: target 기준으로 병합될 source의 커밋 수
+	countSummary := &CountSummary{
+		Commits:      commitStats.Ahead, // Source가 target보다 앞서 있는 커밋 수 (= 병합될 커밋 수)
+		Files:        filesCount,        // Total files changed
+		Contributors: len(contributors), // Number of contributors
+	}
+
 	// Build response
 	response := &MergePreviewResponse{
 		CanMerge:           !conflictAnalysis.HasConflicts || conflictAnalysis.CanMerge,
@@ -451,6 +474,8 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repo *gog
 		Commits:       commitStats,
 		Contributors:  contributors,
 		CommitsByDate: commitsByDate,
+		// Simple count summary
+		CountSummary: countSummary,
 	}
 
 	return response, nil
@@ -520,7 +545,7 @@ func (h *MergePreviewHandler) compareRepositoryTrees(ctx context.Context, repo *
 // compareTreesBasic performs basic tree comparison without detailed diffs
 func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
 	// Use go-git's DiffTree to get actual diff between trees
-	changes, err := object.DiffTree(sourceTree, targetTree)
+	changes, err := object.DiffTree(targetTree, sourceTree)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to calculate tree diff: %w", err)
 	}
@@ -592,7 +617,7 @@ func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTr
 // compareTreesWithDiff performs tree comparison with diff analysis
 func (h *MergePreviewHandler) compareTreesWithDiff(repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
 	// Use go-git's DiffTree to get actual diff between trees
-	changes, err := object.DiffTree(sourceTree, targetTree)
+	changes, err := object.DiffTree(targetTree, sourceTree)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to calculate tree diff: %w", err)
 	}
@@ -1056,86 +1081,73 @@ func (h *MergePreviewHandler) calculateMergeStatistics(ctx context.Context, repo
 		return nil, nil, nil, fmt.Errorf("failed to calculate commit counts: %w", err)
 	}
 
-	// Get contributors from commits between merge base and source
-	contributors, err := h.getContributorsFromCommits(ctx, repo, mergeBase, sourceCommit)
+	// Get contributors from source branch commits (simple approach)
+	contributors, err := h.getContributorsSimple(repo, sourceCommit)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get contributors: %w", err)
+		h.logger.Warn("Failed to get contributors, using empty list", zap.Error(err))
+		contributors = []string{}
 	}
 
-	// Get commits by date (from merge base to source commit)
+	// Get commits by date (from merge base to source commit) - optional
 	commitsByDate, err := h.getCommitsByDate(repo, mergeBase, sourceCommit)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get commits by date: %w", err)
+		h.logger.Warn("Failed to get commits by date, using empty list", zap.Error(err))
+		commitsByDate = []CommitsByDate{}
 	}
 
 	return commitStats, contributors, commitsByDate, nil
 }
 
-// calculateCommitCounts calculates ahead/behind commit counts (reused from diff.go logic)
+// calculateCommitCounts calculates ahead/behind commit counts (target 기준으로 source가 얼마나 앞서 있는지)
 func (h *MergePreviewHandler) calculateCommitCounts(repo *gogit.Repository, sourceCommit, targetCommit, mergeBase *object.Commit) (*CommitStats, error) {
-	// Calculate commits ahead (from merge base to target)
-	ahead, err := h.countCommitsBetween(repo, mergeBase, targetCommit)
+	// Calculate commits ahead (from merge base to source) - source가 target 기준으로 얼마나 앞서 있는지
+	ahead, err := h.countCommitsBetween(repo, mergeBase, sourceCommit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count ahead commits: %w", err)
 	}
 
-	// Calculate commits behind (from merge base to source)
-	behind, err := h.countCommitsBetween(repo, mergeBase, sourceCommit)
+	// Calculate commits behind (from merge base to target) - target이 source 기준으로 얼마나 뒤처져 있는지
+	behind, err := h.countCommitsBetween(repo, mergeBase, targetCommit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count behind commits: %w", err)
 	}
 
 	return &CommitStats{
-		Ahead:  ahead,
-		Behind: behind,
+		Ahead:  ahead,  // source가 target보다 앞서 있는 커밋 수
+		Behind: behind, // target이 source보다 뒤처져 있는 커밋 수
 	}, nil
 }
 
-// getContributorsFromCommits extracts unique contributors from commit history
-func (h *MergePreviewHandler) getContributorsFromCommits(ctx context.Context, repo *gogit.Repository, from, to *object.Commit) ([]string, error) {
-	if from.Hash == to.Hash {
-		return []string{}, nil
-	}
-
-	// Get commit log from 'to' commit
+// getContributorsSimple extracts contributors from a branch's commit history (simple approach)
+func (h *MergePreviewHandler) getContributorsSimple(repo *gogit.Repository, headCommit *object.Commit) ([]string, error) {
+	// Get all commits from the head commit
 	commitIter, err := repo.Log(&gogit.LogOptions{
-		From: to.Hash,
+		From: headCommit.Hash,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get commit log: %w", err)
+		return []string{}, nil // Return empty on error
 	}
 	defer commitIter.Close()
 
 	// Track unique contributors
 	contributorSet := make(map[string]bool)
-	fromHash := from.Hash.String()
 
 	err = commitIter.ForEach(func(commit *object.Commit) error {
-		if commit.Hash.String() == fromHash {
-			// Reached 'from' commit, stop iteration
-			return fmt.Errorf("stop iteration")
+		// Add author email if not empty
+		if commit.Author.Email != "" {
+			contributorSet[commit.Author.Email] = true
 		}
-
-		// Add author to contributors
-		authorKey := commit.Author.Email + "|" + commit.Author.Name
-		contributorSet[authorKey] = true
-
 		return nil
 	})
 
-	// Check if we stopped at the 'from' commit (normal case)
-	if err != nil && err.Error() != "stop iteration" {
-		return nil, fmt.Errorf("failed to iterate commits: %w", err)
+	if err != nil {
+		return []string{}, nil // Return empty on error
 	}
 
 	// Convert set to slice
 	var contributors []string
 	for contributor := range contributorSet {
-		// Split email and name, use name for display
-		parts := strings.Split(contributor, "|")
-		if len(parts) == 2 {
-			contributors = append(contributors, parts[1]) // Use name
-		}
+		contributors = append(contributors, contributor)
 	}
 
 	return contributors, nil
