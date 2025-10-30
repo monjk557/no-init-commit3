@@ -98,11 +98,12 @@ func NewIntegrationTestHarness(t *testing.T) *IntegrationTestHarness {
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:         "localhost",
-			Port:         0, // Let the test server choose a port
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 30 * time.Second,
-			BasePath:     "/",
+			Host:            "localhost",
+			Port:            0, // Let the test server choose a port
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    30 * time.Second,
+			BasePath:        "/",
+			HealthCheckPath: "/health",
 		},
 		Git: config.GitConfig{
 			RepoRoot: tempDir,

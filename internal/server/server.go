@@ -310,6 +310,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	apiGroup.GET("/repository/:owner/:repo", repositoryDetailHandler.HandleGetRepositoryDetail)
 	apiGroup.GET("/repository/:owner/:repo/blob", repositoryDetailHandler.HandleGetBlobDetail)
 	apiGroup.GET("/repository/:owner/:repo/tree", repositoryDetailHandler.HandleGetTreeDetail)
+	apiGroup.GET("/repository/:owner/:repo/branches", branchOpsHandler.HandleGetBranchesDetail)
 
 	{
 		// Repository creation endpoint - separate from existing repos

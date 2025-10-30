@@ -2,7 +2,11 @@
 // 브랜치 생성, 업데이트 등의 작업 결과를 반환하는 데이터 구조체들을 포함합니다.
 package responses
 
-import "github.com/collabops/git-executor/internal/schemas/common"
+import (
+	"time"
+
+	"github.com/collabops/git-executor/internal/schemas/common"
+)
 
 // CreateBranchResponse는 브랜치 생성 응답을 나타냅니다.
 // 생성된 브랜치의 상세 정보와 성공 여부를 포함합니다.
@@ -19,6 +23,7 @@ type CreateBranchData struct {
 	RefPath     string              `json:"ref_path"`
 	IsNewBranch bool                `json:"is_new_branch"`
 	Message     string              `json:"message"`
+	CreatedAt   time.Time           `json:"created_at"`
 	Details     CreateBranchDetails `json:"details"`
 }
 
@@ -48,4 +53,40 @@ type BranchInfo struct {
 	RefPath    string             `json:"ref_path"`
 	IsHead     bool               `json:"is_head"`
 	LastCommit *common.CommitInfo `json:"last_commit,omitempty"`
+}
+
+// BranchesListResponse는 브랜치 목록 응답을 나타냅니다 (GitHub 브랜치 페이지 스타일).
+type BranchesListResponse struct {
+	DefaultBranch string           `json:"default_branch"`
+	Default       []BranchListItem `json:"default"`
+	Yours         []BranchListItem `json:"yours"`
+	Active        []BranchListItem `json:"active"`
+	Stale         []BranchListItem `json:"stale"`
+	TotalCount    int              `json:"total_count"`
+}
+
+// BranchListItem은 브랜치 목록의 개별 브랜치 항목을 나타냅니다.
+type BranchListItem struct {
+	Name          string            `json:"name"`
+	Updated       string            `json:"updated"`
+	UpdatedBy     string            `json:"updated_by"`
+	CommitSHA     string            `json:"commit_sha"`
+	CommitMessage string            `json:"commit_message"`
+	IsDefault     bool              `json:"is_default"`
+	IsProtected   bool              `json:"is_protected"`
+	Behind        int               `json:"behind"`
+	Ahead         int               `json:"ahead"`
+	ChangeRequest ChangeRequestInfo `json:"change_request"`
+	// 메타 정보 (분류는 응답 상위에서 처리)
+	CreatedBy           string    `json:"created_by"`             // 브랜치 생성자
+	DaysSinceLastCommit int       `json:"days_since_last_commit"` // 마지막 커밋으로부터 경과 일수
+	SortTime            time.Time `json:"-"`                      // 정렬용 내부 필드 (응답 제외)
+}
+
+// ChangeRequestInfo는 브랜치와 관련된 Change Request 정보를 나타냅니다.
+type ChangeRequestInfo struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+	State string `json:"state"`
+	URL   string `json:"url"`
 }

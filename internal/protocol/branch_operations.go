@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
@@ -222,6 +224,7 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 			RefPath:     refPath, // "refs/heads/브랜치명"
 			IsNewBranch: !branchExists,
 			Message:     fmt.Sprintf("Branch '%s' created successfully", req.Name),
+			CreatedAt:   time.Now(),
 			Details: responses.CreateBranchDetails{
 				Checkout:  req.Checkout,
 				ForceUsed: req.Force && branchExists,
@@ -428,6 +431,15 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		return
 	}
 
+	// Check if branch is protected - protected branches cannot be modified
+	if h.isProtectedBranch(branchName) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Cannot modify protected branch '%s'. Protected branches must be updated through pull requests only", branchName),
+		})
+		return
+	}
+
 	// Resolve target reference
 	targetCommit, err := h.resolveSourceReference(ctx, repository, req.Target)
 	if err != nil {
@@ -587,8 +599,8 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		return
 	}
 
-	// Check if trying to delete main/master branch
-	if branchName == "main" || branchName == "master" {
+	// Check if trying to delete protected branch
+	if h.isProtectedBranch(branchName) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   fmt.Sprintf("Cannot delete protected branch '%s'", branchName),
@@ -628,4 +640,265 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 
 	// Send success response
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *BranchOperationsHandler) HandleGetBranchesDetail(c *gin.Context) {
+	// URL 파라미터 추출
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	// 헤더 또는 쿼리 파라미터에서 사용자 정보 추출
+	userEmail := c.Query("email") // 이메일도 지원
+	if userEmail == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Missing required parameter: email",
+		})
+		return
+	}
+	h.logger.Info("Processing branches list request",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("user_email", userEmail))
+
+	// 저장소 경로 검증
+	err := h.pathValidator.ValidateRepoAPIPath(owner, repo)
+	if err != nil {
+		h.logger.Error("Invalid repository path", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 저장소 실제 경로 조회
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		h.logger.Error("Failed to get repository path", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 저장소 열기
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		h.logger.Error("Failed to open repository", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open repository"})
+		return
+	}
+
+	// 모든 참조(브랜치) 조회
+	refs, err := gitRepo.References()
+	if err != nil {
+		h.logger.Error("Failed to get references", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get references"})
+		return
+	}
+
+	var defaultBranches []responses.BranchListItem
+	var yoursBranches []responses.BranchListItem
+	var activeBranches []responses.BranchListItem
+	var staleBranches []responses.BranchListItem
+	var defaultBranch string
+	allBranchesCount := 0
+
+	// 기본 브랜치 확인
+	headRef, err := gitRepo.Head()
+	if err == nil {
+		defaultBranch = headRef.Name().Short()
+	}
+
+	// 각 참조 처리
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		// 브랜치 참조만 처리
+		if ref.Name().IsBranch() {
+			allBranchesCount++
+			branchName := ref.Name().Short()
+
+			// 커밋 정보 조회
+			commit, err := gitRepo.CommitObject(ref.Hash())
+			if err != nil {
+				h.logger.Warn("Failed to get commit for branch",
+					zap.String("branch", branchName),
+					zap.Error(err))
+				return nil // 다른 브랜치 계속 처리
+			}
+
+			// 커밋 작성자 가져오기
+			author := commit.Author.Name
+			if author == "" {
+				author = commit.Author.Email
+			}
+
+			// 마지막 커밋 이후 경과 일수 계산
+			daysSinceLastCommit := int(time.Since(commit.Author.When).Hours() / 24)
+
+			// 분류 신호 계산
+			isStale := daysSinceLastCommit >= 120
+			isYours := false
+			if userEmail != "" {
+				isYours = strings.EqualFold(commit.Author.Email, userEmail) ||
+					strings.EqualFold(commit.Author.Name, userEmail)
+			}
+
+			// 브랜치 아이템 생성; 정렬/표시는 최신 커밋 시간 기준
+			sortTime := commit.Author.When
+			branchItem := responses.BranchListItem{
+				Name:                branchName,
+				Updated:             sortTime.Format("Jan 2, 2006"),
+				UpdatedBy:           author,
+				CommitSHA:           commit.Hash.String()[:8],
+				CommitMessage:       commit.Message,
+				IsDefault:           branchName == defaultBranch,
+				IsProtected:         h.isProtectedBranch(branchName),
+				Behind:              0,
+				Ahead:               0,
+				CreatedBy:           commit.Author.Email,
+				DaysSinceLastCommit: daysSinceLastCommit,
+				SortTime:            sortTime,
+			}
+
+			// 기본 브랜치 대비 앞섬/뒤처짐 계산(GitHub 스타일)
+			if defaultBranch != "" && branchName != defaultBranch {
+				// 기본 브랜치 커밋 해시 조회
+				defaultRefName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", defaultBranch))
+				defaultRef, derr := gitRepo.Reference(defaultRefName, false)
+				if derr == nil {
+					defaultCommit, derr := gitRepo.CommitObject(defaultRef.Hash())
+					if derr == nil {
+						// 공통 조상(merge base) 찾기
+						mergeBases, mErr := commit.MergeBase(defaultCommit)
+						if mErr == nil && len(mergeBases) > 0 {
+							mergeBase := mergeBases[0]
+							// 앞선 커밋 수 계산(브랜치→기본)
+							aheadCount, aErr := countCommitsBetween(gitRepo, mergeBase, commit)
+							if aErr == nil {
+								branchItem.Ahead = aheadCount
+							}
+							// 뒤처진 커밋 수 계산(기본→브랜치)
+							behindCount, bErr := countCommitsBetween(gitRepo, mergeBase, defaultCommit)
+							if bErr == nil {
+								branchItem.Behind = behindCount
+							}
+						}
+					}
+				}
+			}
+
+			// PR 정보: 기본값 설정하지 않고, 존재할 때만 포함(현재는 없음)
+
+			// 그룹 분류(기본 제외하고 중복 포함 가능)
+			if branchItem.IsDefault {
+				defaultBranches = append(defaultBranches, branchItem)
+			} else {
+				if isYours {
+					yoursBranches = append(yoursBranches, branchItem)
+				}
+				if isStale {
+					staleBranches = append(staleBranches, branchItem)
+				} else {
+					// Active: 최근 업데이트, 기본 브랜치 아님
+					activeBranches = append(activeBranches, branchItem)
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		h.logger.Error("Error processing references", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error processing references"})
+		return
+	}
+
+	// 최신 생성/업데이트 순(내림차순)으로 정렬하고 Yours/Active/Stale는 각 5개로 제한
+	sort.Slice(yoursBranches, func(i, j int) bool {
+		if yoursBranches[i].SortTime.Equal(yoursBranches[j].SortTime) {
+			return yoursBranches[i].Name > yoursBranches[j].Name
+		}
+		return yoursBranches[i].SortTime.After(yoursBranches[j].SortTime)
+	})
+	if len(yoursBranches) > 5 {
+		yoursBranches = yoursBranches[:5]
+	}
+
+	sort.Slice(activeBranches, func(i, j int) bool {
+		if activeBranches[i].SortTime.Equal(activeBranches[j].SortTime) {
+			return activeBranches[i].Name > activeBranches[j].Name
+		}
+		return activeBranches[i].SortTime.After(activeBranches[j].SortTime)
+	})
+	if len(activeBranches) > 5 {
+		activeBranches = activeBranches[:5]
+	}
+
+	sort.Slice(staleBranches, func(i, j int) bool {
+		if staleBranches[i].SortTime.Equal(staleBranches[j].SortTime) {
+			return staleBranches[i].Name > staleBranches[j].Name
+		}
+		return staleBranches[i].SortTime.After(staleBranches[j].SortTime)
+	})
+	if len(staleBranches) > 5 {
+		staleBranches = staleBranches[:5]
+	}
+
+	// 응답 생성
+	total := allBranchesCount
+	response := responses.BranchesListResponse{
+		DefaultBranch: defaultBranch,
+		Default:       defaultBranches,
+		Yours:         yoursBranches,
+		Active:        activeBranches,
+		Stale:         staleBranches,
+		TotalCount:    total,
+	}
+
+	h.logger.Info("Successfully retrieved branches list",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("total_branches", total))
+
+	c.JSON(http.StatusOK, response)
+}
+
+// 보호 브랜치 여부 확인
+func (h *BranchOperationsHandler) isProtectedBranch(branchName string) bool {
+	protectedBranches := []string{"main", "master", "develop", "production"}
+	for _, protected := range protectedBranches {
+		if strings.EqualFold(branchName, protected) {
+			return true
+		}
+	}
+	return false
+}
+
+// 'from'(제외)에서 'to'(포함)까지 커밋 개수 계산
+// 'to'에서 거슬러가며 'from' 해시를 만나면 중단
+func countCommitsBetween(repo *gogit.Repository, from, to *object.Commit) (int, error) {
+	if from.Hash == to.Hash {
+		return 0, nil
+	}
+
+	iter, err := repo.Log(&gogit.LogOptions{From: to.Hash})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer iter.Close()
+
+	count := 0
+	fromHash := from.Hash.String()
+
+	walkErr := iter.ForEach(func(c *object.Commit) error {
+		if c.Hash.String() == fromHash {
+			return fmt.Errorf("stop iteration")
+		}
+		count++
+		return nil
+	})
+
+	if walkErr != nil && walkErr.Error() == "stop iteration" {
+		return count, nil
+	}
+	if walkErr == nil {
+		return count, nil
+	}
+	return 0, fmt.Errorf("failed to iterate commits: %w", walkErr)
 }

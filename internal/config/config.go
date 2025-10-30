@@ -284,6 +284,11 @@ func validate(config *Config) error {
 		errors = append(errors, "server.base_path must start with '/'")
 	}
 
+	// HealthCheckPath must be explicitly set and non-empty
+	if strings.TrimSpace(config.Server.HealthCheckPath) == "" {
+		errors = append(errors, "server.health_check_path is required")
+	}
+
 	// Git 설정 유효성 검사
 	if config.Git.RepoRoot == "" {
 		errors = append(errors, "git.repo_root is required")
