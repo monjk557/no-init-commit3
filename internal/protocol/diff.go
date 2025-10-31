@@ -71,7 +71,7 @@ type CommitsByDate struct {
 // FileDiff는 단일 파일의 변경사항을 나타냅니다
 type FileDiff struct {
 	Path      string                 `json:"path"`
-	Status    string                 `json:"status"` // "added", "deleted", "modified", "renamed"
+	Status    FileDiffStatus         `json:"status"` // "added", "deleted", "modified", "renamed"
 	Additions int                    `json:"additions"`
 	Deletions int                    `json:"deletions"`
 	Changes   []LineChange           `json:"changes,omitempty"`
@@ -80,11 +80,51 @@ type FileDiff struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"` // 파일 메타데이터 (해시, 모드)
 }
 
+// FileDiffStatus는 파일 변경 상태를 나타냅니다
+type FileDiffStatus string
+
+const (
+	FileDiffStatusAdded    FileDiffStatus = "added"    // 파일 추가됨
+	FileDiffStatusDeleted  FileDiffStatus = "deleted"  // 파일 삭제됨
+	FileDiffStatusModified FileDiffStatus = "modified" // 파일 수정됨
+	FileDiffStatusRenamed  FileDiffStatus = "renamed"  // 파일 이름 변경됨
+)
+
+// String은 FileDiffStatus의 문자열 표현을 반환합니다
+func (s FileDiffStatus) String() string {
+	return string(s)
+}
+
+// IsValid는 FileDiffStatus가 유효한 값인지 확인합니다
+func (s FileDiffStatus) IsValid() bool {
+	return s == FileDiffStatusAdded || s == FileDiffStatusDeleted ||
+		s == FileDiffStatusModified || s == FileDiffStatusRenamed
+}
+
+// LineChangeType은 diff 라인 변경의 타입을 나타냅니다
+type LineChangeType string
+
+const (
+	LineChangeTypeAdd     LineChangeType = "add"     // 라인 추가
+	LineChangeTypeDel     LineChangeType = "del"     // 라인 삭제
+	LineChangeTypeContext LineChangeType = "context" // 컨텍스트 라인 (변경 없음)
+)
+
+// String은 LineChangeType의 문자열 표현을 반환합니다
+func (t LineChangeType) String() string {
+	return string(t)
+}
+
+// IsValid는 LineChangeType이 유효한 값인지 확인합니다
+func (t LineChangeType) IsValid() bool {
+	return t == LineChangeTypeAdd || t == LineChangeTypeDel || t == LineChangeTypeContext
+}
+
 // LineChange는 diff의 단일 라인 변경을 나타냅니다
 type LineChange struct {
-	Type    string `json:"type"`    // "add", "del", "context"
-	LineNum int    `json:"line"`    // 파일 내 라인 번호
-	Content string `json:"content"` // diff 접두사가 포함된 라인 내용
+	Type    LineChangeType `json:"type"`    // "add", "del", "context"
+	LineNum int            `json:"line"`    // 파일 내 라인 번호
+	Content string         `json:"content"` // diff 접두사가 포함된 라인 내용
 }
 
 // DiffStats는 diff의 전체 통계를 나타냅니다
@@ -574,7 +614,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, repo *gogi
 
 		fileDiff := FileDiff{
 			Path:      file.Name,
-			Status:    "added",
+			Status:    FileDiffStatusAdded,
 			Additions: additions,
 			Deletions: 0,
 			IsBinary:  isBinaryFile(content, file.Name),
@@ -585,7 +625,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, repo *gogi
 			var lineChanges []LineChange
 			for i, line := range lines {
 				lineChanges = append(lineChanges, LineChange{
-					Type:    "add",
+					Type:    LineChangeTypeAdd,
 					LineNum: i + 1,
 					Content: "+" + line,
 				})
@@ -676,14 +716,14 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 	// 변경 상태 결정
 	switch {
 	case change.From.Name == "" && change.To.Name != "":
-		fileDiff.Status = "added"
+		fileDiff.Status = FileDiffStatusAdded
 	case change.From.Name != "" && change.To.Name == "":
-		fileDiff.Status = "deleted"
+		fileDiff.Status = FileDiffStatusDeleted
 	case change.From.Name != change.To.Name:
-		fileDiff.Status = "renamed"
+		fileDiff.Status = FileDiffStatusRenamed
 		fileDiff.OldPath = change.From.Name
 	default:
-		fileDiff.Status = "modified"
+		fileDiff.Status = FileDiffStatusModified
 	}
 
 	// 라인 레벨 변경을 위한 patch 정보 가져오기
@@ -692,31 +732,56 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 		return fileDiff, fmt.Errorf("failed to get patch: %w", err)
 	}
 
-	// patch 콘텐츠에서 추가 및 삭제 수 계산
-	patchText := patch.String()
-	lines := splitLines(patchText)
-
-	for _, line := range lines {
-		if len(line) > 0 {
-			switch line[0] {
-			case '+':
-				fileDiff.Additions++
-			case '-':
-				fileDiff.Deletions++
-			}
-		}
-	}
+	// patch에서 실제 추가/삭제된 라인 수를 정확히 계산 (FilePatches 사용)
+	additions, deletions := h.countPatchLines(patch)
+	fileDiff.Additions = additions
+	fileDiff.Deletions = deletions
 
 	// patch 콘텐츠와 파일명을 모두 사용한 향상된 바이너리 파일 감지
+	patchText := patch.String()
 	fileDiff.IsBinary = isBinaryFile(patchText, fileName)
 
 	// 바이너리가 아니고 contextLines > 0이면 라인 레벨 변경 생성
 	if !fileDiff.IsBinary && contextLines > 0 {
+		lines := splitLines(patchText)
 		lineChanges := h.GenerateLineChanges(lines, contextLines)
 		fileDiff.Changes = lineChanges
 	}
 
 	return fileDiff, nil
+}
+
+// countPatchLines는 patch에서 실제 추가/삭제된 라인 수를 정확히 계산합니다
+// diff 헤더(+++ b/file, --- a/file 등)는 제외하고 실제 변경 라인만 카운트합니다
+func (h *DiffHandler) countPatchLines(patch *object.Patch) (additions, deletions int) {
+	for _, filePatch := range patch.FilePatches() {
+		for _, chunk := range filePatch.Chunks() {
+			// chunk.Type()의 반환값:
+			// 0 = Context (변경 없음, 컨텍스트 라인)
+			// 1 = Add (추가된 라인)
+			// 2 = Delete (삭제된 라인)
+			switch chunk.Type() {
+			case 1: // Add
+				// Content에서 실제 라인 수 계산
+				content := chunk.Content()
+				// 개행 문자로 분할하여 라인 수 계산
+				lines := strings.Split(content, "\n")
+				// 마지막이 빈 문자열이면(개행으로 끝난 경우) 제거
+				if len(lines) > 0 && lines[len(lines)-1] == "" {
+					lines = lines[:len(lines)-1]
+				}
+				additions += len(lines)
+			case 2: // Delete
+				content := chunk.Content()
+				lines := strings.Split(content, "\n")
+				if len(lines) > 0 && lines[len(lines)-1] == "" {
+					lines = lines[:len(lines)-1]
+				}
+				deletions += len(lines)
+			}
+		}
+	}
+	return additions, deletions
 }
 
 // GenerateLineChanges는 라인별 diff 정보를 생성합니다
@@ -734,16 +799,16 @@ func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 			continue
 		}
 
-		var changeType string
+		var changeType LineChangeType
 		switch line[0] {
 		case '+':
-			changeType = "add"
+			changeType = LineChangeTypeAdd
 		case '-':
-			changeType = "del"
+			changeType = LineChangeTypeDel
 		case ' ':
-			changeType = "context"
+			changeType = LineChangeTypeContext
 		default:
-			changeType = "context"
+			changeType = LineChangeTypeContext
 		}
 
 		lineChanges = append(lineChanges, LineChange{
@@ -752,7 +817,7 @@ func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 			Content: line,
 		})
 
-		if changeType != "del" {
+		if changeType != LineChangeTypeDel {
 			lineNum++
 		}
 	}
@@ -766,14 +831,6 @@ func getFileName(change *object.Change) string {
 		return change.To.Name
 	}
 	return change.From.Name
-}
-
-// isBinaryPatch는 patch가 바이너리 파일 변경을 나타내는지 확인합니다
-func isBinaryPatch(patchText string) bool {
-	// 간단한 휴리스틱: 바이너리 파일은 종종 null 바이트를 포함하거나 특정 마커를 가짐
-	return strings.Contains(patchText, "Binary files") ||
-		strings.Contains(patchText, "\x00") ||
-		strings.Contains(patchText, "GIT binary patch")
 }
 
 // splitLines는 콘텐츠를 개별 라인으로 분할합니다
@@ -1191,7 +1248,7 @@ func (h *DiffHandler) processFileAddition(file *object.File, filePath string, co
 
 	fileDiff := FileDiff{
 		Path:      filePath,
-		Status:    "added",
+		Status:    FileDiffStatusAdded,
 		Additions: additions,
 		Deletions: 0,
 		IsBinary:  isBinaryContent(content),
@@ -1202,7 +1259,7 @@ func (h *DiffHandler) processFileAddition(file *object.File, filePath string, co
 		var lineChanges []LineChange
 		for i, line := range lines {
 			lineChanges = append(lineChanges, LineChange{
-				Type:    "add",
+				Type:    LineChangeTypeAdd,
 				LineNum: i + 1,
 				Content: "+" + line,
 			})
@@ -1225,7 +1282,7 @@ func (h *DiffHandler) processFileDeletion(file *object.File, filePath string, co
 
 	fileDiff := FileDiff{
 		Path:      filePath,
-		Status:    "deleted",
+		Status:    FileDiffStatusDeleted,
 		Additions: 0,
 		Deletions: deletions,
 		IsBinary:  isBinaryContent(content),
@@ -1236,7 +1293,7 @@ func (h *DiffHandler) processFileDeletion(file *object.File, filePath string, co
 		var lineChanges []LineChange
 		for i, line := range lines {
 			lineChanges = append(lineChanges, LineChange{
-				Type:    "del",
+				Type:    LineChangeTypeDel,
 				LineNum: i + 1,
 				Content: "-" + line,
 			})
@@ -1264,7 +1321,7 @@ func (h *DiffHandler) processFileModification(baseFile, headFile *object.File, f
 
 	fileDiff := FileDiff{
 		Path:     filePath,
-		Status:   "modified",
+		Status:   FileDiffStatusModified,
 		IsBinary: isBinary,
 	}
 
@@ -1305,7 +1362,7 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 			// head에 남은 라인들은 추가
 			for headIndex < len(headLines) {
 				lineChanges = append(lineChanges, LineChange{
-					Type:    "add",
+					Type:    LineChangeTypeAdd,
 					LineNum: lineNum,
 					Content: "+" + headLines[headIndex],
 				})
@@ -1317,7 +1374,7 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 			// base에 남은 라인들은 삭제
 			for baseIndex < len(baseLines) {
 				lineChanges = append(lineChanges, LineChange{
-					Type:    "del",
+					Type:    LineChangeTypeDel,
 					LineNum: lineNum,
 					Content: "-" + baseLines[baseIndex],
 				})
@@ -1327,7 +1384,7 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 		} else if baseLines[baseIndex] == headLines[headIndex] {
 			// 라인이 동일하면 컨텍스트 윈도우 내에 있을 경우 컨텍스트로 추가
 			lineChanges = append(lineChanges, LineChange{
-				Type:    "context",
+				Type:    LineChangeTypeContext,
 				LineNum: lineNum,
 				Content: " " + baseLines[baseIndex],
 			})
@@ -1337,7 +1394,7 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 		} else {
 			// 라인이 다르면 삭제와 추가로 표시
 			lineChanges = append(lineChanges, LineChange{
-				Type:    "del",
+				Type:    LineChangeTypeDel,
 				LineNum: lineNum,
 				Content: "-" + baseLines[baseIndex],
 			})
@@ -1345,7 +1402,7 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 			baseIndex++
 
 			lineChanges = append(lineChanges, LineChange{
-				Type:    "add",
+				Type:    LineChangeTypeAdd,
 				LineNum: lineNum,
 				Content: "+" + headLines[headIndex],
 			})

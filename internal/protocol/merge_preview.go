@@ -586,13 +586,13 @@ func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTr
 
 		// Update summary based on file status
 		switch fileDiff.Status {
-		case "added":
+		case FileDiffStatusAdded:
 			summary.AddedFiles++
-		case "deleted":
+		case FileDiffStatusDeleted:
 			summary.DeletedFiles++
-		case "renamed":
+		case FileDiffStatusRenamed:
 			summary.RenamedFiles++
-		case "modified":
+		case FileDiffStatusModified:
 			summary.ModifiedFiles++
 		}
 
@@ -656,13 +656,13 @@ func (h *MergePreviewHandler) compareTreesWithDiff(repo *gogit.Repository, sourc
 
 		// Update summary based on file status
 		switch fileDiff.Status {
-		case "added":
+		case FileDiffStatusAdded:
 			summary.AddedFiles++
-		case "deleted":
+		case FileDiffStatusDeleted:
 			summary.DeletedFiles++
-		case "renamed":
+		case FileDiffStatusRenamed:
 			summary.RenamedFiles++
-		case "modified":
+		case FileDiffStatusModified:
 			summary.ModifiedFiles++
 		}
 
@@ -684,20 +684,6 @@ func (h *MergePreviewHandler) compareTreesWithDiff(repo *gogit.Repository, sourc
 	return summary, fileChanges, nil
 }
 
-// getChangeStatus determines the status of a file change
-func (h *MergePreviewHandler) getChangeStatus(change *object.Change) string {
-	switch {
-	case change.From.Name == "" && change.To.Name != "":
-		return "added"
-	case change.From.Name != "" && change.To.Name == "":
-		return "deleted"
-	case change.From.Name != change.To.Name && change.From.Name != "" && change.To.Name != "":
-		return "renamed"
-	default:
-		return "modified"
-	}
-}
-
 // isBinaryFile checks if a file change involves binary content
 func (h *MergePreviewHandler) isBinaryFile(change *object.Change) bool {
 	// Simplified binary file detection based on file extension
@@ -709,33 +695,6 @@ func (h *MergePreviewHandler) isBinaryFile(change *object.Change) bool {
 		}
 	}
 	return false
-}
-
-// countLinesInChange counts added and deleted lines in a file change
-func (h *MergePreviewHandler) countLinesInChange(change *object.Change) (int, int) {
-	linesAdded := 0
-	linesDeleted := 0
-
-	// Process the patch to count lines
-	patch, err := change.Patch()
-	if err != nil {
-		// If patch generation fails, return 0 counts
-		return 0, 0
-	}
-
-	// Count lines in each file patch
-	for _, filePatch := range patch.FilePatches() {
-		for _, chunk := range filePatch.Chunks() {
-			switch chunk.Type() {
-			case 1: // Add
-				linesAdded += len(strings.Split(chunk.Content(), "\n")) - 1
-			case 2: // Delete
-				linesDeleted += len(strings.Split(chunk.Content(), "\n")) - 1
-			}
-		}
-	}
-
-	return linesAdded, linesDeleted
 }
 
 // getFileContent extracts file content from a change
@@ -794,11 +753,11 @@ func (h *MergePreviewHandler) detectPotentialConflicts(fileChange *FileChange) [
 	var conflicts []string
 
 	// Check for common conflict patterns
-	if fileChange.Status == "modified" && fileChange.Additions > 50 {
+	if fileChange.Status == FileDiffStatusModified && fileChange.Additions > 50 {
 		conflicts = append(conflicts, "large_modification")
 	}
 
-	if fileChange.Status == "renamed" {
+	if fileChange.Status == FileDiffStatusRenamed {
 		conflicts = append(conflicts, "file_rename")
 	}
 
@@ -1008,14 +967,14 @@ func (h *MergePreviewHandler) processChangeFromDiff(change *object.Change, conte
 	// 변경 상태 결정
 	switch {
 	case change.From.Name == "" && change.To.Name != "":
-		fileDiff.Status = "added"
+		fileDiff.Status = FileDiffStatusAdded
 	case change.From.Name != "" && change.To.Name == "":
-		fileDiff.Status = "deleted"
+		fileDiff.Status = FileDiffStatusDeleted
 	case change.From.Name != change.To.Name:
-		fileDiff.Status = "renamed"
+		fileDiff.Status = FileDiffStatusRenamed
 		fileDiff.OldPath = change.From.Name
 	default:
-		fileDiff.Status = "modified"
+		fileDiff.Status = FileDiffStatusModified
 	}
 
 	// 라인 레벨 변경을 위한 patch 정보 가져오기
@@ -1024,31 +983,56 @@ func (h *MergePreviewHandler) processChangeFromDiff(change *object.Change, conte
 		return fileDiff, fmt.Errorf("failed to get patch: %w", err)
 	}
 
-	// patch 콘텐츠에서 추가 및 삭제 수 계산
-	patchText := patch.String()
-	lines := splitLines(patchText)
-
-	for _, line := range lines {
-		if len(line) > 0 {
-			switch line[0] {
-			case '+':
-				fileDiff.Additions++
-			case '-':
-				fileDiff.Deletions++
-			}
-		}
-	}
+	// patch에서 실제 추가/삭제된 라인 수를 정확히 계산 (FilePatches 사용)
+	additions, deletions := h.countPatchLines(patch)
+	fileDiff.Additions = additions
+	fileDiff.Deletions = deletions
 
 	// patch 콘텐츠와 파일명을 모두 사용한 향상된 바이너리 파일 감지
+	patchText := patch.String()
 	fileDiff.IsBinary = isBinaryFile(patchText, fileName)
 
 	// 바이너리가 아니고 contextLines > 0이면 라인 레벨 변경 생성
 	if !fileDiff.IsBinary && contextLines > 0 {
+		lines := splitLines(patchText)
 		lineChanges := GenerateLineChanges(lines, contextLines)
 		fileDiff.Changes = lineChanges
 	}
 
 	return fileDiff, nil
+}
+
+// countPatchLines는 patch에서 실제 추가/삭제된 라인 수를 정확히 계산합니다
+// diff 헤더(+++ b/file, --- a/file 등)는 제외하고 실제 변경 라인만 카운트합니다
+func (h *MergePreviewHandler) countPatchLines(patch *object.Patch) (additions, deletions int) {
+	for _, filePatch := range patch.FilePatches() {
+		for _, chunk := range filePatch.Chunks() {
+			// chunk.Type()의 반환값:
+			// 0 = Context (변경 없음, 컨텍스트 라인)
+			// 1 = Add (추가된 라인)
+			// 2 = Delete (삭제된 라인)
+			switch chunk.Type() {
+			case 1: // Add
+				// Content에서 실제 라인 수 계산
+				content := chunk.Content()
+				// 개행 문자로 분할하여 라인 수 계산
+				lines := strings.Split(content, "\n")
+				// 마지막이 빈 문자열이면(개행으로 끝난 경우) 제거
+				if len(lines) > 0 && lines[len(lines)-1] == "" {
+					lines = lines[:len(lines)-1]
+				}
+				additions += len(lines)
+			case 2: // Delete
+				content := chunk.Content()
+				lines := strings.Split(content, "\n")
+				if len(lines) > 0 && lines[len(lines)-1] == "" {
+					lines = lines[:len(lines)-1]
+				}
+				deletions += len(lines)
+			}
+		}
+	}
+	return additions, deletions
 }
 
 // calculateMergeStatistics calculates GitHub PR style statistics for merge preview

@@ -132,6 +132,9 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 	mergePreviewHandler, err := protocol.NewMergePreviewHandler(cfg)
 	require.NoError(t, err)
 
+	diffHandler, err := protocol.NewDiffHandler(cfg, permClient)
+	require.NoError(t, err)
+
 	// Repository group endpoints
 	repoGroup := router.Group("/repos/:owner/:repo")
 	{
@@ -163,6 +166,17 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 		{
 			mergeGroup.POST("", mergeOpsHandler.HandleMerge)
 			mergeGroup.GET("/preview", mergePreviewHandler.HandleMergePreview)
+		}
+
+		// Diff endpoints
+		diffGroup := repoGroup.Group("/diff")
+		{
+			diffGroup.GET("/branches/:base/:head", func(c *gin.Context) {
+				diffHandler.HandleBranchDiff(c.Writer, c.Request)
+			})
+			diffGroup.GET("/commits/:base/:head", func(c *gin.Context) {
+				diffHandler.HandleCommitDiff(c.Writer, c.Request)
+			})
 		}
 	}
 

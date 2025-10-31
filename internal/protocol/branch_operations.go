@@ -137,22 +137,6 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 		source = "HEAD"
 	}
 
-	// Validate permissions
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		if err.Error() == "Missing X-USER-ID header" || err.Error() == "Missing X-Source header" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-
 	// Open repository
 	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
 	if err != nil {
@@ -183,7 +167,7 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	}
 
 	// Resolve source reference
-	sourceCommit, err := h.resolveSourceReference(ctx, repository, source)
+	sourceCommit, err := h.resolveSourceReference(repository, source)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -305,12 +289,6 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 	return nil
 }
 
-// validatePermissions validates user permissions for the operation - DISABLED FOR DEVELOPMENT
-func (h *BranchOperationsHandler) validatePermissions(c *gin.Context, owner, repo, action string) error {
-	// Permission validation disabled for development
-	return nil
-}
-
 // checkBranchExists checks if a branch exists and returns its commit hash
 func (h *BranchOperationsHandler) checkBranchExists(ctx context.Context, repo *gogit.Repository, branchName string) (bool, plumbing.Hash, error) {
 	refName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", branchName))
@@ -326,7 +304,7 @@ func (h *BranchOperationsHandler) checkBranchExists(ctx context.Context, repo *g
 }
 
 // resolveSourceReference resolves a source reference (branch/tag/commit) to a commit hash
-func (h *BranchOperationsHandler) resolveSourceReference(ctx context.Context, repo *gogit.Repository, source string) (plumbing.Hash, error) {
+func (h *BranchOperationsHandler) resolveSourceReference(repo *gogit.Repository, source string) (plumbing.Hash, error) {
 	// Try as commit hash first
 	if len(source) >= 7 && len(source) <= 40 {
 		if hash := plumbing.NewHash(source); hash != plumbing.ZeroHash {
@@ -441,7 +419,7 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 	}
 
 	// Resolve target reference
-	targetCommit, err := h.resolveSourceReference(ctx, repository, req.Target)
+	targetCommit, err := h.resolveSourceReference(repository, req.Target)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,

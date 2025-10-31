@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
@@ -741,16 +740,4 @@ func (m *SSHEndpointMetrics) RecordError() {
 // RecordBytes records bytes transferred
 func (m *SSHEndpointMetrics) RecordBytes(bytes int64) {
 	m.BytesTransferred += bytes
-}
-
-// isNilInterface checks if an interface contains a nil pointer
-func isNilInterface(i interface{}) bool {
-	if i == nil {
-		return true
-	}
-	switch reflect.TypeOf(i).Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
-		return reflect.ValueOf(i).IsNil()
-	}
-	return false
 }
