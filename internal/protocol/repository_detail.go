@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/collabops/git-executor/internal/api"
@@ -188,10 +189,21 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 
 	// 9. readme 가져오기
 	readmeData, err := gitRepo.GetBlob(ctx, "README.md", refs)
+	readmeContent := ""
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_readme")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
+		// README가 없는 경우 빈 문자열로 처리 (500 에러 방지)
+		var pathNotFoundErr *git.PathNotFoundError
+		if errors.As(err, &pathNotFoundErr) {
+			// README 파일이 없는 경우 빈 문자열 사용
+			readmeContent = ""
+		} else {
+			// 다른 에러인 경우에는 에러 반환
+			apiErr := h.errorMapper.MapError(err, "get_readme")
+			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+			return
+		}
+	} else {
+		readmeContent = string(readmeData)
 	}
 
 	// 10. response 생성
@@ -211,7 +223,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 			Remotes:  len(remotes),
 			Total:    len(commits) + len(branches) + len(tags) + len(remotes),
 		},
-		Readme: string(readmeData),
+		Readme: readmeContent,
 	}
 
 	api.SendSuccess(c, response, "Repository detail retrieved successfully")
