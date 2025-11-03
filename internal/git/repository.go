@@ -34,14 +34,8 @@ type Repository interface {
 	// GetTags - 모든 태그 목록 조회
 	GetTags(ctx context.Context) ([]Tag, error)
 
-	// GetDescription - 저장소 설명 조회
-	GetDescription(ctx context.Context) (string, error)
-
 	// GetRemotes - 모든 원격 저장소 목록 조회
 	GetRemotes(ctx context.Context) ([]Remote, error)
-
-	// GetRefs - 기본 브랜치 참조 조회 (HEAD가 가리키는 브랜치)
-	GetRefs(ctx context.Context) (string, error)
 
 	// Close - 리포지토리가 보유한 리소스 해제
 	Close() error
@@ -210,9 +204,6 @@ type CreateRepositoryOptions struct {
 	// Bare indicates whether to create a bare repository
 	Bare bool
 
-	// Description is an optional description for the repository
-	Description string
-
 	// DefaultBranch is the name of the default branch (defaults to "main")
 	DefaultBranch string
 
@@ -236,9 +227,6 @@ type RepositoryInfo struct {
 
 	// Name is the repository name (derived from path)
 	Name string `json:"name"`
-
-	// Description is the repository description
-	Description string `json:"description,omitempty"`
 
 	// DefaultBranch is the name of the default branch
 	DefaultBranch string `json:"default_branch"`

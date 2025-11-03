@@ -5,9 +5,8 @@ package requests
 import "github.com/collabops/git-executor/internal/schemas/common"
 
 // CreateRepositoryRequest는 저장소 생성을 위한 JSON 페이로드를 나타냅니다.
-// 저장소 설명, 기본 브랜치, 초기 파일 및 메타데이터를 포함합니다.
+// 기본 브랜치, 초기 파일 및 메타데이터를 포함합니다.
 type CreateRepositoryRequest struct {
-	Description   string                 `json:"description,omitempty"`
 	Private       bool                   `json:"private,omitempty"`
 	InitialCommit bool                   `json:"initial_commit,omitempty"`
 	DefaultBranch string                 `json:"default_branch,omitempty"`

@@ -22,3 +22,11 @@ type UpdateBranchRequest struct {
 	Force   bool   `json:"force,omitempty"`           // force update even if not fast-forward
 	Message string `json:"message,omitempty"`         // optional update message
 }
+
+// RenameBranchRequest는 브랜치 이름 변경을 위한 JSON 페이로드를 나타냅니다.
+// 기존 브랜치의 이름을 새로운 이름으로 변경할 때 사용됩니다.
+type RenameBranchRequest struct {
+	OldName string `json:"old_name" binding:"required"` // 기존 브랜치 이름
+	NewName string `json:"new_name" binding:"required"` // 새로운 브랜치 이름
+	Force   bool   `json:"force,omitempty"`             // force rename even if new name already exists
+}

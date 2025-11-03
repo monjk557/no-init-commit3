@@ -16,7 +16,6 @@ type CreateRepositoryResponse struct {
 	Owner         string                 `json:"owner"`
 	Name          string                 `json:"name"`
 	Path          string                 `json:"path,omitempty"`
-	Description   string                 `json:"description"`
 	DefaultBranch string                 `json:"default_branch"`
 	InitialCommit string                 `json:"initial_commit"`
 	CreatedAt     time.Time              `json:"created_at"`
@@ -29,8 +28,6 @@ type RepositoryDetailResponse struct {
 	Owner         string          `json:"owner"`
 	Name          string          `json:"name"`
 	Path          string          `json:"path"`
-	Description   string          `json:"description"`
-	DefaultBranch string          `json:"default_branch,"`
 	Tree          []git.TreeEntry `json:"tree,"`
 	LatestCommits git.Commit      `json:"latest_commits,"`
 	Branches      []git.Branch    `json:"branches,"`
@@ -45,8 +42,6 @@ type RepositoryTreeResponse struct {
 	Owner         string                     `json:"owner"`
 	Name          string                     `json:"name"`
 	Path          string                     `json:"path"`
-	Description   string                     `json:"description"`
-	DefaultBranch string                     `json:"default_branch"`
 	Tree          []git.TreeEntry            `json:"tree"`
 	SidebarTree   map[string][]git.TreeEntry `json:"sidebar_tree"`
 	LatestCommits git.Commit                 `json:"latest_commits"`

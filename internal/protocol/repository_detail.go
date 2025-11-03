@@ -98,27 +98,6 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		return
 	}
 
-	// 3. repository description 가져오기
-	description, err := gitRepo.GetDescription(ctx)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "repository_corrupted")
-		c.JSON(422, gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
-	// 4. default branch 확인
-	defaultBranch, err := gitRepo.GetRefs(ctx)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "branch_not_found")
-		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
-	// 5. refs가 생략되었으면 default branch 사용
-	if refs == "" {
-		refs = defaultBranch
-	}
-
 	// 6. branches 가져오기
 	branches, err := gitRepo.GetBranches(ctx)
 	if err != nil {
@@ -161,8 +140,6 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 			Owner:         owner,
 			Name:          repo,
 			Path:          repoPath,
-			Description:   description,
-			DefaultBranch: defaultBranch,
 			Tree:          []git.TreeEntry{},
 			LatestCommits: git.Commit{},
 			Branches:      []git.Branch{},
@@ -223,8 +200,6 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		Owner:         owner,
 		Name:          repo,
 		Path:          repoPath,
-		Description:   description,
-		DefaultBranch: defaultBranch,
 		Tree:          treeEntries,
 		LatestCommits: latestCommit,
 		Branches:      branches,

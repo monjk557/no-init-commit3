@@ -586,59 +586,6 @@ func (r *GoGitRepository) GetTags(ctx context.Context) ([]Tag, error) {
 	return tags, nil
 }
 
-// GetDescription retrieves the repository description
-func (r *GoGitRepository) GetDescription(ctx context.Context) (string, error) {
-	// Check for context cancellation
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
-	}
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if r.repo == nil {
-		return "", NewGitError("get_description", r.path, "", "repository is closed", nil)
-	}
-
-	// Read the description file
-	// For bare repositories, description is directly in the repo root
-	// For non-bare repositories, description is in .git/description
-	var descriptionPath string
-
-	// Check if it's a bare repository by looking for .git directory
-	gitDir := filepath.Join(r.path, ".git")
-	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		// This is a bare repository, description is in the root
-		descriptionPath = filepath.Join(r.path, "description")
-	} else {
-		// This is a non-bare repository, description is in .git/description
-		descriptionPath = filepath.Join(r.path, ".git", "description")
-	}
-
-	// Check if description file exists
-	if _, err := os.Stat(descriptionPath); os.IsNotExist(err) {
-		// Return default description if file doesn't exist
-		return "Unnamed repository; edit this file 'description' to name the repository.", nil
-	}
-
-	// Read the description file
-	content, err := os.ReadFile(descriptionPath)
-	if err != nil {
-		return "", NewGitError("get_description", r.path, "", "failed to read description file", err)
-	}
-
-	description := strings.TrimSpace(string(content))
-
-	// Return default if description is empty or default
-	if description == "" || description == "Unnamed repository; edit this file 'description' to name the repository." {
-		return "", nil
-	}
-
-	return description, nil
-}
-
 // GetRemotes retrieves all remote repositories
 func (r *GoGitRepository) GetRemotes(ctx context.Context) ([]Remote, error) {
 	// Check for context cancellation
@@ -813,58 +760,6 @@ func convertCommit(c *object.Commit) Commit {
 		ParentHashes: parentHashes,
 		TreeHash:     c.TreeHash.String(),
 	}
-}
-
-// GetRefs retrieves the default branch reference (HEAD)
-func (r *GoGitRepository) GetRefs(ctx context.Context) (string, error) {
-	// Check for context cancellation
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
-	}
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if r.repo == nil {
-		return "", NewGitError("get_refs", r.path, "", "repository is closed", nil)
-	}
-
-	// 먼저 go-git의 Head() 메서드 시도
-	head, err := r.repo.Head()
-	if err == nil {
-		// HEAD가 브랜치를 가리키는지 확인
-		if head.Name().IsBranch() {
-			return head.Name().Short(), nil
-		}
-		// HEAD가 직접 커밋을 가리키는 경우 (detached HEAD)
-		return head.Hash().String(), nil
-	}
-
-	// go-git에서 실패한 경우, 직접 HEAD 파일 읽기
-	headPath := filepath.Join(r.path, "HEAD")
-	headContent, err := os.ReadFile(headPath)
-	if err != nil {
-		// HEAD 파일도 없는 경우 기본값 반환
-		return "main", nil
-	}
-
-	// HEAD 파일 내용 파싱
-	headStr := strings.TrimSpace(string(headContent))
-	if strings.HasPrefix(headStr, "ref: refs/heads/") {
-		// ref: refs/heads/master -> master
-		branchName := strings.TrimPrefix(headStr, "ref: refs/heads/")
-		return branchName, nil
-	}
-
-	// HEAD가 직접 커밋 해시를 가리키는 경우
-	if len(headStr) == 40 { // SHA-1 해시 길이
-		return headStr, nil
-	}
-
-	// 기본값 반환
-	return "main", nil
 }
 
 // GetGoGitRepo returns the underlying go-git repository instance

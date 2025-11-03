@@ -380,6 +380,8 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				{
 					// POST endpoint for creating branches
 					branchesGroup.POST("", branchOpsHandler.HandleCreateBranch)
+					// PUT endpoint for renaming branches
+					branchesGroup.PUT("/rename", branchOpsHandler.HandleRenameBranch)
 					// PATCH endpoint for updating branches
 					branchesGroup.PATCH("/*branch", branchOpsHandler.HandleUpdateBranch)
 					// DELETE endpoint for deleting branches

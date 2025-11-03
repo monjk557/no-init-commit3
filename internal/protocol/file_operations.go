@@ -205,8 +205,6 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 			})
 			return
 		}
-	} else {
-		req.Branch = "main" // Default branch
 	}
 
 	// Set default encoding if not provided
@@ -470,8 +468,6 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 			})
 			return
 		}
-	} else {
-		req.Branch = "main" // Default branch
 	}
 
 	// Set default author/committer if not provided
@@ -661,9 +657,6 @@ func (h *FileOperationsHandler) HandleFileContent(c *gin.Context) {
 
 	// Get query parameters
 	ref := c.Query("ref")
-	if ref == "" {
-		ref = "main" // Default to main branch
-	}
 
 	linesParam := c.Query("lines")
 
@@ -687,6 +680,13 @@ func (h *FileOperationsHandler) HandleFileContent(c *gin.Context) {
 			"error":   apiErr.Message,
 		})
 		return
+	}
+
+	if ref == "" {
+		head, err := h.objectManager.GetRepositoryHead(ctx, repository)
+		if err == nil {
+			ref = head.Name().String()
+		}
 	}
 
 	// Resolve the reference

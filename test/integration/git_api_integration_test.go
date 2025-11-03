@@ -148,6 +148,7 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 		{
 			branchesGroup.POST("", branchOpsHandler.HandleCreateBranch)
 			branchesGroup.PATCH("/*branch", branchOpsHandler.HandleUpdateBranch)
+			branchesGroup.PUT("/*branch/rename", branchOpsHandler.HandleRenameBranch)
 			branchesGroup.DELETE("/*branch", branchOpsHandler.HandleDeleteBranch)
 		}
 
@@ -491,6 +492,114 @@ func TestBranchOperations_Integration(t *testing.T) {
 		defer func() { _ = resp.Body.Close() }() // errcheck
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("RenameBranch_DefaultBranchWithHEADUpdate", func(t *testing.T) {
+		// 먼저 기본 브랜치 확인 및 설정
+		// HEAD가 가리키는 브랜치를 확인
+		headResp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/head", nil)
+		require.NoError(t, err)
+		defer func() { _ = headResp.Body.Close() }()
+
+		var headResponse map[string]interface{}
+		err = json.NewDecoder(headResp.Body).Decode(&headResponse)
+		require.NoError(t, err)
+		require.Equal(t, true, headResponse["success"])
+
+		headData, ok := headResponse["data"].(map[string]interface{})
+		require.True(t, ok, "head response should have data field")
+
+		// 현재 default branch 이름 확인
+		currentBranchName := "master" // 기본값으로 master 사용 (createInitialCommit에서 생성)
+		if name, ok := headData["name"].(string); ok && name != "" && name != "HEAD" {
+			currentBranchName = name
+		}
+
+		// 새 브랜치 이름
+		newBranchName := "main"
+
+		// 브랜치 이름 변경 요청
+		renameBody := map[string]interface{}{
+			"new_name": newBranchName,
+			"force":    false,
+		}
+
+		renameResp, err := suite.makeRequest("PUT", fmt.Sprintf("/repos/testowner/testrepo/branches/%s/rename", currentBranchName), renameBody)
+		require.NoError(t, err)
+		defer func() { _ = renameResp.Body.Close() }()
+
+		assert.Equal(t, http.StatusOK, renameResp.StatusCode)
+
+		var renameResponse map[string]interface{}
+		err = json.NewDecoder(renameResp.Body).Decode(&renameResponse)
+		require.NoError(t, err)
+		assert.Equal(t, true, renameResponse["success"])
+
+		renameData, ok := renameResponse["data"].(map[string]interface{})
+		require.True(t, ok, "rename response should have data field")
+
+		// 응답에서 head_updated 확인
+		headUpdated, ok := renameData["head_updated"].(bool)
+		require.True(t, ok, "rename response should have head_updated field")
+		assert.True(t, headUpdated, "HEAD should be updated when renaming default branch")
+
+		// 새 브랜치 이름 확인
+		assert.Equal(t, newBranchName, renameData["new_branch_name"])
+
+		// HEAD가 새 브랜치를 가리키는지 확인
+		headResp2, err := suite.makeRequest("GET", "/repos/testowner/testrepo/head", nil)
+		require.NoError(t, err)
+		defer func() { _ = headResp2.Body.Close() }()
+
+		var headResponse2 map[string]interface{}
+		err = json.NewDecoder(headResp2.Body).Decode(&headResponse2)
+		require.NoError(t, err)
+		require.Equal(t, true, headResponse2["success"])
+
+		headData2, ok := headResponse2["data"].(map[string]interface{})
+		require.True(t, ok, "head response should have data field")
+
+		// HEAD가 새 브랜치를 가리키는지 확인
+		assert.Equal(t, newBranchName, headData2["name"], "HEAD should point to the renamed branch")
+
+		// 기존 브랜치가 삭제되었는지 확인 (404가 나와야 함)
+		oldBranchResp, err := suite.makeRequest("GET", fmt.Sprintf("/repos/testowner/testrepo/branches/%s", currentBranchName), nil)
+		if err == nil && oldBranchResp != nil {
+			// 브랜치 조회 엔드포인트가 없을 수 있으므로 references로 확인
+			_ = oldBranchResp.Body.Close()
+		}
+
+		// References를 통해 기존 브랜치가 없는지, 새 브랜치가 있는지 확인
+		refsResp, err := suite.makeRequest("GET", "/repos/testowner/testrepo/references", nil)
+		require.NoError(t, err)
+		defer func() { _ = refsResp.Body.Close() }()
+
+		var refsResponse map[string]interface{}
+		err = json.NewDecoder(refsResp.Body).Decode(&refsResponse)
+		require.NoError(t, err)
+
+		// 직접 저장소를 열어서 확인
+		repo, err := gogit.PlainOpen(suite.testRepoPath)
+		require.NoError(t, err)
+
+		// 기존 브랜치가 삭제되었는지 확인
+		_, err = repo.Reference(plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", currentBranchName)), false)
+		if err == plumbing.ErrReferenceNotFound {
+			// 기대된 동작 - 브랜치가 삭제됨
+		} else {
+			t.Errorf("Old branch '%s' should not exist, but reference found: %v", currentBranchName, err)
+		}
+
+		// 새 브랜치가 존재하는지 확인
+		newRef, err := repo.Reference(plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", newBranchName)), false)
+		require.NoError(t, err, "New branch '%s' should exist", newBranchName)
+		assert.NotNil(t, newRef)
+
+		// HEAD가 새 브랜치를 가리키는지 확인
+		headRef, err := repo.Head()
+		require.NoError(t, err)
+		assert.Equal(t, plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", newBranchName)), headRef.Target(),
+			"HEAD should point to renamed branch")
 	})
 }
 

@@ -513,6 +513,230 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 	})
 }
 
+// HandleRenameBranch는 PUT /repos/{owner}/{repo}/branches/{branch}/rename 엔드포인트를 처리합니다.
+
+func (h *BranchOperationsHandler) HandleRenameBranch(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// URL 파라미터 추출
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	// 경로 컴포넌트 검증
+	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid path: %v", err),
+		})
+		return
+	}
+
+	// JSON 요청 파싱 및 검증
+	var req requests.RenameBranchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid JSON: %v", err),
+		})
+		return
+	}
+
+	newBranchName := req.NewName
+	oldBranchName := req.OldName
+	force := req.Force
+
+	// 브랜치 이름 검증
+	if err := h.validateBranchName(oldBranchName); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid old branch name: %v", err),
+		})
+		return
+	}
+
+	if err := h.validateBranchName(newBranchName); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid new branch name: %v", err),
+		})
+		return
+	}
+
+	// 기존 이름과 새 이름이 같은지 확인
+	if oldBranchName == newBranchName {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "기존 브랜치 이름과 새 브랜치 이름이 동일할 수 없습니다",
+		})
+		return
+	}
+
+	// 저장소 열기
+	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to open repository: %v", err),
+		})
+		return
+	}
+
+	// 기존 브랜치 존재 확인
+	oldBranchExists, branchCommit, err := h.checkBranchExists(ctx, repository, oldBranchName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("기존 브랜치 존재 여부 확인 실패: %v", err),
+		})
+		return
+	}
+
+	if !oldBranchExists {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("브랜치 '%s'가 존재하지 않습니다", oldBranchName),
+		})
+		return
+	}
+
+	// 새 브랜치 이름이 이미 존재하는지 확인
+	newBranchExists, _, err := h.checkBranchExists(ctx, repository, newBranchName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("새 브랜치 존재 여부 확인 실패: %v", err),
+		})
+		return
+	}
+
+	if newBranchExists && !force {
+		c.JSON(http.StatusConflict, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("브랜치 '%s'가 이미 존재합니다. force=true를 사용하여 덮어쓰세요", newBranchName),
+		})
+		return
+	}
+
+	// 기존 브랜치가 protected인지 확인 - protected 브랜치는 이름 변경 불가
+	if h.isProtectedBranch(oldBranchName) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Protected 브랜치 '%s'의 이름을 변경할 수 없습니다", oldBranchName),
+		})
+		return
+	}
+
+	// 새 브랜치 이름이 protected인지 확인 - protected 브랜치 이름으로 변경 불가
+	if h.isProtectedBranch(newBranchName) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Protected 브랜치 이름 '%s'으로 변경할 수 없습니다", newBranchName),
+		})
+		return
+	}
+
+	// 현재 HEAD가 기존 브랜치를 가리키는지 확인
+	headRef, err := repository.Head()
+	if err != nil {
+		// HEAD might not exist in empty repository, but we'll continue
+		headRef = nil
+	}
+
+	isHeadBranch := false
+	oldRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", oldBranchName))
+	if headRef != nil {
+		if headRef.Type() == plumbing.SymbolicReference && headRef.Target() == oldRefPath {
+			isHeadBranch = true
+		} else if headRef.Name() == oldRefPath {
+			isHeadBranch = true
+		}
+	}
+
+	// 새 브랜치가 존재하고 force가 true인 경우 먼저 삭제
+	if newBranchExists && req.Force {
+		newRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.NewName))
+		if err := repository.Storer.RemoveReference(newRefPath); err != nil {
+			h.logger.Warn("기존 새 브랜치 참조 제거 실패",
+				zap.String("new_branch", req.NewName),
+				zap.Error(err))
+			// 계속 진행 (rename은 여전히 작동할 수 있음)
+		}
+	}
+
+	// 기존 브랜치 참조 읽기
+	oldRef, err := repository.Reference(oldRefPath, false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("기존 브랜치 참조 읽기 실패: %v", err),
+		})
+		return
+	}
+
+	// 동일한 커밋 해시로 새 브랜치 참조 생성
+	newRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.NewName))
+	newRef := plumbing.NewHashReference(newRefPath, oldRef.Hash())
+
+	if err := repository.Storer.SetReference(newRef); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("새 브랜치 참조 생성 실패: %v", err),
+		})
+		return
+	}
+
+	// HEAD가 기존 브랜치를 가리키고 있었다면 업데이트
+	if isHeadBranch {
+		newHeadRef := plumbing.NewSymbolicReference(plumbing.HEAD, newRefPath)
+		if err := repository.Storer.SetReference(newHeadRef); err != nil {
+			h.logger.Warn("이름 변경된 브랜치로 HEAD 업데이트 실패",
+				zap.String("new_branch", req.NewName),
+				zap.Error(err))
+			// 요청은 실패하지 않지만 경고 로그
+		} else {
+			h.logger.Info("이름 변경된 브랜치로 HEAD 업데이트 완료",
+				zap.String("new_branch", req.NewName))
+		}
+	}
+
+	// 기존 브랜치 참조 삭제
+	if err := repository.Storer.RemoveReference(oldRefPath); err != nil {
+		// 삭제가 실패하면 새 참조 정리 시도
+		repository.Storer.RemoveReference(newRefPath)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("기존 브랜치 참조 삭제 실패: %v", err),
+		})
+		return
+	}
+
+	// 응답 데이터 준비
+	responseData := map[string]interface{}{
+		"old_branch_name": oldBranchName,
+		"new_branch_name": req.NewName,
+		"commit_hash":     branchCommit.String(),
+		"ref_path":        newRefPath.String(),
+		"operation":       "rename",
+		"head_updated":    isHeadBranch,
+		"forced":          req.Force && newBranchExists,
+	}
+
+	// 성공 로그
+	h.logger.Info("브랜치 이름 변경 완료",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("old_branch", oldBranchName),
+		zap.String("new_branch", req.NewName),
+		zap.String("commit_hash", branchCommit.String()),
+		zap.Bool("head_updated", isHeadBranch))
+
+	// Send success response
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    responseData,
+	})
+}
+
 func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -821,12 +1045,11 @@ func (h *BranchOperationsHandler) HandleGetBranchesDetail(c *gin.Context) {
 	// 응답 생성
 	total := allBranchesCount
 	response := responses.BranchesListResponse{
-		DefaultBranch: defaultBranch,
-		Default:       defaultBranches,
-		Yours:         yoursBranches,
-		Active:        activeBranches,
-		Stale:         staleBranches,
-		TotalCount:    total,
+		Default:    defaultBranches,
+		Yours:      yoursBranches,
+		Active:     activeBranches,
+		Stale:      staleBranches,
+		TotalCount: total,
 	}
 
 	h.logger.Info("Successfully retrieved branches list",

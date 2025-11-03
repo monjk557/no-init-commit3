@@ -30,9 +30,6 @@ type MockRepository struct {
 	// tags stores all tags
 	tags []Tag
 
-	// description stores repository description
-	description string
-
 	// remotes stores all remotes
 	remotes []Remote
 
@@ -40,15 +37,13 @@ type MockRepository struct {
 	closed bool
 
 	// Mock control fields
-	GetTreeError        error
-	GetBlobError        error
-	GetCommitsError     error
-	GetBranchesError    error
-	GetTagsError        error
-	GetDescriptionError error
-	GetRemotesError     error
-	GetRefsError        error
-	CloseError          error
+	GetTreeError     error
+	GetBlobError     error
+	GetCommitsError  error
+	GetBranchesError error
+	GetTagsError     error
+	GetRemotesError  error
+	CloseError       error
 
 	// defaultRef is the default branch reference
 	defaultRef string
@@ -318,29 +313,6 @@ func (m *MockRepository) GetTags(ctx context.Context) ([]Tag, error) {
 	return result, nil
 }
 
-// GetDescription retrieves the repository description (mock implementation)
-func (m *MockRepository) GetDescription(ctx context.Context) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if m.closed {
-		return "", fmt.Errorf("repository is closed")
-	}
-
-	if m.GetDescriptionError != nil {
-		return "", m.GetDescriptionError
-	}
-
-	// Check for context cancellation
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
-	}
-
-	return m.description, nil
-}
-
 // GetRemotes retrieves all remote repositories (mock implementation)
 func (m *MockRepository) GetRemotes(ctx context.Context) ([]Remote, error) {
 	m.mu.RLock()
@@ -365,30 +337,6 @@ func (m *MockRepository) GetRemotes(ctx context.Context) ([]Remote, error) {
 	result := make([]Remote, len(m.remotes))
 	copy(result, m.remotes)
 	return result, nil
-}
-
-// GetRefs retrieves the default branch reference (HEAD)
-func (m *MockRepository) GetRefs(ctx context.Context) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if m.closed {
-		return "", fmt.Errorf("repository is closed")
-	}
-
-	if m.GetRefsError != nil {
-		return "", m.GetRefsError
-	}
-
-	// Check for context cancellation
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
-	}
-
-	// Return the configured default ref
-	return m.defaultRef, nil
 }
 
 // Close releases any resources held by the repository

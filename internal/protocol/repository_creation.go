@@ -75,9 +75,8 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 }
 
 // CreateRepositoryRequest는 저장소 생성을 위한 JSON 페이로드를 나타냅니다.
-// 저장소 설명, 기본 브랜치, 초기 파일 및 메타데이터를 포함합니다.
+// 기본 브랜치, 초기 파일 및 메타데이터를 포함합니다.
 type CreateRepositoryRequest struct {
-	Description   string                 `json:"description,omitempty"`
 	Private       bool                   `json:"private,omitempty"`
 	InitialCommit bool                   `json:"initial_commit,omitempty"`
 	DefaultBranch string                 `json:"default_branch,omitempty"`
@@ -202,7 +201,6 @@ func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner,
 	options := &git.CreateRepositoryOptions{
 		Path:          repoPath,
 		Bare:          true, // Always create bare repositories for server-side storage
-		Description:   req.Description,
 		DefaultBranch: req.DefaultBranch,
 		InitialCommit: req.InitialCommit,
 		Author:        author,
@@ -221,7 +219,6 @@ func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner,
 		Owner:         owner,
 		Name:          repo,
 		Path:          repoInfo.Path,
-		Description:   repoInfo.Description,
 		DefaultBranch: repoInfo.DefaultBranch,
 		CreatedAt:     repoInfo.CreatedAt,
 		Metadata:      req.Metadata,

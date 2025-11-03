@@ -11,8 +11,8 @@ import (
 
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repository"
-	"github.com/go-git/go-git/v5"
 	gogit "github.com/go-git/go-git/v5"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -255,16 +255,16 @@ type CommitResult struct {
 // GitObjectManagerInterface defines the interface for Git object manipulation
 type GitObjectManagerInterface interface {
 	// OpenRepository opens a Git repository for manipulation
-	OpenRepository(ctx context.Context, owner, repo string) (*git.Repository, error)
+	OpenRepository(ctx context.Context, owner, repo string) (*gogit.Repository, error)
 
 	// GetRepositoryHead gets the current HEAD reference
-	GetRepositoryHead(ctx context.Context, repo *git.Repository) (*plumbing.Reference, error)
+	GetRepositoryHead(ctx context.Context, repo *gogit.Repository) (*plumbing.Reference, error)
 
 	// CreateTreeFromChanges creates a new tree from a list of file changes
-	CreateTreeFromChanges(ctx context.Context, repo *git.Repository, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, error)
+	CreateTreeFromChanges(ctx context.Context, repo *gogit.Repository, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, error)
 
 	// CreateCommit creates a new commit with the specified tree and metadata
-	CreateCommit(ctx context.Context, repo *git.Repository, treeHash plumbing.Hash, commitInfo CommitInfo) (*CommitResult, error)
+	CreateCommit(ctx context.Context, repo *gogit.Repository, treeHash plumbing.Hash, commitInfo CommitInfo) (*CommitResult, error)
 
 	// ValidateFileChanges validates a list of file changes
 	ValidateFileChanges(ctx context.Context, changes []FileChange) error
@@ -273,7 +273,7 @@ type GitObjectManagerInterface interface {
 	GetFileFromTree(ctx context.Context, tree *object.Tree, path string) (*object.File, error)
 
 	// ResolveReference resolves a Git reference to a commit hash
-	ResolveReference(ctx context.Context, repo *git.Repository, ref string) (plumbing.Hash, error)
+	ResolveReference(ctx context.Context, repo *gogit.Repository, ref string) (plumbing.Hash, error)
 }
 
 // NewGitObjectManager creates a new Git object manager
@@ -292,7 +292,7 @@ func NewGitObjectManager(pathConfig *repository.PathConfig, logger *logging.Logg
 }
 
 // OpenRepository opens a Git repository for manipulation
-func (gom *GitObjectManager) OpenRepository(ctx context.Context, owner, repo string) (*git.Repository, error) {
+func (gom *GitObjectManager) OpenRepository(ctx context.Context, owner, repo string) (*gogit.Repository, error) {
 	// Get the repository path using existing path validation
 	repoPath, err := repository.GetRepoPath(gom.pathConfig, owner, repo)
 	if err != nil {
@@ -312,7 +312,7 @@ func (gom *GitObjectManager) OpenRepository(ctx context.Context, owner, repo str
 	}
 
 	// Open the repository using go-git
-	gitRepo, err := git.PlainOpen(repoPath)
+	gitRepo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		gom.logger.Error("Failed to open Git repository",
 			zap.String("path", repoPath),
@@ -324,7 +324,7 @@ func (gom *GitObjectManager) OpenRepository(ctx context.Context, owner, repo str
 }
 
 // GetRepositoryHead gets the current HEAD reference
-func (gom *GitObjectManager) GetRepositoryHead(ctx context.Context, repo *git.Repository) (*plumbing.Reference, error) {
+func (gom *GitObjectManager) GetRepositoryHead(ctx context.Context, repo *gogit.Repository) (*plumbing.Reference, error) {
 	headRef, err := repo.Head()
 	if err != nil {
 		gom.logger.Error("Failed to get repository HEAD", zap.Error(err))
@@ -335,7 +335,7 @@ func (gom *GitObjectManager) GetRepositoryHead(ctx context.Context, repo *git.Re
 }
 
 // ResolveReference resolves a Git reference to a commit hash
-func (gom *GitObjectManager) ResolveReference(ctx context.Context, repo *git.Repository, ref string) (plumbing.Hash, error) {
+func (gom *GitObjectManager) ResolveReference(ctx context.Context, repo *gogit.Repository, ref string) (plumbing.Hash, error) {
 	// Try to parse as direct hash first
 	if hash := plumbing.NewHash(ref); !hash.IsZero() {
 		// Validate that the hash exists in the repository
@@ -438,7 +438,7 @@ func (gom *GitObjectManager) GetFileFromTree(ctx context.Context, tree *object.T
 }
 
 // GetTreeFromCommit gets a tree object from a commit hash
-func (gom *GitObjectManager) GetTreeFromCommit(ctx context.Context, repo *git.Repository, commitHash plumbing.Hash) (*object.Tree, error) {
+func (gom *GitObjectManager) GetTreeFromCommit(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash) (*object.Tree, error) {
 	// Get the commit object
 	commit, err := repo.CommitObject(commitHash)
 	if err != nil {
@@ -455,7 +455,7 @@ func (gom *GitObjectManager) GetTreeFromCommit(ctx context.Context, repo *git.Re
 }
 
 // CreateTreeFromChanges creates a new tree from a list of file changes
-func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *git.Repository, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, error) {
+func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gogit.Repository, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, error) {
 	// Validate changes first
 	if err := gom.ValidateFileChanges(ctx, changes); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
@@ -574,7 +574,7 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *gi
 }
 
 // CreateCommit creates a new commit with the specified tree and metadata
-func (gom *GitObjectManager) CreateCommit(ctx context.Context, repo *git.Repository, treeHash plumbing.Hash, commitInfo CommitInfo) (*CommitResult, error) {
+func (gom *GitObjectManager) CreateCommit(ctx context.Context, repo *gogit.Repository, treeHash plumbing.Hash, commitInfo CommitInfo) (*CommitResult, error) {
 	// Validate commit info
 	if commitInfo.Message == "" {
 		return nil, fmt.Errorf("commit message is required")

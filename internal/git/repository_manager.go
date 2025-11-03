@@ -70,22 +70,10 @@ func (rw *repositoryWrapper) GetTags(ctx context.Context) ([]Tag, error) {
 	return nil, fmt.Errorf("GetTags not implemented in repository wrapper")
 }
 
-// GetDescription retrieves the repository description
-func (rw *repositoryWrapper) GetDescription(ctx context.Context) (string, error) {
-	// This is a simplified implementation - full implementation would be more complex
-	return "", fmt.Errorf("GetDescription not implemented in repository wrapper")
-}
-
 // GetRemotes retrieves all remote repositories
 func (rw *repositoryWrapper) GetRemotes(ctx context.Context) ([]Remote, error) {
 	// This is a simplified implementation - full implementation would be more complex
 	return nil, fmt.Errorf("GetRemotes not implemented in repository wrapper")
-}
-
-// GetRefs retrieves the default branch reference (HEAD)
-func (rw *repositoryWrapper) GetRefs(ctx context.Context) (string, error) {
-	// This is a simplified implementation - full implementation would be more complex
-	return "", fmt.Errorf("GetRefs not implemented in repository wrapper")
 }
 
 // Close releases any resources held by the repository
@@ -161,21 +149,10 @@ func (rm *DefaultRepositoryManager) CreateRepository(ctx context.Context, option
 		return nil, fmt.Errorf("failed to initialize git repository: %w", err)
 	}
 
-	// Set repository description if provided
-	if options.Description != "" {
-		descPath := filepath.Join(options.Path, "description")
-		if err := os.WriteFile(descPath, []byte(options.Description+"\n"), 0644); err != nil {
-			rm.logger.Warn("Failed to set repository description",
-				zap.String("path", options.Path),
-				zap.Error(err))
-		}
-	}
-
 	// Create repository info
 	repoInfo := &RepositoryInfo{
 		Path:          options.Path,
 		Name:          rm.extractRepositoryName(options.Path),
-		Description:   options.Description,
 		DefaultBranch: options.DefaultBranch,
 		IsBare:        options.Bare,
 		CreatedAt:     time.Now(),
@@ -315,12 +292,6 @@ func (rm *DefaultRepositoryManager) ListRepositories(ctx context.Context, rootPa
 				LastModified: info.ModTime(),
 			}
 
-			// Try to get description
-			descPath := filepath.Join(path, "description")
-			if descData, err := os.ReadFile(descPath); err == nil {
-				repoInfo.Description = strings.TrimSpace(string(descData))
-			}
-
 			// Update statistics
 			if err := rm.updateRepositoryStats(ctx, repoInfo); err != nil {
 				rm.logger.Debug("Failed to update repository statistics",
@@ -353,8 +324,8 @@ func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repositor
 	if len(initialFiles) == 0 {
 		// Create default README
 		initialFiles = map[string]string{
-			"README.md": fmt.Sprintf("# Repository\n\n%s\n\nCreated: %s\n",
-				options.Description, time.Now().Format(time.RFC3339)),
+			"README.md": fmt.Sprintf("# Repository\n\nCreated: %s\n",
+				time.Now().Format(time.RFC3339)),
 		}
 	}
 
@@ -517,11 +488,20 @@ func (rm *DefaultRepositoryManager) updateRepositoryStats(ctx context.Context, r
 		repoInfo.Size = size
 	}
 
-	// Get default branch
+	// Get default branch from HEAD
+	// Note: HEAD는 파일 작업 등으로 변경될 수 있으므로,
+	// 현재는 HEAD가 symbolic reference일 때만 default branch로 간주
 	head, err := gitRepo.Head()
-	if err == nil && head.Name().IsBranch() {
-		repoInfo.DefaultBranch = head.Name().Short()
+	if err == nil && head.Type() == plumbing.SymbolicReference {
+		// HEAD가 브랜치를 가리키는 경우 (symbolic reference)
+		// Target()에서 실제 브랜치 참조를 가져옴 (예: "refs/heads/main")
+		targetBranch := head.Target().String()
+		if strings.HasPrefix(targetBranch, "refs/heads/") {
+			repoInfo.DefaultBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
+		}
 	}
+	// Detached HEAD 상태 (head.Type() == plumbing.HashReference)인 경우
+	// DefaultBranch는 이전에 설정된 값이 유지되거나 빈 값일 수 있음
 
 	// Count references
 	refs, err := gitRepo.References()

@@ -57,12 +57,11 @@ type BranchInfo struct {
 
 // BranchesListResponse는 브랜치 목록 응답을 나타냅니다 (GitHub 브랜치 페이지 스타일).
 type BranchesListResponse struct {
-	DefaultBranch string           `json:"default_branch"`
-	Default       []BranchListItem `json:"default"`
-	Yours         []BranchListItem `json:"yours"`
-	Active        []BranchListItem `json:"active"`
-	Stale         []BranchListItem `json:"stale"`
-	TotalCount    int              `json:"total_count"`
+	Default    []BranchListItem `json:"default"`
+	Yours      []BranchListItem `json:"yours"`
+	Active     []BranchListItem `json:"active"`
+	Stale      []BranchListItem `json:"stale"`
+	TotalCount int              `json:"total_count"`
 }
 
 // BranchListItem은 브랜치 목록의 개별 브랜치 항목을 나타냅니다.
