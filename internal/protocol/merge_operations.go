@@ -425,10 +425,15 @@ func (h *MergeOperationsHandler) performSquashMerge(ctx context.Context, repo *g
 	committer := author
 
 	if req.Author != nil {
+		authorDate := req.Author.Date
+		// Date가 zero value인 경우 현재 시간 사용
+		if authorDate.IsZero() {
+			authorDate = now
+		}
 		author = &object.Signature{
 			Name:  req.Author.Name,
 			Email: req.Author.Email,
-			When:  req.Author.Date,
+			When:  authorDate,
 		}
 	} else {
 		// Default to source commit author if not specified
@@ -440,10 +445,15 @@ func (h *MergeOperationsHandler) performSquashMerge(ctx context.Context, repo *g
 	}
 
 	if req.Committer != nil {
+		committerDate := req.Committer.Date
+		// Date가 zero value인 경우 현재 시간 사용
+		if committerDate.IsZero() {
+			committerDate = now
+		}
 		committer = &object.Signature{
 			Name:  req.Committer.Name,
 			Email: req.Committer.Email,
-			When:  req.Committer.Date,
+			When:  committerDate,
 		}
 	} else {
 		committer = author
@@ -640,20 +650,30 @@ func (h *MergeOperationsHandler) performRebase(ctx context.Context, repo *gogit.
 
 		// Allow override of author/committer if provided in request
 		if req.Author != nil {
+			authorDate := req.Author.Date
+			// Date가 zero value인 경우 원본 커밋의 작성자 날짜 사용
+			if authorDate.IsZero() {
+				authorDate = commitToRebase.Author.When
+			}
 			author = object.Signature{
 				Name:  req.Author.Name,
 				Email: req.Author.Email,
-				When:  req.Author.Date,
+				When:  authorDate,
 			}
 		} else {
 			author = commitToRebase.Author
 		}
 
 		if req.Committer != nil {
+			committerDate := req.Committer.Date
+			// Date가 zero value인 경우 현재 시간 사용 (rebase는 커밋 시간 변경)
+			if committerDate.IsZero() {
+				committerDate = time.Now()
+			}
 			committer = object.Signature{
 				Name:  req.Committer.Name,
 				Email: req.Committer.Email,
-				When:  req.Committer.Date,
+				When:  committerDate,
 			}
 		} else {
 			// Use current time for committer if not specified (rebase changes commit time)
@@ -796,18 +816,28 @@ func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo 
 	committer := author
 
 	if req.Author != nil {
+		authorDate := req.Author.Date
+		// Date가 zero value인 경우 현재 시간 사용
+		if authorDate.IsZero() {
+			authorDate = now
+		}
 		author = &object.Signature{
 			Name:  req.Author.Name,
 			Email: req.Author.Email,
-			When:  req.Author.Date,
+			When:  authorDate,
 		}
 	}
 
 	if req.Committer != nil {
+		committerDate := req.Committer.Date
+		// Date가 zero value인 경우 현재 시간 사용
+		if committerDate.IsZero() {
+			committerDate = now
+		}
 		committer = &object.Signature{
 			Name:  req.Committer.Name,
 			Email: req.Committer.Email,
-			When:  req.Committer.Date,
+			When:  committerDate,
 		}
 	}
 

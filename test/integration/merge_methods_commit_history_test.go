@@ -73,6 +73,13 @@ func testMergeMethodCommitHistory(t *testing.T, suite *IntegrationTestSuite, rep
 	require.NoError(t, err)
 
 	// 4. Merge operation 실행
+	// Author와 Date를 명시적으로 설정하여 1970-01-01 문제 방지
+	testAuthorName := "Test Merge Author"
+	testAuthorEmail := "test-merge@example.com"
+	testCommitterName := "Test Merge Committer"
+	testCommitterEmail := "test-committer@example.com"
+	testDate := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+
 	mergeRequest := map[string]interface{}{
 		"source_ref":     featureBranch,
 		"target_ref":     baseBranch,
@@ -80,6 +87,16 @@ func testMergeMethodCommitHistory(t *testing.T, suite *IntegrationTestSuite, rep
 		"strategy":       "ort",
 		"message":        fmt.Sprintf("%s merge from %s to %s", mergeMethod, featureBranch, baseBranch),
 		"force_conflict": true, // 충돌이 있어도 강제로 merge 수행
+		"author": map[string]interface{}{
+			"name":  testAuthorName,
+			"email": testAuthorEmail,
+			"date":  testDate.Format(time.RFC3339),
+		},
+		"committer": map[string]interface{}{
+			"name":  testCommitterName,
+			"email": testCommitterEmail,
+			"date":  testDate.Add(time.Hour).Format(time.RFC3339), // Committer는 1시간 후
+		},
 	}
 
 	resp, err := suite.makeRequest("POST", fmt.Sprintf("/repos/%s/%s/merges", owner, repoName), mergeRequest)
@@ -112,10 +129,16 @@ func testMergeMethodCommitHistory(t *testing.T, suite *IntegrationTestSuite, rep
 	switch mergeMethod {
 	case "merge":
 		validateMergeCommitHistory(t, commitHistory, mainCommit1, mainCommit2, featureCommit1, featureCommit2)
+		// Merge commit의 author와 date 검증
+		validateMergeCommitAuthorAndDate(t, repo, mainHead, testAuthorName, testAuthorEmail, testCommitterName, testCommitterEmail, testDate)
 	case "squash":
 		validateSquashCommitHistory(t, commitHistory, mainCommit1, mainCommit2, featureCommit1, featureCommit2)
+		// Squash commit의 author와 date 검증
+		validateMergeCommitAuthorAndDate(t, repo, mainHead, testAuthorName, testAuthorEmail, testCommitterName, testCommitterEmail, testDate)
 	case "rebase":
 		validateRebaseCommitHistory(t, repo, commitHistory, mainCommit1, mainCommit2, featureCommit1, featureCommit2)
+		// Rebase의 경우 마지막 커밋의 author와 date 검증
+		validateMergeCommitAuthorAndDate(t, repo, mainHead, testAuthorName, testAuthorEmail, testCommitterName, testCommitterEmail, testDate)
 	}
 }
 
@@ -587,4 +610,35 @@ func validateRebaseCommitHistory(t *testing.T, repo *gogit.Repository, history [
 	}
 	assert.True(t, linearStructure, "Rebase 후 히스토리는 선형 구조여야 함 (각 커밋이 1개 이하의 parent)")
 
+}
+
+// validateMergeCommitAuthorAndDate는 merge/squash/rebase commit의 author와 date가 올바르게 설정되었는지 검증합니다.
+func validateMergeCommitAuthorAndDate(t *testing.T, repo *gogit.Repository, mergeCommit *object.Commit, expectedAuthorName, expectedAuthorEmail, expectedCommitterName, expectedCommitterEmail string, expectedDate time.Time) {
+	// Author 정보 검증
+	assert.Equal(t, expectedAuthorName, mergeCommit.Author.Name, "Author name should match")
+	assert.Equal(t, expectedAuthorEmail, mergeCommit.Author.Email, "Author email should match")
+
+	// Date가 1970-01-01 (epoch)이 아니어야 함
+	epochTime := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	assert.False(t, mergeCommit.Author.When.Before(epochTime.Add(time.Hour)), "Author date should not be epoch (1970-01-01)")
+
+	// Date가 제공된 경우, 설정된 날짜와 일치해야 함 (초 단위 정확도)
+	assert.WithinDuration(t, expectedDate, mergeCommit.Author.When, time.Second, "Author date should match expected date")
+
+	// Committer 정보 검증
+	assert.Equal(t, expectedCommitterName, mergeCommit.Committer.Name, "Committer name should match")
+	assert.Equal(t, expectedCommitterEmail, mergeCommit.Committer.Email, "Committer email should match")
+
+	// Committer Date가 1970-01-01 (epoch)이 아니어야 함
+	assert.False(t, mergeCommit.Committer.When.Before(epochTime.Add(time.Hour)), "Committer date should not be epoch (1970-01-01)")
+
+	// Committer Date가 제공된 경우 (1시간 후), 설정된 날짜와 일치해야 함
+	expectedCommitterDate := expectedDate.Add(time.Hour)
+	assert.WithinDuration(t, expectedCommitterDate, mergeCommit.Committer.When, time.Second, "Committer date should match expected date")
+
+	t.Logf("Merge commit author and date validated successfully:")
+	t.Logf("  Author: %s <%s>", mergeCommit.Author.Name, mergeCommit.Author.Email)
+	t.Logf("  Author Date: %s", mergeCommit.Author.When.Format(time.RFC3339))
+	t.Logf("  Committer: %s <%s>", mergeCommit.Committer.Name, mergeCommit.Committer.Email)
+	t.Logf("  Committer Date: %s", mergeCommit.Committer.When.Format(time.RFC3339))
 }
