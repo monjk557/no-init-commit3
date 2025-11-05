@@ -259,7 +259,7 @@ func setupTestRepository(t *testing.T) (string, func()) {
 	err = os.MkdirAll(repoDir, 0755)
 	require.NoError(t, err)
 
-	// Initialize git repository
+	// Initialize git repository (non-bare for test setup)
 	repo, err := git.PlainInit(repoDir, false)
 	require.NoError(t, err)
 
@@ -283,7 +283,7 @@ func setupTestRepository(t *testing.T) (string, func()) {
 	}
 
 	// Initial commit
-	_, err = worktree.Commit("Initial commit", &git.CommitOptions{
+	initialCommit, err := worktree.Commit("Initial commit", &git.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test Author",
 			Email: "test@example.com",
@@ -291,6 +291,29 @@ func setupTestRepository(t *testing.T) (string, func()) {
 		},
 	})
 	require.NoError(t, err)
+
+	// Get the default branch name (could be master or main)
+	headRef, err := repo.Head()
+	require.NoError(t, err)
+	defaultBranchName := headRef.Name().Short()
+
+	// Create main branch if it doesn't exist (rename default branch to main)
+	if defaultBranchName != "main" {
+		// Create main branch from initial commit
+		mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), initialCommit)
+		err = repo.Storer.SetReference(mainRef)
+		require.NoError(t, err)
+
+		// Update HEAD to point to main
+		err = repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main")))
+		require.NoError(t, err)
+
+		// Checkout main
+		err = worktree.Checkout(&git.CheckoutOptions{
+			Branch: plumbing.NewBranchReferenceName("main"),
+		})
+		require.NoError(t, err)
+	}
 
 	// Create feature branch
 	err = worktree.Checkout(&git.CheckoutOptions{
@@ -373,8 +396,8 @@ func setupTestRepository(t *testing.T) (string, func()) {
 	err = os.MkdirAll(ownerDir, 0755)
 	require.NoError(t, err)
 
-	// Move repo to owner directory
-	finalRepoDir := filepath.Join(ownerDir, "testrepo")
+	// Move repo to owner directory with .git extension (required for API)
+	finalRepoDir := filepath.Join(ownerDir, "testrepo.git")
 	err = os.Rename(repoDir, finalRepoDir)
 	require.NoError(t, err)
 
@@ -392,7 +415,8 @@ func setupMergePreviewHandler(t *testing.T, repoRoot string) *protocol.MergePrev
 			RepoRoot: repoRoot,
 		},
 		Logging: config.LoggingConfig{
-			Level: "debug",
+			Level:  "debug",
+			Format: "json",
 		},
 	}
 

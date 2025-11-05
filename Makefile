@@ -143,12 +143,14 @@ test:
 		cd tests && go test -v ./unit/api/...; \
 	elif [ "$(filter integration,$(MAKECMDGOALS))" ]; then \
 		cd tests && go test -v ./integration/...; \
+		cd .. && go test -v ./test/integration/...; \
 	elif [ "$(filter e2e,$(MAKECMDGOALS))" ]; then \
 		$(MAKE) local-it bg; \
 		sleep 10; \
 		cd tests && go test -v -tags=e2e ./e2e/...; \
 	else \
 		cd tests && go test -race -v ./...; \
+		cd .. && go test -v ./test/integration/...; \
 	fi
 
 # [MANUAL 7] make clean

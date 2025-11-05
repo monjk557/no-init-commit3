@@ -1,0 +1,591 @@
+package protocol
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+
+	"github.com/collabops/git-executor/internal/api"
+	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/git"
+	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/repository"
+)
+
+// MergeOperationsHandler handles REST API operations for Git merge operations
+type MergeOperationsHandler struct {
+	pathConfig       *repository.PathConfig
+	logger           *logging.Logger
+	errorMapper      *api.GitErrorMapper
+	objectManager    *git.GitObjectManager
+	conflictDetector *git.ConflictDetector
+}
+
+// NewMergeOperationsHandler creates a new merge operations handler
+func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config cannot be nil")
+	}
+
+	logger, err := logging.NewLogger(cfg.Logging)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %w", err)
+	}
+
+	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create path config: %w", err)
+	}
+
+	objectManager, err := git.NewGitObjectManager(pathConfig, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create object manager: %w", err)
+	}
+	errorMapper := api.GetDefaultMapper()
+	conflictDetector := git.NewConflictDetector(pathConfig, logger)
+
+	return &MergeOperationsHandler{
+		pathConfig:       pathConfig,
+		logger:           logger,
+		errorMapper:      errorMapper,
+		objectManager:    objectManager,
+		conflictDetector: conflictDetector,
+	}, nil
+}
+
+// MergePreviewHandler handles REST API operations for Git merge preview operations
+type MergePreviewHandler struct {
+	pathConfig       *repository.PathConfig
+	logger           *logging.Logger
+	errorMapper      *api.GitErrorMapper
+	objectManager    *git.GitObjectManager
+	conflictDetector *git.ConflictDetector
+}
+
+// NewMergePreviewHandler creates a new merge preview handler
+func NewMergePreviewHandler(cfg *config.Config) (*MergePreviewHandler, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config cannot be nil")
+	}
+
+	logger, err := logging.NewLogger(cfg.Logging)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %w", err)
+	}
+
+	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create path config: %w", err)
+	}
+
+	objectManager, err := git.NewGitObjectManager(pathConfig, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create object manager: %w", err)
+	}
+	errorMapper := api.GetDefaultMapper()
+	conflictDetector := git.NewConflictDetector(pathConfig, logger)
+
+	return &MergePreviewHandler{
+		pathConfig:       pathConfig,
+		logger:           logger,
+		errorMapper:      errorMapper,
+		objectManager:    objectManager,
+		conflictDetector: conflictDetector,
+	}, nil
+}
+
+// HandleMerge handles POST /repos/{owner}/{repo}/merges for performing Git merges
+func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Extract URL parameters
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	h.logger.Info("Processing merge request",
+		zap.String("owner", owner),
+		zap.String("repo", repo))
+
+	// Validate path components
+	if err := h.validatePath(owner, repo); err != nil {
+		apiErr := h.errorMapper.MapError(err, "validate_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Parse and validate JSON request
+	var req MergeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid JSON: %v", err),
+		})
+		return
+	}
+
+	// Set default method if not specified
+	if req.Method == "" {
+		req.Method = MergeMethodMerge
+	}
+
+	// Set default strategy if not specified
+	if req.Strategy == "" {
+		req.Strategy = MergeStrategyRecursive
+	}
+
+	// Validate merge request
+	if err := h.validateMergeRequest(&req); err != nil {
+		if gitAPIErr, ok := err.(*api.GitAPIError); ok {
+			c.JSON(gitAPIErr.HTTPStatusCode(), gin.H{
+				"success": false,
+				"error":   gitAPIErr.Message,
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
+		return
+	}
+
+	// Open repository
+	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "open_repository")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Resolve source and target commits
+	sourceCommit, err := h.resolveReference(repository, req.SourceRef)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "resolve_source_ref")
+		_ = apiErr.WithDetails("source_ref", req.SourceRef)
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	targetCommit, err := h.resolveReference(repository, req.TargetRef)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "resolve_target_ref")
+		_ = apiErr.WithDetails("target_ref", req.TargetRef)
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	h.logger.Debug("Resolved merge references",
+		zap.String("source_commit", sourceCommit.String()),
+		zap.String("target_commit", targetCommit.String()))
+
+	// Check if source and target are the same
+	if sourceCommit == targetCommit {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Source and target references point to the same commit",
+		})
+		return
+	}
+
+	// Perform merge analysis first
+	conflictAnalysis, err := h.analyzeMerge(ctx, repository, sourceCommit, targetCommit, &req)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "analyze_merge")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// Handle dry run
+	if req.DryRun {
+		// Rebase method의 경우 각 커밋 단계별로 conflict를 분석해야 함
+		if req.Method == MergeMethodRebase {
+			rebaseAnalysis, err := h.analyzeRebaseDryRun(ctx, repository, sourceCommit, targetCommit, &req)
+			if err != nil {
+				apiErr := h.errorMapper.MapError(err, "analyze_rebase_dry_run")
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+
+			details := map[string]interface{}{
+				"dry_run":               true,
+				"can_merge":             rebaseAnalysis.CanMerge,
+				"auto_resolvable_count": rebaseAnalysis.AutoResolvable,
+				"estimated_time":        rebaseAnalysis.EstimatedTime.String(),
+				"recommendations":       rebaseAnalysis.Recommendations,
+			}
+			// Add rebase-specific metadata if available
+			if rebaseAnalysis.Metadata != nil {
+				if commitsToRebase, ok := rebaseAnalysis.Metadata["commits_to_rebase"].(int); ok {
+					details["commits_to_rebase"] = commitsToRebase
+				}
+				if firstConflictCommit, ok := rebaseAnalysis.Metadata["first_conflict_commit"].(string); ok {
+					details["first_conflict_commit"] = firstConflictCommit
+				}
+			}
+
+			response := &MergeResponse{
+				Success:         !rebaseAnalysis.HasConflicts || req.ForceConflict,
+				IsFastForward:   false, // Rebase는 fast-forward가 아님
+				HasConflicts:    rebaseAnalysis.HasConflicts,
+				ConflictCount:   rebaseAnalysis.ConflictCount,
+				Strategy:        req.Strategy,
+				Method:          req.Method,
+				Message:         "Rebase dry run completed - no changes made",
+				ConflictSummary: rebaseAnalysis,
+				Details:         details,
+			}
+			h.SendSuccess(c, response, "Rebase dry run analysis completed successfully")
+			return
+		}
+
+		// Merge와 Squash는 동일한 분석 사용 (둘 다 source vs target의 단일 merge)
+		response := &MergeResponse{
+			Success:         !conflictAnalysis.HasConflicts || req.ForceConflict,
+			IsFastForward:   conflictAnalysis.IsFastForward,
+			HasConflicts:    conflictAnalysis.HasConflicts,
+			ConflictCount:   conflictAnalysis.ConflictCount,
+			Strategy:        req.Strategy,
+			Method:          req.Method,
+			Message:         "Dry run completed - no changes made",
+			ConflictSummary: conflictAnalysis,
+			Details: map[string]interface{}{
+				"dry_run":               true,
+				"can_merge":             conflictAnalysis.CanMerge,
+				"auto_resolvable_count": conflictAnalysis.AutoResolvable,
+				"estimated_time":        conflictAnalysis.EstimatedTime.String(),
+				"recommendations":       conflictAnalysis.Recommendations,
+			},
+		}
+		h.SendSuccess(c, response, "Merge analysis completed successfully")
+		return
+	}
+
+	// Check for conflicts (unless force is specified)
+	if conflictAnalysis.HasConflicts && !req.ForceConflict {
+		apiErr := api.NewBadRequestError(fmt.Sprintf("Merge has %d conflicts. Use force_conflict=true to override", conflictAnalysis.ConflictCount))
+		_ = apiErr.WithDetails("conflict_count", conflictAnalysis.ConflictCount)
+		_ = apiErr.WithDetails("conflict_summary", conflictAnalysis)
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// Perform the actual merge
+	mergeResult, err := h.performMerge(ctx, repository, sourceCommit, targetCommit, &req, conflictAnalysis)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "perform_merge")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// Prepare response
+	response := &MergeResponse{
+		Success:       true,
+		IsFastForward: mergeResult.IsFastForward,
+		HasConflicts:  mergeResult.HasConflicts,
+		ConflictCount: 0, // Successful merge means conflicts were resolved
+		Strategy:      req.Strategy,
+		Method:        req.Method, // 사용된 merge method 추가
+		Message:       h.generateMergeMessage(mergeResult, &req),
+	}
+
+	if mergeResult.MergeCommit != nil {
+		response.MergeCommit = h.commitToInfo(mergeResult.MergeCommit)
+	}
+
+	// Add additional details
+	details := map[string]interface{}{
+		"source_ref":    req.SourceRef,
+		"target_ref":    req.TargetRef,
+		"merge_type":    h.getMergeTypeForMethod(req.Method, mergeResult),
+		"merge_method":  string(req.Method),
+		"strategy_used": string(req.Strategy),
+	}
+
+	if req.Message != "" {
+		details["custom_message"] = req.Message
+	}
+
+	if mergeResult.HasConflicts {
+		details["conflicts_resolved"] = true
+		details["force_applied"] = req.ForceConflict
+	}
+
+	response.Details = details
+
+	// Log success
+	h.logger.Info("Merge completed successfully",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("source_ref", req.SourceRef),
+		zap.String("target_ref", req.TargetRef),
+		zap.String("method", string(req.Method)),
+		zap.Bool("fast_forward", mergeResult.IsFastForward),
+		zap.Bool("had_conflicts", mergeResult.HasConflicts),
+		zap.String("strategy", string(req.Strategy)))
+
+	// Send success response
+	h.SendSuccess(c, response, response.Message)
+}
+
+// HandleMergePreview handles GET /repos/{owner}/{repo}/merges/preview for merge analysis
+func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
+	startTime := time.Now()
+	ctx := c.Request.Context()
+
+	// Extract URL parameters
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	h.logger.Info("Processing merge preview request",
+		zap.String("owner", owner),
+		zap.String("repo", repo))
+
+	// Validate path components
+	if err := h.validatePath(owner, repo); err != nil {
+		apiErr := h.errorMapper.MapError(err, "validate_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Parse and validate query parameters
+	var req MergePreviewRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid query parameters: %v", err),
+		})
+		return
+	}
+
+	// Set defaults
+	if req.Strategy == "" {
+		req.Strategy = MergeStrategyRecursive
+	}
+	if req.MaxFileSize == 0 {
+		req.MaxFileSize = 1024 * 1024 // 1MB default
+	}
+	if req.MaxFiles == 0 {
+		req.MaxFiles = 1000 // 1000 files default
+	}
+	if req.CompareStrategy == "" {
+		req.CompareStrategy = "tree"
+	}
+
+	// Validate merge preview request
+	if err := h.validateMergePreviewRequest(&req); err != nil {
+		if gitAPIErr, ok := err.(*api.GitAPIError); ok {
+			c.JSON(gitAPIErr.HTTPStatusCode(), gin.H{
+				"success": false,
+				"error":   gitAPIErr.Message,
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
+		return
+	}
+
+	// Open repository
+	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "open_repository")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	// Resolve source and target commits
+	sourceCommit, err := h.resolveReference(repository, req.SourceRef)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "resolve_source_ref")
+		_ = apiErr.WithDetails("source_ref", req.SourceRef)
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	targetCommit, err := h.resolveReference(repository, req.TargetRef)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "resolve_target_ref")
+		_ = apiErr.WithDetails("target_ref", req.TargetRef)
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{
+			"success": false,
+			"error":   apiErr.Message,
+		})
+		return
+	}
+
+	h.logger.Debug("Resolved merge preview references",
+		zap.String("source_commit", sourceCommit.String()),
+		zap.String("target_commit", targetCommit.String()))
+
+	// Check if source and target are the same
+	if sourceCommit == targetCommit {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Source and target references point to the same commit",
+		})
+		return
+	}
+
+	// Perform merge preview analysis
+	previewResult, err := h.performMergePreview(ctx, repository, sourceCommit, targetCommit, &req, startTime)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "perform_merge_preview")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// Send success response
+	h.SendSuccess(c, previewResult, "Merge preview completed successfully")
+}
+
+// validatePath validates the owner and repo path components
+func (h *MergeOperationsHandler) validatePath(owner, repo string) error {
+	// Check for empty components
+	if owner == "" {
+		return api.NewBadRequestError("owner parameter is required")
+	}
+	if repo == "" {
+		return api.NewBadRequestError("repo parameter is required")
+	}
+
+	// Check path traversal and security
+	pathValidator := repository.NewGitAPIPathValidator(h.pathConfig)
+	return pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo))
+}
+
+// validatePath validates the owner and repo path components
+func (h *MergePreviewHandler) validatePath(owner, repo string) error {
+	// Check for empty components
+	if owner == "" {
+		return api.NewBadRequestError("owner parameter is required")
+	}
+	if repo == "" {
+		return api.NewBadRequestError("repo parameter is required")
+	}
+
+	// Check path traversal and security
+	pathValidator := repository.NewGitAPIPathValidator(h.pathConfig)
+	return pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo))
+}
+
+// resolveReference resolves a Git reference to a commit hash
+func (h *MergeOperationsHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
+	// Try to resolve as hash first
+	if hash := plumbing.NewHash(ref); !hash.IsZero() {
+		// Verify the commit exists
+		_, err := repo.CommitObject(hash)
+		if err == nil {
+			return hash, nil
+		}
+	}
+
+	// Try to resolve as reference
+	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
+	if err == nil {
+		return reference.Hash(), nil
+	}
+
+	// Try with refs/heads/ prefix for branch names
+	if !strings.HasPrefix(ref, "refs/") {
+		branchRef := "refs/heads/" + ref
+		reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true)
+		if err == nil {
+			return reference.Hash(), nil
+		}
+
+		// Try with refs/tags/ prefix for tag names
+		tagRef := "refs/tags/" + ref
+		reference, err = repo.Reference(plumbing.ReferenceName(tagRef), true)
+		if err == nil {
+			return reference.Hash(), nil
+		}
+	}
+
+	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference: %s", ref)
+}
+
+// resolveReference resolves a Git reference to a commit hash
+func (h *MergePreviewHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
+	// Try to resolve as hash first
+	if hash := plumbing.NewHash(ref); !hash.IsZero() {
+		// Verify the commit exists
+		_, err := repo.CommitObject(hash)
+		if err == nil {
+			return hash, nil
+		}
+	}
+
+	// Try to resolve as reference
+	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
+	if err == nil {
+		return reference.Hash(), nil
+	}
+
+	// Try with refs/heads/ prefix for branch names
+	if !strings.HasPrefix(ref, "refs/") {
+		branchRef := "refs/heads/" + ref
+		reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true)
+		if err == nil {
+			return reference.Hash(), nil
+		}
+
+		// Try with refs/tags/ prefix for tag names
+		tagRef := "refs/tags/" + ref
+		reference, err = repo.Reference(plumbing.ReferenceName(tagRef), true)
+		if err == nil {
+			return reference.Hash(), nil
+		}
+	}
+
+	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference: %s", ref)
+}
+
+// SendSuccess sends a successful JSON response
+func (h *MergeOperationsHandler) SendSuccess(c *gin.Context, data interface{}, message string) {
+	response := map[string]interface{}{
+		"success": true,
+		"message": message,
+		"data":    data,
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// SendSuccess sends a successful JSON response
+func (h *MergePreviewHandler) SendSuccess(c *gin.Context, data interface{}, message string) {
+	response := map[string]interface{}{
+		"success": true,
+		"message": message,
+		"data":    data,
+	}
+	c.JSON(http.StatusOK, response)
+}

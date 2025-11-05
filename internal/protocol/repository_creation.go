@@ -242,5 +242,3 @@ func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner,
 
 	return response, nil
 }
-
-// Note: createInitialCommit functionality moved to git.DefaultRepositoryManager

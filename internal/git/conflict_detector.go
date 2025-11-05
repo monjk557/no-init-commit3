@@ -58,6 +58,7 @@ type MergeStrategy string
 const (
 	MergeStrategyRecursive MergeStrategy = "recursive" // Default three-way merge
 	MergeStrategyResolve   MergeStrategy = "resolve"   // Three-way merge with aggressive resolution
+	MergeStrategyORT       MergeStrategy = "ort"       // Optimized Recursive Three-way merge (improved recursive)
 	MergeStrategyOctopus   MergeStrategy = "octopus"   // Multi-branch merge
 	MergeStrategyOurs      MergeStrategy = "ours"      // Keep our version on conflicts
 	MergeStrategyTheirs    MergeStrategy = "theirs"    // Keep their version on conflicts

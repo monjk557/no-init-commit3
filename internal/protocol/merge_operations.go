@@ -3,11 +3,9 @@ package protocol
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -16,60 +14,26 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/collabops/git-executor/internal/api"
-	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
-	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/repository"
 	"github.com/collabops/git-executor/internal/schemas/common"
 )
 
-// MergeOperationsHandler handles REST API operations for Git merge operations
-type MergeOperationsHandler struct {
-	pathConfig       *repository.PathConfig
-	logger           *logging.Logger
-	errorMapper      *api.GitErrorMapper
-	objectManager    *git.GitObjectManager
-	conflictDetector *git.ConflictDetector
-}
+// MergeMethod represents different merge methods (how to combine branches)
+type MergeMethod string
 
-// NewMergeOperationsHandler creates a new merge operations handler
-func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config cannot be nil")
-	}
+const (
+	MergeMethodMerge  MergeMethod = "merge"  // Default: create a merge commit
+	MergeMethodSquash MergeMethod = "squash" // Squash all commits into a single commit
+	MergeMethodRebase MergeMethod = "rebase" // Rebase source branch onto target (not yet implemented)
+)
 
-	logger, err := logging.NewLogger(cfg.Logging)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create logger: %w", err)
-	}
-
-	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create path config: %w", err)
-	}
-
-	objectManager, err := git.NewGitObjectManager(pathConfig, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create object manager: %w", err)
-	}
-	errorMapper := api.GetDefaultMapper()
-	conflictDetector := git.NewConflictDetector(pathConfig, logger)
-
-	return &MergeOperationsHandler{
-		pathConfig:       pathConfig,
-		logger:           logger,
-		errorMapper:      errorMapper,
-		objectManager:    objectManager,
-		conflictDetector: conflictDetector,
-	}, nil
-}
-
-// MergeStrategy represents different merge strategies
+// MergeStrategy represents different merge strategies (Git's internal merge algorithm)
 type MergeStrategy string
 
 const (
 	MergeStrategyRecursive MergeStrategy = "recursive" // Default three-way merge
 	MergeStrategyResolve   MergeStrategy = "resolve"   // Three-way merge with aggressive resolution
+	MergeStrategyORT       MergeStrategy = "ort"       // Optimized Recursive Three-way merge (improved recursive)
 	MergeStrategyOurs      MergeStrategy = "ours"      // Keep our version on conflicts
 	MergeStrategyTheirs    MergeStrategy = "theirs"    // Keep their version on conflicts
 	MergeStrategySubtree   MergeStrategy = "subtree"   // Subtree merge strategy
@@ -79,6 +43,7 @@ const (
 type MergeRequest struct {
 	SourceRef     string                 `json:"source_ref" binding:"required"` // Source branch/commit to merge FROM
 	TargetRef     string                 `json:"target_ref" binding:"required"` // Target branch/commit to merge INTO
+	Method        MergeMethod            `json:"method,omitempty"`              // Merge method (merge, squash, rebase) - default: merge
 	Strategy      MergeStrategy          `json:"strategy,omitempty"`            // Merge strategy (default: recursive)
 	Message       string                 `json:"message,omitempty"`             // Custom merge commit message
 	Author        *common.AuthorInfo     `json:"author,omitempty"`              // Merge commit author
@@ -96,6 +61,7 @@ type MergeResponse struct {
 	HasConflicts    bool                     `json:"has_conflicts"`    // Whether conflicts were detected
 	ConflictCount   int                      `json:"conflict_count"`   // Number of conflicts
 	Strategy        MergeStrategy            `json:"strategy"`         // Strategy used
+	Method          MergeMethod              `json:"method"`           // Merge method used (merge, squash, rebase)
 	Message         string                   `json:"message"`          // Operation result message
 	Details         map[string]interface{}   `json:"details"`          // Additional details
 	ConflictSummary *git.MergeAnalysisResult `json:"conflict_summary"` // Detailed conflict analysis
@@ -109,215 +75,6 @@ type MergeResult struct {
 	ConflictAnalysis *git.MergeAnalysisResult
 }
 
-// HandleMerge handles POST /repos/{owner}/{repo}/merges for performing Git merges
-func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	// Extract URL parameters
-	owner := c.Param("owner")
-	repo := c.Param("repo")
-
-	h.logger.Info("Processing merge request",
-		zap.String("owner", owner),
-		zap.String("repo", repo))
-
-	// Validate path components
-	if err := h.validatePath(owner, repo); err != nil {
-		apiErr := h.errorMapper.MapError(err, "validate_path")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{
-			"success": false,
-			"error":   apiErr.Message,
-		})
-		return
-	}
-
-	// Parse and validate JSON request
-	var req MergeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid JSON: %v", err),
-		})
-		return
-	}
-
-	// Set default strategy if not specified
-	if req.Strategy == "" {
-		req.Strategy = MergeStrategyRecursive
-	}
-
-	// Validate merge request
-	if err := h.validateMergeRequest(&req); err != nil {
-		if gitAPIErr, ok := err.(*api.GitAPIError); ok {
-			c.JSON(gitAPIErr.HTTPStatusCode(), gin.H{
-				"success": false,
-				"error":   gitAPIErr.Message,
-			})
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-
-	// Open repository
-	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "open_repository")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{
-			"success": false,
-			"error":   apiErr.Message,
-		})
-		return
-	}
-
-	// Resolve source and target commits
-	sourceCommit, err := h.resolveReference(repository, req.SourceRef)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "resolve_source_ref")
-		_ = apiErr.WithDetails("source_ref", req.SourceRef)
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{
-			"success": false,
-			"error":   apiErr.Message,
-		})
-		return
-	}
-
-	targetCommit, err := h.resolveReference(repository, req.TargetRef)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "resolve_target_ref")
-		_ = apiErr.WithDetails("target_ref", req.TargetRef)
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{
-			"success": false,
-			"error":   apiErr.Message,
-		})
-		return
-	}
-
-	h.logger.Debug("Resolved merge references",
-		zap.String("source_commit", sourceCommit.String()),
-		zap.String("target_commit", targetCommit.String()))
-
-	// Check if source and target are the same
-	if sourceCommit == targetCommit {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Source and target references point to the same commit",
-		})
-		return
-	}
-
-	// Perform merge analysis first
-	conflictAnalysis, err := h.analyzeMerge(ctx, repository, sourceCommit, targetCommit, &req)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "analyze_merge")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
-	// Handle dry run
-	if req.DryRun {
-		response := &MergeResponse{
-			Success:         !conflictAnalysis.HasConflicts || req.ForceConflict,
-			IsFastForward:   conflictAnalysis.IsFastForward,
-			HasConflicts:    conflictAnalysis.HasConflicts,
-			ConflictCount:   conflictAnalysis.ConflictCount,
-			Strategy:        req.Strategy,
-			Message:         "Dry run completed - no changes made",
-			ConflictSummary: conflictAnalysis,
-			Details: map[string]interface{}{
-				"dry_run":               true,
-				"can_merge":             conflictAnalysis.CanMerge,
-				"auto_resolvable_count": conflictAnalysis.AutoResolvable,
-				"estimated_time":        conflictAnalysis.EstimatedTime.String(),
-				"recommendations":       conflictAnalysis.Recommendations,
-			},
-		}
-		h.SendSuccess(c, response, "Merge analysis completed successfully")
-		return
-	}
-
-	// Check for conflicts (unless force is specified)
-	if conflictAnalysis.HasConflicts && !req.ForceConflict {
-		apiErr := api.NewBadRequestError(fmt.Sprintf("Merge has %d conflicts. Use force_conflict=true to override", conflictAnalysis.ConflictCount))
-		_ = apiErr.WithDetails("conflict_count", conflictAnalysis.ConflictCount)
-		_ = apiErr.WithDetails("conflict_summary", conflictAnalysis)
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
-	// Perform the actual merge
-	mergeResult, err := h.performMerge(ctx, repository, sourceCommit, targetCommit, &req, conflictAnalysis)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "perform_merge")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
-	// Prepare response
-	response := &MergeResponse{
-		Success:       true,
-		IsFastForward: mergeResult.IsFastForward,
-		HasConflicts:  mergeResult.HasConflicts,
-		ConflictCount: 0, // Successful merge means conflicts were resolved
-		Strategy:      req.Strategy,
-		Message:       h.generateMergeMessage(mergeResult, &req),
-	}
-
-	if mergeResult.MergeCommit != nil {
-		response.MergeCommit = h.commitToInfo(mergeResult.MergeCommit)
-	}
-
-	// Add additional details
-	details := map[string]interface{}{
-		"source_ref":    req.SourceRef,
-		"target_ref":    req.TargetRef,
-		"merge_type":    h.getMergeType(mergeResult),
-		"strategy_used": string(req.Strategy),
-	}
-
-	if req.Message != "" {
-		details["custom_message"] = req.Message
-	}
-
-	if mergeResult.HasConflicts {
-		details["conflicts_resolved"] = true
-		details["force_applied"] = req.ForceConflict
-	}
-
-	response.Details = details
-
-	// Log success
-	h.logger.Info("Merge completed successfully",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("source_ref", req.SourceRef),
-		zap.String("target_ref", req.TargetRef),
-		zap.Bool("fast_forward", mergeResult.IsFastForward),
-		zap.Bool("had_conflicts", mergeResult.HasConflicts),
-		zap.String("strategy", string(req.Strategy)))
-
-	// Send success response
-	h.SendSuccess(c, response, response.Message)
-}
-
-// validatePath validates the owner and repo path components
-func (h *MergeOperationsHandler) validatePath(owner, repo string) error {
-	// Check for empty components
-	if owner == "" {
-		return api.NewBadRequestError("owner parameter is required")
-	}
-	if repo == "" {
-		return api.NewBadRequestError("repo parameter is required")
-	}
-
-	// Check path traversal and security
-	pathValidator := repository.NewGitAPIPathValidator(h.pathConfig)
-	return pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo))
-}
-
 // validateMergeRequest validates the merge request parameters
 func (h *MergeOperationsHandler) validateMergeRequest(req *MergeRequest) error {
 	// Validate source and target refs
@@ -328,12 +85,24 @@ func (h *MergeOperationsHandler) validateMergeRequest(req *MergeRequest) error {
 		return api.NewBadRequestError("target_ref is required")
 	}
 
+	// Validate method
+	switch req.Method {
+	case MergeMethodMerge, MergeMethodSquash, MergeMethodRebase:
+		// Valid method
+	default:
+		if req.Method != "" {
+			return api.NewBadRequestError(fmt.Sprintf("Invalid merge method: %s. Must be one of: merge, squash, rebase", req.Method))
+		}
+	}
+
 	// Validate strategy
 	switch req.Strategy {
-	case MergeStrategyRecursive, MergeStrategyResolve, MergeStrategyOurs, MergeStrategyTheirs, MergeStrategySubtree:
+	case MergeStrategyRecursive, MergeStrategyResolve, MergeStrategyORT, MergeStrategyOurs, MergeStrategyTheirs, MergeStrategySubtree:
 		// Valid strategy
 	default:
-		return api.NewBadRequestError(fmt.Sprintf("Invalid merge strategy: %s", req.Strategy))
+		if req.Strategy != "" {
+			return api.NewBadRequestError(fmt.Sprintf("Invalid merge strategy: %s", req.Strategy))
+		}
 	}
 
 	// Validate message length
@@ -364,42 +133,6 @@ func (h *MergeOperationsHandler) validateMergeRequest(req *MergeRequest) error {
 	return nil
 }
 
-// resolveReference resolves a Git reference to a commit hash
-func (h *MergeOperationsHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
-	// Try to resolve as hash first
-	if hash := plumbing.NewHash(ref); !hash.IsZero() {
-		// Verify the commit exists
-		_, err := repo.CommitObject(hash)
-		if err == nil {
-			return hash, nil
-		}
-	}
-
-	// Try to resolve as reference
-	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
-	if err == nil {
-		return reference.Hash(), nil
-	}
-
-	// Try with refs/heads/ prefix for branch names
-	if !strings.HasPrefix(ref, "refs/") {
-		branchRef := "refs/heads/" + ref
-		reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true)
-		if err == nil {
-			return reference.Hash(), nil
-		}
-
-		// Try with refs/tags/ prefix for tag names
-		tagRef := "refs/tags/" + ref
-		reference, err = repo.Reference(plumbing.ReferenceName(tagRef), true)
-		if err == nil {
-			return reference.Hash(), nil
-		}
-	}
-
-	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference: %s", ref)
-}
-
 // analyzeMerge performs merge conflict analysis
 func (h *MergeOperationsHandler) analyzeMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest) (*git.MergeAnalysisResult, error) {
 	// Create analysis request with already opened repository
@@ -419,6 +152,190 @@ func (h *MergeOperationsHandler) analyzeMerge(ctx context.Context, repo *gogit.R
 	return h.conflictDetector.AnalyzeMerge(ctx, analysisReq)
 }
 
+// analyzeRebaseDryRun performs rebase-specific dry run analysis
+// Rebase는 각 커밋을 순차적으로 rebase하면서 각 단계에서 conflict를 확인해야 함
+func (h *MergeOperationsHandler) analyzeRebaseDryRun(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest) (*git.MergeAnalysisResult, error) {
+	// Get source and target commits
+	sourceCommit, err := repo.CommitObject(sourceHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get source commit: %w", err)
+	}
+
+	targetCommit, err := repo.CommitObject(targetHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get target commit: %w", err)
+	}
+
+	// Find merge base (common ancestor)
+	mergeBases, err := sourceCommit.MergeBase(targetCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find merge base: %w", err)
+	}
+	if len(mergeBases) == 0 {
+		return nil, fmt.Errorf("no common ancestor found for rebase")
+	}
+
+	mergeBase := mergeBases[0]
+
+	// If source and target are the same or source is already on target, nothing to rebase
+	if mergeBase.Hash == sourceCommit.Hash {
+		return &git.MergeAnalysisResult{
+			CanMerge:          true,
+			HasConflicts:      false,
+			IsFastForward:     false,
+			ConflictCount:     0,
+			FileConflicts:     []git.FileConflict{},
+			SourceCommit:      nil, // Will be set if needed
+			TargetCommit:      nil,
+			Strategy:          git.MergeStrategy(req.Strategy),
+			AutoResolvable:    0,
+			SeverityBreakdown: make(map[git.ConflictSeverity]int),
+			EstimatedTime:     0,
+			Recommendations:   []string{"Source is already based on target, nothing to rebase"},
+		}, nil
+	}
+
+	// Collect commits from merge base to source (exclusive of merge base, inclusive of source)
+	commitsToRebase, err := h.getCommitsBetween(repo, mergeBase, sourceCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commits to rebase: %w", err)
+	}
+
+	if len(commitsToRebase) == 0 {
+		return &git.MergeAnalysisResult{
+			CanMerge:          true,
+			HasConflicts:      false,
+			IsFastForward:     false,
+			ConflictCount:     0,
+			FileConflicts:     []git.FileConflict{},
+			Strategy:          git.MergeStrategy(req.Strategy),
+			AutoResolvable:    0,
+			SeverityBreakdown: make(map[git.ConflictSeverity]int),
+			EstimatedTime:     0,
+			Recommendations:   []string{"No commits to rebase"},
+		}, nil
+	}
+
+	// Analyze each commit sequentially (simulating rebase)
+	allConflicts := make(map[string]git.FileConflict) // Use map to deduplicate conflicts
+	currentBase := targetCommit
+	totalConflictCount := 0
+	var firstConflictCommit *object.Commit
+	firstConflictCommitSHA := ""
+
+	h.logger.Info("Analyzing rebase dry run",
+		zap.Int("commits_to_rebase", len(commitsToRebase)))
+
+	for i, commitToRebase := range commitsToRebase {
+		// Get the commit's parent (the base from which this commit was made)
+		var parentCommit *object.Commit
+		if len(commitToRebase.ParentHashes) > 0 {
+			parentCommit, err = repo.CommitObject(commitToRebase.ParentHashes[0])
+			if err != nil {
+				h.logger.Warn("Failed to get parent commit for rebase analysis",
+					zap.String("commit", commitToRebase.Hash.String()),
+					zap.Error(err))
+				continue
+			}
+		}
+
+		// For non-root commits, analyze conflict with current base
+		if parentCommit != nil {
+			// Analyze this commit's rebase onto current base
+			singleAnalysis, err := h.analyzeMerge(ctx, repo, commitToRebase.Hash, currentBase.Hash, req)
+			if err != nil {
+				h.logger.Warn("Failed to analyze rebase commit",
+					zap.String("commit", commitToRebase.Hash.String()),
+					zap.Error(err))
+				continue
+			}
+
+			// Collect conflicts from this step
+			if singleAnalysis.HasConflicts {
+				if firstConflictCommit == nil {
+					firstConflictCommit = commitToRebase
+					firstConflictCommitSHA = commitToRebase.Hash.String()
+				}
+				totalConflictCount += singleAnalysis.ConflictCount
+
+				// Merge conflicts into allConflicts map (deduplicate by path)
+				for _, conflict := range singleAnalysis.FileConflicts {
+					allConflicts[conflict.FilePath] = conflict
+				}
+			}
+
+			// Update current base for next iteration (simulating successful rebase)
+			// In dry run, we don't actually create commits, so we simulate by using target
+			// This is approximate - actual rebase would have new commits
+			// For analysis purposes, we continue with the assumption that rebase succeeds
+		}
+
+		h.logger.Debug("Analyzed rebase commit",
+			zap.Int("index", i+1),
+			zap.Int("total", len(commitsToRebase)),
+			zap.String("commit", commitToRebase.Hash.String()),
+			zap.Bool("has_conflicts", parentCommit != nil && totalConflictCount > 0))
+	}
+
+	// Convert conflicts map to slice
+	fileConflicts := make([]git.FileConflict, 0, len(allConflicts))
+	for _, conflict := range allConflicts {
+		fileConflicts = append(fileConflicts, conflict)
+	}
+
+	// Calculate auto-resolvable count
+	autoResolvable := 0
+	for _, conflict := range fileConflicts {
+		if conflict.AutoResolvable {
+			autoResolvable++
+		}
+	}
+
+	// Calculate severity breakdown
+	severityBreakdown := make(map[git.ConflictSeverity]int)
+	for _, conflict := range fileConflicts {
+		severityBreakdown[conflict.Severity]++
+	}
+
+	// Generate recommendations
+	recommendations := []string{}
+	if totalConflictCount > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("Rebase will encounter %d conflicts across %d commits", totalConflictCount, len(commitsToRebase)))
+		if firstConflictCommitSHA != "" {
+			recommendations = append(recommendations, fmt.Sprintf("First conflict occurs at commit %s: %s", firstConflictCommitSHA[:8], firstConflictCommit.Message))
+		}
+		if autoResolvable > 0 {
+			recommendations = append(recommendations, fmt.Sprintf("%d conflicts may be auto-resolvable", autoResolvable))
+		}
+	} else {
+		recommendations = append(recommendations, "Rebase will complete without conflicts")
+	}
+
+	// Add rebase-specific metadata
+	metadata := map[string]interface{}{
+		"commits_to_rebase":     len(commitsToRebase),
+		"first_conflict_commit": firstConflictCommitSHA,
+		"rebase_method":         "sequential",
+	}
+
+	return &git.MergeAnalysisResult{
+		CanMerge:          totalConflictCount == 0 || (req.ForceConflict && autoResolvable == totalConflictCount),
+		HasConflicts:      totalConflictCount > 0,
+		IsFastForward:     false,              // Rebase is never fast-forward
+		ConflictCount:     len(fileConflicts), // Unique file conflicts
+		FileConflicts:     fileConflicts,
+		MergeBase:         nil, // Not used for rebase
+		SourceCommit:      nil, // Can be set if needed
+		TargetCommit:      nil,
+		Strategy:          git.MergeStrategy(req.Strategy),
+		AutoResolvable:    autoResolvable,
+		SeverityBreakdown: severityBreakdown,
+		EstimatedTime:     time.Duration(totalConflictCount) * time.Minute, // Rough estimate
+		Recommendations:   recommendations,
+		Metadata:          metadata,
+	}, nil
+}
+
 // performMerge performs the actual Git merge operation
 func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *git.MergeAnalysisResult) (*MergeResult, error) {
 	result := &MergeResult{
@@ -427,30 +344,169 @@ func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.R
 		ConflictAnalysis: analysis,
 	}
 
-	// Handle fast-forward merge
-	if analysis.IsFastForward {
-		err := h.performFastForwardMerge(repo, targetHash, sourceHash, req.TargetRef)
+	// Route to appropriate merge method
+	switch req.Method {
+	case MergeMethodSquash:
+		// Perform squash merge
+		mergeCommit, err := h.performSquashMerge(ctx, repo, sourceHash, targetHash, req, analysis)
 		if err != nil {
-			return nil, fmt.Errorf("fast-forward merge failed: %w", err)
+			return nil, fmt.Errorf("squash merge failed: %w", err)
+		}
+		result.MergeCommit = mergeCommit
+		return result, nil
+
+	case MergeMethodRebase:
+		// Perform rebase
+		rebaseCommit, err := h.performRebase(ctx, repo, sourceHash, targetHash, req, analysis)
+		if err != nil {
+			return nil, fmt.Errorf("rebase failed: %w", err)
+		}
+		result.MergeCommit = rebaseCommit
+		return result, nil
+
+	case MergeMethodMerge:
+		fallthrough
+	default:
+		// For merge method, always create a merge commit (even for fast-forward)
+		// This is equivalent to git merge --no-ff
+		// Perform three-way merge (which will create a merge commit)
+		mergeCommit, err := h.performThreeWayMerge(ctx, repo, sourceHash, targetHash, req, analysis)
+		if err != nil {
+			return nil, fmt.Errorf("three-way merge failed: %w", err)
 		}
 
-		// Get the source commit as the result
-		commit, err := repo.CommitObject(sourceHash)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get source commit: %w", err)
-		}
-		result.MergeCommit = commit
+		result.MergeCommit = mergeCommit
 		return result, nil
 	}
+}
 
-	// Perform three-way merge
-	mergeCommit, err := h.performThreeWayMerge(ctx, repo, sourceHash, targetHash, req, analysis)
+// performSquashMerge performs a squash merge by combining all source commits into a single commit
+// Squash merge creates a single commit that contains all changes from the source branch,
+// applied on top of the target branch. Unlike regular merge, it doesn't create a merge commit.
+func (h *MergeOperationsHandler) performSquashMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *git.MergeAnalysisResult) (*object.Commit, error) {
+	// Get source and target commits
+	sourceCommit, err := repo.CommitObject(sourceHash)
 	if err != nil {
-		return nil, fmt.Errorf("three-way merge failed: %w", err)
+		return nil, fmt.Errorf("failed to get source commit: %w", err)
 	}
 
-	result.MergeCommit = mergeCommit
-	return result, nil
+	targetCommit, err := repo.CommitObject(targetHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get target commit: %w", err)
+	}
+
+	h.logger.Info("Performing squash merge",
+		zap.String("source", sourceCommit.Hash.String()),
+		zap.String("target", targetCommit.Hash.String()))
+
+	// For squash merge, we need to merge source's tree onto target's tree
+	// This is similar to a three-way merge, but we create a single-parent commit instead of a merge commit
+	if analysis.HasConflicts && !req.ForceConflict {
+		// Even for squash merge, we should check conflicts
+		return nil, fmt.Errorf("squash merge has %d conflicts. Use force_conflict=true to override", analysis.ConflictCount)
+	}
+
+	// Use centralized strategy resolution logic
+	squashTreeHash, err := h.resolveMergeTree(ctx, repo, sourceCommit, targetCommit, analysis, req.Strategy, req.ForceConflict, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve merge tree for squash: %w", err)
+	}
+
+	// Generate squash commit message
+	message := h.generateSquashCommitMessage(req, sourceCommit, targetCommit)
+
+	// Set up author and committer
+	now := time.Now()
+	author := &object.Signature{
+		Name:  "Git Executor",
+		Email: "git@executor.com",
+		When:  now,
+	}
+	committer := author
+
+	if req.Author != nil {
+		author = &object.Signature{
+			Name:  req.Author.Name,
+			Email: req.Author.Email,
+			When:  req.Author.Date,
+		}
+	} else {
+		// Default to source commit author if not specified
+		author = &object.Signature{
+			Name:  sourceCommit.Author.Name,
+			Email: sourceCommit.Author.Email,
+			When:  sourceCommit.Author.When,
+		}
+	}
+
+	if req.Committer != nil {
+		committer = &object.Signature{
+			Name:  req.Committer.Name,
+			Email: req.Committer.Email,
+			When:  req.Committer.Date,
+		}
+	} else {
+		committer = author
+	}
+
+	// Create squash commit with single parent (target only)
+	// Unlike merge commit, squash commit has only one parent (the target)
+	commit := &object.Commit{
+		Message:      message,
+		TreeHash:     squashTreeHash,
+		ParentHashes: []plumbing.Hash{targetHash}, // Single parent - target branch
+		Author:       *author,
+		Committer:    *committer,
+	}
+
+	// Store the commit
+	obj := repo.Storer.NewEncodedObject()
+	if err := commit.Encode(obj); err != nil {
+		return nil, fmt.Errorf("failed to encode squash commit: %w", err)
+	}
+
+	hash, err := repo.Storer.SetEncodedObject(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store squash commit: %w", err)
+	}
+
+	commit.Hash = hash
+
+	// Update the target reference to point to the new squash commit
+	var refName plumbing.ReferenceName
+	if strings.HasPrefix(req.TargetRef, "refs/") {
+		refName = plumbing.ReferenceName(req.TargetRef)
+	} else {
+		refName = plumbing.ReferenceName("refs/heads/" + req.TargetRef)
+	}
+
+	ref := plumbing.NewHashReference(refName, hash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return nil, fmt.Errorf("failed to update target reference: %w", err)
+	}
+
+	h.logger.Info("Squash merge completed successfully",
+		zap.String("commit_hash", hash.String()),
+		zap.String("target_ref", req.TargetRef))
+
+	return commit, nil
+}
+
+// generateSquashCommitMessage generates an appropriate commit message for squash merge
+func (h *MergeOperationsHandler) generateSquashCommitMessage(req *MergeRequest, source, target *object.Commit) string {
+	if req.Message != "" {
+		return req.Message
+	}
+
+	// Generate default squash merge message
+	sourceRef := req.SourceRef
+	targetRef := req.TargetRef
+
+	// Simplify ref names if they're full refs
+	sourceRef = strings.TrimPrefix(sourceRef, "refs/heads/")
+	targetRef = strings.TrimPrefix(targetRef, "refs/heads/")
+
+	return fmt.Sprintf("Squash merge branch '%s' into '%s'", sourceRef, targetRef)
 }
 
 // performFastForwardMerge performs a fast-forward merge by updating the target reference
@@ -468,6 +524,241 @@ func (h *MergeOperationsHandler) performFastForwardMerge(repo *gogit.Repository,
 	return repo.Storer.SetReference(ref)
 }
 
+// performRebase performs a rebase by reapplying source branch commits onto target branch
+// Rebase takes commits from source branch (after merge base) and applies them one by one onto target
+func (h *MergeOperationsHandler) performRebase(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *git.MergeAnalysisResult) (*object.Commit, error) {
+	// Get source and target commits
+	sourceCommit, err := repo.CommitObject(sourceHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get source commit: %w", err)
+	}
+
+	targetCommit, err := repo.CommitObject(targetHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get target commit: %w", err)
+	}
+
+	h.logger.Info("Performing rebase",
+		zap.String("source", sourceCommit.Hash.String()),
+		zap.String("target", targetCommit.Hash.String()))
+
+	// Find merge base (common ancestor)
+	mergeBases, err := sourceCommit.MergeBase(targetCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find merge base: %w", err)
+	}
+	if len(mergeBases) == 0 {
+		return nil, fmt.Errorf("no common ancestor found for rebase")
+	}
+
+	mergeBase := mergeBases[0]
+	h.logger.Debug("Found merge base for rebase",
+		zap.String("merge_base", mergeBase.Hash.String()))
+
+	// If source and target are the same or source is already on target, nothing to rebase
+	if mergeBase.Hash == sourceCommit.Hash {
+		h.logger.Info("Source is already based on target, nothing to rebase")
+		return targetCommit, nil
+	}
+
+	// Collect commits from merge base to source (exclusive of merge base, inclusive of source)
+	commitsToRebase, err := h.getCommitsBetween(repo, mergeBase, sourceCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commits to rebase: %w", err)
+	}
+
+	if len(commitsToRebase) == 0 {
+		h.logger.Info("No commits to rebase")
+		return targetCommit, nil
+	}
+
+	h.logger.Info("Rebasing commits",
+		zap.Int("commit_count", len(commitsToRebase)))
+
+	// Start with target as the base
+	currentBase := targetCommit
+
+	// Apply each commit sequentially
+	for i, commitToRebase := range commitsToRebase {
+		h.logger.Debug("Rebasing commit",
+			zap.Int("index", i+1),
+			zap.Int("total", len(commitsToRebase)),
+			zap.String("commit", commitToRebase.Hash.String()))
+
+		// For rebase, we need to apply the commit's changes to the current base
+		// The commit's changes are: (commitToRebase - commitToRebase.Parents[0])
+		// We apply these changes to currentBase
+		// This is different from a regular merge where we need a common ancestor
+
+		// Get the commit's parent (the base from which this commit was made)
+		var parentCommit *object.Commit
+		if len(commitToRebase.ParentHashes) > 0 {
+			parentCommit, err = repo.CommitObject(commitToRebase.ParentHashes[0])
+			if err != nil {
+				return nil, fmt.Errorf("failed to get parent commit for rebase: %w", err)
+			}
+		} else {
+			// This is a root commit, just use its tree
+			parentCommit = nil
+		}
+
+		// For rebase, we merge: currentBase (target) <- commitToRebase (source)
+		// with parentCommit as the common ancestor
+		// If it's a root commit, we just use the commit's tree directly
+		var rebasedTreeHash plumbing.Hash
+		var singleCommitAnalysis *git.MergeAnalysisResult
+
+		if parentCommit == nil {
+			// Root commit: use its tree directly merged with currentBase
+			// This is a simple case - just apply the root commit's tree
+			rebasedTreeHash = commitToRebase.TreeHash
+		} else {
+			// Perform 3-way merge: parentCommit (base) + commitToRebase (source) -> currentBase (target)
+			// Create a temporary analysis for this single commit rebase
+			var err error
+			singleCommitAnalysis, err = h.analyzeMerge(ctx, repo, commitToRebase.Hash, currentBase.Hash, req)
+			if err != nil {
+				return nil, fmt.Errorf("failed to analyze rebase commit %s: %w", commitToRebase.Hash.String(), err)
+			}
+
+			// Check for conflicts if not forcing
+			if singleCommitAnalysis.HasConflicts && !req.ForceConflict {
+				return nil, fmt.Errorf("rebase conflict at commit %s: %d conflicts. Use force_conflict=true to override", commitToRebase.Hash.String(), singleCommitAnalysis.ConflictCount)
+			}
+
+			// Use createMergedTreeWithBase for rebase (using parentCommit as base)
+			rebasedTreeHash, err = h.createMergedTreeWithBase(ctx, repo, commitToRebase, currentBase, parentCommit, singleCommitAnalysis, req.Strategy)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve tree for rebase commit %s: %w", commitToRebase.Hash.String(), err)
+			}
+		}
+
+		// Create new commit with rebased tree
+		// Preserve original commit author and message, but use new parent (currentBase)
+		var author object.Signature
+		var committer object.Signature
+
+		// Allow override of author/committer if provided in request
+		if req.Author != nil {
+			author = object.Signature{
+				Name:  req.Author.Name,
+				Email: req.Author.Email,
+				When:  req.Author.Date,
+			}
+		} else {
+			author = commitToRebase.Author
+		}
+
+		if req.Committer != nil {
+			committer = object.Signature{
+				Name:  req.Committer.Name,
+				Email: req.Committer.Email,
+				When:  req.Committer.Date,
+			}
+		} else {
+			// Use current time for committer if not specified (rebase changes commit time)
+			committer = object.Signature{
+				Name:  author.Name,
+				Email: author.Email,
+				When:  time.Now(),
+			}
+		}
+
+		// Create rebased commit
+		rebasedCommit := &object.Commit{
+			Message:      commitToRebase.Message,
+			TreeHash:     rebasedTreeHash,
+			ParentHashes: []plumbing.Hash{currentBase.Hash}, // Single parent - the current base
+			Author:       author,
+			Committer:    committer,
+		}
+
+		// Store the commit
+		obj := repo.Storer.NewEncodedObject()
+		if err := rebasedCommit.Encode(obj); err != nil {
+			return nil, fmt.Errorf("failed to encode rebased commit: %w", err)
+		}
+
+		hash, err := repo.Storer.SetEncodedObject(obj)
+		if err != nil {
+			return nil, fmt.Errorf("failed to store rebased commit: %w", err)
+		}
+
+		// Reload the commit from the repository to ensure it's fully stored
+		// This ensures we have a valid commit object with proper storage references for the next iteration
+		currentBase, err = repo.CommitObject(hash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reload rebased commit: %w", err)
+		}
+
+		h.logger.Debug("Successfully rebased commit",
+			zap.String("original", commitToRebase.Hash.String()),
+			zap.String("rebased", hash.String()))
+	}
+
+	// Update target reference to point to the final rebased commit
+	var refName plumbing.ReferenceName
+	if strings.HasPrefix(req.TargetRef, "refs/") {
+		refName = plumbing.ReferenceName(req.TargetRef)
+	} else {
+		refName = plumbing.ReferenceName("refs/heads/" + req.TargetRef)
+	}
+
+	ref := plumbing.NewHashReference(refName, currentBase.Hash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return nil, fmt.Errorf("failed to update target reference: %w", err)
+	}
+
+	h.logger.Info("Rebase completed successfully",
+		zap.String("final_commit", currentBase.Hash.String()),
+		zap.Int("rebased_commits", len(commitsToRebase)))
+
+	return currentBase, nil
+}
+
+// getCommitsBetween collects commits from 'from' (exclusive) to 'to' (inclusive) in chronological order
+// Returns commits in order from oldest to newest
+func (h *MergeOperationsHandler) getCommitsBetween(repo *gogit.Repository, from, to *object.Commit) ([]*object.Commit, error) {
+	if from.Hash == to.Hash {
+		return []*object.Commit{}, nil
+	}
+
+	// Get commit log from 'to' commit
+	commitIter, err := repo.Log(&gogit.LogOptions{
+		From: to.Hash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer commitIter.Close()
+
+	var commits []*object.Commit
+	fromHashStr := from.Hash.String()
+
+	err = commitIter.ForEach(func(commit *object.Commit) error {
+		// Stop when we reach the 'from' commit
+		if commit.Hash.String() == fromHashStr {
+			return fmt.Errorf("stop iteration")
+		}
+
+		commits = append(commits, commit)
+		return nil
+	})
+
+	// Check if we stopped at the 'from' commit (normal case)
+	if err != nil && err.Error() != "stop iteration" {
+		return nil, fmt.Errorf("failed to iterate commits: %w", err)
+	}
+
+	// Reverse the list to get chronological order (oldest first)
+	// Since we collected from newest to oldest, we need to reverse
+	for i, j := 0, len(commits)-1; i < j; i, j = i+1, j-1 {
+		commits[i], commits[j] = commits[j], commits[i]
+	}
+
+	return commits, nil
+}
+
 // performThreeWayMerge performs a three-way merge and creates a merge commit
 func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *git.MergeAnalysisResult) (*object.Commit, error) {
 	// Get source and target commits
@@ -481,83 +772,15 @@ func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo 
 		return nil, fmt.Errorf("failed to get target commit: %w", err)
 	}
 
-	// Determine which tree to use based on strategy and conflict status
-	var mergeTreeHash plumbing.Hash
+	// Use centralized strategy resolution logic
+	mergeTreeHash, err := h.resolveMergeTree(ctx, repo, sourceCommit, targetCommit, analysis, req.Strategy, req.ForceConflict, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve merge tree: %w", err)
+	}
 
-	if analysis.HasConflicts && req.ForceConflict {
-		// When forcing conflicts, use strategy to determine which tree to use
-		h.logger.Info("Resolving conflicts using strategy",
-			zap.String("strategy", string(req.Strategy)),
-			zap.Int("conflict_count", analysis.ConflictCount))
-
-		switch req.Strategy {
-		case MergeStrategyOurs:
-			// Keep our version (target)
-			mergeTreeHash = targetCommit.TreeHash
-			h.logger.Debug("Using 'ours' strategy - keeping target tree")
-
-		case MergeStrategyTheirs:
-			// Keep their version (source)
-			mergeTreeHash = sourceCommit.TreeHash
-			h.logger.Debug("Using 'theirs' strategy - using source tree")
-
-		case MergeStrategyRecursive, MergeStrategyResolve:
-			// For recursive/resolve strategy, perform actual 3-way merge
-			if analysis.AutoResolvable > 0 && analysis.AutoResolvable == analysis.ConflictCount {
-				// All conflicts are auto-resolvable, create merged tree
-				h.logger.Debug("Performing 3-way merge - all conflicts auto-resolvable")
-
-				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, req.Strategy)
-				if err != nil {
-					h.logger.Error("Failed to create merged tree, falling back to source tree",
-						zap.Error(err))
-					mergeTreeHash = sourceCommit.TreeHash
-				} else {
-					mergeTreeHash = mergedTree
-					h.logger.Info("Successfully created merged tree",
-						zap.String("merged_tree", mergedTree.String()))
-				}
-			} else if analysis.AutoResolvable > 0 {
-				// Mixed auto-resolvable and manual conflicts
-				h.logger.Warn("Not all conflicts auto-resolvable - attempting partial merge",
-					zap.Int("auto_resolvable", analysis.AutoResolvable),
-					zap.Int("total_conflicts", analysis.ConflictCount))
-
-				// Attempt to create merged tree with auto-resolvable conflicts
-				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, req.Strategy)
-				if err != nil {
-					h.logger.Error("Failed to create partially merged tree, falling back to target tree",
-						zap.Error(err))
-					mergeTreeHash = targetCommit.TreeHash
-				} else {
-					mergeTreeHash = mergedTree
-					h.logger.Info("Successfully created partially merged tree",
-						zap.String("merged_tree", mergedTree.String()))
-				}
-			} else {
-				// No auto-resolvable conflicts, cannot safely merge
-				h.logger.Warn("No auto-resolvable conflicts - using target tree")
-				mergeTreeHash = targetCommit.TreeHash
-			}
-
-		case MergeStrategySubtree:
-			// Subtree merge uses source tree
-			mergeTreeHash = sourceCommit.TreeHash
-			h.logger.Debug("Using 'subtree' strategy - using source tree")
-
-		default:
-			// Fallback to target tree for unknown strategies
-			mergeTreeHash = targetCommit.TreeHash
-			h.logger.Warn("Unknown strategy - defaulting to target tree",
-				zap.String("strategy", string(req.Strategy)))
-		}
-	} else if analysis.HasConflicts && !req.ForceConflict {
+	if analysis.HasConflicts && !req.ForceConflict {
 		// This should not happen as we check for conflicts earlier
 		return nil, fmt.Errorf("conflicts detected but force_conflict is false")
-	} else {
-		// No conflicts - use source tree for clean merge
-		mergeTreeHash = sourceCommit.TreeHash
-		h.logger.Debug("No conflicts - using source tree for clean merge")
 	}
 
 	// Generate merge commit message
@@ -669,6 +892,20 @@ func (h *MergeOperationsHandler) getMergeType(result *MergeResult) string {
 	return "three-way"
 }
 
+// getMergeType returns the type of merge performed based on method and result
+func (h *MergeOperationsHandler) getMergeTypeForMethod(method MergeMethod, result *MergeResult) string {
+	switch method {
+	case MergeMethodSquash:
+		return "squash"
+	case MergeMethodRebase:
+		return "rebase"
+	case MergeMethodMerge:
+		fallthrough
+	default:
+		return h.getMergeType(result)
+	}
+}
+
 // commitToInfo converts a commit object to CommitInfo
 func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) *common.CommitInfo {
 	return &common.CommitInfo{
@@ -678,6 +915,287 @@ func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) *common.Com
 		Committer: common.AuthorInfo{Name: commit.Committer.Name, Email: commit.Committer.Email, Date: commit.Committer.When},
 		CreatedAt: commit.Author.When,
 	}
+}
+
+// resolveMergeTree determines which tree to use based on merge strategy and conflict status
+// This function centralizes the strategy resolution logic used by both regular and squash merges
+func (h *MergeOperationsHandler) resolveMergeTree(
+	ctx context.Context,
+	repo *gogit.Repository,
+	sourceCommit, targetCommit *object.Commit,
+	analysis *git.MergeAnalysisResult,
+	strategy MergeStrategy,
+	forceConflict bool,
+	isSquash bool,
+) (plumbing.Hash, error) {
+	// If there are conflicts and we're not forcing, we should not call this function
+	// But handle it gracefully anyway
+	if analysis.HasConflicts && !forceConflict {
+		if isSquash {
+			// For squash, prefer source changes when not forcing
+			return sourceCommit.TreeHash, nil
+		}
+		return targetCommit.TreeHash, nil
+	}
+
+	// Handle conflicts with force
+	if analysis.HasConflicts && forceConflict {
+		h.logger.Info("Resolving conflicts using strategy",
+			zap.String("strategy", string(strategy)),
+			zap.Int("conflict_count", analysis.ConflictCount),
+			zap.Bool("is_squash", isSquash))
+
+		switch strategy {
+		case MergeStrategyOurs:
+			// Keep our version (target)
+			if isSquash {
+				h.logger.Warn("'ours' strategy in squash merge - keeping target tree (may lose source changes)")
+			} else {
+				h.logger.Debug("Using 'ours' strategy - keeping target tree")
+			}
+			return targetCommit.TreeHash, nil
+
+		case MergeStrategyTheirs:
+			// Keep their version (source)
+			if isSquash {
+				h.logger.Debug("Using 'theirs' strategy for squash - using source tree")
+			} else {
+				h.logger.Debug("Using 'theirs' strategy - using source tree")
+			}
+			return sourceCommit.TreeHash, nil
+
+		case MergeStrategyRecursive, MergeStrategyResolve, MergeStrategyORT:
+			// For recursive/resolve/ORT strategy, perform actual 3-way merge
+			if analysis.AutoResolvable > 0 && analysis.AutoResolvable == analysis.ConflictCount {
+				// All conflicts are auto-resolvable, create merged tree
+				h.logger.Debug("Performing 3-way merge - all conflicts auto-resolvable",
+					zap.String("strategy", string(strategy)))
+
+				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy)
+				if err != nil {
+					fallbackTree := sourceCommit.TreeHash
+					if !isSquash {
+						fallbackTree = targetCommit.TreeHash
+					}
+					h.logger.Error("Failed to create merged tree, falling back",
+						zap.Error(err),
+						zap.Bool("is_squash", isSquash))
+					return fallbackTree, nil
+				}
+				h.logger.Info("Successfully created merged tree",
+					zap.String("merged_tree", mergedTree.String()),
+					zap.String("strategy", string(strategy)))
+				return mergedTree, nil
+			} else if analysis.AutoResolvable > 0 {
+				// Mixed auto-resolvable and manual conflicts
+				h.logger.Warn("Not all conflicts auto-resolvable - attempting partial merge",
+					zap.Int("auto_resolvable", analysis.AutoResolvable),
+					zap.Int("total_conflicts", analysis.ConflictCount),
+					zap.String("strategy", string(strategy)))
+
+				// Attempt to create merged tree with auto-resolvable conflicts
+				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy)
+				if err != nil {
+					fallbackTree := sourceCommit.TreeHash
+					if !isSquash {
+						fallbackTree = targetCommit.TreeHash
+					}
+					h.logger.Error("Failed to create partially merged tree, falling back",
+						zap.Error(err),
+						zap.Bool("is_squash", isSquash))
+					return fallbackTree, nil
+				}
+				h.logger.Info("Successfully created partially merged tree",
+					zap.String("merged_tree", mergedTree.String()),
+					zap.String("strategy", string(strategy)))
+				return mergedTree, nil
+			} else {
+				// No auto-resolvable conflicts
+				fallbackTree := sourceCommit.TreeHash
+				if !isSquash {
+					fallbackTree = targetCommit.TreeHash
+				}
+				h.logger.Warn("No auto-resolvable conflicts - using fallback tree",
+					zap.Bool("is_squash", isSquash),
+					zap.String("strategy", string(strategy)))
+				return fallbackTree, nil
+			}
+
+		case MergeStrategySubtree:
+			// Subtree merge uses source tree
+			h.logger.Debug("Using 'subtree' strategy - using source tree")
+			return sourceCommit.TreeHash, nil
+
+		default:
+			// Fallback based on merge method
+			fallbackTree := sourceCommit.TreeHash
+			if !isSquash {
+				fallbackTree = targetCommit.TreeHash
+			}
+			h.logger.Warn("Unknown strategy - defaulting to fallback tree",
+				zap.String("strategy", string(strategy)),
+				zap.Bool("is_squash", isSquash))
+			return fallbackTree, nil
+		}
+	}
+
+	// No conflicts - perform proper 3-way merge even when clean
+	// This ensures we get the correct merged tree structure
+	h.logger.Debug("No conflicts - performing 3-way merge",
+		zap.String("strategy", string(strategy)),
+		zap.Bool("is_squash", isSquash))
+
+	mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy)
+	if err != nil {
+		// Fallback based on merge method
+		fallbackTree := sourceCommit.TreeHash
+		if !isSquash {
+			fallbackTree = targetCommit.TreeHash
+		}
+		h.logger.Warn("Failed to create merged tree for clean merge, using fallback",
+			zap.Error(err),
+			zap.Bool("is_squash", isSquash))
+		return fallbackTree, nil
+	}
+
+	h.logger.Debug("Successfully created merged tree for clean merge",
+		zap.String("merged_tree", mergedTree.String()),
+		zap.String("strategy", string(strategy)))
+	return mergedTree, nil
+}
+
+// createMergedTreeWithBase creates a new tree by performing 3-way merge with an explicit base commit
+// This is used for rebase operations where we know the base commit (the parent of the commit being rebased)
+func (h *MergeOperationsHandler) createMergedTreeWithBase(
+	ctx context.Context,
+	repo *gogit.Repository,
+	sourceCommit, targetCommit, baseCommit *object.Commit,
+	analysis *git.MergeAnalysisResult,
+	strategy MergeStrategy,
+) (plumbing.Hash, error) {
+	if baseCommit == nil {
+		return plumbing.ZeroHash, fmt.Errorf("base commit cannot be nil")
+	}
+
+	// Get trees for base, source, and target
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to get base tree: %w", err)
+	}
+
+	sourceTree, err := sourceCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to get source tree: %w", err)
+	}
+
+	targetTree, err := targetCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to get target tree: %w", err)
+	}
+
+	h.logger.Debug("Starting 3-way merge tree creation with explicit base",
+		zap.String("base", baseCommit.Hash.String()),
+		zap.String("source", sourceCommit.Hash.String()),
+		zap.String("target", targetCommit.Hash.String()))
+
+	// Use the same tree merging logic as createMergedTree
+	// Create a map to track all files from all three trees
+	fileMap := make(map[string]*mergeFileEntry)
+
+	// Collect all files from base tree
+	_ = baseTree.Files().ForEach(func(f *object.File) error {
+		fileMap[f.Name] = &mergeFileEntry{
+			path:     f.Name,
+			baseHash: f.Hash,
+			baseMode: f.Mode,
+		}
+		return nil
+	})
+
+	// Collect all files from source tree
+	_ = sourceTree.Files().ForEach(func(f *object.File) error {
+		if entry, exists := fileMap[f.Name]; exists {
+			entry.sourceHash = f.Hash
+			entry.sourceMode = f.Mode
+		} else {
+			fileMap[f.Name] = &mergeFileEntry{
+				path:       f.Name,
+				sourceHash: f.Hash,
+				sourceMode: f.Mode,
+			}
+		}
+		return nil
+	})
+
+	// Collect all files from target tree
+	_ = targetTree.Files().ForEach(func(f *object.File) error {
+		if entry, exists := fileMap[f.Name]; exists {
+			entry.targetHash = f.Hash
+			entry.targetMode = f.Mode
+		} else {
+			fileMap[f.Name] = &mergeFileEntry{
+				path:       f.Name,
+				targetHash: f.Hash,
+				targetMode: f.Mode,
+			}
+		}
+		return nil
+	})
+
+	// Build conflict map for quick lookup (empty for rebase as conflicts are handled separately)
+	conflictMap := make(map[string]*git.FileConflict)
+
+	// Create new tree entries by resolving each file
+	var treeEntries []object.TreeEntry
+
+	for path, entry := range fileMap {
+		resolvedHash, resolvedMode, err := h.resolveFileForMerge(entry, conflictMap[path], strategy)
+		if err != nil {
+			h.logger.Warn("Failed to resolve file, skipping",
+				zap.String("path", path),
+				zap.Error(err))
+			continue
+		}
+
+		if !resolvedHash.IsZero() {
+			treeEntries = append(treeEntries, object.TreeEntry{
+				Name: path,
+				Mode: resolvedMode,
+				Hash: resolvedHash,
+			})
+		}
+	}
+
+	// Sort tree entries by name (required by Git)
+	// Using a simple bubble sort for clarity
+	for i := 0; i < len(treeEntries); i++ {
+		for j := i + 1; j < len(treeEntries); j++ {
+			if treeEntries[i].Name > treeEntries[j].Name {
+				treeEntries[i], treeEntries[j] = treeEntries[j], treeEntries[i]
+			}
+		}
+	}
+
+	// Create and store the new tree
+	newTree := &object.Tree{
+		Entries: treeEntries,
+	}
+
+	treeObj := repo.Storer.NewEncodedObject()
+	if err := newTree.Encode(treeObj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to encode merged tree: %w", err)
+	}
+
+	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to store merged tree: %w", err)
+	}
+
+	h.logger.Info("Successfully created merged tree with explicit base",
+		zap.String("tree_hash", treeHash.String()),
+		zap.Int("entries", len(treeEntries)))
+
+	return treeHash, nil
 }
 
 // createMergedTree creates a new tree by performing 3-way merge
@@ -931,8 +1449,12 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 			return entry.sourceHash, entry.sourceMode, nil
 		case MergeStrategyOurs:
 			return entry.targetHash, entry.targetMode, nil
+		case MergeStrategyRecursive, MergeStrategyResolve, MergeStrategyORT:
+			// For recursive/resolve/ORT strategies, prefer source version
+			// ORT (Optimized Recursive Three-way) is an improved version of recursive
+			return entry.sourceHash, entry.sourceMode, nil
 		default:
-			// Default to source for recursive strategy
+			// Default to source for other strategies
 			return entry.sourceHash, entry.sourceMode, nil
 		}
 	}
@@ -958,14 +1480,4 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 	}
 
 	return plumbing.ZeroHash, 0, nil
-}
-
-// SendSuccess sends a successful JSON response
-func (h *MergeOperationsHandler) SendSuccess(c *gin.Context, data interface{}, message string) {
-	response := map[string]interface{}{
-		"success": true,
-		"message": message,
-		"data":    data,
-	}
-	c.JSON(http.StatusOK, response)
 }
