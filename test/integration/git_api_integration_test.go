@@ -157,7 +157,6 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 		{
 			branchesGroup.POST("", branchOpsHandler.HandleCreateBranch)
 			branchesGroup.PATCH("/*branch", branchOpsHandler.HandleUpdateBranch)
-			branchesGroup.PUT("/rename", branchOpsHandler.HandleRenameBranch)
 			branchesGroup.DELETE("/*branch", branchOpsHandler.HandleDeleteBranch)
 		}
 
@@ -536,14 +535,14 @@ func TestBranchOperations_Integration(t *testing.T) {
 		newBranchName := "main"
 
 		// 브랜치 이름 변경 요청
+		// 새로운 API: PATCH /repos/{owner}/{repo}/branches/{branch_name} with new_name in body
 		renameBody := map[string]interface{}{
 			"new_name": newBranchName,
 			"force":    false,
 		}
 
-		// 브랜치 이름 변경은 /branches/rename 엔드포인트 사용 (old_name은 body에 포함)
-		renameBody["old_name"] = currentBranchName
-		renameResp, err := suite.makeRequest("PUT", "/repos/testowner/testrepo/branches/rename", renameBody)
+		// 브랜치 이름 변경은 PATCH /branches/{branch_name} 엔드포인트 사용
+		renameResp, err := suite.makeRequest("PATCH", fmt.Sprintf("/repos/testowner/testrepo/branches/%s", currentBranchName), renameBody)
 		require.NoError(t, err)
 		defer func() { _ = renameResp.Body.Close() }()
 

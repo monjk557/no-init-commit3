@@ -16,11 +16,13 @@ type CreateBranchRequest struct {
 }
 
 // UpdateBranchRequest는 브랜치 업데이트를 위한 JSON 페이로드를 나타냅니다.
-// 기존 브랜치의 포인터를 다른 커밋으로 변경할 때 사용됩니다.
+// 기존 브랜치의 포인터를 다른 커밋으로 변경하거나 브랜치 이름을 변경할 때 사용됩니다.
+// target과 new_name 중 하나만 제공해야 합니다 (둘 다 제공하면 에러).
 type UpdateBranchRequest struct {
-	Target  string `json:"target" binding:"required"` // commit SHA or branch name to point to
-	Force   bool   `json:"force,omitempty"`           // force update even if not fast-forward
-	Message string `json:"message,omitempty"`         // optional update message
+	Target  string `json:"target,omitempty"`   // commit SHA or branch name to point to (for commit update)
+	NewName string `json:"new_name,omitempty"` // new branch name (for rename operation)
+	Force   bool   `json:"force,omitempty"`    // force update even if not fast-forward, or force rename even if new name exists
+	Message string `json:"message,omitempty"`  // optional update message
 }
 
 // RenameBranchRequest는 브랜치 이름 변경을 위한 JSON 페이로드를 나타냅니다.

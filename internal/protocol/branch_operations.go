@@ -372,6 +372,24 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		return
 	}
 
+	// Validate that either target or new_name is provided, but not both
+	hasTarget := req.Target != ""
+	hasNewName := req.NewName != ""
+	if !hasTarget && !hasNewName {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Either 'target' (for commit update) or 'new_name' (for rename) must be provided",
+		})
+		return
+	}
+	if hasTarget && hasNewName {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Cannot provide both 'target' and 'new_name'. Use 'target' for commit update or 'new_name' for rename",
+		})
+		return
+	}
+
 	// Validate branch name
 	if err := h.validateBranchName(branchName); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -409,6 +427,163 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		return
 	}
 
+	// Handle rename operation
+	if hasNewName {
+		// Validate new branch name
+		if err := h.validateBranchName(req.NewName); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Invalid new branch name: %v", err),
+			})
+			return
+		}
+
+		// Check if old and new names are the same
+		if branchName == req.NewName {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "Old branch name and new branch name cannot be the same",
+			})
+			return
+		}
+
+		// Check if old branch is protected
+		if h.isProtectedBranch(branchName) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Cannot rename protected branch '%s'", branchName),
+			})
+			return
+		}
+
+		// Check if new branch name is protected
+		if h.isProtectedBranch(req.NewName) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Cannot rename to protected branch name '%s'", req.NewName),
+			})
+			return
+		}
+
+		// Check if new branch name already exists
+		newBranchExists, _, err := h.checkBranchExists(ctx, repository, req.NewName)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Failed to check new branch existence: %v", err),
+			})
+			return
+		}
+
+		if newBranchExists && !req.Force {
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Branch '%s' already exists. Use force=true to overwrite", req.NewName),
+			})
+			return
+		}
+
+		// Check if HEAD points to the old branch
+		headRef, err := repository.Head()
+		if err != nil {
+			headRef = nil
+		}
+
+		isHeadBranch := false
+		oldRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", branchName))
+		if headRef != nil {
+			if headRef.Type() == plumbing.SymbolicReference && headRef.Target() == oldRefPath {
+				isHeadBranch = true
+			} else if headRef.Name() == oldRefPath {
+				isHeadBranch = true
+			}
+		}
+
+		// If new branch exists and force is true, delete it first
+		if newBranchExists && req.Force {
+			newRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.NewName))
+			if err := repository.Storer.RemoveReference(newRefPath); err != nil {
+				h.logger.Warn("Failed to remove existing new branch reference",
+					zap.String("new_branch", req.NewName),
+					zap.Error(err))
+			}
+		}
+
+		// Read old branch reference
+		oldRef, err := repository.Reference(oldRefPath, false)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Failed to read old branch reference: %v", err),
+			})
+			return
+		}
+
+		// Create new branch reference with same commit hash
+		newRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.NewName))
+		newRef := plumbing.NewHashReference(newRefPath, oldRef.Hash())
+
+		if err := repository.Storer.SetReference(newRef); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Failed to create new branch reference: %v", err),
+			})
+			return
+		}
+
+		// Update HEAD if it pointed to the old branch
+		if isHeadBranch {
+			newHeadRef := plumbing.NewSymbolicReference(plumbing.HEAD, newRefPath)
+			if err := repository.Storer.SetReference(newHeadRef); err != nil {
+				h.logger.Warn("Failed to update HEAD to renamed branch",
+					zap.String("new_branch", req.NewName),
+					zap.Error(err))
+			} else {
+				h.logger.Info("Updated HEAD to renamed branch",
+					zap.String("new_branch", req.NewName))
+			}
+		}
+
+		// Delete old branch reference
+		if err := repository.Storer.RemoveReference(oldRefPath); err != nil {
+			// Cleanup: remove new reference if old deletion fails
+			repository.Storer.RemoveReference(newRefPath)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Failed to delete old branch reference: %v", err),
+			})
+			return
+		}
+
+		// Prepare response data
+		responseData := map[string]interface{}{
+			"old_branch_name": branchName,
+			"new_branch_name": req.NewName,
+			"commit_hash":     currentCommit.String(),
+			"ref_path":        newRefPath.String(),
+			"operation":       "rename",
+			"head_updated":    isHeadBranch,
+			"forced":          req.Force && newBranchExists,
+		}
+
+		// Log success
+		h.logger.Info("Branch renamed successfully",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("old_branch", branchName),
+			zap.String("new_branch", req.NewName),
+			zap.String("commit_hash", currentCommit.String()),
+			zap.Bool("head_updated", isHeadBranch))
+
+		// Send success response
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    responseData,
+		})
+		return
+	}
+
+	// Handle commit update operation (existing logic)
 	// Check if branch is protected - protected branches cannot be modified
 	if h.isProtectedBranch(branchName) {
 		c.JSON(http.StatusForbidden, gin.H{
@@ -505,230 +680,6 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		zap.String("to_commit", targetCommit.String()),
 		zap.Bool("fast_forward", isFastForward),
 		zap.Bool("forced", req.Force))
-
-	// Send success response
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    responseData,
-	})
-}
-
-// HandleRenameBranch는 PUT /repos/{owner}/{repo}/branches/{branch}/rename 엔드포인트를 처리합니다.
-
-func (h *BranchOperationsHandler) HandleRenameBranch(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	// URL 파라미터 추출
-	owner := c.Param("owner")
-	repo := c.Param("repo")
-
-	// 경로 컴포넌트 검증
-	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return
-	}
-
-	// JSON 요청 파싱 및 검증
-	var req requests.RenameBranchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid JSON: %v", err),
-		})
-		return
-	}
-
-	newBranchName := req.NewName
-	oldBranchName := req.OldName
-	force := req.Force
-
-	// 브랜치 이름 검증
-	if err := h.validateBranchName(oldBranchName); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid old branch name: %v", err),
-		})
-		return
-	}
-
-	if err := h.validateBranchName(newBranchName); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid new branch name: %v", err),
-		})
-		return
-	}
-
-	// 기존 이름과 새 이름이 같은지 확인
-	if oldBranchName == newBranchName {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "기존 브랜치 이름과 새 브랜치 이름이 동일할 수 없습니다",
-		})
-		return
-	}
-
-	// 저장소 열기
-	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to open repository: %v", err),
-		})
-		return
-	}
-
-	// 기존 브랜치 존재 확인
-	oldBranchExists, branchCommit, err := h.checkBranchExists(ctx, repository, oldBranchName)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("기존 브랜치 존재 여부 확인 실패: %v", err),
-		})
-		return
-	}
-
-	if !oldBranchExists {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("브랜치 '%s'가 존재하지 않습니다", oldBranchName),
-		})
-		return
-	}
-
-	// 새 브랜치 이름이 이미 존재하는지 확인
-	newBranchExists, _, err := h.checkBranchExists(ctx, repository, newBranchName)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("새 브랜치 존재 여부 확인 실패: %v", err),
-		})
-		return
-	}
-
-	if newBranchExists && !force {
-		c.JSON(http.StatusConflict, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("브랜치 '%s'가 이미 존재합니다. force=true를 사용하여 덮어쓰세요", newBranchName),
-		})
-		return
-	}
-
-	// 기존 브랜치가 protected인지 확인 - protected 브랜치는 이름 변경 불가
-	if h.isProtectedBranch(oldBranchName) {
-		c.JSON(http.StatusForbidden, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Protected 브랜치 '%s'의 이름을 변경할 수 없습니다", oldBranchName),
-		})
-		return
-	}
-
-	// 새 브랜치 이름이 protected인지 확인 - protected 브랜치 이름으로 변경 불가
-	if h.isProtectedBranch(newBranchName) {
-		c.JSON(http.StatusForbidden, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Protected 브랜치 이름 '%s'으로 변경할 수 없습니다", newBranchName),
-		})
-		return
-	}
-
-	// 현재 HEAD가 기존 브랜치를 가리키는지 확인
-	headRef, err := repository.Head()
-	if err != nil {
-		// HEAD might not exist in empty repository, but we'll continue
-		headRef = nil
-	}
-
-	isHeadBranch := false
-	oldRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", oldBranchName))
-	if headRef != nil {
-		if headRef.Type() == plumbing.SymbolicReference && headRef.Target() == oldRefPath {
-			isHeadBranch = true
-		} else if headRef.Name() == oldRefPath {
-			isHeadBranch = true
-		}
-	}
-
-	// 새 브랜치가 존재하고 force가 true인 경우 먼저 삭제
-	if newBranchExists && req.Force {
-		newRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.NewName))
-		if err := repository.Storer.RemoveReference(newRefPath); err != nil {
-			h.logger.Warn("기존 새 브랜치 참조 제거 실패",
-				zap.String("new_branch", req.NewName),
-				zap.Error(err))
-			// 계속 진행 (rename은 여전히 작동할 수 있음)
-		}
-	}
-
-	// 기존 브랜치 참조 읽기
-	oldRef, err := repository.Reference(oldRefPath, false)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("기존 브랜치 참조 읽기 실패: %v", err),
-		})
-		return
-	}
-
-	// 동일한 커밋 해시로 새 브랜치 참조 생성
-	newRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.NewName))
-	newRef := plumbing.NewHashReference(newRefPath, oldRef.Hash())
-
-	if err := repository.Storer.SetReference(newRef); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("새 브랜치 참조 생성 실패: %v", err),
-		})
-		return
-	}
-
-	// HEAD가 기존 브랜치를 가리키고 있었다면 업데이트
-	if isHeadBranch {
-		newHeadRef := plumbing.NewSymbolicReference(plumbing.HEAD, newRefPath)
-		if err := repository.Storer.SetReference(newHeadRef); err != nil {
-			h.logger.Warn("이름 변경된 브랜치로 HEAD 업데이트 실패",
-				zap.String("new_branch", req.NewName),
-				zap.Error(err))
-			// 요청은 실패하지 않지만 경고 로그
-		} else {
-			h.logger.Info("이름 변경된 브랜치로 HEAD 업데이트 완료",
-				zap.String("new_branch", req.NewName))
-		}
-	}
-
-	// 기존 브랜치 참조 삭제
-	if err := repository.Storer.RemoveReference(oldRefPath); err != nil {
-		// 삭제가 실패하면 새 참조 정리 시도
-		repository.Storer.RemoveReference(newRefPath)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("기존 브랜치 참조 삭제 실패: %v", err),
-		})
-		return
-	}
-
-	// 응답 데이터 준비
-	responseData := map[string]interface{}{
-		"old_branch_name": oldBranchName,
-		"new_branch_name": req.NewName,
-		"commit_hash":     branchCommit.String(),
-		"ref_path":        newRefPath.String(),
-		"operation":       "rename",
-		"head_updated":    isHeadBranch,
-		"forced":          req.Force && newBranchExists,
-	}
-
-	// 성공 로그
-	h.logger.Info("브랜치 이름 변경 완료",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("old_branch", oldBranchName),
-		zap.String("new_branch", req.NewName),
-		zap.String("commit_hash", branchCommit.String()),
-		zap.Bool("head_updated", isHeadBranch))
 
 	// Send success response
 	c.JSON(http.StatusOK, gin.H{
