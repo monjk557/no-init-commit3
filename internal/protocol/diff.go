@@ -1470,9 +1470,6 @@ func (h *DiffHandler) validateAndExtractParams(r *http.Request) (*RequestParams,
 
 	// 권한 확인을 위해 헤더에서 사용자 ID 가져오기
 	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		return nil, fmt.Errorf("missing user authentication")
-	}
 
 	return &RequestParams{
 		Owner:  owner,
