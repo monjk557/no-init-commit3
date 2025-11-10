@@ -37,6 +37,9 @@ type Repository interface {
 	// GetRemotes - 모든 원격 저장소 목록 조회
 	GetRemotes(ctx context.Context) ([]Remote, error)
 
+	// GetLanguageDistribution - 특정 참조에서 언어 분포도 계산
+	GetLanguageDistribution(ctx context.Context, ref string) (*LanguageDistribution, error)
+
 	// Close - 리포지토리가 보유한 리소스 해제
 	Close() error
 }
@@ -173,6 +176,33 @@ type Remote struct {
 
 	// IsDefault - 기본 원격 저장소 여부 (origin)
 	IsDefault bool `json:"is_default"`
+}
+
+// LanguageStats - 언어별 통계 정보
+type LanguageStats struct {
+	// Language - 언어 이름
+	Language string `json:"language"`
+
+	// Bytes - 해당 언어의 바이트 수
+	Bytes int64 `json:"bytes"`
+
+	// Percentage - 전체 코드 중 비율 (0-100)
+	Percentage float64 `json:"percentage"`
+
+	// Files - 해당 언어의 파일 수
+	Files int `json:"files"`
+}
+
+// LanguageDistribution - 언어 분포도 정보
+type LanguageDistribution struct {
+	// Languages - 언어별 통계 목록
+	Languages []LanguageStats `json:"languages"`
+
+	// TotalBytes - 전체 코드 바이트 수
+	TotalBytes int64 `json:"total_bytes"`
+
+	// TotalFiles - 전체 파일 수
+	TotalFiles int `json:"total_files"`
 }
 
 // OpenRepositoryFunc - 리포지토리를 여는 함수 타입

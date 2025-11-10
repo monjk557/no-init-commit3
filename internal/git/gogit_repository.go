@@ -9,9 +9,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
+	"github.com/go-enry/go-enry/v2"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -766,4 +768,131 @@ func convertCommit(c *object.Commit) Commit {
 // This is useful for operations that need direct access to go-git APIs
 func (r *GoGitRepository) GetGoGitRepo() *git.Repository {
 	return r.repo
+}
+
+// GetLanguageDistribution calculates language distribution for files in a specific reference
+func (r *GoGitRepository) GetLanguageDistribution(ctx context.Context, ref string) (*LanguageDistribution, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.repo == nil {
+		return nil, NewGitError("get_language_distribution", r.path, ref, "repository is closed", nil)
+	}
+
+	// Resolve the reference to a commit
+	commit, err := r.resolveCommit(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the tree from the commit
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, NewGitError("get_language_distribution", r.path, ref, "failed to get tree from commit", err)
+	}
+
+	// Language statistics map: language -> {bytes, files}
+	langStats := make(map[string]struct {
+		bytes int64
+		files int
+	})
+
+	var totalBytes int64
+	var totalFiles int
+
+	// Iterate through all files in the repository
+	err = tree.Files().ForEach(func(file *object.File) error {
+		// Check for context cancellation during iteration
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Skip binary files and very large files (over 1MB)
+		if file.Size > 1024*1024 {
+			return nil
+		}
+
+		// Get file content to detect language
+		reader, err := file.Reader()
+		if err != nil {
+			// Skip files that can't be read
+			return nil
+		}
+
+		content, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			// Skip files that can't be read
+			return nil
+		}
+
+		// Check if file is binary
+		if enry.IsBinary(content) {
+			return nil
+		}
+
+		// Detect language using go-enry
+		language := enry.GetLanguage(file.Name, content)
+
+		// If no language detected, try to detect by filename only
+		if language == "" {
+			language, _ = enry.GetLanguageByFilename(file.Name)
+		}
+
+		// If still no language, skip this file
+		if language == "" {
+			return nil
+		}
+
+		// Update statistics
+		stats := langStats[language]
+		stats.bytes += file.Size
+		stats.files++
+		langStats[language] = stats
+
+		totalBytes += file.Size
+		totalFiles++
+
+		return nil
+	})
+
+	if err != nil && err != io.EOF {
+		return nil, NewGitError("get_language_distribution", r.path, ref, "failed to iterate files", err)
+	}
+
+	// Convert map to slice and calculate percentages
+	var languages []LanguageStats
+	for lang, stats := range langStats {
+		percentage := float64(0)
+		if totalBytes > 0 {
+			percentage = (float64(stats.bytes) / float64(totalBytes)) * 100
+		}
+
+		languages = append(languages, LanguageStats{
+			Language:   lang,
+			Bytes:      stats.bytes,
+			Percentage: percentage,
+			Files:      stats.files,
+		})
+	}
+
+	// Sort by bytes (descending)
+	sort.Slice(languages, func(i, j int) bool {
+		return languages[i].Bytes > languages[j].Bytes
+	})
+
+	return &LanguageDistribution{
+		Languages:  languages,
+		TotalBytes: totalBytes,
+		TotalFiles: totalFiles,
+	}, nil
 }

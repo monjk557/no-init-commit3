@@ -76,6 +76,12 @@ func (rw *repositoryWrapper) GetRemotes(ctx context.Context) ([]Remote, error) {
 	return nil, fmt.Errorf("GetRemotes not implemented in repository wrapper")
 }
 
+// GetLanguageDistribution calculates language distribution for files in a specific reference
+func (rw *repositoryWrapper) GetLanguageDistribution(ctx context.Context, ref string) (*LanguageDistribution, error) {
+	// This wrapper doesn't implement full functionality - use GoGitRepository instead
+	return nil, fmt.Errorf("GetLanguageDistribution not implemented in repository wrapper")
+}
+
 // Close releases any resources held by the repository
 func (rw *repositoryWrapper) Close() error {
 	// go-git repositories don't need explicit closing

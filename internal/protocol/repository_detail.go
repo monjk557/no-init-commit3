@@ -152,7 +152,8 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 				Remotes:  0,
 				Total:    0,
 			},
-			Readme: "",
+			Readme:               "",
+			LanguageDistribution: &git.LanguageDistribution{},
 		}
 		api.SendSuccess(c, response, "Empty repository - no commits found")
 		return
@@ -206,7 +207,19 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		readmeContent = string(readmeData)
 	}
 
-	// 10. response 생성
+	// 10. 언어 분포도 계산
+	languageDistribution, err := gitRepo.GetLanguageDistribution(ctx, refs)
+	if err != nil {
+		// 언어 분포도 계산 실패는 로그만 남기고 응답에는 포함하지 않음 (선택적 기능)
+		h.logger.Warn("Failed to calculate language distribution",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("refs", refs),
+			zap.Error(err))
+		// Continue without language distribution
+	}
+
+	// 11. response 생성
 	response := responses.RepositoryDetailResponse{
 		Repository:    fmt.Sprintf("%s/%s", owner, repo),
 		Owner:         owner,
@@ -223,7 +236,8 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 			Remotes:  len(remotes),
 			Total:    len(commits) + len(branches) + len(tags) + len(remotes),
 		},
-		Readme: readmeContent,
+		Readme:               readmeContent,
+		LanguageDistribution: languageDistribution,
 	}
 
 	api.SendSuccess(c, response, "Repository detail retrieved successfully")

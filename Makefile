@@ -7,6 +7,8 @@ install:
 	@echo "📦 Installing Go dependencies..."
 	@go mod download
 	@go mod tidy
+	@echo "📦 Installing test dependencies..."
+	@cd tests && go mod download && go mod tidy
 	@if [ "$(filter local,$(MAKECMDGOALS))" ] || [ "$(words $(MAKECMDGOALS))" -eq 1 ]; then \
 		echo "🔧 Installing local development tools..."; \
 		command -v golangci-lint >/dev/null 2>&1 || { \
