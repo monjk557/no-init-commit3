@@ -526,13 +526,13 @@ func TestBranchOperations_Integration(t *testing.T) {
 		require.True(t, ok, "head response should have data field")
 
 		// 현재 default branch 이름 확인
-		currentBranchName := "master" // 기본값으로 master 사용 (createInitialCommit에서 생성)
+		currentBranchName := "master" // createInitialCommit에서 기본 브랜치로 master 생성
 		if name, ok := headData["name"].(string); ok && name != "" && name != "HEAD" {
 			currentBranchName = name
 		}
 
 		// 새 브랜치 이름
-		newBranchName := "main"
+		newBranchName := "newnew"
 
 		// 브랜치 이름 변경 요청
 		// 새로운 API: PATCH /repos/{owner}/{repo}/branches/{branch_name} with new_name in body
@@ -585,8 +585,11 @@ func TestBranchOperations_Integration(t *testing.T) {
 		headData2, ok := headResponse2["data"].(map[string]interface{})
 		require.True(t, ok, "head response should have data field")
 
+		headInfo2, ok := headData2["head"].(map[string]interface{})
+		require.True(t, ok, "head response should have head field")
+
 		// HEAD가 새 브랜치를 가리키는지 확인
-		assert.Equal(t, newBranchName, headData2["name"], "HEAD should point to the renamed branch")
+		assert.Equal(t, newBranchName, headInfo2["name"], "HEAD should point to the renamed branch")
 
 		// 기존 브랜치가 삭제되었는지 확인 (404가 나와야 함)
 		oldBranchResp, err := suite.makeRequest("GET", fmt.Sprintf("/repos/testowner/testrepo/branches/%s", currentBranchName), nil)
@@ -624,8 +627,18 @@ func TestBranchOperations_Integration(t *testing.T) {
 		// HEAD가 새 브랜치를 가리키는지 확인
 		headRef, err := repo.Head()
 		require.NoError(t, err)
-		assert.Equal(t, plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", newBranchName)), headRef.Target(),
-			"HEAD should point to renamed branch")
+		expectedRefName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", newBranchName))
+		switch headRef.Type() {
+		case plumbing.SymbolicReference:
+			assert.Equal(t, expectedRefName, headRef.Target(),
+				"HEAD symbolic reference should point to renamed branch")
+		default:
+			// Detached HEAD: ensure it matches the new branch commit
+			assert.Equal(t, expectedRefName, headRef.Name(),
+				"Detached HEAD should reference the renamed branch")
+			assert.Equal(t, newRef.Hash(), headRef.Hash(),
+				"Detached HEAD commit should match renamed branch commit")
+		}
 	})
 }
 

@@ -72,7 +72,6 @@ type BranchListItem struct {
 	CommitSHA     string            `json:"commit_sha"`
 	CommitMessage string            `json:"commit_message"`
 	IsDefault     bool              `json:"is_default"`
-	IsProtected   bool              `json:"is_protected"`
 	Behind        int               `json:"behind"`
 	Ahead         int               `json:"ahead"`
 	ChangeRequest ChangeRequestInfo `json:"change_request"`

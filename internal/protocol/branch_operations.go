@@ -447,24 +447,6 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 			return
 		}
 
-		// Check if old branch is protected
-		if h.isProtectedBranch(branchName) {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   fmt.Sprintf("Cannot rename protected branch '%s'", branchName),
-			})
-			return
-		}
-
-		// Check if new branch name is protected
-		if h.isProtectedBranch(req.NewName) {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   fmt.Sprintf("Cannot rename to protected branch name '%s'", req.NewName),
-			})
-			return
-		}
-
 		// Check if new branch name already exists
 		newBranchExists, _, err := h.checkBranchExists(ctx, repository, req.NewName)
 		if err != nil {
@@ -579,16 +561,6 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"data":    responseData,
-		})
-		return
-	}
-
-	// Handle commit update operation (existing logic)
-	// Check if branch is protected - protected branches cannot be modified
-	if h.isProtectedBranch(branchName) {
-		c.JSON(http.StatusForbidden, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Cannot modify protected branch '%s'. Protected branches must be updated through pull requests only", branchName),
 		})
 		return
 	}
@@ -752,15 +724,6 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		return
 	}
 
-	// Check if trying to delete protected branch
-	if h.isProtectedBranch(branchName) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Cannot delete protected branch '%s'", branchName),
-		})
-		return
-	}
-
 	// Delete the branch reference
 	refPath := fmt.Sprintf("refs/heads/%s", branchName)
 	if err := repository.Storer.RemoveReference(plumbing.ReferenceName(refPath)); err != nil {
@@ -901,7 +864,6 @@ func (h *BranchOperationsHandler) HandleGetBranchesDetail(c *gin.Context) {
 				CommitSHA:           commit.Hash.String()[:8],
 				CommitMessage:       commit.Message,
 				IsDefault:           branchName == defaultBranch,
-				IsProtected:         h.isProtectedBranch(branchName),
 				Behind:              0,
 				Ahead:               0,
 				CreatedBy:           commit.Author.Email,
@@ -1009,17 +971,6 @@ func (h *BranchOperationsHandler) HandleGetBranchesDetail(c *gin.Context) {
 		zap.Int("total_branches", total))
 
 	c.JSON(http.StatusOK, response)
-}
-
-// 보호 브랜치 여부 확인
-func (h *BranchOperationsHandler) isProtectedBranch(branchName string) bool {
-	protectedBranches := []string{"main", "master", "develop", "production"}
-	for _, protected := range protectedBranches {
-		if strings.EqualFold(branchName, protected) {
-			return true
-		}
-	}
-	return false
 }
 
 // 'from'(제외)에서 'to'(포함)까지 커밋 개수 계산
