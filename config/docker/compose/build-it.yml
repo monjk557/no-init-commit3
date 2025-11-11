@@ -5,12 +5,10 @@ services:
     build:
       context: ../../../../collabops-git-executor
       dockerfile: config/docker/Dockerfile
-    ports:
-      - "${GIT_EXECUTOR_PORT:-5001}:5001"
-      - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
     env_file:
       - ../../env/build-it/git-executor.env
-    volumes:  
+    volumes:
+      - git_pipelines_data:${GIT_REPO_ROOT}
       - git_executor_data:${GIT_REPO_ROOT}
       - ../../../../collabops-git-executor:/app
       - /app/tmp
@@ -31,6 +29,7 @@ services:
 
 volumes:
   git_executor_data:
+  git_pipelines_data:
 
 networks:
   collabops-network:

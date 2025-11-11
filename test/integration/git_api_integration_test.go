@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,6 +165,7 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 		// File operations endpoints
 		filesGroup := repoGroup.Group("/files")
 		{
+			filesGroup.POST("/*path", fileOpsHandler.HandleFileUpload)
 			filesGroup.PUT("/*path", fileOpsHandler.HandleFilePUT)
 			filesGroup.DELETE("/*path", fileOpsHandler.HandleFileDELETE)
 		}
@@ -386,6 +389,52 @@ func TestFileOperations_Integration(t *testing.T) {
 
 		// File deletion API returns 200 even if file doesn't exist (idempotent operation)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("FileUpload_NewBranchConflict", func(t *testing.T) {
+		suite := SetupIntegrationTest(t)
+		repoPath := suite.testRepoPath
+		defer suite.Cleanup()
+
+		// Ensure base repository has main branch
+		repo, err := gogit.PlainOpen(repoPath)
+		require.NoError(t, err)
+
+		headRef, err := repo.Head()
+		require.NoError(t, err)
+		baseHash := headRef.Hash()
+		require.False(t, baseHash.IsZero())
+
+		// Create a branch manually to simulate existing branch
+		existingBranch := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/existing"), baseHash)
+		require.NoError(t, repo.Storer.SetReference(existingBranch))
+
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+		require.NoError(t, writer.WriteField("message", "test commit"))
+		require.NoError(t, writer.WriteField("new_branch", "existing"))
+
+		fileWriter, err := writer.CreateFormFile("file", "test.txt")
+		require.NoError(t, err)
+		_, err = fileWriter.Write([]byte("dummy content"))
+		require.NoError(t, err)
+
+		require.NoError(t, writer.Close())
+
+		url := fmt.Sprintf("/repos/%s/%s/files/%s?ref=master", url.PathEscape("testowner"), url.PathEscape("testrepo"), url.PathEscape("test.txt"))
+		req, err := http.NewRequest(http.MethodPost, suite.testServer.URL+url, body)
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		if !assert.Equal(t, http.StatusBadRequest, resp.StatusCode) {
+			// If the handler returned 404, log the entire response body for debugging.
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			t.Logf("Unexpected status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
 	})
 }
 

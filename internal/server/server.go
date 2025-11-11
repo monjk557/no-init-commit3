@@ -369,6 +369,8 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				{
 					// GET endpoint for reading file content
 					filesGroup.GET("/*path", fileOpsHandler.HandleFileContent)
+					// Upload endpoint for creating/updating files
+					filesGroup.POST("/*path", fileOpsHandler.HandleFileUpload)
 					// PUT endpoint for creating/updating files
 					filesGroup.PUT("/*path", fileOpsHandler.HandleFilePUT)
 					// DELETE endpoint for deleting files

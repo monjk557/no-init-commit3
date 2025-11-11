@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -26,6 +27,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
+
+const maxUploadFileSize int64 = 10 * 1024 * 1024 // 10MB
 
 // FileOperationsHandler는 파일 관리를 위한 REST API 작업을 처리합니다.
 // 파일 CRUD 작업과 다중 파일 커밋을 지원하는 핸들러입니다.
@@ -426,6 +429,358 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 
 	// Send success response
 	api.SendSuccess(c, response, "File operation completed successfully")
+}
+
+// HandleFileUpload handles POST /repos/{owner}/{repo}/files upload requests.
+// 멀티파트 폼 데이터에서 파일과 메타데이터를 받아 브랜치에 커밋을 생성한다.
+func (h *FileOperationsHandler) HandleFileUpload(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	filePath := c.Param("path")
+
+	// 1) 업로드 대상 경로 검증
+	// Remove leading slash from path parameter
+	filePath = strings.TrimPrefix(filePath, "/")
+
+	// Validate path parameter
+	if filePath == "" {
+		apiErr := api.NewBadRequestError("Missing required parameter: path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	if err := h.pathValidator.ValidateFilePath(filePath); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid file path: %v", err),
+		})
+		return
+	}
+
+	refParam := strings.TrimSpace(c.Query("ref"))
+	if refParam != "" {
+		if err := h.validateRefName(refParam); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Invalid branch name: %v", err),
+			})
+			return
+		}
+	}
+
+	// 2) 신규 브랜치 생성 요청 검증
+
+	// ㅇ
+	newBranch := strings.TrimSpace(c.PostForm("new_branch"))
+
+	if newBranch != "" {
+		if err := h.validateRefName(newBranch); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Invalid new branch name: %v", err),
+			})
+			return
+		}
+	}
+
+	message := strings.TrimSpace(c.PostForm("message"))
+	if message == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Commit message is required",
+		})
+		return
+	}
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to read uploaded file: %v", err),
+		})
+		return
+	}
+
+	if fileHeader.Size == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Uploaded file is empty",
+		})
+		return
+	}
+
+	if fileHeader.Size > maxUploadFileSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Uploaded file exceeds maximum allowed size (%d bytes)", maxUploadFileSize),
+		})
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to open uploaded file: %v", err),
+		})
+		return
+	}
+	defer file.Close()
+
+	// 3) 파일 내용 및 크기 검증
+	content, err := io.ReadAll(io.LimitReader(file, maxUploadFileSize+1))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to read uploaded file: %v", err),
+		})
+		return
+	}
+
+	if int64(len(content)) > maxUploadFileSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Uploaded file exceeds maximum allowed size (%d bytes)", maxUploadFileSize),
+		})
+		return
+	}
+
+	author := &CommitAuthor{
+		Name:  strings.TrimSpace(c.DefaultPostForm("author_name", "")),
+		Email: strings.TrimSpace(c.DefaultPostForm("author_email", "")),
+	}
+	if author.Name == "" || author.Email == "" {
+		author = &CommitAuthor{
+			Name:  "Git Executor",
+			Email: "git-executor@collabops.dev",
+		}
+	}
+
+	committer := &CommitAuthor{
+		Name:  strings.TrimSpace(c.DefaultPostForm("committer_name", author.Name)),
+		Email: strings.TrimSpace(c.DefaultPostForm("committer_email", author.Email)),
+	}
+	if committer.Name == "" || committer.Email == "" {
+		committer = author
+	}
+
+	// 4) 업로드 요청 로깅
+	h.logger.Info("File upload requested",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("file_path", filePath),
+		zap.Int64("file_size", fileHeader.Size),
+		zap.String("ref", refParam),
+		zap.String("new_branch", newBranch))
+
+	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
+		h.logger.Warn("Permission validation failed", zap.Error(err))
+
+		if apiErr, ok := err.(*api.GitAPIError); ok {
+			switch apiErr.Code {
+			case api.ErrorCodeUnauthorized:
+				c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": apiErr.Message})
+			case api.ErrorCodeForbidden:
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": apiErr.Message})
+			default:
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": err.Error()})
+			}
+		} else {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": err.Error()})
+		}
+		return
+	}
+
+	ctx := c.Request.Context()
+	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "open_repository")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	if newBranch != "" {
+		exists, err := branchExists(repository, newBranch)
+		if err != nil {
+			apiErr := h.errorMapper.MapError(err, "check_branch_exists")
+			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+			return
+		}
+		if exists {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Branch '%s' already exists. Choose a different name.", newBranch),
+			})
+			return
+		}
+	}
+
+	fileChanges := []git.FileChange{
+		{
+			Path:      filePath,
+			Content:   content,
+			Operation: git.FileOperationUpdate,
+		},
+	}
+
+	if err := h.objectManager.ValidateFileChanges(ctx, fileChanges); err != nil {
+		apiErr := h.errorMapper.MapError(err, "validate_file_changes")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	headRef, err := h.objectManager.GetRepositoryHead(ctx, repository)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_repository_head")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	effectiveBranch := refParam
+	if newBranch != "" {
+		effectiveBranch = newBranch
+	}
+
+	resolveRef := refParam
+
+	// 5) 기준이 될 브랜치 혹은 커밋 해시 계산
+	if resolveRef == "" {
+		if headRef.Type() == plumbing.SymbolicReference {
+			target := headRef.Target().String()
+			resolvedBranch := strings.TrimPrefix(target, "refs/heads/")
+			resolveRef = resolvedBranch
+			if effectiveBranch == "" {
+				effectiveBranch = resolvedBranch
+			}
+			h.logger.Info("Using HEAD symbolic target as default reference",
+				zap.String("target", target),
+				zap.String("resolved_ref", resolveRef))
+		} else {
+			resolveRef = headRef.Hash().String()
+			h.logger.Info("HEAD is detached; using commit hash as base reference",
+				zap.String("head_hash", headRef.Hash().String()))
+		}
+	}
+
+	baseHash, err := h.objectManager.ResolveReference(ctx, repository, resolveRef)
+	if err != nil {
+		baseHash = headRef.Hash()
+		h.logger.Warn("Reference not found, using HEAD as base",
+			zap.String("ref", resolveRef),
+			zap.String("head_hash", headRef.Hash().String()),
+			zap.Error(err))
+	} else {
+		h.logger.Info("Resolved branch reference",
+			zap.String("ref", resolveRef),
+			zap.String("base_hash", baseHash.String()))
+	}
+
+	baseTree, err := h.objectManager.GetTreeFromCommit(ctx, repository, baseHash)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_base_tree")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	treeResult, err := h.objectManager.CreateTreeFromChanges(ctx, repository, baseTree, fileChanges)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "create_tree_from_changes")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	operationType := "create"
+	if _, err := h.objectManager.GetFileContent(ctx, owner, repo, filePath, effectiveBranch); err == nil {
+		operationType = "update"
+	}
+
+	now := time.Now()
+	// 6) 커밋 메타데이터 구성
+	commitInfo := git.CommitInfo{
+		Message: message,
+		Author: object.Signature{
+			Name:  author.Name,
+			Email: author.Email,
+			When:  now,
+		},
+		Committer: &object.Signature{
+			Name:  committer.Name,
+			Email: committer.Email,
+			When:  now,
+		},
+		Parents: []plumbing.Hash{baseHash},
+	}
+
+	result, err := h.objectManager.CreateCommit(ctx, repository, treeResult.TreeHash, commitInfo)
+	if err != nil {
+		apiErr := h.errorMapper.MapErrorWithContext(err, "create_commit", fmt.Sprintf("file=%s", filePath))
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// 7) 브랜치 및 HEAD 참조를 새 커밋으로 이동
+	if effectiveBranch != "" {
+		refName := plumbing.ReferenceName("refs/heads/" + effectiveBranch)
+		ref := plumbing.NewHashReference(refName, result.Hash)
+		if err := repository.Storer.SetReference(ref); err != nil {
+			h.logger.Warn("Failed to update branch reference",
+				zap.String("branch", effectiveBranch),
+				zap.String("commit_hash", result.Hash.String()),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Updated branch reference",
+				zap.String("branch", effectiveBranch),
+				zap.String("commit_hash", result.Hash.String()))
+		}
+
+		headRef := plumbing.NewSymbolicReference(plumbing.HEAD, refName)
+		if err := repository.Storer.SetReference(headRef); err != nil {
+			h.logger.Warn("Failed to update HEAD to branch",
+				zap.String("branch", effectiveBranch),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Updated HEAD to point to branch",
+				zap.String("branch", effectiveBranch))
+		}
+		if err := h.objectManager.EnsureProperHEAD(ctx, repository, effectiveBranch); err != nil {
+			h.logger.Warn("Failed to ensure proper HEAD state",
+				zap.String("branch", effectiveBranch),
+				zap.Error(err))
+		}
+	}
+
+	if effectiveBranch != "" {
+		if err := h.objectManager.EnsureProperHEAD(ctx, repository, effectiveBranch); err != nil {
+			h.logger.Warn("Failed to ensure proper HEAD state",
+				zap.String("branch", effectiveBranch),
+				zap.Error(err))
+		}
+	}
+
+	// 8) 응답 생성 및 반환
+	response := FileOperationResponse{
+		Success:    true,
+		CommitHash: result.Hash.String(),
+		CommitSHA:  result.Hash.String(),
+		Message:    message,
+		FilePath:   filePath,
+		Operation:  operationType,
+		Branch:     effectiveBranch,
+	}
+
+	api.SendSuccess(c, response, "File upload operation completed successfully")
+}
+
+func branchExists(repo *gogit.Repository, branchName string) (bool, error) {
+	refName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", branchName))
+	_, err := repo.Reference(refName, false)
+	if err != nil {
+		if err == plumbing.ErrReferenceNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // HandleFileDELETE handles DELETE /repos/{owner}/{repo}/files/{path} requests
