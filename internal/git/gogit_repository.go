@@ -163,10 +163,30 @@ func (r *GoGitRepository) GetTreeWithCommits(ctx context.Context, ref string, pa
 		return nil, err
 	}
 
-	// 각 blob 엔트리에 대해 최신 커밋 정보 가져오기
+	// 현재 경로 정규화 (전체 경로 구성용)
+	normalizedPath := strings.Trim(path, "/")
+	if normalizedPath != "" {
+		normalizedPath = normalizedPath + "/"
+	}
+
+	// 각 엔트리에 대해 최신 커밋 정보 가져오기
 	for i, entry := range entries {
+		// 전체 경로 구성 (현재 경로 + 엔트리 이름)
+		fullPath := entry.Path
+		if normalizedPath != "" {
+			fullPath = normalizedPath + entry.Path
+		}
+
 		if entry.Type == EntryTypeBlob {
-			latestCommit, err := r.getLatestCommitForFile(ctx, entry.Path, ref)
+			// Blob(파일)인 경우: 파일의 최신 커밋 가져오기
+			latestCommit, err := r.getLatestCommitForFile(ctx, fullPath, ref)
+			if err == nil {
+				entries[i].LatestCommit = latestCommit
+			}
+			// 커밋 정보를 가져올 수 없는 경우에도 계속 진행
+		} else if entry.Type == EntryTypeTree {
+			// Tree(디렉토리)인 경우: 디렉토리 내 모든 파일 중 가장 최근 커밋 가져오기
+			latestCommit, err := r.getLatestCommitForDirectory(ctx, fullPath, ref)
 			if err == nil {
 				entries[i].LatestCommit = latestCommit
 			}
@@ -260,6 +280,68 @@ func (r *GoGitRepository) getLatestCommitForFile(ctx context.Context, filePath, 
 			return nil, NewGitError("get_latest_commit_for_file", r.path, filePath, "no commits found for file", nil)
 		}
 		return nil, NewGitError("get_latest_commit_for_file", r.path, filePath, "failed to get commit", err)
+	}
+
+	// Convert to our Commit format
+	return &Commit{
+		Sha: commit.Hash.String(),
+		Author: CommitAuthor{
+			Name:  commit.Author.Name,
+			Email: commit.Author.Email,
+			Date:  commit.Author.When,
+		},
+		Committer: CommitAuthor{
+			Name:  commit.Committer.Name,
+			Email: commit.Committer.Email,
+			Date:  commit.Committer.When,
+		},
+		Message:      commit.Message,
+		ParentHashes: convertParentHashes(commit.ParentHashes),
+		TreeHash:     commit.TreeHash.String(),
+	}, nil
+}
+
+// getLatestCommitForDirectory gets the latest commit that modified any file within a directory
+// 디렉토리 내 모든 파일 중 가장 최근에 수정된 커밋을 반환합니다
+func (r *GoGitRepository) getLatestCommitForDirectory(ctx context.Context, dirPath, ref string) (*Commit, error) {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// 디렉토리 경로 정규화 (앞뒤 슬래시 정리)
+	normalizedDir := strings.Trim(dirPath, "/")
+	if normalizedDir != "" {
+		normalizedDir = normalizedDir + "/"
+	}
+
+	// Get commit iterator for all files in the directory
+	commitIter, err := r.repo.Log(&git.LogOptions{
+		From: r.getCommitHash(ref),
+		PathFilter: func(path string) bool {
+			// 경로가 디렉토리로 시작하는지 확인
+			if normalizedDir == "" {
+				// 루트 디렉토리인 경우 모든 파일 매칭
+				return true
+			}
+			// 경로가 정규화된 디렉토리 경로로 시작하는지 확인
+			return strings.HasPrefix(path, normalizedDir)
+		},
+	})
+	if err != nil {
+		return nil, NewGitError("get_latest_commit_for_directory", r.path, dirPath, "failed to get commit iterator", err)
+	}
+	defer commitIter.Close()
+
+	// Get the first (latest) commit
+	commit, err := commitIter.Next()
+	if err != nil {
+		if err == io.EOF {
+			return nil, NewGitError("get_latest_commit_for_directory", r.path, dirPath, "no commits found for directory", nil)
+		}
+		return nil, NewGitError("get_latest_commit_for_directory", r.path, dirPath, "failed to get commit", err)
 	}
 
 	// Convert to our Commit format
