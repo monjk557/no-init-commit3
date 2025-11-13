@@ -409,26 +409,20 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 	// commit이 없는 빈 저장소인 경우 early return
 	if emptyRepository {
 		response := responses.RepositoryTreeResponse{
-			Repository:    fmt.Sprintf("%s/%s", owner, repo),
-			Owner:         owner,
-			Name:          repo,
-			Path:          repoPath,
-			LatestCommits: git.Commit{},
-			Tree:          []git.TreeEntry{},
-			SidebarTree:   make(map[string][]git.TreeEntry),
-			Branches:      []git.Branch{},
-			Readme:        "",
+			Repository: fmt.Sprintf("%s/%s", owner, repo),
+			Owner:      owner,
+			Name:       repo,
+			Path:       repoPath,
+			Tree:       make(map[string][]git.TreeEntry),
 		}
 		api.SendSuccess(c, response, "Empty repository - no commits found")
 		return
 	}
 
-	latestCommit := commits[0]
-
-	// Side bar를 위한 Tree (No commit info)
+	// recursive tree 가져오기
 	// path가 중첩된 경우 부모 경로들도 모두 가져오기 (커밋 정보 없이)
 	// 경로별로 그룹화하여 map으로 반환
-	sidebarTree := make(map[string][]git.TreeEntry)
+	tree := make(map[string][]git.TreeEntry)
 
 	if path == "" || path == "/" {
 		// 루트 경로인 경우 그냥 가져오기
@@ -438,7 +432,7 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 			return
 		}
-		sidebarTree["/"] = entries
+		tree["/"] = entries
 	} else {
 		// 중첩된 경로인 경우 부모 경로들도 재귀적으로 가져오기
 		pathParts := strings.Split(strings.Trim(path, "/"), "/")
@@ -451,7 +445,7 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 			return
 		}
-		sidebarTree["/"] = entries
+		tree["/"] = entries
 
 		// 각 부모 경로들 가져오기
 		for _, part := range pathParts {
@@ -462,61 +456,16 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 				return
 			}
-			sidebarTree[currentPath] = entries
+			tree[currentPath] = entries
 		}
 	}
-
-	// Path의 Tree (Commit info)
-	// 5. tree entries 가져오기 (커밋 정보 포함)
-	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, refs, path)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_tree")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-
-	// 7. tags 가져오기
-	tags, err := gitRepo.GetTags(ctx)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_tags")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-	h.logger.Info("tags", zap.Any("tags", tags))
-
-	// 8. remotes 가져오기
-	remotes, err := gitRepo.GetRemotes(ctx)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_remotes")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-	h.logger.Info("remotes", zap.Any("remotes", remotes))
-
-	// 9. readme 가져오기 (현재 경로의 README.md)
-	readmePath := "README.md"
-	if path != "/" && path != "" {
-		readmePath = fmt.Sprintf("%s/README.md", path)
-	}
-
-	readmeData, err := gitRepo.GetBlob(ctx, readmePath, refs)
-	if err != nil {
-		// README가 없을 수도 있으므로 빈 문자열로 처리
-		readmeData = []byte("")
-	}
-
 	// 10. response 생성
 	response := responses.RepositoryTreeResponse{
-		Repository:    fmt.Sprintf("%s/%s", owner, repo),
-		Owner:         owner,
-		Name:          repo,
-		Path:          repoPath,
-		TreePath:      path,
-		LatestCommits: latestCommit,
-		SidebarTree:   sidebarTree,
-		Tree:          treeEntries,
-		Branches:      branches,
-		Readme:        string(readmeData),
+		Repository: fmt.Sprintf("%s/%s", owner, repo),
+		Owner:      owner,
+		Name:       repo,
+		Path:       repoPath,
+		Tree:       tree,
 	}
 
 	api.SendSuccess(c, response, "Repository tree detail retrieved successfully")
