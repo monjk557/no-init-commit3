@@ -74,7 +74,45 @@ func (h *BlobHandler) HandleBlobAPIGin(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	h.processBlobRequest(c.Writer, c.Request, owner, repo)
+	ctx := c.Request.Context()
+
+	// Extract and validate parameters
+	params, err := h.validateAndExtractBlobParams(c.Request, owner, repo)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "Invalid request parameters"})
+		return
+	}
+
+	// Validate permissions and get repository path
+	repoPath, err := h.validateBlobRequestAndPermissions(ctx, params)
+	if err != nil {
+		c.JSON(404, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Get blob content
+	content, err := h.getBlobContent(ctx, repoPath, params.Path, params.Ref)
+	if err != nil {
+		// Hardcoded 404 response
+		c.JSON(404, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Detect content type
+	contentType := h.detectContentType(content, params.Path)
+
+	// Set headers
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Length", fmt.Sprintf("%d", len(content)))
+	c.Header("Cache-Control", "public, max-age=3600")
+
+	// For binary content
+	if h.isBinaryContent(content, contentType) && h.shouldBase64Encode(contentType) {
+		c.Header("X-Content-Encoding", "binary")
+	}
+
+	// Write content
+	c.Data(http.StatusOK, contentType, content)
 }
 
 // processBlobRequest processes the actual blob request
@@ -98,7 +136,7 @@ func (h *BlobHandler) processBlobRequest(w http.ResponseWriter, r *http.Request,
 	// Get blob content
 	content, err := h.getBlobContent(ctx, repoPath, params.Path, params.Ref)
 	if err != nil {
-		h.handleBlobError(w, err, "get blob content")
+		h.sendBlobErrorResponse(w, fmt.Sprintf("File not found: %v", err), http.StatusNotFound)
 		return
 	}
 
