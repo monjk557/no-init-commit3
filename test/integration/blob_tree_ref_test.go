@@ -216,15 +216,17 @@ func TestBlobTreeRefParameter(t *testing.T) {
 		assert.True(t, response["success"].(bool))
 
 		// Check that main branch files are present
-		// Tree API returns data field, not entries
-		data, ok := response["data"].([]interface{})
-		require.True(t, ok, "Response should have 'data' field with array")
-		require.True(t, len(data) > 0, "Should have some entries in main branch")
+		dataMap, ok := response["data"].(map[string]interface{})
+		require.True(t, ok, "Response should have 'data' map")
+
+		entriesRaw, ok := dataMap["/"].([]interface{})
+		require.True(t, ok, "Response should have '/' key with entries")
+		require.True(t, len(entriesRaw) > 0, "Should have some entries in main branch")
 
 		// Extract entry names and paths for assertion
-		entryNames := make([]string, 0, len(data))
-		entryPaths := make([]string, 0, len(data))
-		for _, entry := range data {
+		entryNames := make([]string, 0, len(entriesRaw))
+		entryPaths := make([]string, 0, len(entriesRaw))
+		for _, entry := range entriesRaw {
 			entryMap := entry.(map[string]interface{})
 			if name, ok := entryMap["name"].(string); ok {
 				entryNames = append(entryNames, name)
@@ -255,15 +257,17 @@ func TestBlobTreeRefParameter(t *testing.T) {
 		assert.True(t, response["success"].(bool))
 
 		// Check that feature branch files are present
-		// Tree API returns data field, not entries
-		data, ok := response["data"].([]interface{})
-		require.True(t, ok, "Response should have 'data' field with array")
-		require.True(t, len(data) > 0, "Should have some entries in feature branch")
+		dataMap, ok := response["data"].(map[string]interface{})
+		require.True(t, ok, "Response should have 'data' map")
+
+		entriesRaw, ok := dataMap["/"].([]interface{})
+		require.True(t, ok, "Response should have '/' key with entries")
+		require.True(t, len(entriesRaw) > 0, "Should have some entries in feature branch")
 
 		// Extract entry names and paths for assertion
-		entryNames := make([]string, 0, len(data))
-		entryPaths := make([]string, 0, len(data))
-		for _, entry := range data {
+		entryNames := make([]string, 0, len(entriesRaw))
+		entryPaths := make([]string, 0, len(entriesRaw))
+		for _, entry := range entriesRaw {
 			entryMap := entry.(map[string]interface{})
 			if name, ok := entryMap["name"].(string); ok {
 				entryNames = append(entryNames, name)
@@ -296,9 +300,12 @@ func TestBlobTreeRefParameter(t *testing.T) {
 		assert.True(t, response["success"].(bool))
 
 		// Check that src directory entries are returned
-		data, ok := response["data"].([]interface{})
-		require.True(t, ok, "Response should have 'data' field with array")
-		assert.True(t, len(data) > 0, "Should have entries in src directory")
+		dataMap, ok := response["data"].(map[string]interface{})
+		require.True(t, ok, "Response should have 'data' map")
+
+		entriesRaw, ok := dataMap["src"].([]interface{})
+		require.True(t, ok, "Response should have 'src' key with entries")
+		assert.True(t, len(entriesRaw) > 0, "Should have entries in src directory")
 	})
 
 	t.Run("Tree_존재하지않는브랜치_404응답", func(t *testing.T) {
@@ -368,9 +375,12 @@ func TestBlobTreeRefParameter(t *testing.T) {
 		assert.True(t, response["success"].(bool))
 
 		// Check that data is returned
-		data, ok := response["data"].([]interface{})
-		require.True(t, ok, "Response should have 'data' field with array")
-		assert.True(t, len(data) > 0, "Should have entries when querying by commit hash")
+		dataMap, ok := response["data"].(map[string]interface{})
+		require.True(t, ok, "Response should have 'data' map")
+
+		entriesRaw, ok := dataMap["/"].([]interface{})
+		require.True(t, ok, "Response should have '/' key with entries when querying by commit hash")
+		assert.True(t, len(entriesRaw) > 0, "Should have entries when querying by commit hash")
 	})
 }
 

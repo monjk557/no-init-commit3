@@ -129,8 +129,21 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 			h.handleTreeError(c.Writer, err, "get tree structure")
 			return
 		}
+		// Wrap non-recursive response to match recursive format
+		pathKey := path
+		if pathKey == "" {
+			pathKey = "/"
+		}
+
+		response := &responses.TreeEntriesRecursiveResponse{
+			Success: true,
+			Data: map[string][]responses.TreeEntry{
+				pathKey: treeEntries.Data,
+			},
+		}
+
 		// Send JSON response
-		h.sendTreeJSONResponse(c.Writer, treeEntries, http.StatusOK)
+		h.sendTreeJSONResponse(c.Writer, response, http.StatusOK)
 	}
 }
 
@@ -235,7 +248,15 @@ func (h *TreeHandler) getTreeStructureRecursive(ctx context.Context, repoPath, r
 		// Get tree entries for this path
 		entries, err := gitRepo.GetTree(ctx, ref, path)
 		if err != nil {
-			// If path doesn't exist, skip it
+			// If the requested path (or one of its parents) doesn't exist,
+			// propagate the error so the handler can return 404.
+			if strings.Trim(path, "/") == targetPath {
+				return nil, &git.PathNotFoundError{
+					Path: path,
+					Ref:  ref,
+					Repo: repoPath,
+				}
+			}
 			continue
 		}
 
@@ -275,7 +296,24 @@ func (h *TreeHandler) getTreeStructureRecursive(ctx context.Context, repoPath, r
 			})
 		}
 
-		result[path] = responseEntries
+		mapKey := path
+		if mapKey == "" {
+			mapKey = "/"
+		}
+		result[mapKey] = responseEntries
+	}
+
+	// Ensure the requested path exists in the result
+	expectedKey := targetPath
+	if expectedKey == "" {
+		expectedKey = "/"
+	}
+	if _, ok := result[expectedKey]; !ok {
+		return nil, &git.PathNotFoundError{
+			Path: targetPath,
+			Ref:  ref,
+			Repo: repoPath,
+		}
 	}
 
 	return result, nil
