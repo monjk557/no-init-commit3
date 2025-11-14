@@ -39,16 +39,15 @@ type RepositoryDetailResponse struct {
 
 // RepositoryTreeResponse는 저장소 트리 정보 응답을 나타냅니다.
 type RepositoryTreeResponse struct {
-	Repository    string                     `json:"repository"`
-	Owner         string                     `json:"owner"`
-	Name          string                     `json:"name"`
-	Path          string                     `json:"path"`
-	Tree          []git.TreeEntry            `json:"tree"`
-	SidebarTree   map[string][]git.TreeEntry `json:"sidebar_tree"`
-	LatestCommits git.Commit                 `json:"latest_commits"`
-	Branches      []git.Branch               `json:"branches"`
-	TreePath      string                     `json:"tree_path"`
-	Readme        string                     `json:"readme"`
+	Repository    string          `json:"repository"`
+	Owner         string          `json:"owner"`
+	Name          string          `json:"name"`
+	Path          string          `json:"path"`
+	Tree          []git.TreeEntry `json:"tree"`
+	LatestCommits git.Commit      `json:"latest_commits"`
+	Branches      []git.Branch    `json:"branches"`
+	TreePath      string          `json:"tree_path"`
+	Readme        string          `json:"readme"`
 }
 
 // RepositoryCount는 저장소의 각종 카운트 정보를 나타냅니다.

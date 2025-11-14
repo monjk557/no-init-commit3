@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
+	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/collabops/git-executor/internal/schemas/responses"
@@ -25,15 +27,15 @@ import (
 type TreeHandler struct {
 	pathConfig       *repository.PathConfig
 	permissionClient permissions.PermissionClient
+	repoManager      *git.DefaultRepositoryManager
 }
 
 // TreeRequestParams holds request parameters for tree endpoints
 type TreeRequestParams struct {
-	Owner  string
-	Repo   string
-	Ref    string
-	Path   string // Optional: subdirectory path to query
-	UserID string
+	Owner string
+	Repo  string
+	Ref   string
+	Path  string // Optional: subdirectory path to query
 }
 
 // TreeErrorResponse represents a standardized error response for tree endpoints
@@ -56,109 +58,80 @@ func NewTreeHandler(cfg *config.Config, permClient permissions.PermissionClient)
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
 
+	// Create logger
+	logger, err := logging.NewLogger(cfg.Logging)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %w", err)
+	}
+
+	// Create repository manager
+	repoManager, err := git.NewRepositoryManager(pathConfig, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create repository manager: %w", err)
+	}
+
 	return &TreeHandler{
 		pathConfig:       pathConfig,
 		permissionClient: permClient,
+		repoManager:      repoManager,
 	}, nil
 }
 
 // HandleTreeAPI handles GET /repos/:owner/:repo/tree?ref=:ref
-func (h *TreeHandler) HandleTreeAPI(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
+	ctx := c.Request.Context()
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	refs := c.Query("refs")
+	path := c.Query("path")
+	recursiveStr := c.Query("recursive")
+	recursive := false
+	if recursiveStr != "" {
+		recursive, _ = strconv.ParseBool(recursiveStr)
+	}
 
-	// Extract and validate parameters
-	params, err := h.validateAndExtractTreeParams(r)
+	// 1. parameter 조합 검증
+	// Validate permissions and get repository path
+	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		h.handleTreeError(w, err, "extract parameters")
+		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
 		return
 	}
 
-	// Validate permissions and get repository path
-	repoPath, err := h.validateTreeRequestAndPermissions(ctx, params)
+	// 2. repository 존재 확인
+	exists, err := h.repoManager.RepositoryExists(ctx, repoPath)
 	if err != nil {
-		h.handleTreeError(w, err, "validate permissions")
+		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
+		return
+	}
+	if !exists {
+		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
 		return
 	}
 
 	// Get tree structure
-	treeEntries, err := h.getTreeStructure(ctx, repoPath, params.Ref, params.Path)
-	if err != nil {
-		h.handleTreeError(w, err, "get tree structure")
-		return
-	}
-
-	// Send JSON response
-	h.sendTreeJSONResponse(w, treeEntries, http.StatusOK)
-}
-
-// validateAndExtractTreeParams extracts and validates parameters from tree request
-func (h *TreeHandler) validateAndExtractTreeParams(r *http.Request) (*TreeRequestParams, error) {
-	// Extract path parameters
-	owner := URLParam(r, "owner")
-	repo := URLParam(r, "repo")
-
-	// Extract query parameters
-	ref := r.URL.Query().Get("ref")
-	path := r.URL.Query().Get("path") // Optional: subdirectory path
-
-	// Validate required parameters
-	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("missing required parameters: owner or repo")
-	}
-
-	if ref == "" {
-		return nil, fmt.Errorf("missing required parameter: ref")
-	}
-
-	// Basic validation of parameter format
-	if !isValidRepoIdentifier(owner) {
-		return nil, fmt.Errorf("invalid owner format")
-	}
-
-	if !isValidRepoIdentifier(repo) {
-		return nil, fmt.Errorf("invalid repo format")
-	}
-
-	if !isValidGitRef(ref) {
-		return nil, fmt.Errorf("invalid ref format")
-	}
-
-	// Get user ID from header for permission checking
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		return nil, fmt.Errorf("missing user authentication")
-	}
-
-	return &TreeRequestParams{
-		Owner:  owner,
-		Repo:   repo,
-		Ref:    ref,
-		Path:   path,
-		UserID: userID,
-	}, nil
-}
-
-// validateTreeRequestAndPermissions performs validation and permission checking for tree requests
-func (h *TreeHandler) validateTreeRequestAndPermissions(ctx context.Context, params *TreeRequestParams) (string, error) {
-	// If permission client is nil, skip permission checking (for development/testing)
-	if h.permissionClient != nil {
-		// Check user permissions (read access for tree operations)
-		hasAccess, err := h.permissionClient.CheckReadAccess(ctx, params.UserID, params.Owner, params.Repo)
+	if recursive {
+		treeMap, err := h.getTreeStructureRecursive(ctx, repoPath, refs, path)
 		if err != nil {
-			return "", fmt.Errorf("permission check failed: %w", err)
+			h.handleTreeError(c.Writer, err, "get tree structure")
+			return
 		}
-		if !hasAccess {
-			return "", fmt.Errorf("access denied to repository")
+		// Wrap in response structure
+		response := &responses.TreeEntriesRecursiveResponse{
+			Success: true,
+			Data:    treeMap,
 		}
+		// Send JSON response with map structure
+		h.sendTreeJSONResponse(c.Writer, response, http.StatusOK)
+	} else {
+		treeEntries, err := h.getTreeStructure(ctx, repoPath, refs, path)
+		if err != nil {
+			h.handleTreeError(c.Writer, err, "get tree structure")
+			return
+		}
+		// Send JSON response
+		h.sendTreeJSONResponse(c.Writer, treeEntries, http.StatusOK)
 	}
-
-	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
-	if err != nil {
-		return "", fmt.Errorf("invalid repository path: %w", err)
-	}
-
-	return repoPath, nil
 }
 
 // getTreeStructure retrieves the tree structure using the Git repository interface
@@ -178,6 +151,9 @@ func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref, path 
 
 	// Convert to response format
 	var responseEntries []responses.TreeEntry
+	// Normalize base path (remove leading/trailing slashes)
+	basePath := strings.Trim(path, "/")
+
 	for _, entry := range entries {
 		// Convert type from git.EntryType to string expected by API
 		entryType := ""
@@ -194,10 +170,19 @@ func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref, path 
 			entryType = "blob"
 		}
 
+		// Name is just the entry name (file or directory name)
+		name := entry.Path
+
+		// Path is the full path from repository root
+		fullPath := entry.Path
+		if basePath != "" {
+			fullPath = basePath + "/" + entry.Path
+		}
+
 		responseEntries = append(responseEntries, responses.TreeEntry{
 			Type: entryType,
-			Name: entry.Path, // In GetTree, Path contains just the name
-			Path: entry.Path, // For root level entries, name and path are the same
+			Name: name,
+			Path: fullPath,
 		})
 	}
 
@@ -205,6 +190,95 @@ func (h *TreeHandler) getTreeStructure(ctx context.Context, repoPath, ref, path 
 		Success: true,
 		Data:    responseEntries,
 	}, nil
+}
+
+// getTreeStructureRecursive retrieves tree structure recursively from root to the specified path
+// Returns a map where keys are directory paths and values are tree entries in that directory
+func (h *TreeHandler) getTreeStructureRecursive(ctx context.Context, repoPath, ref, targetPath string) (map[string][]responses.TreeEntry, error) {
+	// Open repository using the simple cache
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+	defer func() { _ = gitRepo.Close() }()
+
+	// Normalize target path
+	targetPath = strings.Trim(targetPath, "/")
+
+	// Build list of all parent directories from root to target path
+	var pathsToExplore []string
+	if targetPath == "" {
+		// If target is root, only explore root
+		pathsToExplore = []string{""}
+	} else {
+		// Start with root
+		pathsToExplore = []string{""}
+
+		// Split path into components and build all parent paths
+		parts := strings.Split(targetPath, "/")
+		currentPath := ""
+		for _, part := range parts {
+			if currentPath == "" {
+				currentPath = part
+			} else {
+				currentPath = currentPath + "/" + part
+			}
+			pathsToExplore = append(pathsToExplore, currentPath)
+		}
+	}
+
+	// Map to store results: path -> []TreeEntry
+	result := make(map[string][]responses.TreeEntry)
+
+	// Explore each path from root to target
+	for _, path := range pathsToExplore {
+		// Get tree entries for this path
+		entries, err := gitRepo.GetTree(ctx, ref, path)
+		if err != nil {
+			// If path doesn't exist, skip it
+			continue
+		}
+
+		// Convert to responses.TreeEntry format (same as getTreeStructure)
+		basePath := strings.Trim(path, "/")
+		var responseEntries []responses.TreeEntry
+
+		for _, entry := range entries {
+			// Convert type from git.EntryType to string expected by API
+			entryType := ""
+			switch entry.Type {
+			case git.EntryTypeTree:
+				entryType = "tree"
+			case git.EntryTypeBlob:
+				entryType = "blob"
+			case git.EntryTypeCommit:
+				// For submodules, we'll treat them as trees for the API response
+				entryType = "tree"
+			default:
+				// Default to blob for unknown types
+				entryType = "blob"
+			}
+
+			// Name is just the entry name (file or directory name)
+			name := entry.Path
+
+			// Path is the full path from repository root
+			fullPath := entry.Path
+			if basePath != "" {
+				fullPath = basePath + "/" + entry.Path
+			}
+
+			responseEntries = append(responseEntries, responses.TreeEntry{
+				Type: entryType,
+				Name: name,
+				Path: fullPath,
+			})
+		}
+
+		result[path] = responseEntries
+	}
+
+	return result, nil
 }
 
 // sendTreeJSONResponse sends a standardized JSON response for tree endpoints
@@ -399,6 +473,24 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 			zap.String("refs", refs))
 	}
 
+	// 8. path가 제공된 경우, 해당 브랜치에 path가 존재하는지 확인
+	if path != "" && path != "/" {
+		_, err := gitRepo.GetTree(ctx, refs, path)
+		if err != nil {
+			// Check if it's a PathNotFoundError
+			var pathErr *git.PathNotFoundError
+			if errors.As(err, &pathErr) {
+				apiErr := h.errorMapper.MapError(err, "path_not_found")
+				c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+			// Other errors might be temporary, but we should still return error
+			apiErr := h.errorMapper.MapError(err, "get_tree")
+			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+			return
+		}
+	}
+
 	// 5. commit history 가져오기 (빈 저장소 확인용)
 	commits, err := gitRepo.GetCommits(ctx, refs, 10, 0)
 	emptyRepository := false
@@ -415,55 +507,11 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 			Path:          repoPath,
 			LatestCommits: git.Commit{},
 			Tree:          []git.TreeEntry{},
-			SidebarTree:   make(map[string][]git.TreeEntry),
 			Branches:      []git.Branch{},
 			Readme:        "",
 		}
 		api.SendSuccess(c, response, "Empty repository - no commits found")
 		return
-	}
-
-	latestCommit := commits[0]
-
-	// Side bar를 위한 Tree (No commit info)
-	// path가 중첩된 경우 부모 경로들도 모두 가져오기 (커밋 정보 없이)
-	// 경로별로 그룹화하여 map으로 반환
-	sidebarTree := make(map[string][]git.TreeEntry)
-
-	if path == "" || path == "/" {
-		// 루트 경로인 경우 그냥 가져오기
-		entries, err := gitRepo.GetTree(ctx, refs, "/")
-		if err != nil {
-			apiErr := h.errorMapper.MapError(err, "get_sidebar_tree")
-			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-			return
-		}
-		sidebarTree["/"] = entries
-	} else {
-		// 중첩된 경로인 경우 부모 경로들도 재귀적으로 가져오기
-		pathParts := strings.Split(strings.Trim(path, "/"), "/")
-		currentPath := ""
-
-		// 루트부터 시작
-		entries, err := gitRepo.GetTree(ctx, refs, "/")
-		if err != nil {
-			apiErr := h.errorMapper.MapError(err, "get_sidebar_tree")
-			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-			return
-		}
-		sidebarTree["/"] = entries
-
-		// 각 부모 경로들 가져오기
-		for _, part := range pathParts {
-			currentPath = currentPath + "/" + part
-			entries, err := gitRepo.GetTree(ctx, refs, currentPath)
-			if err != nil {
-				apiErr := h.errorMapper.MapError(err, "get_sidebar_tree")
-				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-				return
-			}
-			sidebarTree[currentPath] = entries
-		}
 	}
 
 	// Path의 Tree (Commit info)
@@ -475,6 +523,49 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 		return
 	}
 
+	// Normalize base path (remove leading/trailing slashes)
+	basePath := strings.Trim(path, "/")
+
+	// Convert tree entries: Path should be full path, Name should be just the file/dir name
+	convertedTreeEntries := make([]git.TreeEntry, len(treeEntries))
+	for i, entry := range treeEntries {
+		// Name is just the entry name (file or directory name)
+		name := entry.Path
+
+		// Path is the full path from repository root
+		fullPath := entry.Path
+		if basePath != "" {
+			fullPath = basePath + "/" + entry.Path
+		}
+
+		convertedTreeEntries[i] = git.TreeEntry{
+			Path:         fullPath,
+			Name:         name,
+			Mode:         entry.Mode,
+			Type:         entry.Type,
+			Hash:         entry.Hash,
+			Size:         entry.Size,
+			LatestCommit: entry.LatestCommit,
+		}
+	}
+
+	treeEntries = convertedTreeEntries
+
+	// tree entries의 LatestCommit 중에서 가장 최근 커밋 찾기
+	var latestCommitValue git.Commit
+	if len(treeEntries) > 0 {
+		var latestCommit *git.Commit
+		for _, entry := range treeEntries {
+			if entry.LatestCommit != nil {
+				if latestCommit == nil || entry.LatestCommit.Committer.Date.After(latestCommit.Committer.Date) {
+					latestCommit = entry.LatestCommit
+				}
+			}
+		}
+		if latestCommit != nil {
+			latestCommitValue = *latestCommit
+		}
+	}
 	// 7. tags 가져오기
 	tags, err := gitRepo.GetTags(ctx)
 	if err != nil {
@@ -506,14 +597,15 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 	}
 
 	// 10. response 생성
+	// latestCommit이 nil이 아닌 경우에만 역참조
+
 	response := responses.RepositoryTreeResponse{
 		Repository:    fmt.Sprintf("%s/%s", owner, repo),
 		Owner:         owner,
 		Name:          repo,
 		Path:          repoPath,
 		TreePath:      path,
-		LatestCommits: latestCommit,
-		SidebarTree:   sidebarTree,
+		LatestCommits: latestCommitValue,
 		Tree:          treeEntries,
 		Branches:      branches,
 		Readme:        string(readmeData),

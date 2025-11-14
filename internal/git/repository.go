@@ -67,8 +67,11 @@ type BlobInfo struct {
 
 // TreeEntry - Git 트리의 항목 (디렉토리 리스팅)
 type TreeEntry struct {
-	// Path - 트리 내에서의 상대 경로
+	// Path - 전체 경로 (repository root부터의 경로)
 	Path string `json:"path"`
+
+	// Name - 파일 또는 디렉토리 이름
+	Name string `json:"name,omitempty"`
 
 	// Mode - 파일 모드 (권한 및 타입)
 	Mode string `json:"mode"`

@@ -145,6 +145,7 @@ func (r *GoGitRepository) GetTree(ctx context.Context, ref string, path string) 
 
 		entries = append(entries, TreeEntry{
 			Path: entry.Name,
+			Name: entry.Name,
 			Mode: entry.Mode.String(),
 			Type: entryType,
 			Hash: entry.Hash.String(),

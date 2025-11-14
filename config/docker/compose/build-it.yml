@@ -10,8 +10,6 @@ services:
     volumes:
       - git_pipelines_data:${GIT_REPO_ROOT}
       - git_executor_data:${GIT_REPO_ROOT}
-      - ../../../../collabops-git-executor:/app
-      - /app/tmp
     networks:
       - collabops-network
     restart: unless-stopped

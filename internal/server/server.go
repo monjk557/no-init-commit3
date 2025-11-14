@@ -322,7 +322,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				// Repository creation endpoint
 				repoGroup.POST("", repoCreationHandler.HandleCreateRepository)
 				// Tree endpoint
-				repoGroup.GET("/tree", gin.WrapF(treeHandler.HandleTreeAPI))
+				repoGroup.GET("/tree", treeHandler.HandleTreeAPI)
 				// Blob endpoint
 				repoGroup.GET("/blob", blobHandler.HandleBlobAPIGin)
 

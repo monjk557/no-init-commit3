@@ -16,3 +16,10 @@ type TreeEntriesResponse struct {
 	Success bool        `json:"success"`
 	Data    []TreeEntry `json:"data"`
 }
+
+// TreeEntriesRecursiveResponse는 재귀적 트리 항목 목록 요청에 대한 응답을 나타냅니다.
+// 성공 여부와 경로별 트리 항목들의 맵을 포함합니다.
+type TreeEntriesRecursiveResponse struct {
+	Success bool                   `json:"success"`
+	Data    map[string][]TreeEntry `json:"data"`
+}
