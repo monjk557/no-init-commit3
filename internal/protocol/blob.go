@@ -437,7 +437,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	path := c.Query("path")
-	refs := c.Query("refs")
+	ref := c.Query("ref")
 
 	// Validate path parameter
 	if path == "" {
@@ -485,17 +485,17 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	}
 
 	// 7. refs가 제공된 경우, 실존하는 브랜치인지 확인
-	if refs != "" {
+	if ref != "" {
 		branchExists := false
 		for _, branch := range branches {
-			if branch.Name == refs {
+			if branch.Name == ref {
 				branchExists = true
 				break
 			}
 		}
 
 		if !branchExists {
-			refErr := fmt.Errorf("reference '%s' not found in repository", refs)
+			refErr := fmt.Errorf("reference '%s' not found in repository", ref)
 			apiErr := h.errorMapper.MapError(refErr, "reference_not_found")
 			c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 			return
@@ -504,7 +504,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 
 	// 4. blob 가져오기
 	// Lines, Bytes
-	blob, err := gitRepo.GetBlob(ctx, path, refs)
+	blob, err := gitRepo.GetBlob(ctx, path, ref)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_blob")
 		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
@@ -516,7 +516,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	size := int64(len(blob))
 
 	// 5. tree entries 가져오기
-	treeEntries, err := gitRepo.GetTree(ctx, refs, "")
+	treeEntries, err := gitRepo.GetTree(ctx, ref, "")
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
@@ -524,7 +524,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	}
 
 	// 6. 파일의 커밋 히스토리 가져오기
-	commits, err := gitRepo.GetCommitsForFile(ctx, path, refs, 10, 0)
+	commits, err := gitRepo.GetCommitsForFile(ctx, path, ref, 10, 0)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_commits")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})

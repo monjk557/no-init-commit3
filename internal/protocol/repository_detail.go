@@ -68,7 +68,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	refs := c.Query("refs")
+	ref := c.Query("ref")
 	path := c.Query("path")
 
 	// 1. parameter 조합 검증
@@ -87,7 +87,9 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		return
 	}
 	if !exists {
-		apiErr := h.errorMapper.MapError(err, "repository_not_found")
+		// Repository does not exist - create a proper error message
+		notFoundErr := fmt.Errorf("repository not found at path: %s", repoPath)
+		apiErr := h.errorMapper.MapError(notFoundErr, "repository_not_found")
 		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
@@ -108,27 +110,27 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	}
 
 	// 7. refs가 제공된 경우, 실존하는 브랜치인지 확인
-	if refs != "" {
+	if ref != "" {
 		branchExists := false
 		for _, branch := range branches {
-			if branch.Name == refs {
+			if branch.Name == ref {
 				branchExists = true
 				break
 			}
 		}
 
 		if !branchExists {
-			refErr := fmt.Errorf("reference '%s' not found in repository", refs)
+			refErr := fmt.Errorf("reference '%s' not found in repository", ref)
 			apiErr := h.errorMapper.MapError(refErr, "reference_not_found")
 			c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 			return
 		}
-		h.logger.Info("refs validated successfully",
-			zap.String("refs", refs))
+		h.logger.Info("ref validated successfully",
+			zap.String("ref", ref))
 	}
 
 	// 5. commit history 가져오기 (빈 저장소 확인용)
-	commits, err := gitRepo.GetCommits(ctx, refs, 10, 0)
+	commits, err := gitRepo.GetCommits(ctx, ref, 10, 0)
 	emptyRepository := false
 	if err != nil || len(commits) == 0 {
 		emptyRepository = true
@@ -163,7 +165,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	latestCommit := commits[0]
 
 	// 5. tree entries 가져오기 (커밋 정보 포함)
-	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, refs, path)
+	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, ref, path)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
@@ -189,7 +191,7 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	h.logger.Info("remotes", zap.Any("remotes", remotes))
 
 	// 9. readme 가져오기
-	readmeData, err := gitRepo.GetBlob(ctx, "README.md", refs)
+	readmeData, err := gitRepo.GetBlob(ctx, "README.md", ref)
 	readmeContent := ""
 	if err != nil {
 		// README가 없는 경우 빈 문자열로 처리 (500 에러 방지)
@@ -208,13 +210,13 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	}
 
 	// 10. 언어 분포도 계산
-	languageDistribution, err := gitRepo.GetLanguageDistribution(ctx, refs)
+	languageDistribution, err := gitRepo.GetLanguageDistribution(ctx, ref)
 	if err != nil {
 		// 언어 분포도 계산 실패는 로그만 남기고 응답에는 포함하지 않음 (선택적 기능)
 		h.logger.Warn("Failed to calculate language distribution",
 			zap.String("owner", owner),
 			zap.String("repo", repo),
-			zap.String("refs", refs),
+			zap.String("ref", ref),
 			zap.Error(err))
 		// Continue without language distribution
 	}

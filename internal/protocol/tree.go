@@ -82,7 +82,7 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	refs := c.Query("refs")
+	ref := c.Query("ref")
 	path := c.Query("path")
 	recursiveStr := c.Query("recursive")
 	recursive := false
@@ -111,7 +111,7 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 
 	// Get tree structure
 	if recursive {
-		treeMap, err := h.getTreeStructureRecursive(ctx, repoPath, refs, path)
+		treeMap, err := h.getTreeStructureRecursive(ctx, repoPath, ref, path)
 		if err != nil {
 			h.handleTreeError(c.Writer, err, "get tree structure")
 			return
@@ -124,7 +124,7 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 		// Send JSON response with map structure
 		h.sendTreeJSONResponse(c.Writer, response, http.StatusOK)
 	} else {
-		treeEntries, err := h.getTreeStructure(ctx, repoPath, refs, path)
+		treeEntries, err := h.getTreeStructure(ctx, repoPath, ref, path)
 		if err != nil {
 			h.handleTreeError(c.Writer, err, "get tree structure")
 			return
@@ -453,7 +453,7 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	refs := c.Query("refs")
+	ref := c.Query("ref")
 	path := c.Query("path")
 
 	// 1. parameter 조합 검증
@@ -472,7 +472,9 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 		return
 	}
 	if !exists {
-		apiErr := h.errorMapper.MapError(err, "repository_not_found")
+		// Repository does not exist - create a proper error message
+		notFoundErr := fmt.Errorf("repository not found at path: %s", repoPath)
+		apiErr := h.errorMapper.MapError(notFoundErr, "repository_not_found")
 		c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
@@ -492,28 +494,28 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 	}
 
 	// 7. refs가 제공된 경우, 실존하는 브랜치인지 확인
-	if refs != "" {
+	if ref != "" {
 		branchExists := false
 		for _, branch := range branches {
-			if branch.Name == refs {
+			if branch.Name == ref {
 				branchExists = true
 				break
 			}
 		}
 
 		if !branchExists {
-			refErr := fmt.Errorf("reference '%s' not found in repository", refs)
+			refErr := fmt.Errorf("reference '%s' not found in repository", ref)
 			apiErr := h.errorMapper.MapError(refErr, "reference_not_found")
 			c.JSON(404, gin.H{"success": false, "error": apiErr.Message})
 			return
 		}
 		h.logger.Info("refs validated successfully",
-			zap.String("refs", refs))
+			zap.String("ref", ref))
 	}
 
 	// 8. path가 제공된 경우, 해당 브랜치에 path가 존재하는지 확인
 	if path != "" && path != "/" {
-		_, err := gitRepo.GetTree(ctx, refs, path)
+		_, err := gitRepo.GetTree(ctx, ref, path)
 		if err != nil {
 			// Check if it's a PathNotFoundError
 			var pathErr *git.PathNotFoundError
@@ -530,7 +532,7 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 	}
 
 	// 5. commit history 가져오기 (빈 저장소 확인용)
-	commits, err := gitRepo.GetCommits(ctx, refs, 10, 0)
+	commits, err := gitRepo.GetCommits(ctx, ref, 10, 0)
 	emptyRepository := false
 	if err != nil || len(commits) == 0 {
 		emptyRepository = true
@@ -554,7 +556,7 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 
 	// Path의 Tree (Commit info)
 	// 5. tree entries 가져오기 (커밋 정보 포함)
-	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, refs, path)
+	treeEntries, err := gitRepo.GetTreeWithCommits(ctx, ref, path)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_tree")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
@@ -628,7 +630,7 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 		readmePath = fmt.Sprintf("%s/README.md", path)
 	}
 
-	readmeData, err := gitRepo.GetBlob(ctx, readmePath, refs)
+	readmeData, err := gitRepo.GetBlob(ctx, readmePath, ref)
 	if err != nil {
 		// README가 없을 수도 있으므로 빈 문자열로 처리
 		readmeData = []byte("")

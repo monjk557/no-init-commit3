@@ -796,16 +796,16 @@ func (h *BranchOperationsHandler) HandleGetBranchesDetail(c *gin.Context) {
 	// 저장소 열기
 	gitRepo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
-		h.logger.Error("Failed to open repository", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open repository"})
+		h.logger.Error("repository not found", zap.Error(err))
+		c.JSON(404, gin.H{"success": false, "error": "repository not found"})
 		return
 	}
 
 	// 모든 참조(브랜치) 조회
 	refs, err := gitRepo.References()
 	if err != nil {
-		h.logger.Error("Failed to get references", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get references"})
+		h.logger.Error("failed to get references", zap.Error(err))
+		c.JSON(404, gin.H{"success": false, "error": "failed to get references"})
 		return
 	}
 
