@@ -36,7 +36,6 @@ services:
       timeout: 10s
       retries: 3
 
-
   # CollabOps API Service (Pre-built Image)
   collabops-api-service:
     image: asia-northeast3-docker.pkg.dev/collabops-shared/api-service/collabops-api-service:latest
@@ -95,33 +94,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  # CollabOps Git Executor Service - Handles Git Operations
-  collabops-git-executor:
-    image: asia-northeast3-docker.pkg.dev/collabops-shared/git-executor/collabops-git-executor:latest
-    platform: linux/amd64
-    pull_policy: always
-    ports:
-      - "${GIT_EXECUTOR_PORT:-5001}:5001"
-      - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
-    env_file:
-      - ../../env/local-it/git-executor.env
-    volumes:  
-      - git_executor_data:${GIT_REPO_ROOT}
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "5"
-        labels: "service=collabops-git-executor"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   # Redis Cache for Orchestrator
   redis-orchestrator:
