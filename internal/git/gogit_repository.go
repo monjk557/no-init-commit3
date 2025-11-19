@@ -153,6 +153,9 @@ func (r *GoGitRepository) GetTree(ctx context.Context, ref string, path string) 
 		})
 	}
 
+	// 트리 항목 정렬: 폴더가 먼저, 파일이 뒤에 오고, 각 그룹 내에서 사전순 정렬
+	SortTreeEntries(entries)
+
 	return entries, nil
 }
 
@@ -978,4 +981,31 @@ func (r *GoGitRepository) GetLanguageDistribution(ctx context.Context, ref strin
 		TotalBytes: totalBytes,
 		TotalFiles: totalFiles,
 	}, nil
+}
+
+// SortTreeEntries sorts tree entries with the following order:
+// 1. Folders (Tree) come first
+// 2. Files (Blob) come after folders
+// 3. Submodules (Commit) come last
+// Within each group, entries are sorted alphabetically (ASCII order)
+func SortTreeEntries(entries []TreeEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		// 타입 우선순위: Tree(폴더) > Blob(파일) > Commit(서브모듈)
+		typeOrder := map[EntryType]int{
+			EntryTypeTree:   0,
+			EntryTypeBlob:   1,
+			EntryTypeCommit: 2,
+		}
+
+		typeI := typeOrder[entries[i].Type]
+		typeJ := typeOrder[entries[j].Type]
+
+		// 타입이 다르면 타입 순서로 정렬
+		if typeI != typeJ {
+			return typeI < typeJ
+		}
+
+		// 같은 타입이면 이름으로 사전순 정렬 (아스키 순서)
+		return entries[i].Name < entries[j].Name
+	})
 }
