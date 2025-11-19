@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -462,105 +460,6 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 	}
 
 	s.logger.Info("Push request processed successfully")
-	return nil
-}
-
-// handleUploadArchive : git-upload-archive (archive) 처리
-func (s *DuplexTCPServer) handleUploadArchive(conn *DuplexConnection, owner, repo string) error {
-
-	// 0) 리포 경로 확인
-	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
-	if err != nil {
-		return fmt.Errorf("path config: %w", err)
-	}
-
-	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repo)
-	if err != nil {
-		return fmt.Errorf("repo path: %w", err)
-	}
-
-	// 1) 요청 인자 읽기 (argument ... 줄들을 flush까지)
-	raw, err := s.readSection(conn.reader)
-	if err != nil {
-		return fmt.Errorf("read upload-archive args: %w", err)
-	}
-	if len(raw) == 0 {
-		return fmt.Errorf("no arguments")
-	}
-
-	// 2) 인자 정규화 (argument ... 줄들을 flush까지)
-	args := make([]string, 0, len(raw))
-	for _, line := range raw {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "argument ")
-		if line == "" {
-			continue
-		}
-		args = append(args, line)
-	}
-
-	// 3) 인자 파싱 (최소: tree-ish 1개. 나머지는 pathspec/옵션)
-
-	parsed, err := protocol.ParseUploadArchiveArgs(args)
-	if err != nil {
-		return fmt.Errorf("parse args: %w", err)
-	}
-
-	// 4) ACK + flush (프로토콜)
-	if err := s.writePktLine(conn, "ACK\n"); err != nil {
-		return err
-	}
-	if err := conn.writer.Flush(); err != nil {
-		return fmt.Errorf("flush ACK: %w", err)
-	}
-
-	// 5) 실제 아카이브 생성 스트리밍
-	// 외부 git을 이용 (권장: 호환성↑). tar/zip 등 포맷은 parsed.format 사용.
-	cmdArgs := []string{"-C", repoPath, "archive"}
-	if parsed.Format != "" {
-		cmdArgs = append(cmdArgs, "--format="+parsed.Format)
-	}
-	// --prefix 등 옵션
-	if parsed.Prefix != "" {
-		cmdArgs = append(cmdArgs, "--prefix="+parsed.Prefix)
-	}
-	// tree-ish + pathspecs
-	cmdArgs = append(cmdArgs, parsed.Treeish)
-	cmdArgs = append(cmdArgs, parsed.Pathspecs...)
-
-	cmd := exec.Command("git", cmdArgs...)
-	// 보안상 system/global config 영향 최소화
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
-	)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("cannot pipe stdout: %w", err)
-	}
-	stderr, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start archive: %w", err)
-	}
-
-	// stderr는 서버 로그로만
-	go func() { io.Copy(os.Stdout, stderr) }()
-
-	// RAW 스트림 복사 (pkt-line 아님!)
-	if _, err := io.Copy(conn.writer, stdout); err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("stream archive: %w", err)
-	}
-	if err := cmd.Wait(); err != nil {
-		// 이미 ACK/flush를 보낸 뒤라 에러 패킷을 더 보낼 수 없음 → 서버 로그만 남김
-		s.logger.Error("git archive failed", zap.Error(err), zap.String("repo_path", repoPath))
-		return err
-	}
-
-	// 6) 정상 종료 (EOF로 마무리)
 	return nil
 }
 

@@ -4,17 +4,17 @@ package protocol
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/gin-gonic/gin"
 )
 
 // CommitsHandler는 Git 커밋 로그 REST API 엔드포인트를 처리합니다.
@@ -22,6 +22,7 @@ import (
 type CommitsHandler struct {
 	pathConfig       *repository.PathConfig
 	permissionClient permissions.PermissionClient
+	errorMapper      *api.GitErrorMapper
 }
 
 // CommitsRequestParams는 커밋 로그 엔드포인트의 요청 파라미터를 나타냅니다.
@@ -115,27 +116,30 @@ func NewCommitsHandler(cfg *config.Config, permClient permissions.PermissionClie
 }
 
 // HandleCommitsAPI는 GET /repos/:owner/:repo/commits?ref=:ref&limit=:limit&skip=:skip 요청을 처리합니다.
-func (h *CommitsHandler) HandleCommitsAPI(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
+	ctx := c.Request.Context()
 
 	// 파라미터 추출 및 검증
-	params, err := h.validateAndExtractCommitsParams(r)
+	params, err := h.validateAndExtractCommitsParams(c.Request)
 	if err != nil {
-		h.handleCommitsError(w, err, "extract parameters")
+		apiErr := h.errorMapper.MapError(err, "extract_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 저장소 경로 조회 및 검증
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		h.handleCommitsError(w, err, "get repository path")
+		apiErr := h.errorMapper.MapError(err, "get_repository_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 커밋 히스토리 조회
 	commits, totalCount, err := h.getCommitHistory(ctx, repoPath, params)
 	if err != nil {
-		h.handleCommitsError(w, err, "get commit history")
+		apiErr := h.errorMapper.MapError(err, "get_commit_history")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
@@ -156,15 +160,15 @@ func (h *CommitsHandler) HandleCommitsAPI(w http.ResponseWriter, r *http.Request
 		Message: "Commits fetched successfully",
 		Pagination: PaginationInfo{
 			Count:      totalCount,
-			Next:       buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, r.URL.String()).Next,
-			Previous:   buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, r.URL.String()).Previous,
-			TotalPages: buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, r.URL.String()).TotalPages,
+			Next:       buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String()).Next,
+			Previous:   buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String()).Previous,
+			TotalPages: buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String()).TotalPages,
 			PageSize:   params.Limit,
 		},
 	}
 
 	// JSON 응답 전송
-	h.sendCommitsJSONResponse(w, response, http.StatusOK)
+	c.JSON(http.StatusOK, response)
 }
 
 // validateAndExtractCommitsParams는 커밋 요청에서 파라미터를 추출하고 검증합니다.
@@ -267,73 +271,6 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, 
 	totalCount := len(commits)
 
 	return commits, totalCount, nil
-}
-
-// sendCommitsJSONResponse는 커밋 엔드포인트의 표준화된 JSON 응답을 전송합니다.
-func (h *CommitsHandler) sendCommitsJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// 에러 로깅 (이 시점에서는 응답을 변경할 수 없음)
-		fmt.Printf("Failed to encode JSON response: %v\n", err)
-	}
-}
-
-// sendCommitsErrorResponse는 커밋 엔드포인트의 표준화된 에러 응답을 전송합니다.
-func (h *CommitsHandler) sendCommitsErrorResponse(w http.ResponseWriter, success bool, message string, statusCode int) {
-	errorResp := CommitsErrorResponse{
-		Success: success,
-		Error:   message,
-	}
-	h.sendCommitsJSONResponse(w, errorResp, statusCode)
-}
-
-// handleCommitsError는 에러를 분류하고 커밋 엔드포인트에 적절한 HTTP 응답을 전송합니다.
-func (h *CommitsHandler) handleCommitsError(w http.ResponseWriter, err error, operation string) {
-	if isCommitsReferenceNotFoundError(err) {
-		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Reference not found: %v", err), http.StatusNotFound)
-	} else if isCommitsRepositoryNotFoundError(err) {
-		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Repository not found: %v", err), http.StatusNotFound)
-	} else if strings.Contains(err.Error(), "permission") {
-		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
-	} else if strings.Contains(err.Error(), "access denied") {
-		h.sendCommitsErrorResponse(w, true, "Access denied to repository", http.StatusForbidden)
-	} else if strings.Contains(err.Error(), "authentication") {
-		h.sendCommitsErrorResponse(w, true, err.Error(), http.StatusUnauthorized)
-	} else if strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "invalid") {
-		h.sendCommitsErrorResponse(w, true, err.Error(), http.StatusBadRequest)
-	} else {
-		h.sendCommitsErrorResponse(w, true, fmt.Sprintf("Failed to %s: %v", operation, err), http.StatusInternalServerError)
-	}
-}
-
-// 커밋 작업을 위한 에러 타입 확인 함수들
-
-// isCommitsReferenceNotFoundError는 에러가 참조를 찾을 수 없는 에러인지 확인합니다.
-func isCommitsReferenceNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := err.Error()
-	return strings.Contains(errStr, "reference not found") ||
-		strings.Contains(errStr, "revision not found") ||
-		strings.Contains(errStr, "ref not found") ||
-		strings.Contains(errStr, "ReferenceNotFoundError")
-}
-
-// isCommitsRepositoryNotFoundError는 에러가 저장소를 찾을 수 없는 에러인지 확인합니다.
-func isCommitsRepositoryNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := err.Error()
-	return strings.Contains(errStr, "repository not found") ||
-		strings.Contains(errStr, "no such file or directory") ||
-		strings.Contains(errStr, "not a git repository") ||
-		strings.Contains(errStr, "RepositoryNotFoundError")
 }
 
 // convertGitCommitToMetadata는 git.Commit을 CommitMetadata로 변환합니다.

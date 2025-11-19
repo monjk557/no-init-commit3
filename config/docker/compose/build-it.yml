@@ -28,23 +28,46 @@ services:
 
 # API Orchestrator (FastAPI) - Pull from Artifact Registry
   collabops-api-orchestrator:
-    image: asia-northeast3-docker.pkg.dev/collabops-shared/api-orchestrator/collabops-api-orchestrator:latest
-    platform: linux/amd64
-    pull_policy: always
-    env_file:
-      - ../../env/build-it/orchestrator.env
+    build:
+      context: ../../../../collabops-api-orchestrator
+      dockerfile: config/docker/Dockerfile
+      args:
+        APP_ENV: local
+        ENABLE_RELOAD: "true"
     ports:
       - "${ORCHESTRATOR_PORT:-2345}:2345"
+    
+    volumes:
+      - ../../../../collabops-api-orchestrator/app:/app/app:ro                    # Mount Python source code (read-only)
+      - ../../../../collabops-api-orchestrator/config:/app/config:ro              # Mount config files
+      - ../../../../collabops-api-orchestrator/pyproject.toml:/app/pyproject.toml:ro  # UV project configuration
+      - ../../../../collabops-api-orchestrator/uv.lock:/app/uv.lock:ro            # UV dependency lock file
+      - ../../../../collabops-api-orchestrator/pytest.ini:/app/pytest.ini:ro
+    env_file:
+      - ../../env/build-it/orchestrator.env
+    
+    # Override command for hot reload - goes through entrypoint.py for auto-initialization
+    # Use entrypoint with server arguments to ensure auto-initialization runs
+    entrypoint: ["uv", "run", "python", "/entrypoint.py"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "2345", "--reload", "--reload-dir", "/app/app", "--log-level", "debug"]
     depends_on:
       orchestrator-db:
         condition: service_healthy
       redis-orchestrator:
         condition: service_healthy
+      openfga:
+        condition: service_started
     networks:
       - collabops-network
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        labels: "service=orchestrator"
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:2345/health']
+      test: ["CMD", "curl", "-f", "http://localhost:2345/health"]
       interval: 30s
       timeout: 10s
       retries: 3

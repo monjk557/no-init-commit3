@@ -174,7 +174,7 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 		commitGroup := repoGroup.Group("/commits")
 		{
 			commitGroup.GET("", func(c *gin.Context) {
-				commitsHandler.HandleCommitsAPI(c.Writer, c.Request)
+				commitsHandler.HandleCommitsAPI(c)
 			})
 			commitGroup.POST("", fileOpsHandler.HandleMultiFileCommit)
 		}
@@ -190,10 +190,10 @@ func SetupIntegrationTest(t *testing.T) *IntegrationTestSuite {
 		diffGroup := repoGroup.Group("/diff")
 		{
 			diffGroup.GET("/branches/:base/:head", func(c *gin.Context) {
-				diffHandler.HandleBranchDiff(c.Writer, c.Request)
+				diffHandler.HandleBranchDiff(c)
 			})
 			diffGroup.GET("/commits/:base/:head", func(c *gin.Context) {
-				diffHandler.HandleCommitDiff(c.Writer, c.Request)
+				diffHandler.HandleCommitDiff(c)
 			})
 		}
 	}

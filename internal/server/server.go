@@ -329,7 +329,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				commitGroup := repoGroup.Group("/commits")
 				{
 					// Commits endpoint
-					commitGroup.GET("", gin.WrapF(commitsHandler.HandleCommitsAPI))
+					commitGroup.GET("", commitsHandler.HandleCommitsAPI)
 					// Multi-file commit endpoints
 					commitGroup.POST("", fileOpsHandler.HandleMultiFileCommit)
 				}
@@ -338,15 +338,14 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				diffGroup := repoGroup.Group("/diff")
 				{
 					// Compare two commits
-					diffGroup.GET("/commits/:base/:head", gin.WrapF(diffHandler.HandleCommitDiff))
+					diffGroup.GET("/commits/:base/:head", diffHandler.HandleCommitDiff)
 					// Compare two branches
-					diffGroup.GET("/branches/:base/:head", gin.WrapF(diffHandler.HandleBranchDiff))
+					diffGroup.GET("/branches/:base/:head", diffHandler.HandleBranchDiff)
 					// Compare specific file between two references
-					diffGroup.GET("/file", gin.WrapF(diffHandler.HandleFileDiff))
+					diffGroup.GET("/file", diffHandler.HandleFileDiff)
+					// Single commit diff endpoint
+					diffGroup.GET("/commit/:sha", diffHandler.HandleSingleCommitDiff)
 				}
-
-				// Single commit diff endpoint
-				repoGroup.GET("/commits/:sha/diff", gin.WrapF(diffHandler.HandleSingleCommitDiff))
 
 				// Merge endpoints
 				mergeGroup := repoGroup.Group("/merges")
@@ -361,7 +360,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				patchGroup := repoGroup.Group("/patch")
 				{
 					// Generate Git patch format for commit range
-					patchGroup.GET("/:base/:head", gin.WrapF(diffHandler.HandlePatch))
+					patchGroup.GET("/:base/:head", diffHandler.HandlePatch)
 				}
 
 				// File operations endpoints (server-side Git REST APIs)
@@ -422,14 +421,6 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 		// Continue with upload-pack only
 	}
 
-	// Initialize SSH protocol handler (SSH-forwarded operations)
-	sshHandler, err := protocol.NewSSHProtocolHandler(s.config, nil)
-	if err != nil {
-		// For now, log the error and continue without SSH support
-		fmt.Printf("⚠️  Warning: Failed to initialize SSH protocol handler: %v\n", err)
-		// Continue without SSH support
-	}
-
 	// Git Smart HTTP routes for both fetch and push operations (executor endpoints)
 	ownerRepoGroup := router.Group("/:owner/:repo")
 	ownerRepoGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
@@ -464,18 +455,4 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 		}
 	}
 
-	// SSH protocol routes for SSH-forwarded Git operations
-	if sshHandler != nil {
-		sshGroup := router.Group("/ssh/:owner/:repo")
-		sshGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
-		{
-			// SSH-forwarded fetch operations
-			// POST /ssh/{owner}/{repo}/git-upload-pack
-			sshGroup.POST("/git-upload-pack", gin.WrapF(sshHandler.HandleSSHUploadPack))
-
-			// SSH-forwarded push operations
-			// POST /ssh/{owner}/{repo}/git-receive-pack
-			sshGroup.POST("/git-receive-pack", gin.WrapF(sshHandler.HandleSSHReceivePack))
-		}
-	}
 }

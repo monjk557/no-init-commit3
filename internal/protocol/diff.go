@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -25,6 +27,7 @@ import (
 type DiffHandler struct {
 	pathConfig       *repository.PathConfig
 	permissionClient permissions.PermissionClient
+	errorMapper      *api.GitErrorMapper
 }
 
 // DiffResponse는 diff 엔드포인트의 응답 구조를 나타냅니다
@@ -153,32 +156,35 @@ func NewDiffHandler(cfg *config.Config, permClient permissions.PermissionClient)
 }
 
 // HandleCommitDiff는 GET /repos/:owner/:repo/diff/commits/:base/:head를 처리합니다
-func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *DiffHandler) HandleCommitDiff(c *gin.Context) {
+	ctx := c.Request.Context()
 
 	// 공통 파라미터 추출 및 검증
-	params, err := h.validateAndExtractParams(r)
+	params, err := h.validateAndExtractParams(c.Request)
 	if err != nil {
-		handleDiffError(w, err, "extract parameters")
+		apiErr := h.errorMapper.MapError(err, "extract_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 커밋 diff를 위해 base와 head 파라미터가 필수인지 검증
 	if params.Base == "" || params.Head == "" {
-		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate commit parameters")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("missing required parameters: base or head"), "validate_commit_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, err, "invalid repository path: %w")
+		apiErr := h.errorMapper.MapError(err, "invalid_repository_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
 	contextLines := 3 // 기본값
-	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+	if contextStr := c.Query("context"); contextStr != "" {
 		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
 			contextLines = ctx
 		}
@@ -187,13 +193,14 @@ func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 	// diff 계산
 	diffResp, err := h.calculateCommitDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		handleDiffError(w, err, "calculate commit diff")
+		apiErr := h.errorMapper.MapError(err, "calculate_commit_diff")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 페이지네이션 요청 확인
-	if r.URL.Query().Get("page") != "" || r.URL.Query().Get("page_size") != "" {
-		pagination := extractPaginationParams(r)
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		pagination := extractPaginationParams(c.Request)
 		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
 		response := &PaginatedDiffResponse{
@@ -210,39 +217,42 @@ func (h *DiffHandler) HandleCommitDiff(w http.ResponseWriter, r *http.Request) {
 			},
 			Pagination: &updatedPagination,
 		}
-		sendJSONResponse(w, response, http.StatusOK)
+		c.JSON(http.StatusOK, response)
 	} else {
-		sendJSONResponse(w, diffResp, http.StatusOK)
+		c.JSON(http.StatusOK, diffResp)
 	}
 }
 
 // HandleBranchDiff는 GET /repos/:owner/:repo/diff/branches/:base/:head를 처리합니다
-func (h *DiffHandler) HandleBranchDiff(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
+	ctx := c.Request.Context()
 
 	// 공통 파라미터 추출 및 검증
-	params, err := h.validateAndExtractParams(r)
+	params, err := h.validateAndExtractParams(c.Request)
 	if err != nil {
-		handleDiffError(w, err, "extract parameters")
+		apiErr := h.errorMapper.MapError(err, "extract_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 브랜치 diff를 위해 base와 head 파라미터가 필수인지 검증
 	if params.Base == "" || params.Head == "" {
-		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate branch parameters")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("missing required parameters: base or head"), "validate_branch_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := h.validateRequestAndPermissions(ctx, params)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		apiErr := h.errorMapper.MapError(err, "validate_permissions")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
 	contextLines := 3 // 기본값
-	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+	if contextStr := c.Query("context"); contextStr != "" {
 		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
 			contextLines = ctx
 		}
@@ -251,13 +261,14 @@ func (h *DiffHandler) HandleBranchDiff(w http.ResponseWriter, r *http.Request) {
 	// 브랜치 diff 계산
 	diffResp, err := h.calculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		handleDiffError(w, err, "calculate branch diff")
+		apiErr := h.errorMapper.MapError(err, "calculate_branch_diff")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 페이지네이션 요청 확인
-	if r.URL.Query().Get("page") != "" || r.URL.Query().Get("page_size") != "" {
-		pagination := extractPaginationParams(r)
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		pagination := extractPaginationParams(c.Request)
 		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
 
 		response := &PaginatedDiffResponse{
@@ -276,34 +287,37 @@ func (h *DiffHandler) HandleBranchDiff(w http.ResponseWriter, r *http.Request) {
 			},
 			Pagination: &updatedPagination,
 		}
-		sendJSONResponse(w, response, http.StatusOK)
+		c.JSON(http.StatusOK, response)
 	} else {
-		sendJSONResponse(w, diffResp, http.StatusOK)
+		c.JSON(http.StatusOK, diffResp)
 	}
 }
 
 // HandleFileDiff는 GET /repos/:owner/:repo/diff/file?path=:path&base=:base&head=:head를 처리합니다
-func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
+	ctx := c.Request.Context()
 
 	// 공통 파라미터 추출 및 검증
-	params, err := h.validateAndExtractParams(r)
+	params, err := h.validateAndExtractParams(c.Request)
 	if err != nil {
-		handleDiffError(w, err, "extract parameters")
+		apiErr := h.errorMapper.MapError(err, "extract_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 쿼리 문자열에서 파일별 파라미터 추출
-	filePath := r.URL.Query().Get("path")
+	filePath := c.Query("path")
 	if filePath == "" {
-		handleDiffError(w, fmt.Errorf("missing required parameter: path"), "validate file parameters")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("missing required parameter: path"), "validate_file_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
-	base := r.URL.Query().Get("base")
-	head := r.URL.Query().Get("head")
+	base := c.Query("base")
+	head := c.Query("head")
 	if base == "" || head == "" {
-		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate file diff parameters")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("missing required parameters: base or head"), "validate_file_diff_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
@@ -314,25 +328,26 @@ func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, fmt.Errorf("invalid repository path: %w", err), "invalid repository path: %w")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("invalid repository path: %w", err), "invalid_repository_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 쿼리 파라미터에서 컨텍스트 라인과 형식 가져오기
 	contextLines := 3 // 기본값
-	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+	if contextStr := c.Query("context"); contextStr != "" {
 		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
 			contextLines = ctx
 		}
 	}
 
 	// full_context 파라미터 확인 (Pull Request 뷰용)
-	fullContext := r.URL.Query().Get("full_context") == "true"
+	fullContext := c.Query("full_context") == "true"
 	if fullContext {
 		contextLines = 999999 // 전체 파일을 포함하기 위한 큰 숫자
 	}
 
-	format := r.URL.Query().Get("format")
+	format := c.Query("format")
 	if format == "" {
 		format = "unified" // 기본값
 	}
@@ -340,41 +355,45 @@ func (h *DiffHandler) HandleFileDiff(w http.ResponseWriter, r *http.Request) {
 	// 파일 diff 계산
 	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, params.Base, params.Head, contextLines, format)
 	if err != nil {
-		handleDiffError(w, err, "calculate file diff")
+		apiErr := h.errorMapper.MapError(err, "calculate_file_diff")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
-	sendJSONResponse(w, diffResp, http.StatusOK)
+	c.JSON(http.StatusOK, diffResp)
 }
 
 // HandleSingleCommitDiff는 GET /repos/:owner/:repo/commits/:sha/diff를 처리합니다
-func (h *DiffHandler) HandleSingleCommitDiff(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) {
+	ctx := c.Request.Context()
 
 	// 공통 파라미터 추출 및 검증
-	params, err := h.validateAndExtractParams(r)
+	params, err := h.validateAndExtractParams(c.Request)
 	if err != nil {
-		handleDiffError(w, err, "extract parameters")
+		apiErr := h.errorMapper.MapError(err, "extract_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// URL 경로에서 SHA 파라미터 가져오기
-	sha := URLParam(r, "sha")
+	sha := c.Param("sha")
 	if sha == "" {
-		handleDiffError(w, fmt.Errorf("missing required parameter: sha"), "validate commit sha")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("missing required parameter: sha"), "validate_commit_sha")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := h.validateRequestAndPermissions(ctx, params)
 	if err != nil {
-		handleDiffError(w, err, "validate permissions")
+		apiErr := h.errorMapper.MapError(err, "validate_permissions")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
 	contextLines := 3 // 기본값
-	if contextStr := r.URL.Query().Get("context"); contextStr != "" {
+	if contextStr := c.Query("context"); contextStr != "" {
 		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
 			contextLines = ctx
 		}
@@ -383,59 +402,63 @@ func (h *DiffHandler) HandleSingleCommitDiff(w http.ResponseWriter, r *http.Requ
 	// 단일 커밋 diff 계산
 	response, err := h.calculateSingleCommitDiff(ctx, repoPath, sha, contextLines)
 	if err != nil {
-		handleDiffError(w, err, "calculate single commit diff")
+		apiErr := h.errorMapper.MapError(err, "calculate_single_commit_diff")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
-	sendJSONResponse(w, response, http.StatusOK)
+	c.JSON(http.StatusOK, response)
 }
 
 // HandlePatch는 GET /repos/:owner/:repo/patch/:base/:head를 처리합니다
-func (h *DiffHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
+func (h *DiffHandler) HandlePatch(c *gin.Context) {
 	// 공통 파라미터 추출 및 검증
-	params, err := h.validateAndExtractParams(r)
+	params, err := h.validateAndExtractParams(c.Request)
 	if err != nil {
-		handleDiffError(w, err, "extract parameters")
+		apiErr := h.errorMapper.MapError(err, "extract_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// patch를 위해 base와 head 파라미터가 필수인지 검증
 	if params.Base == "" || params.Head == "" {
-		handleDiffError(w, fmt.Errorf("missing required parameters: base or head"), "validate patch parameters")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("missing required parameters: base or head"), "validate_patch_parameters")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		handleDiffError(w, fmt.Errorf("invalid repository path: %w", err), "invalid repository path: %w")
+		apiErr := h.errorMapper.MapError(fmt.Errorf("invalid repository path: %w", err), "invalid_repository_path")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// patch 콘텐츠 생성
-	patchContent, err := h.generatePatch(ctx, repoPath, params.Base, params.Head)
+	patchContent, err := h.generatePatch(repoPath, params.Base, params.Head)
 	if err != nil {
-		handleDiffError(w, err, "generate patch")
+		apiErr := h.errorMapper.MapError(err, "generate_patch")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
 
 	// patch 콘텐츠에 적절한 헤더 설정
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.patch\"", params.Base, params.Head))
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.patch\"", params.Base, params.Head))
 
 	// patch 콘텐츠 작성
-	w.WriteHeader(http.StatusOK)
-	_, err = w.Write([]byte(patchContent))
+	c.Status(http.StatusOK)
+	_, err = c.Writer.Write([]byte(patchContent))
 	if err != nil {
-		// 오류 로깅하지만 이 시점에선 HTTP 오류를 보낼 수 없음
-		fmt.Printf("Error writing patch response: %v\n", err)
+		apiErr := h.errorMapper.MapError(err, "write_patch_response")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
 	}
 }
 
 // generatePatch는 커밋 범위에 대한 Git patch 형식 출력을 생성합니다
-func (h *DiffHandler) generatePatch(ctx context.Context, repoPath, base, head string) (string, error) {
+func (h *DiffHandler) generatePatch(repoPath, base, head string) (string, error) {
 	// 저장소 열기
 	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
