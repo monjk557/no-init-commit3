@@ -4,7 +4,6 @@ package repositories
 // 새로운 Git 저장소를 만들고 초기 커밋을 설정하는 REST API 기능을 제공합니다.
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -74,8 +73,6 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 
 // HandleCreateRepository handles POST /repos/{owner}/{repo} for creating new repositories
 func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
-	ctx := c.Request.Context()
-
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -119,7 +116,7 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 	}
 
 	// Create repository
-	createdRepo, err := h.createRepository(ctx, owner, repo, &req)
+	createdRepo, err := h.createRepository(owner, repo, &req)
 	if err != nil {
 		h.logger.Error("Failed to create repository",
 			zap.String("owner", owner),
@@ -138,7 +135,7 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 }
 
 // createRepository creates a new Git repository with optional initial commit
-func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner, repo string, req *CreateRepositoryRequest) (*CreateRepositoryResponse, error) {
+func (h *RepositoryCreationHandler) createRepository(owner, repo string, req *CreateRepositoryRequest) (*CreateRepositoryResponse, error) {
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
 
 	// Prepare author information
@@ -162,7 +159,7 @@ func (h *RepositoryCreationHandler) createRepository(ctx context.Context, owner,
 	}
 
 	// Use repository manager to create the repository
-	repoInfo, err := h.repoManager.CreateRepository(ctx, options)
+	repoInfo, err := h.repoManager.CreateRepository(options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create repository: %w", err)
 	}

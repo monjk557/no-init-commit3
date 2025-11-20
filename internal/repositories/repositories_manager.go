@@ -55,7 +55,7 @@ func NewRepositoryManager(pathConfig *PathConfig, logger *logging.Logger) (*Defa
 }
 
 // CreateRepository creates a new Git repository at the specified path
-func (rm *DefaultRepositoryManager) CreateRepository(ctx context.Context, options *CreateRepositoryOptions) (*RepositoryInfo, error) {
+func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOptions) (*RepositoryInfo, error) {
 	if options == nil {
 		return nil, fmt.Errorf("options cannot be nil")
 	}
@@ -72,7 +72,7 @@ func (rm *DefaultRepositoryManager) CreateRepository(ctx context.Context, option
 		zap.Bool("initial_commit", options.InitialCommit))
 
 	// Check if repository already exists
-	exists, err := rm.RepositoryExists(ctx, options.Path)
+	exists, err := rm.RepositoryExists(options.Path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check repository existence: %w", err)
 	}
@@ -121,7 +121,7 @@ func (rm *DefaultRepositoryManager) CreateRepository(ctx context.Context, option
 	}
 
 	// Update repository statistics
-	if err := rm.updateRepositoryStats(ctx, repoInfo); err != nil {
+	if err := rm.updateRepositoryStats(repoInfo); err != nil {
 		rm.logger.Warn("Failed to update repository statistics",
 			zap.String("path", options.Path),
 			zap.Error(err))
@@ -135,7 +135,7 @@ func (rm *DefaultRepositoryManager) CreateRepository(ctx context.Context, option
 }
 
 // OpenRepository opens an existing Git repository
-func (rm *DefaultRepositoryManager) OpenRepository(ctx context.Context, path string) (*repositoryWrapper, error) {
+func (rm *DefaultRepositoryManager) OpenRepository(path string) (*repositoryWrapper, error) {
 	// For now, we'll return a simple wrapper around go-git repository
 	// This can be extended later to implement our Repository interface properly
 	gitRepo, err := gogit.PlainOpen(path)
@@ -148,7 +148,7 @@ func (rm *DefaultRepositoryManager) OpenRepository(ctx context.Context, path str
 }
 
 // RepositoryExists checks if a repository exists at the given path
-func (rm *DefaultRepositoryManager) RepositoryExists(ctx context.Context, path string) (bool, error) {
+func (rm *DefaultRepositoryManager) RepositoryExists(path string) (bool, error) {
 	if path == "" {
 		return false, fmt.Errorf("path cannot be empty")
 	}
@@ -171,7 +171,7 @@ func (rm *DefaultRepositoryManager) RepositoryExists(ctx context.Context, path s
 }
 
 // DeleteRepository removes a repository from the filesystem
-func (rm *DefaultRepositoryManager) DeleteRepository(ctx context.Context, path string) error {
+func (rm *DefaultRepositoryManager) DeleteRepository(path string) error {
 	if path == "" {
 		return fmt.Errorf("path cannot be empty")
 	}
@@ -185,7 +185,7 @@ func (rm *DefaultRepositoryManager) DeleteRepository(ctx context.Context, path s
 		zap.String("path", path))
 
 	// Check if repository exists
-	exists, err := rm.RepositoryExists(ctx, path)
+	exists, err := rm.RepositoryExists(path)
 	if err != nil {
 		return fmt.Errorf("failed to check repository existence: %w", err)
 	}
@@ -205,7 +205,7 @@ func (rm *DefaultRepositoryManager) DeleteRepository(ctx context.Context, path s
 }
 
 // ListRepositories returns a list of repositories in a directory
-func (rm *DefaultRepositoryManager) ListRepositories(ctx context.Context, rootPath string) ([]RepositoryInfo, error) {
+func (rm *DefaultRepositoryManager) ListRepositories(rootPath string) ([]RepositoryInfo, error) {
 	if rootPath == "" {
 		rootPath = rm.pathConfig.GetRepoRoot()
 	}
@@ -224,7 +224,7 @@ func (rm *DefaultRepositoryManager) ListRepositories(ctx context.Context, rootPa
 		}
 
 		// Check if this is a Git repository
-		exists, err := rm.RepositoryExists(ctx, path)
+		exists, err := rm.RepositoryExists(path)
 		if err != nil {
 			// Skip directories that cause errors
 			return nil
@@ -240,7 +240,7 @@ func (rm *DefaultRepositoryManager) ListRepositories(ctx context.Context, rootPa
 			}
 
 			// Update statistics
-			if err := rm.updateRepositoryStats(ctx, repoInfo); err != nil {
+			if err := rm.updateRepositoryStats(repoInfo); err != nil {
 				rm.logger.Debug("Failed to update repository statistics",
 					zap.String("path", path),
 					zap.Error(err))
@@ -423,7 +423,7 @@ func (rm *DefaultRepositoryManager) isBareRepository(path string) bool {
 }
 
 // updateRepositoryStats updates repository statistics
-func (rm *DefaultRepositoryManager) updateRepositoryStats(ctx context.Context, repoInfo *RepositoryInfo) error {
+func (rm *DefaultRepositoryManager) updateRepositoryStats(repoInfo *RepositoryInfo) error {
 	// Open repository to get statistics
 	gitRepo, err := gogit.PlainOpen(repoInfo.Path)
 	if err != nil {

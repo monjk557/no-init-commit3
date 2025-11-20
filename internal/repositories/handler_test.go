@@ -1,7 +1,6 @@
 package repositories
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -262,8 +261,6 @@ func TestCreateRepository_NilOptions(t *testing.T) {
 	handler, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
-
 	// This will panic because createRepository doesn't check for nil
 	// We use recover to catch the panic and verify it happens
 	func() {
@@ -273,7 +270,7 @@ func TestCreateRepository_NilOptions(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_, _ = handler.createRepository(ctx, "owner", "repo", nil)
+		_, _ = handler.createRepository("owner", "repo", nil)
 		t.Error("Expected panic but none occurred")
 	}()
 }
@@ -425,8 +422,7 @@ func TestCreateRepository_RepositoryManager_NilOptions(t *testing.T) {
 	handler, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
-	_, err := handler.repoManager.CreateRepository(ctx, nil)
+	_, err := handler.repoManager.CreateRepository(nil)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be nil")
@@ -444,7 +440,6 @@ func TestCreateRepository_RepositoryManager_AlreadyExists(t *testing.T) {
 	_, err = gogit.PlainInit(repoPath, true)
 	require.NoError(t, err)
 
-	ctx := context.Background()
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
 		Bare:          true,
@@ -452,7 +447,7 @@ func TestCreateRepository_RepositoryManager_AlreadyExists(t *testing.T) {
 		InitialCommit: false,
 	}
 
-	_, err = handler.repoManager.CreateRepository(ctx, options)
+	_, err = handler.repoManager.CreateRepository(options)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
@@ -462,7 +457,6 @@ func TestCreateRepository_RepositoryManager_InvalidPath(t *testing.T) {
 	handler, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	options := &CreateRepositoryOptions{
 		Path:          "../../../etc/passwd",
 		Bare:          true,
@@ -470,7 +464,7 @@ func TestCreateRepository_RepositoryManager_InvalidPath(t *testing.T) {
 		InitialCommit: false,
 	}
 
-	_, err := handler.repoManager.CreateRepository(ctx, options)
+	_, err := handler.repoManager.CreateRepository(options)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid")
@@ -480,7 +474,6 @@ func TestCreateRepository_RepositoryManager_EmptyPath(t *testing.T) {
 	handler, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	options := &CreateRepositoryOptions{
 		Path:          "",
 		Bare:          true,
@@ -488,7 +481,7 @@ func TestCreateRepository_RepositoryManager_EmptyPath(t *testing.T) {
 		InitialCommit: false,
 	}
 
-	_, err := handler.repoManager.CreateRepository(ctx, options)
+	_, err := handler.repoManager.CreateRepository(options)
 
 	assert.Error(t, err)
 }
@@ -497,7 +490,6 @@ func TestCreateRepository_RepositoryManager_DefaultBranchFallback(t *testing.T) 
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
@@ -506,7 +498,7 @@ func TestCreateRepository_RepositoryManager_DefaultBranchFallback(t *testing.T) 
 		InitialCommit: true,
 	}
 
-	repoInfo, err := handler.repoManager.CreateRepository(ctx, options)
+	repoInfo, err := handler.repoManager.CreateRepository(options)
 	require.NoError(t, err)
 
 	assert.Equal(t, "main", repoInfo.DefaultBranch)
@@ -516,7 +508,6 @@ func TestCreateRepository_RepositoryManager_NonBareRepository(t *testing.T) {
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
@@ -525,7 +516,7 @@ func TestCreateRepository_RepositoryManager_NonBareRepository(t *testing.T) {
 		InitialCommit: true,
 	}
 
-	repoInfo, err := handler.repoManager.CreateRepository(ctx, options)
+	repoInfo, err := handler.repoManager.CreateRepository(options)
 	require.NoError(t, err)
 
 	assert.False(t, repoInfo.IsBare)
@@ -535,7 +526,6 @@ func TestCreateRepository_RepositoryManager_VerifyRepositoryStructure(t *testing
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
@@ -544,11 +534,11 @@ func TestCreateRepository_RepositoryManager_VerifyRepositoryStructure(t *testing
 		InitialCommit: true,
 	}
 
-	repoInfo, err := handler.repoManager.CreateRepository(ctx, options)
+	repoInfo, err := handler.repoManager.CreateRepository(options)
 	require.NoError(t, err)
 
 	// Verify repository exists and is valid
-	exists, err := handler.repoManager.RepositoryExists(ctx, repoPath)
+	exists, err := handler.repoManager.RepositoryExists(repoPath)
 	require.NoError(t, err)
 	assert.True(t, exists)
 
@@ -572,7 +562,6 @@ func TestCreateRepository_RepositoryManager_InitialCommitWithFiles(t *testing.T)
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
@@ -589,7 +578,7 @@ func TestCreateRepository_RepositoryManager_InitialCommitWithFiles(t *testing.T)
 		},
 	}
 
-	repoInfo, err := handler.repoManager.CreateRepository(ctx, options)
+	repoInfo, err := handler.repoManager.CreateRepository(options)
 	require.NoError(t, err)
 
 	// Verify repository has initial commit
@@ -621,7 +610,6 @@ func TestCreateRepository_RepositoryManager_EmptyDefaultBranchUsesMain(t *testin
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
@@ -630,7 +618,7 @@ func TestCreateRepository_RepositoryManager_EmptyDefaultBranchUsesMain(t *testin
 		InitialCommit: true,
 	}
 
-	repoInfo, err := handler.repoManager.CreateRepository(ctx, options)
+	repoInfo, err := handler.repoManager.CreateRepository(options)
 	require.NoError(t, err)
 
 	assert.Equal(t, "main", repoInfo.DefaultBranch)
@@ -640,7 +628,6 @@ func TestCreateRepository_RepositoryManager_CustomDefaultBranch(t *testing.T) {
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
@@ -649,7 +636,7 @@ func TestCreateRepository_RepositoryManager_CustomDefaultBranch(t *testing.T) {
 		InitialCommit: true,
 	}
 
-	repoInfo, err := handler.repoManager.CreateRepository(ctx, options)
+	repoInfo, err := handler.repoManager.CreateRepository(options)
 	require.NoError(t, err)
 
 	assert.Equal(t, "develop", repoInfo.DefaultBranch)
