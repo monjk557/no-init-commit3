@@ -138,22 +138,6 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 		req.DefaultBranch = "main"
 	}
 
-	// Validate permissions (require write permission to create repositories)
-	if err := h.validatePermissions(c); err != nil {
-		if err.Error() == "missing X-USER-ID header" || err.Error() == "missing X-Source header" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-
 	// Check if repository already exists
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
 	if _, err := os.Stat(repoPath); !os.IsNotExist(err) {

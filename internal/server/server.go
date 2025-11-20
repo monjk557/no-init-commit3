@@ -17,6 +17,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/protocol"
+	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -311,6 +312,22 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	apiGroup.GET("/repository/:owner/:repo/blob", repositoryDetailHandler.HandleGetBlobDetail)
 	apiGroup.GET("/repository/:owner/:repo/tree", repositoryDetailHandler.HandleGetTreeDetail)
 	apiGroup.GET("/repository/:owner/:repo/branches", branchOpsHandler.HandleGetBranchesDetail)
+
+	//===============================================
+	// refactoring code
+	//===============================================
+
+	apiV2Group := router.Group("/api/v2")
+	apiV2Group.Use(ginContextMiddleware()) // Add chi compatibility middleware
+	apiV2Group.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
+	apiV2Group.Use(jsonResponseMiddleware.ErrorHandler())
+
+	repositoryHandler, err := repositories.NewRepositoryCreationHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create repository creation handler", zap.Error(err))
+		return
+	}
+	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
 
 	{
 		// Repository creation endpoint - separate from existing repos
