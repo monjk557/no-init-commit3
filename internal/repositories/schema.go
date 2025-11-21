@@ -41,7 +41,7 @@ type CreateRepositoryRequest struct {
 type CommitAuthor struct {
 	Name  string    `json:"name"`
 	Email string    `json:"email"`
-	Date  time.Time `json:"date, omitempty"`
+	Date  time.Time `json:"date"`
 }
 
 // RepositoryInfo는 저장소에 대한 메타데이터를 담는 구조체입니다.

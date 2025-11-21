@@ -12,169 +12,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/storage"
 	"go.uber.org/zap"
 )
-
-// TreeBuilder helps build hierarchical Git tree structures
-type TreeBuilder struct {
-	storer storage.Storer
-	logger *logging.Logger
-	files  map[string]TreeFileEntry
-}
-
-// TreeFileEntry represents a file entry in the tree
-type TreeFileEntry struct {
-	Hash plumbing.Hash
-	Mode filemode.FileMode
-}
-
-// NewTreeBuilder creates a new tree builder
-func NewTreeBuilder(storer storage.Storer, logger *logging.Logger) *TreeBuilder {
-	return &TreeBuilder{
-		storer: storer,
-		logger: logger,
-		files:  make(map[string]TreeFileEntry),
-	}
-}
-
-// LoadBaseTree loads an existing tree as the base
-func (tb *TreeBuilder) LoadBaseTree(baseTree *object.Tree) error {
-	return tb.loadTreeRecursive("", baseTree)
-}
-
-// loadTreeRecursive loads tree entries recursively
-func (tb *TreeBuilder) loadTreeRecursive(prefix string, tree *object.Tree) error {
-	for _, entry := range tree.Entries {
-		fullPath := entry.Name
-		if prefix != "" {
-			fullPath = prefix + "/" + entry.Name
-		}
-
-		if entry.Mode == filemode.Dir {
-			// Load subdirectory
-			subTree, err := tree.Tree(entry.Name)
-			if err != nil {
-				return fmt.Errorf("failed to load subtree %s: %w", entry.Name, err)
-			}
-			if err := tb.loadTreeRecursive(fullPath, subTree); err != nil {
-				return err
-			}
-		} else {
-			// Add file entry
-			tb.files[fullPath] = TreeFileEntry{
-				Hash: entry.Hash,
-				Mode: entry.Mode,
-			}
-		}
-	}
-	return nil
-}
-
-// HasFile checks if a file exists in the tree
-func (tb *TreeBuilder) HasFile(path string) bool {
-	_, exists := tb.files[path]
-	return exists
-}
-
-// AddFile adds a file to the tree
-func (tb *TreeBuilder) AddFile(path string, hash plumbing.Hash, mode filemode.FileMode) error {
-	tb.files[path] = TreeFileEntry{
-		Hash: hash,
-		Mode: mode,
-	}
-	return nil
-}
-
-// RemoveFile removes a file from the tree
-func (tb *TreeBuilder) RemoveFile(path string) error {
-	delete(tb.files, path)
-	return nil
-}
-
-// BuildTree builds the final tree structure
-func (tb *TreeBuilder) BuildTree() (plumbing.Hash, error) {
-	return tb.buildTreeRecursive("")
-}
-
-// buildTreeRecursive builds a tree for a specific directory path
-func (tb *TreeBuilder) buildTreeRecursive(dirPath string) (plumbing.Hash, error) {
-	var entries []object.TreeEntry
-	subdirs := make(map[string]bool)
-
-	// Find all files and subdirectories in this directory
-	for filePath, fileEntry := range tb.files {
-		var relativePath string
-		if dirPath == "" {
-			relativePath = filePath
-		} else {
-			if !strings.HasPrefix(filePath, dirPath+"/") {
-				continue
-			}
-			relativePath = strings.TrimPrefix(filePath, dirPath+"/")
-		}
-
-		// Skip if this file is in a subdirectory
-		parts := strings.Split(relativePath, "/")
-		if len(parts) > 1 {
-			subdirs[parts[0]] = true
-			continue
-		}
-
-		// Add file entry
-		entries = append(entries, object.TreeEntry{
-			Name: parts[0],
-			Mode: fileEntry.Mode,
-			Hash: fileEntry.Hash,
-		})
-	}
-
-	// Add subdirectory entries
-	for subdirName := range subdirs {
-		var subdirPath string
-		if dirPath == "" {
-			subdirPath = subdirName
-		} else {
-			subdirPath = dirPath + "/" + subdirName
-		}
-
-		subdirTreeHash, err := tb.buildTreeRecursive(subdirPath)
-		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("failed to build subtree for %s: %w", subdirPath, err)
-		}
-
-		entries = append(entries, object.TreeEntry{
-			Name: subdirName,
-			Mode: filemode.Dir,
-			Hash: subdirTreeHash,
-		})
-	}
-
-	// Sort entries (Git requirement)
-	for i := 0; i < len(entries); i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[i].Name > entries[j].Name {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
-		}
-	}
-
-	// Create tree object
-	tree := &object.Tree{Entries: entries}
-
-	// Encode and store the tree
-	encodedTree := tb.storer.NewEncodedObject()
-	if err := tree.Encode(encodedTree); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
-	}
-
-	treeHash, err := tb.storer.SetEncodedObject(encodedTree)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store tree: %w", err)
-	}
-
-	return treeHash, nil
-}
 
 // GitObjectManager provides Git object manipulation capabilities for REST API operations
 type GitObjectManager struct {
@@ -305,6 +144,15 @@ func (gom *GitObjectManager) GetRepositoryHead(repo *gogit.Repository) (*plumbin
 
 // ResolveReference resolves a Git reference to a commit hash
 func (gom *GitObjectManager) ResolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
+	// Handle HEAD specially - it resolves to the current branch
+	if ref == "HEAD" || ref == "" {
+		headRef, err := repo.Head()
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("failed to get HEAD reference: %w", err)
+		}
+		return headRef.Hash(), nil
+	}
+
 	// Try to parse as direct hash first
 	if hash := plumbing.NewHash(ref); !hash.IsZero() {
 		// Validate that the hash exists in the repository

@@ -1,5 +1,57 @@
 # CollabOps Git Executor
 
+## 📦 Project Structure
+
+This project uses a **Feature-based architecture**.
+
+### Feature Package Structure
+
+Each feature is organized as an independent package named after its functionality:
+
+```
+internal/
+  ├── repository/     # Repository management feature
+  │   ├── handler.go  # HTTP request handling (required)
+  │   ├── schema.go   # Request/response schemas (required)
+  │   ├── service.go  # Business logic (required)
+  │   ├── validator.go # Input validation (optional)
+  │   └── manager.go  # Infrastructure layer (optional)
+  │
+  ├── commits/       # Commit management feature
+  │   ├── handler.go
+  │   ├── schema.go
+  │   ├── service.go
+  │   └── validator.go
+  │
+  └── ...
+```
+
+### Layer Structure
+
+Each feature package follows this internal layer structure:
+
+1. **Handler** (required)
+   - Handles HTTP requests
+   - Parses `gin.Context` and generates responses
+   - Calls Service layer
+
+2. **Service** (required)
+   - Contains business logic
+   - Handles validation, default values, and type conversion
+   - Uses Manager interfaces
+
+3. **Manager** (optional)
+   - Infrastructure layer
+   - Directly uses go-git library
+   - Performs actual Git operations
+
+4. **Schema** (required)
+   - Defines request/response data structures
+
+5. **Validator** (optional)
+   - Input validation logic
+
+
 ## 🚀 Current Status & Verification Results
 
 **Last Updated:** January 8, 2025

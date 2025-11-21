@@ -20,6 +20,7 @@ import (
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/tree"
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -339,6 +340,13 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
 	apiV2Group.PATCH("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleUpdateBranch)
 	apiV2Group.DELETE("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleDeleteBranch)
+
+	treeHandlerV2, err := tree.NewTreeHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create tree handler", zap.Error(err))
+		return
+	}
+	apiV2Group.GET("/repository/:owner/:repo/tree", treeHandlerV2.HandleTreeAPI)
 
 	{
 		// Repository creation endpoint - separate from existing repos
