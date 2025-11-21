@@ -4,13 +4,21 @@ package responses
 
 import "time"
 
+type Operation string
+
+const (
+	OperationCreate Operation = "create"
+	OperationUpdate Operation = "update"
+	OperationDelete Operation = "delete"
+)
+
 // OperationResult는 개별 파일 작업의 결과를 나타냅니다.
 // 각 파일에 대한 작업 상태와 오류 메시지를 포함합니다.
 type OperationResult struct {
-	Path      string `json:"path"`
-	Operation string `json:"operation"`
-	Success   bool   `json:"success"`
-	Error     string `json:"error,omitempty"`
+	Path      string    `json:"path"`
+	Operation Operation `json:"operation"`
+	Success   bool      `json:"success"`
+	Error     string    `json:"error,omitempty"`
 }
 
 // MultiFileCommitResponse는 다중 파일 커밋 작업에 대한 응답을 나타냅니다.

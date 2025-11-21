@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -155,13 +156,24 @@ func (tb *TreeBuilder) buildTreeRecursive(dirPath string) (plumbing.Hash, error)
 	}
 
 	// Sort entries (Git requirement)
-	for i := 0; i < len(entries); i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[i].Name > entries[j].Name {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
+	// Git tree entries must be sorted using the same logic as go-git's TreeEntrySorter:
+	// - Directories have "/" appended to their name for comparison
+	// - This ensures directories come before files with the same prefix
+	// - Then entries are sorted alphabetically by the modified name
+	sort.Slice(entries, func(i, j int) bool {
+		name1 := entries[i].Name
+		name2 := entries[j].Name
+
+		// Append "/" to directory names for comparison (same as go-git's TreeEntrySorter)
+		if entries[i].Mode == filemode.Dir {
+			name1 += "/"
 		}
-	}
+		if entries[j].Mode == filemode.Dir {
+			name2 += "/"
+		}
+
+		return name1 < name2
+	})
 
 	// Create tree object
 	tree := &object.Tree{Entries: entries}

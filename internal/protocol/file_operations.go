@@ -143,15 +143,23 @@ type CommitAuthor struct {
 	Email string `json:"email" binding:"required"`
 }
 
+type Operation string
+
+const (
+	OperationCreate Operation = "create"
+	OperationUpdate Operation = "update"
+	OperationDelete Operation = "delete"
+)
+
 // FileOperationResponse represents the response for file operations
 type FileOperationResponse struct {
-	Success    bool   `json:"success"`
-	CommitHash string `json:"commit_hash"` // for integration test compatibility
-	CommitSHA  string `json:"commit_sha"`  // for unit test compatibility
-	Message    string `json:"message"`
-	FilePath   string `json:"file_path"`
-	Operation  string `json:"operation"`
-	Branch     string `json:"branch"`
+	Success    bool      `json:"success"`
+	CommitHash string    `json:"commit_hash"` // for integration test compatibility
+	CommitSHA  string    `json:"commit_sha"`  // for unit test compatibility
+	Message    string    `json:"message"`
+	FilePath   string    `json:"file_path"`
+	Operation  Operation `json:"operation"`
+	Branch     string    `json:"branch"`
 }
 
 // HandleFilePUT handles PUT /repos/{owner}/{repo}/files/{path} requests
@@ -225,44 +233,6 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 	if req.Committer == nil {
 		req.Committer = req.Author
 	}
-
-	// Check permissions (using existing permission validation)
-	h.logger.Info("Validating permissions",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("action", "write"))
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		h.logger.Warn("Permission validation failed", zap.Error(err))
-
-		// Check if it's a GitAPIError and handle based on error code
-		if apiErr, ok := err.(*api.GitAPIError); ok {
-			switch apiErr.Code {
-			case api.ErrorCodeUnauthorized:
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			case api.ErrorCodeForbidden:
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"error":   apiErr.Message,
-				})
-			default:
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"error":   err.Error(),
-				})
-			}
-		} else {
-			// Fallback for non-GitAPIError
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return
-	}
-	h.logger.Info("Permission validation passed")
 
 	// Open repository (we don't need the repoPath variable, OpenRepository handles path internally)
 	ctx := c.Request.Context()
@@ -423,7 +393,7 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 		CommitSHA:  result.Hash.String(), // for unit tests
 		Message:    req.Message,          // Use the user's original commit message
 		FilePath:   filePath,
-		Operation:  operationType, // Set based on file existence
+		Operation:  OperationCreate, // Set based on file existence
 		Branch:     req.Branch,
 	}
 
@@ -573,24 +543,6 @@ func (h *FileOperationsHandler) HandleFileUpload(c *gin.Context) {
 		zap.String("ref", refParam),
 		zap.String("new_branch", newBranch))
 
-	if err := h.validatePermissions(c, owner, repo, "write"); err != nil {
-		h.logger.Warn("Permission validation failed", zap.Error(err))
-
-		if apiErr, ok := err.(*api.GitAPIError); ok {
-			switch apiErr.Code {
-			case api.ErrorCodeUnauthorized:
-				c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": apiErr.Message})
-			case api.ErrorCodeForbidden:
-				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": apiErr.Message})
-			default:
-				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": err.Error()})
-			}
-		} else {
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": err.Error()})
-		}
-		return
-	}
-
 	ctx := c.Request.Context()
 	repository, err := h.objectManager.OpenRepository(ctx, owner, repo)
 	if err != nil {
@@ -689,9 +641,9 @@ func (h *FileOperationsHandler) HandleFileUpload(c *gin.Context) {
 		return
 	}
 
-	operationType := "create"
+	operationType := OperationCreate
 	if _, err := h.objectManager.GetFileContent(ctx, owner, repo, filePath, effectiveBranch); err == nil {
-		operationType = "update"
+		operationType = OperationUpdate
 	}
 
 	now := time.Now()
@@ -1320,12 +1272,6 @@ func (h *FileOperationsHandler) validateRefName(ref string) error {
 	return nil
 }
 
-// validatePermissions checks if the user has the required permissions - DISABLED FOR DEVELOPMENT
-func (h *FileOperationsHandler) validatePermissions(c *gin.Context, owner, repo, action string) error {
-	// Permission validation disabled for development
-	return nil
-}
-
 // NewUnauthorizedError creates an unauthorized error
 func NewUnauthorizedError(message string) *api.GitAPIError {
 	return api.NewGitAPIError(api.ErrorCodeUnauthorized, message, api.ErrorSeverityMedium)
@@ -1417,24 +1363,24 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		return
 	}
 
-	// Check for file existence conflicts for create operations
+	// Get commit and tree once for file existence checks
+	commit, err := repository.CommitObject(baseHash)
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_commit_object")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		apiErr := h.errorMapper.MapError(err, "get_commit_tree")
+		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+		return
+	}
+
+	// Check for file existence conflicts for create operations and validate delete operations
 	for _, op := range req.Operations {
 		if op.Operation == "create" {
-			// Get commit and tree
-			commit, err := repository.CommitObject(baseHash)
-			if err != nil {
-				apiErr := h.errorMapper.MapError(err, "get_commit_object")
-				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-				return
-			}
-
-			tree, err := commit.Tree()
-			if err != nil {
-				apiErr := h.errorMapper.MapError(err, "get_commit_tree")
-				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-				return
-			}
-
 			// Check if file exists using tree.File() method
 			_, err = tree.File(op.Path)
 			if err == nil {
@@ -1448,6 +1394,21 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 				return
 			}
 			// If err == object.ErrFileNotFound, file doesn't exist, which is what we want for create operation
+		} else if op.Operation == "delete" {
+			// Check if file exists - it must exist for delete operation
+			_, err = tree.File(op.Path)
+			if err == object.ErrFileNotFound {
+				// File doesn't exist, return not found error
+				apiErr := api.NewNotFoundError("file", fmt.Sprintf("File '%s' not found in repository", op.Path))
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			} else if err != nil {
+				// Some other error occurred
+				apiErr := h.errorMapper.MapError(err, "check_file_exists")
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+			// If err == nil, file exists, which is what we want for delete operation
 		}
 	}
 
@@ -1513,7 +1474,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		if err != nil {
 			operationResults[i] = responses.OperationResult{
 				Path:      op.Path,
-				Operation: op.Operation,
+				Operation: responses.Operation(op.Operation),
 				Success:   false,
 				Error:     err.Error(),
 			}
@@ -1533,7 +1494,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		if err := h.transactionManager.AddOperation(ctx, transaction, txnOp); err != nil {
 			operationResults[i] = responses.OperationResult{
 				Path:      op.Path,
-				Operation: op.Operation,
+				Operation: responses.Operation(op.Operation),
 				Success:   false,
 				Error:     err.Error(),
 			}
@@ -1545,7 +1506,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		} else {
 			operationResults[i] = responses.OperationResult{
 				Path:      op.Path,
-				Operation: op.Operation,
+				Operation: responses.Operation(op.Operation),
 				Success:   true,
 			}
 		}
@@ -1646,6 +1607,11 @@ func (h *FileOperationsHandler) validateMultiFileOperation(op *MultiFileOperatio
 	// Validate content requirements
 	if (op.Operation == "create" || op.Operation == "update") && op.Content == "" {
 		return fmt.Errorf("content is required for %s operations", op.Operation)
+	}
+
+	// Validate that delete operations should not have content
+	if op.Operation == "delete" && op.Content != "" {
+		return fmt.Errorf("content should not be provided for delete operations")
 	}
 
 	// Validate encoding

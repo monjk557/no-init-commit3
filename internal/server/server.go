@@ -319,7 +319,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	//===============================================
 
 	apiV2Group := router.Group("/api/v2")
-	apiV2Group.Use(ginContextMiddleware()) // Add chi compatibility middleware
+	apiV2Group.Use(ginContextMiddleware())
 	apiV2Group.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
 	apiV2Group.Use(jsonResponseMiddleware.ErrorHandler())
 
