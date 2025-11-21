@@ -17,21 +17,90 @@ import (
 )
 
 // repositoryWrapper wraps go-git repository to implement our Repository interface
-type repositoryWrapper struct {
+type RepositoryWrapper struct {
 	repo *gogit.Repository
 	path string
 	mu   sync.RWMutex
 }
 
 // Path returns the filesystem path of the repository
-func (rw *repositoryWrapper) Path() string {
+func (rw *RepositoryWrapper) Path() string {
 	return rw.path
 }
 
 // Close releases any resources held by the repository
-func (rw *repositoryWrapper) Close() error {
+func (rw *RepositoryWrapper) Close() error {
 	// go-git repositories don't need explicit closing
 	return nil
+}
+
+// GetRepo returns the underlying go-git repository (thread-safe)
+func (rw *RepositoryWrapper) GetRepo() *gogit.Repository {
+	rw.mu.RLock()
+	defer rw.mu.RUnlock()
+	return rw.repo
+}
+
+// ResolveReference resolves a Git reference to a commit hash (thread-safe)
+func (rw *RepositoryWrapper) ResolveReference(ref string) (plumbing.Hash, error) {
+	rw.mu.RLock()
+	defer rw.mu.RUnlock()
+
+	if rw.repo == nil {
+		return plumbing.ZeroHash, fmt.Errorf("repository is closed")
+	}
+
+	if ref == "" || ref == "HEAD" {
+		head, err := rw.repo.Head()
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("failed to get HEAD: %w", err)
+		}
+		return head.Hash(), nil
+	}
+
+	// Try to resolve as a reference first
+	refObj, err := rw.repo.Reference(plumbing.ReferenceName(ref), false)
+	if err == nil {
+		return refObj.Hash(), nil
+	}
+
+	// Try with refs/heads/ prefix
+	refObj, err = rw.repo.Reference(plumbing.ReferenceName("refs/heads/"+ref), false)
+	if err == nil {
+		return refObj.Hash(), nil
+	}
+
+	// If not a reference, try as a hash
+	hash := plumbing.NewHash(ref)
+	if hash != plumbing.ZeroHash {
+		return hash, nil
+	}
+
+	return plumbing.ZeroHash, fmt.Errorf("failed to resolve reference: %s", ref)
+}
+
+// CommitObject returns a commit object from the repository (thread-safe)
+func (rw *RepositoryWrapper) CommitObject(hash plumbing.Hash) (*object.Commit, error) {
+	rw.mu.RLock()
+	defer rw.mu.RUnlock()
+
+	if rw.repo == nil {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	return rw.repo.CommitObject(hash)
+}
+
+// SetReference sets a reference in the repository (thread-safe)
+func (rw *RepositoryWrapper) SetReference(ref *plumbing.Reference) error {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+
+	if rw.repo == nil {
+		return fmt.Errorf("repository is closed")
+	}
+
+	return rw.repo.Storer.SetReference(ref)
 }
 
 // DefaultRepositoryManager implements the RepositoryManager interface
@@ -136,7 +205,7 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 }
 
 // OpenRepository opens an existing Git repository
-func (rm *DefaultRepositoryManager) OpenRepository(path string) (*repositoryWrapper, error) {
+func (rm *DefaultRepositoryManager) OpenRepository(path string) (*RepositoryWrapper, error) {
 	// For now, we'll return a simple wrapper around go-git repository
 	// This can be extended later to implement our Repository interface properly
 	gitRepo, err := gogit.PlainOpen(path)
@@ -145,7 +214,7 @@ func (rm *DefaultRepositoryManager) OpenRepository(path string) (*repositoryWrap
 	}
 
 	// Return a wrapper that implements our Repository interface
-	return &repositoryWrapper{repo: gitRepo, path: path}, nil
+	return &RepositoryWrapper{repo: gitRepo, path: path}, nil
 }
 
 // RepositoryExists checks if a repository exists at the given path
@@ -590,14 +659,14 @@ func (c *SimpleRepoCache) cleanup() {
 }
 
 // OpenRepositorySimple은 간단한 캐싱으로 저장소를 엽니다.
-func OpenRepositorySimple(path string) (*repositoryWrapper, error) {
+func OpenRepositorySimple(path string) (*RepositoryWrapper, error) {
 	cache := GetSimpleCache()
 	gitRepo, err := cache.Get(path)
 	if err != nil {
 		return nil, err
 	}
 
-	return &repositoryWrapper{
+	return &RepositoryWrapper{
 		path: path,
 		repo: gitRepo,
 		mu:   sync.RWMutex{},

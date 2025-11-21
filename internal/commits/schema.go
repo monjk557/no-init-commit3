@@ -1,0 +1,152 @@
+package commits
+
+import "time"
+
+// CommitsRequestParams는 커밋 로그 엔드포인트의 요청 파라미터를 나타냅니다.
+type CommitsRequestParams struct {
+	Owner string
+	Repo  string
+	Ref   string
+	Limit int
+	Skip  int
+	Sort  string // 정렬 옵션: "date" (날짜별 그룹화) 또는 빈 문자열 (기본형)
+}
+
+// CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.
+// sort=date일 때는 날짜별로 그룹화된 커밋 목록, 그렇지 않으면 기본 커밋 목록을 반환합니다.
+// CommitsByDate 타입은 diff.go에서 정의된 타입을 재사용합니다.
+type CommitsResponse struct {
+	Success    bool           `json:"success"`
+	Message    string         `json:"message"`
+	Results    interface{}    `json:"results"` // sort=date일 때는 []CommitsByDate, 그렇지 않으면 []git.Commit
+	Pagination PaginationInfo `json:"pagination"`
+}
+
+// PaginationInfo는 커밋 응답의 페이지네이션 정보를 나타냅니다.
+// Python PaginatedResponse와 호환되는 필드들을 포함합니다.
+type PaginationInfo struct {
+	Count       int     `json:"count"`        // 전체 항목 수
+	Next        *string `json:"next"`         // 다음 페이지 URL
+	Previous    *string `json:"previous"`     // 이전 페이지 URL
+	CurrentPage int     `json:"current_page"` // 현재 페이지 번호
+	TotalPages  int     `json:"total_pages"`  // 전체 페이지 수
+	PageSize    int     `json:"page_size"`    // 페이지당 항목 수
+}
+
+// CommitsErrorResponse는 커밋 엔드포인트의 표준화된 에러 응답을 나타냅니다.
+type CommitsErrorResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
+	Code    string `json:"code,omitempty"`
+	Details string `json:"details,omitempty"`
+}
+
+// 기본 페이지네이션 값들
+const (
+	DefaultCommitsLimit = 30
+	MaxCommitsLimit     = 100
+	MinCommitsLimit     = 1
+)
+
+// CommitMetadata는 커밋 정보를 나타냅니다
+type CommitMetadata struct {
+	SHA     string   `json:"sha"`
+	Author  string   `json:"author"`
+	Email   string   `json:"email"`
+	Date    string   `json:"date"`
+	Message string   `json:"message"`
+	Parents []string `json:"parents"`
+}
+
+// CommitStats는 브랜치 비교를 위한 커밋 수 차이를 나타냅니다
+type CommitStats struct {
+	Ahead  int `json:"ahead"`  // base에 없는 head의 커밋들
+	Behind int `json:"behind"` // head에 없는 base의 커밋들
+}
+
+// CommitsByDate는 날짜별로 그룹화된 커밋 목록을 나타냅니다
+type CommitsByDate struct {
+	Date    string           `json:"date"`    // YYYY-MM-DD 형식의 날짜
+	Commits []CommitMetadata `json:"commits"` // 해당 날짜의 커밋 목록
+}
+
+// Commit - Git 커밋 정보
+type Commit struct {
+	Sha          string       `json:"sha"`           // Sha - 커밋 해시
+	Author       CommitAuthor `json:"author"`        // Author - 커밋 작성자 정보
+	Committer    CommitAuthor `json:"committer"`     // Committer - 커밋 실행자 정보
+	Message      string       `json:"message"`       // Message - 커밋 메시지
+	ParentHashes []string     `json:"parent_hashes"` // ParentHashes - 부모 커밋들의 해시
+	TreeHash     string       `json:"tree_hash"`     // TreeHash - 커밋의 트리 객체 해시
+}
+
+// CommitAuthor - 커밋 작성자/실행자 정보
+type CommitAuthor struct {
+	Name  string    `json:"name"`  // Name - 작성자/실행자 이름
+	Email string    `json:"email"` // Email - 작성자/실행자 이메일
+	Date  time.Time `json:"date"`  // Date - 커밋 타임스탬프
+}
+
+type MultiFileCommitRequest struct {
+	Message    string               `json:"message" binding:"required"`
+	Branch     string               `json:"branch,omitempty"`
+	Author     *CommitAuthor        `json:"author,omitempty"`
+	Committer  *CommitAuthor        `json:"committer,omitempty"`
+	Operations []MultiFileOperation `json:"operations" binding:"required,min=1"`
+	Options    *CommitOptions       `json:"options,omitempty"`
+	Metadata   map[string]string    `json:"metadata,omitempty"`
+}
+
+// MultiFileOperation represents a single file operation in a multi-file commit
+type MultiFileOperation struct {
+	Path      string `json:"path" binding:"required"`
+	Operation string `json:"operation" binding:"required"` // "create", "update", "delete"
+	Content   string `json:"content,omitempty"`            // required for create/update
+	Encoding  string `json:"encoding,omitempty"`           // optional, defaults to utf-8
+	Mode      string `json:"mode,omitempty"`               // optional file mode
+}
+
+// CommitOptions represents additional options for commit operations
+type CommitOptions struct {
+	ValidateOnly       bool          `json:"validate_only,omitempty"`        // only validate, don't commit
+	AllowPartialCommit bool          `json:"allow_partial_commit,omitempty"` // continue with successful operations if some fail
+	Timeout            time.Duration `json:"timeout,omitempty"`              // transaction timeout
+	DryRun             bool          `json:"dry_run,omitempty"`              // alias for validate_only
+}
+
+// Operation은 파일 작업 유형을 나타냅니다
+type Operation string
+
+const (
+	// OperationCreate - 파일 생성
+	OperationCreate Operation = "create"
+	// OperationUpdate - 파일 업데이트
+	OperationUpdate Operation = "update"
+	// OperationDelete - 파일 삭제
+	OperationDelete Operation = "delete"
+)
+
+// OperationResult는 개별 파일 작업의 결과를 나타냅니다.
+// 각 파일에 대한 작업 상태와 오류 메시지를 포함합니다.
+type OperationResult struct {
+	Path      string    `json:"path"`
+	Operation Operation `json:"operation"`
+	Success   bool      `json:"success"`
+	Error     string    `json:"error,omitempty"`
+}
+
+// MultiFileCommitResponse는 다중 파일 커밋 작업에 대한 응답을 나타냅니다.
+// 트랜잭션 ID, 전체 작업 현황, 개별 작업 결과 및 실행 시간을 포함합니다.
+type MultiFileCommitResponse struct {
+	Success          bool                   `json:"success"`
+	CommitSHA        string                 `json:"commit_sha,omitempty"`
+	TransactionID    string                 `json:"transaction_id"`
+	Message          string                 `json:"message"`
+	TotalOperations  int                    `json:"total_operations"`
+	SuccessfulOps    int                    `json:"successful_operations"`
+	FailedOps        int                    `json:"failed_operations"`
+	OperationResults []OperationResult      `json:"operation_results,omitempty"`
+	ValidationOnly   bool                   `json:"validation_only,omitempty"`
+	Duration         time.Duration          `json:"duration_ms"` // in milliseconds
+	Details          map[string]interface{} `json:"details,omitempty"`
+}

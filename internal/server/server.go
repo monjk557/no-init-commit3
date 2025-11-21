@@ -14,6 +14,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/branches"
+	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
@@ -329,7 +330,6 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		s.logger.Error("Failed to create repository creation handler", zap.Error(err))
 		return
 	}
-	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
 
 	branchesHandler, err := branches.NewBranchOperationsHandler(s.config)
 	if err != nil {
@@ -337,16 +337,28 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
-	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
-	apiV2Group.PATCH("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleUpdateBranch)
-	apiV2Group.DELETE("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleDeleteBranch)
-
 	treeHandlerV2, err := tree.NewTreeHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create tree handler", zap.Error(err))
 		return
 	}
+
+	commitsHandlerV2, err := commits.NewCommitsHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create commits handler", zap.Error(err))
+		return
+	}
+
+	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
+
+	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
+	apiV2Group.PATCH("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleUpdateBranch)
+	apiV2Group.DELETE("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleDeleteBranch)
+
 	apiV2Group.GET("/repository/:owner/:repo/tree", treeHandlerV2.HandleTreeAPI)
+
+	apiV2Group.GET("/repository/:owner/:repo/commits", commitsHandlerV2.HandleCommitsAPI)
+	apiV2Group.POST("/repository/:owner/:repo/commits", commitsHandlerV2.HandleMultiFileCommit)
 
 	{
 		// Repository creation endpoint - separate from existing repos
