@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/api"
+	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
@@ -328,6 +329,16 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
+
+	branchesHandler, err := branches.NewBranchOperationsHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create branch operations handler", zap.Error(err))
+		return
+	}
+
+	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
+	apiV2Group.PATCH("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleUpdateBranch)
+	apiV2Group.DELETE("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleDeleteBranch)
 
 	{
 		// Repository creation endpoint - separate from existing repos

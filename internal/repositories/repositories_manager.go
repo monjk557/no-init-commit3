@@ -1,7 +1,6 @@
 package repositories
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -387,7 +386,7 @@ func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repositor
 
 	// Ensure HEAD is properly set using the object manager
 	if rm.objectManager != nil {
-		if ensureErr := rm.objectManager.EnsureProperHEAD(context.Background(), gitRepo, options.DefaultBranch); ensureErr != nil {
+		if ensureErr := rm.objectManager.EnsureProperHEAD(gitRepo, options.DefaultBranch); ensureErr != nil {
 			rm.logger.Warn("Failed to ensure proper HEAD state after repository creation",
 				zap.String("branch", options.DefaultBranch),
 				zap.Error(ensureErr))

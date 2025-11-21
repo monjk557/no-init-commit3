@@ -3,7 +3,6 @@
 package repositories
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -262,7 +261,7 @@ func NewGitObjectManager(pathConfig *PathConfig, logger *logging.Logger) (*GitOb
 }
 
 // OpenRepository opens a Git repository for manipulation
-func (gom *GitObjectManager) OpenRepository(ctx context.Context, owner, repo string) (*gogit.Repository, error) {
+func (gom *GitObjectManager) OpenRepository(owner, repo string) (*gogit.Repository, error) {
 	// Get the repository path using existing path validation
 	repoPath, err := GetRepoPath(&gom.pathConfig, owner, repo)
 	if err != nil {
@@ -294,7 +293,7 @@ func (gom *GitObjectManager) OpenRepository(ctx context.Context, owner, repo str
 }
 
 // GetRepositoryHead gets the current HEAD reference
-func (gom *GitObjectManager) GetRepositoryHead(ctx context.Context, repo *gogit.Repository) (*plumbing.Reference, error) {
+func (gom *GitObjectManager) GetRepositoryHead(repo *gogit.Repository) (*plumbing.Reference, error) {
 	headRef, err := repo.Head()
 	if err != nil {
 		gom.logger.Error("Failed to get repository HEAD", zap.Error(err))
@@ -305,7 +304,7 @@ func (gom *GitObjectManager) GetRepositoryHead(ctx context.Context, repo *gogit.
 }
 
 // ResolveReference resolves a Git reference to a commit hash
-func (gom *GitObjectManager) ResolveReference(ctx context.Context, repo *gogit.Repository, ref string) (plumbing.Hash, error) {
+func (gom *GitObjectManager) ResolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
 	// Try to parse as direct hash first
 	if hash := plumbing.NewHash(ref); !hash.IsZero() {
 		// Validate that the hash exists in the repository
@@ -337,7 +336,7 @@ func (gom *GitObjectManager) ResolveReference(ctx context.Context, repo *gogit.R
 }
 
 // ValidateFileChanges validates a list of file changes
-func (gom *GitObjectManager) ValidateFileChanges(ctx context.Context, changes []FileChange) error {
+func (gom *GitObjectManager) ValidateFileChanges(changes []FileChange) error {
 	if len(changes) == 0 {
 		return fmt.Errorf("no file changes provided")
 	}
@@ -391,7 +390,7 @@ func (gom *GitObjectManager) ValidateFileChanges(ctx context.Context, changes []
 }
 
 // GetFileFromTree gets a file from a tree by path
-func (gom *GitObjectManager) GetFileFromTree(ctx context.Context, tree *object.Tree, path string) (*object.File, error) {
+func (gom *GitObjectManager) GetFileFromTree(tree *object.Tree, path string) (*object.File, error) {
 	file, err := tree.File(path)
 	if err != nil {
 		// Check if it's a "file not found" error
@@ -408,7 +407,7 @@ func (gom *GitObjectManager) GetFileFromTree(ctx context.Context, tree *object.T
 }
 
 // GetTreeFromCommit gets a tree object from a commit hash
-func (gom *GitObjectManager) GetTreeFromCommit(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash) (*object.Tree, error) {
+func (gom *GitObjectManager) GetTreeFromCommit(repo *gogit.Repository, commitHash plumbing.Hash) (*object.Tree, error) {
 	// Get the commit object
 	commit, err := repo.CommitObject(commitHash)
 	if err != nil {
@@ -425,7 +424,7 @@ func (gom *GitObjectManager) GetTreeFromCommit(ctx context.Context, repo *gogit.
 }
 
 // EnsureProperHEAD ensures HEAD points to a branch, not directly to a commit
-func (gom *GitObjectManager) EnsureProperHEAD(ctx context.Context, repo *gogit.Repository, branchName string) error {
+func (gom *GitObjectManager) EnsureProperHEAD(repo *gogit.Repository, branchName string) error {
 	// Check current HEAD state
 	headRef, err := repo.Head()
 	if err != nil {
