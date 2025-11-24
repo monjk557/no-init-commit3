@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/api"
+	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
@@ -349,6 +350,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	blobHandlerV2, err := blob.NewBlobHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create blob handler", zap.Error(err))
+		return
+	}
+
 	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
 
 	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
@@ -359,6 +366,8 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 	apiV2Group.GET("/repository/:owner/:repo/commits", commitsHandlerV2.HandleCommitsAPI)
 	apiV2Group.POST("/repository/:owner/:repo/commits", commitsHandlerV2.HandleMultiFileCommit)
+
+	apiV2Group.GET("/repository/:owner/:repo/blob", blobHandlerV2.HandleBlobAPI)
 
 	{
 		// Repository creation endpoint - separate from existing repos
