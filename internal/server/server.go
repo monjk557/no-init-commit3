@@ -17,6 +17,7 @@ import (
 	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/protocol"
@@ -356,6 +357,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	diffsHandler, err := diffs.NewDiffHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create diff handler", zap.Error(err))
+		return
+	}
+
 	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
 
 	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
@@ -368,6 +375,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	apiV2Group.POST("/repository/:owner/:repo/commits", commitsHandlerV2.HandleMultiFileCommit)
 
 	apiV2Group.GET("/repository/:owner/:repo/blob", blobHandlerV2.HandleBlobAPI)
+
+	apiV2Group.GET("/repository/:owner/:repo/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
+	apiV2Group.GET("/repository/:owner/:repo/diff/branches/:base/:head", diffsHandler.HandleBranchDiff)
+	apiV2Group.GET("/repository/:owner/:repo/diff/file", diffsHandler.HandleFileDiff)
+	apiV2Group.GET("/repository/:owner/:repo/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
+	apiV2Group.GET("/repository/:owner/:repo/diff/patch/:base/:head", diffsHandler.HandlePatch)
 
 	{
 		// Repository creation endpoint - separate from existing repos

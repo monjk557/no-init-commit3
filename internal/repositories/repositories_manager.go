@@ -578,8 +578,9 @@ func (rm *DefaultRepositoryManager) getDirectorySize(path string) (int64, error)
 
 // SimpleRepoCache는 스레드 안전한 간단한 저장소 캐시입니다.
 type SimpleRepoCache struct {
-	mu    sync.RWMutex
-	repos map[string]*cachedRepo
+	mu         sync.RWMutex
+	repos      map[string]*cachedRepo
+	pendingOps map[string]*sync.Mutex // Prevent race conditions on repository opening
 }
 
 type cachedRepo struct {
@@ -597,7 +598,8 @@ var (
 func GetSimpleCache() *SimpleRepoCache {
 	initOnce.Do(func() {
 		globalSimpleCache = &SimpleRepoCache{
-			repos: make(map[string]*cachedRepo),
+			repos:      make(map[string]*cachedRepo),
+			pendingOps: make(map[string]*sync.Mutex),
 		}
 		// Start cleanup goroutine
 		go globalSimpleCache.cleanup()
@@ -623,9 +625,43 @@ func (c *SimpleRepoCache) Get(path string) (*gogit.Repository, error) {
 	}
 	c.mu.RUnlock()
 
+	// Get or create mutex for this path to prevent race conditions
+	c.mu.Lock()
+	pathMutex, exists := c.pendingOps[path]
+	if !exists {
+		pathMutex = &sync.Mutex{}
+		c.pendingOps[path] = pathMutex
+	}
+	c.mu.Unlock()
+
+	// Lock this specific path to prevent concurrent opens
+	pathMutex.Lock()
+	defer pathMutex.Unlock()
+
+	// Double-check after acquiring path lock (another goroutine might have added it)
+	c.mu.RLock()
+	if cached, exists := c.repos[path]; exists {
+		repo := cached.repo
+		c.mu.RUnlock()
+
+		// Update lastUsed
+		c.mu.Lock()
+		if cached, stillExists := c.repos[path]; stillExists {
+			cached.lastUsed = time.Now()
+		}
+		c.mu.Unlock()
+
+		return repo, nil
+	}
+	c.mu.RUnlock()
+
 	// Open repository
 	repo, err := gogit.PlainOpen(path)
 	if err != nil {
+		// Clean up pending ops mutex on error
+		c.mu.Lock()
+		delete(c.pendingOps, path)
+		c.mu.Unlock()
 		return nil, err
 	}
 
@@ -636,6 +672,8 @@ func (c *SimpleRepoCache) Get(path string) (*gogit.Repository, error) {
 		lastUsed: time.Now(),
 		path:     path,
 	}
+	// Clean up pending ops mutex
+	delete(c.pendingOps, path)
 	c.mu.Unlock()
 
 	return repo, nil
@@ -649,10 +687,21 @@ func (c *SimpleRepoCache) cleanup() {
 	for range ticker.C {
 		c.mu.Lock()
 		cutoff := time.Now().Add(-10 * time.Minute) // Remove after 10 minutes of inactivity
+		var toRemove []string
+
 		for path, cached := range c.repos {
 			if cached.lastUsed.Before(cutoff) {
-				delete(c.repos, path)
+				toRemove = append(toRemove, path)
 			}
+		}
+
+		// Remove expired entries
+		for _, path := range toRemove {
+			// Note: go-git repositories don't have an explicit Close() method,
+			// but we remove the reference to allow GC to clean up
+			delete(c.repos, path)
+			// Also clean up any pending ops mutexes
+			delete(c.pendingOps, path)
 		}
 		c.mu.Unlock()
 	}
