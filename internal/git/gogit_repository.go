@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/go-enry/go-enry/v2"
+	"github.com/go-enry/go-enry/v2/data"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -937,6 +938,12 @@ func (r *GoGitRepository) GetLanguageDistribution(ctx context.Context, ref strin
 		// If still no language, skip this file
 		if language == "" {
 			return nil
+		}
+
+		// Map derived languages to base languages using LanguagesGroup
+		// For example, "TSX" -> "TypeScript", "JSX" -> "JavaScript"
+		if baseLanguage, exists := data.LanguagesGroup[language]; exists {
+			language = baseLanguage
 		}
 
 		// Update statistics
