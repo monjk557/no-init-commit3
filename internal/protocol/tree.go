@@ -413,9 +413,13 @@ func isTreeReferenceNotFoundError(err error) bool {
 	}
 
 	errStr := err.Error()
+	// Check for various reference not found error patterns
+	// This handles both direct errors and wrapped errors
 	return strings.Contains(errStr, "reference not found") ||
 		strings.Contains(errStr, "revision not found") ||
-		strings.Contains(errStr, "ref not found")
+		strings.Contains(errStr, "ref not found") ||
+		(strings.Contains(errStr, "reference") && strings.Contains(errStr, "not found")) ||
+		strings.Contains(errStr, "reference \"") && strings.Contains(errStr, "\" not found in repository")
 }
 
 // isTreeRepositoryNotFoundError checks if error is a repository not found error

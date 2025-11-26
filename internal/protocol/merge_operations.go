@@ -1123,105 +1123,33 @@ func (h *MergeOperationsHandler) createMergedTreeWithBase(
 		return plumbing.ZeroHash, fmt.Errorf("failed to get target tree: %w", err)
 	}
 
-	h.logger.Debug("Starting 3-way merge tree creation with explicit base",
+	h.logger.Debug("Starting 3-way merge tree creation",
 		zap.String("base", baseCommit.Hash.String()),
 		zap.String("source", sourceCommit.Hash.String()),
 		zap.String("target", targetCommit.Hash.String()))
 
-	// Use the same tree merging logic as createMergedTree
-	// Create a map to track all files from all three trees
-	fileMap := make(map[string]*mergeFileEntry)
-
-	// Collect all files from base tree
-	_ = baseTree.Files().ForEach(func(f *object.File) error {
-		fileMap[f.Name] = &mergeFileEntry{
-			path:     f.Name,
-			baseHash: f.Hash,
-			baseMode: f.Mode,
-		}
-		return nil
-	})
-
-	// Collect all files from source tree
-	_ = sourceTree.Files().ForEach(func(f *object.File) error {
-		if entry, exists := fileMap[f.Name]; exists {
-			entry.sourceHash = f.Hash
-			entry.sourceMode = f.Mode
-		} else {
-			fileMap[f.Name] = &mergeFileEntry{
-				path:       f.Name,
-				sourceHash: f.Hash,
-				sourceMode: f.Mode,
-			}
-		}
-		return nil
-	})
-
-	// Collect all files from target tree
-	_ = targetTree.Files().ForEach(func(f *object.File) error {
-		if entry, exists := fileMap[f.Name]; exists {
-			entry.targetHash = f.Hash
-			entry.targetMode = f.Mode
-		} else {
-			fileMap[f.Name] = &mergeFileEntry{
-				path:       f.Name,
-				targetHash: f.Hash,
-				targetMode: f.Mode,
-			}
-		}
-		return nil
-	})
-
-	// Build conflict map for quick lookup (empty for rebase as conflicts are handled separately)
+	// Build conflict map for quick lookup
 	conflictMap := make(map[string]*git.FileConflict)
-
-	// Create new tree entries by resolving each file
-	var treeEntries []object.TreeEntry
-
-	for path, entry := range fileMap {
-		resolvedHash, resolvedMode, err := h.resolveFileForMerge(entry, conflictMap[path], strategy)
-		if err != nil {
-			h.logger.Warn("Failed to resolve file, skipping",
-				zap.String("path", path),
-				zap.Error(err))
-			continue
-		}
-
-		if !resolvedHash.IsZero() {
-			treeEntries = append(treeEntries, object.TreeEntry{
-				Name: path,
-				Mode: resolvedMode,
-				Hash: resolvedHash,
-			})
+	if analysis != nil {
+		for _, conflict := range analysis.FileConflicts {
+			conflictMap[conflict.FilePath] = &conflict
 		}
 	}
 
-	// Sort tree entries by name (required by Git)
-	// Using a simple bubble sort for clarity
-	for i := 0; i < len(treeEntries); i++ {
-		for j := i + 1; j < len(treeEntries); j++ {
-			if treeEntries[i].Name > treeEntries[j].Name {
-				treeEntries[i], treeEntries[j] = treeEntries[j], treeEntries[i]
-			}
-		}
-	}
-
-	// Create and store the new tree
-	newTree := &object.Tree{
-		Entries: treeEntries,
-	}
-
-	treeObj := repo.Storer.NewEncodedObject()
-	if err := newTree.Encode(treeObj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode merged tree: %w", err)
-	}
-
-	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	// Merge trees recursively starting from root
+	treeEntries, err := h.mergeTreeEntries(ctx, repo, baseTree, sourceTree, targetTree, "", conflictMap, strategy)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store merged tree: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("failed to merge tree entries: %w", err)
 	}
 
-	h.logger.Info("Successfully created merged tree with explicit base",
+	// Sort and store the merged tree
+	sortTreeEntries(treeEntries)
+	treeHash, err := h.createAndStoreTree(repo, treeEntries)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	h.logger.Info("Successfully created merged tree",
 		zap.String("tree_hash", treeHash.String()),
 		zap.Int("entries", len(treeEntries)))
 
@@ -1246,128 +1174,7 @@ func (h *MergeOperationsHandler) createMergedTree(
 	}
 
 	baseCommit := mergeBases[0]
-
-	// Get trees for base, source, and target
-	baseTree, err := baseCommit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to get base tree: %w", err)
-	}
-
-	sourceTree, err := sourceCommit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to get source tree: %w", err)
-	}
-
-	targetTree, err := targetCommit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to get target tree: %w", err)
-	}
-
-	h.logger.Debug("Starting 3-way merge tree creation",
-		zap.String("base", baseCommit.Hash.String()),
-		zap.String("source", sourceCommit.Hash.String()),
-		zap.String("target", targetCommit.Hash.String()))
-
-	// Create a map to track all files from all three trees
-	fileMap := make(map[string]*mergeFileEntry)
-
-	// Collect all files from base tree
-	_ = baseTree.Files().ForEach(func(f *object.File) error {
-		fileMap[f.Name] = &mergeFileEntry{
-			path:     f.Name,
-			baseHash: f.Hash,
-			baseMode: f.Mode,
-		}
-		return nil
-	})
-
-	// Collect all files from source tree
-	_ = sourceTree.Files().ForEach(func(f *object.File) error {
-		if entry, exists := fileMap[f.Name]; exists {
-			entry.sourceHash = f.Hash
-			entry.sourceMode = f.Mode
-		} else {
-			fileMap[f.Name] = &mergeFileEntry{
-				path:       f.Name,
-				sourceHash: f.Hash,
-				sourceMode: f.Mode,
-			}
-		}
-		return nil
-	})
-
-	// Collect all files from target tree
-	_ = targetTree.Files().ForEach(func(f *object.File) error {
-		if entry, exists := fileMap[f.Name]; exists {
-			entry.targetHash = f.Hash
-			entry.targetMode = f.Mode
-		} else {
-			fileMap[f.Name] = &mergeFileEntry{
-				path:       f.Name,
-				targetHash: f.Hash,
-				targetMode: f.Mode,
-			}
-		}
-		return nil
-	})
-
-	// Build conflict map for quick lookup
-	conflictMap := make(map[string]*git.FileConflict)
-	for _, conflict := range analysis.FileConflicts {
-		conflictMap[conflict.FilePath] = &conflict
-	}
-
-	// Create new tree entries by resolving each file
-	var treeEntries []object.TreeEntry
-
-	for path, entry := range fileMap {
-		resolvedHash, resolvedMode, err := h.resolveFileForMerge(entry, conflictMap[path], strategy)
-		if err != nil {
-			h.logger.Warn("Failed to resolve file, skipping",
-				zap.String("path", path),
-				zap.Error(err))
-			continue
-		}
-
-		if !resolvedHash.IsZero() {
-			treeEntries = append(treeEntries, object.TreeEntry{
-				Name: path,
-				Mode: resolvedMode,
-				Hash: resolvedHash,
-			})
-		}
-	}
-
-	// Sort tree entries by name (required by Git)
-	// Using a simple bubble sort for clarity
-	for i := 0; i < len(treeEntries); i++ {
-		for j := i + 1; j < len(treeEntries); j++ {
-			if treeEntries[i].Name > treeEntries[j].Name {
-				treeEntries[i], treeEntries[j] = treeEntries[j], treeEntries[i]
-			}
-		}
-	}
-
-	// Create and store the new tree
-	newTree := &object.Tree{
-		Entries: treeEntries,
-	}
-
-	treeObj := repo.Storer.NewEncodedObject()
-	if err := newTree.Encode(treeObj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode merged tree: %w", err)
-	}
-
-	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store merged tree: %w", err)
-	}
-
-	h.logger.Info("Successfully created merged tree",
-		zap.String("tree_hash", treeHash.String()),
-		zap.Int("entries", len(treeEntries)))
-
-	return treeHash, nil
+	return h.createMergedTreeWithBase(ctx, repo, sourceCommit, targetCommit, baseCommit, analysis, strategy)
 }
 
 // mergeFileEntry represents a file's state in base, source, and target
@@ -1409,11 +1216,22 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 	}
 
 	// Case 4: File deleted in source but exists in target
+	// Note: This case applies when the file was explicitly deleted in source.
+	// If the file is unchanged between base and target, we should preserve it
+	// (the directory might not exist in source, which is different from explicit deletion).
+	// For recursive/ORT strategies, prefer preserving unchanged files from base/target.
 	if baseExists && !sourceExists && targetExists {
 		if entry.baseHash == entry.targetHash {
-			// Target unchanged, respect source deletion
-			h.logger.Debug("File deleted in source, unchanged in target", zap.String("path", entry.path))
-			return plumbing.ZeroHash, 0, nil
+			// Target unchanged from base. For recursive/ORT strategies, preserve the file
+			// because the directory might not exist in source (not an explicit deletion).
+			// For "theirs" strategy, respect the deletion.
+			if strategy == MergeStrategyTheirs {
+				h.logger.Debug("File deleted in source, unchanged in target - respecting deletion (theirs strategy)", zap.String("path", entry.path))
+				return plumbing.ZeroHash, 0, nil
+			}
+			// For recursive/ORT/ours strategies, preserve the file
+			h.logger.Debug("File missing in source but unchanged in target - preserving target (directory may not exist in source)", zap.String("path", entry.path))
+			return entry.targetHash, entry.targetMode, nil
 		}
 		// Conflict: modified in target, deleted in source
 		h.logger.Warn("Conflict: modified in target, deleted in source", zap.String("path", entry.path))
@@ -1497,8 +1315,19 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 
 	// Case 8: File exists in base and target but not source
 	if baseExists && !sourceExists && targetExists {
-		h.logger.Debug("File exists in base and target, deleted in source", zap.String("path", entry.path))
-		return plumbing.ZeroHash, 0, nil // Respect deletion
+		// If target unchanged from base, keep target (don't respect source deletion)
+		// This is because if the entire directory doesn't exist in source,
+		// we should preserve files that exist in both base and target
+		if entry.baseHash == entry.targetHash {
+			h.logger.Debug("File exists in base and target but not source, keeping target", zap.String("path", entry.path))
+			return entry.targetHash, entry.targetMode, nil // Keep target
+		}
+		// Conflict: modified in target, deleted in source
+		h.logger.Warn("Conflict: modified in target, deleted in source", zap.String("path", entry.path))
+		if strategy == MergeStrategyTheirs {
+			return plumbing.ZeroHash, 0, nil // Keep deletion
+		}
+		return entry.targetHash, entry.targetMode, nil // Keep target (ours)
 	}
 
 	// Default: keep target version
@@ -1510,4 +1339,402 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 	}
 
 	return plumbing.ZeroHash, 0, nil
+}
+
+// mergeTreeEntry represents a tree entry's state in base, source, and target
+type mergeTreeEntry struct {
+	name        string
+	baseEntry   *object.TreeEntry
+	sourceEntry *object.TreeEntry
+	targetEntry *object.TreeEntry
+}
+
+// collectTreeEntries collects all entries from three trees into a map
+func (h *MergeOperationsHandler) collectTreeEntries(baseTree, sourceTree, targetTree *object.Tree) map[string]*mergeTreeEntry {
+	entryMap := make(map[string]*mergeTreeEntry)
+
+	// Helper to add entry to map
+	addEntry := func(name string, entry *object.TreeEntry, setter func(*mergeTreeEntry)) {
+		if mergeEntry, exists := entryMap[name]; exists {
+			setter(mergeEntry)
+		} else {
+			mergeEntry = &mergeTreeEntry{name: name}
+			setter(mergeEntry)
+			entryMap[name] = mergeEntry
+		}
+	}
+
+	// Collect from base tree
+	for i := range baseTree.Entries {
+		entry := &baseTree.Entries[i]
+		addEntry(entry.Name, entry, func(me *mergeTreeEntry) { me.baseEntry = entry })
+	}
+
+	// Collect from source tree
+	for i := range sourceTree.Entries {
+		entry := &sourceTree.Entries[i]
+		addEntry(entry.Name, entry, func(me *mergeTreeEntry) { me.sourceEntry = entry })
+	}
+
+	// Collect from target tree
+	for i := range targetTree.Entries {
+		entry := &targetTree.Entries[i]
+		addEntry(entry.Name, entry, func(me *mergeTreeEntry) { me.targetEntry = entry })
+	}
+
+	return entryMap
+}
+
+// sortTreeEntries sorts tree entries by name (required by Git)
+func sortTreeEntries(entries []object.TreeEntry) {
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[i].Name > entries[j].Name {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+		}
+	}
+}
+
+// createAndStoreTree creates and stores a tree object in the repository
+func (h *MergeOperationsHandler) createAndStoreTree(repo *gogit.Repository, entries []object.TreeEntry) (plumbing.Hash, error) {
+	newTree := &object.Tree{Entries: entries}
+	treeObj := repo.Storer.NewEncodedObject()
+	if err := newTree.Encode(treeObj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
+	}
+	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to store tree: %w", err)
+	}
+	return treeHash, nil
+}
+
+// getOrCreateEmptyTree gets an existing tree or returns nil if entry is nil
+func (h *MergeOperationsHandler) getOrCreateEmptyTree(repo *gogit.Repository, entry *object.TreeEntry) (*object.Tree, error) {
+	if entry == nil {
+		return nil, nil
+	}
+	if entry.Mode != filemode.Dir {
+		return nil, fmt.Errorf("entry is not a directory")
+	}
+	return repo.TreeObject(entry.Hash)
+}
+
+// createEmptyTree creates and stores an empty tree in the repository
+func (h *MergeOperationsHandler) createEmptyTree(repo *gogit.Repository) (*object.Tree, error) {
+	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
+	treeObj := repo.Storer.NewEncodedObject()
+	if err := emptyTree.Encode(treeObj); err != nil {
+		return nil, fmt.Errorf("failed to encode empty tree: %w", err)
+	}
+	emptyTreeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store empty tree: %w", err)
+	}
+	return repo.TreeObject(emptyTreeHash)
+}
+
+// mergeTreeEntries recursively merges tree entries from base, source, and target trees
+func (h *MergeOperationsHandler) mergeTreeEntries(
+	ctx context.Context,
+	repo *gogit.Repository,
+	baseTree, sourceTree, targetTree *object.Tree,
+	prefix string,
+	conflictMap map[string]*git.FileConflict,
+	strategy MergeStrategy,
+) ([]object.TreeEntry, error) {
+	// Collect all entries from all three trees
+	entryMap := h.collectTreeEntries(baseTree, sourceTree, targetTree)
+
+	// Resolve each entry
+	var resolvedEntries []object.TreeEntry
+
+	for _, mergeEntry := range entryMap {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		resolvedEntry, err := h.resolveTreeEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+		if err != nil {
+			h.logger.Warn("Failed to resolve tree entry, skipping",
+				zap.String("name", mergeEntry.name),
+				zap.String("prefix", prefix),
+				zap.Error(err))
+			continue
+		}
+
+		if resolvedEntry != nil {
+			resolvedEntries = append(resolvedEntries, *resolvedEntry)
+		}
+	}
+
+	// Sort tree entries by name (required by Git)
+	sortTreeEntries(resolvedEntries)
+
+	return resolvedEntries, nil
+}
+
+// resolveTreeEntry resolves a single tree entry (file or directory) for merge
+func (h *MergeOperationsHandler) resolveTreeEntry(
+	ctx context.Context,
+	repo *gogit.Repository,
+	mergeEntry *mergeTreeEntry,
+	prefix string,
+	conflictMap map[string]*git.FileConflict,
+	strategy MergeStrategy,
+) (*object.TreeEntry, error) {
+	baseExists := mergeEntry.baseEntry != nil
+	sourceExists := mergeEntry.sourceEntry != nil
+	targetExists := mergeEntry.targetEntry != nil
+
+	baseIsDir := baseExists && mergeEntry.baseEntry.Mode == filemode.Dir
+	sourceIsDir := sourceExists && mergeEntry.sourceEntry.Mode == filemode.Dir
+	targetIsDir := targetExists && mergeEntry.targetEntry.Mode == filemode.Dir
+
+	// Determine full path for conflict lookup
+	fullPath := mergeEntry.name
+	if prefix != "" {
+		fullPath = prefix + "/" + mergeEntry.name
+	}
+
+	// Handle type conflicts (directory vs file)
+	if h.hasTypeConflict(baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists) {
+		return h.resolveTypeConflict(ctx, repo, mergeEntry, prefix, conflictMap, strategy, fullPath, baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists)
+	}
+
+	// Handle directory entries (recursive merge)
+	if baseIsDir || sourceIsDir || targetIsDir {
+		return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+	}
+
+	// Handle file entries (use existing file merge logic)
+	fileEntry := &mergeFileEntry{
+		path: fullPath,
+	}
+	if baseExists {
+		fileEntry.baseHash = mergeEntry.baseEntry.Hash
+		fileEntry.baseMode = mergeEntry.baseEntry.Mode
+	}
+	if sourceExists {
+		fileEntry.sourceHash = mergeEntry.sourceEntry.Hash
+		fileEntry.sourceMode = mergeEntry.sourceEntry.Mode
+	}
+	if targetExists {
+		fileEntry.targetHash = mergeEntry.targetEntry.Hash
+		fileEntry.targetMode = mergeEntry.targetEntry.Mode
+	}
+
+	conflict := conflictMap[fullPath]
+	resolvedHash, resolvedMode, err := h.resolveFileForMerge(fileEntry, conflict, strategy)
+	if err != nil {
+		return nil, err
+	}
+
+	if resolvedHash.IsZero() {
+		return nil, nil // File was deleted
+	}
+
+	return &object.TreeEntry{
+		Name: mergeEntry.name,
+		Mode: resolvedMode,
+		Hash: resolvedHash,
+	}, nil
+}
+
+// mergeDirectoryEntry recursively merges a directory entry
+func (h *MergeOperationsHandler) mergeDirectoryEntry(
+	ctx context.Context,
+	repo *gogit.Repository,
+	mergeEntry *mergeTreeEntry,
+	prefix string,
+	conflictMap map[string]*git.FileConflict,
+	strategy MergeStrategy,
+) (*object.TreeEntry, error) {
+	// Get sub-trees for base, source, and target (or create empty ones)
+	baseSubTree, err := h.getOrCreateEmptyTree(repo, mergeEntry.baseEntry)
+	if err != nil && mergeEntry.baseEntry != nil {
+		return nil, fmt.Errorf("failed to get base subtree: %w", err)
+	}
+
+	// Handle case where source is a file instead of directory (type conflict)
+	var sourceSubTree *object.Tree
+	if mergeEntry.sourceEntry != nil {
+		if mergeEntry.sourceEntry.Mode == filemode.Dir {
+			sourceSubTree, err = h.getOrCreateEmptyTree(repo, mergeEntry.sourceEntry)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get source subtree: %w", err)
+			}
+		} else {
+			// Source is a file, create a tree with that file
+			// This handles type conflict where directory is preferred over file
+			// The file should be included in the merged directory
+			// Use the source entry's name (e.g., "blob" for "tree/blob")
+			fileEntries := []object.TreeEntry{
+				{
+					Name: mergeEntry.sourceEntry.Name, // Use the actual file name from source entry
+					Mode: mergeEntry.sourceEntry.Mode,
+					Hash: mergeEntry.sourceEntry.Hash,
+				},
+			}
+			sortTreeEntries(fileEntries)
+			treeHash, err := h.createAndStoreTree(repo, fileEntries)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create tree with source file: %w", err)
+			}
+			sourceSubTree, err = repo.TreeObject(treeHash)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get tree with source file: %w", err)
+			}
+		}
+	}
+
+	targetSubTree, err := h.getOrCreateEmptyTree(repo, mergeEntry.targetEntry)
+	if err != nil && mergeEntry.targetEntry != nil {
+		return nil, fmt.Errorf("failed to get target subtree: %w", err)
+	}
+
+	// If no sub-trees exist, return nil (directory was deleted)
+	if baseSubTree == nil && sourceSubTree == nil && targetSubTree == nil {
+		return nil, nil
+	}
+
+	// Ensure all trees are non-nil (create empty ones if needed)
+	if baseSubTree == nil {
+		baseSubTree, err = h.createEmptyTree(repo)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if sourceSubTree == nil {
+		sourceSubTree, err = h.createEmptyTree(repo)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if targetSubTree == nil {
+		targetSubTree, err = h.createEmptyTree(repo)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Recursively merge sub-trees
+	newPrefix := mergeEntry.name
+	if prefix != "" {
+		newPrefix = prefix + "/" + mergeEntry.name
+	}
+
+	mergedEntries, err := h.mergeTreeEntries(ctx, repo, baseSubTree, sourceSubTree, targetSubTree, newPrefix, conflictMap, strategy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to merge subtree entries: %w", err)
+	}
+
+	// Check if directory should be kept even if merged entries is empty
+	baseHadContent := mergeEntry.baseEntry != nil && mergeEntry.baseEntry.Mode == filemode.Dir
+	targetHadContent := mergeEntry.targetEntry != nil && mergeEntry.targetEntry.Mode == filemode.Dir
+	sourceHadContent := mergeEntry.sourceEntry != nil && mergeEntry.sourceEntry.Mode == filemode.Dir
+
+	// If merged entries is empty, check if we should keep the directory
+	if len(mergedEntries) == 0 {
+		// If directory existed in base or target (not just source), keep it even if empty
+		// This handles the case where source doesn't have the directory but base/target do
+		if baseHadContent || targetHadContent {
+			// Directory existed in base or target, keep it (even if empty after merge)
+			// This is valid in Git - empty directories can exist
+			h.logger.Debug("Keeping empty directory that existed in base or target",
+				zap.String("name", mergeEntry.name),
+				zap.Bool("base", baseHadContent),
+				zap.Bool("target", targetHadContent))
+		} else if sourceHadContent {
+			// Directory only existed in source, keep it
+			h.logger.Debug("Keeping empty directory that existed in source",
+				zap.String("name", mergeEntry.name))
+		} else {
+			// Directory was never created, return nil
+			h.logger.Debug("Directory was never created, returning nil",
+				zap.String("name", mergeEntry.name))
+			return nil, nil
+		}
+	} else {
+		// Directory has content, log for debugging
+		h.logger.Debug("Directory has merged entries",
+			zap.String("name", mergeEntry.name),
+			zap.Int("entry_count", len(mergedEntries)))
+	}
+
+	// Sort and store the merged tree
+	sortTreeEntries(mergedEntries)
+	treeHash, err := h.createAndStoreTree(repo, mergedEntries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create merged subtree: %w", err)
+	}
+
+	return &object.TreeEntry{
+		Name: mergeEntry.name,
+		Mode: filemode.Dir,
+		Hash: treeHash,
+	}, nil
+}
+
+// hasTypeConflict checks if there's a type conflict (directory vs file)
+func (h *MergeOperationsHandler) hasTypeConflict(baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists bool) bool {
+	return (baseIsDir && sourceExists && !sourceIsDir) ||
+		(baseIsDir && targetExists && !targetIsDir) ||
+		(sourceIsDir && targetExists && !targetIsDir) ||
+		(targetIsDir && sourceExists && !sourceIsDir)
+}
+
+// resolveTypeConflict resolves a type conflict (directory vs file) using the merge strategy
+func (h *MergeOperationsHandler) resolveTypeConflict(
+	ctx context.Context,
+	repo *gogit.Repository,
+	mergeEntry *mergeTreeEntry,
+	prefix string,
+	conflictMap map[string]*git.FileConflict,
+	strategy MergeStrategy,
+	fullPath string,
+	baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists bool,
+) (*object.TreeEntry, error) {
+	h.logger.Warn("Type conflict: directory vs file",
+		zap.String("path", fullPath),
+		zap.Bool("base_is_dir", baseIsDir),
+		zap.Bool("source_is_dir", sourceIsDir),
+		zap.Bool("target_is_dir", targetIsDir))
+
+	switch strategy {
+	case MergeStrategyTheirs:
+		if sourceExists {
+			if sourceIsDir {
+				return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+			}
+			return mergeEntry.sourceEntry, nil
+		}
+	case MergeStrategyOurs:
+		if targetExists {
+			if targetIsDir {
+				return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+			}
+			return mergeEntry.targetEntry, nil
+		}
+	default:
+		// Prefer directory over file
+		if sourceIsDir {
+			return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+		}
+		if targetIsDir {
+			return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+		}
+		// Both are files, use source
+		if sourceExists {
+			return mergeEntry.sourceEntry, nil
+		}
+		if targetExists {
+			return mergeEntry.targetEntry, nil
+		}
+	}
+	return nil, nil
 }
