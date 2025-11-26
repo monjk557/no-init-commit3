@@ -400,6 +400,8 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 				{
 					// Commits endpoint
 					commitGroup.GET("", commitsHandler.HandleCommitsAPI)
+					// Merge base endpoint
+					commitGroup.GET("/merge-base", commitsHandler.HandleMergeBaseAPI)
 					// Multi-file commit endpoints
 					commitGroup.POST("", fileOpsHandler.HandleMultiFileCommit)
 				}

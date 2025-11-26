@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
@@ -15,6 +16,9 @@ import (
 	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/gin-gonic/gin"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // CommitsHandler는 Git 커밋 로그 REST API 엔드포인트를 처리합니다.
@@ -27,13 +31,12 @@ type CommitsHandler struct {
 
 // CommitsRequestParams는 커밋 로그 엔드포인트의 요청 파라미터를 나타냅니다.
 type CommitsRequestParams struct {
-	Owner  string
-	Repo   string
-	Ref    string
-	Limit  int
-	Skip   int
-	Sort   string // 정렬 옵션: "date" (날짜별 그룹화) 또는 빈 문자열 (기본형)
-	UserID string
+	Owner string
+	Repo  string
+	Ref   string
+	Limit int
+	Skip  int
+	Sort  string // 정렬 옵션: "date" (날짜별 그룹화) 또는 빈 문자열 (기본형)
 }
 
 // CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.
@@ -127,6 +130,10 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		return
 	}
 
+	// optional parameters
+	from_ref := c.Query("from_ref")
+	to_ref := c.Query("to_ref")
+
 	// 저장소 경로 조회 및 검증
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
@@ -135,12 +142,25 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		return
 	}
 
-	// 커밋 히스토리 조회
-	commits, totalCount, err := h.getCommitHistory(ctx, repoPath, params)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_commit_history")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
+	// from과 to가 모두 제공된 경우, merge base부터 source branch까지의 커밋 조회
+	var commits []git.Commit
+	var totalCount int
+
+	if from_ref != "" && to_ref != "" {
+		commits, totalCount, err = h.getCommitsBetween(ctx, repoPath, params, from_ref, to_ref)
+		if err != nil {
+			apiErr := h.errorMapper.MapError(err, "get_commits_between")
+			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+			return
+		}
+	} else {
+		// 커밋 히스토리 조회
+		commits, totalCount, err = h.getCommitHistory(ctx, repoPath, params)
+		if err != nil {
+			apiErr := h.errorMapper.MapError(err, "get_commit_history")
+			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+			return
+		}
 	}
 
 	// sort=date 파라미터에 따라 응답 형식 결정
@@ -168,6 +188,56 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	}
 
 	// JSON 응답 전송
+	c.JSON(http.StatusOK, response)
+}
+
+// HandleMergeBaseAPI는 GET /repos/:owner/:repo/commits/merge-base?from=:from&to=:to 요청을 처리합니다.
+// 두 브랜치/커밋의 공통 조상(merge base)을 찾아 반환합니다.
+func (h *CommitsHandler) HandleMergeBaseAPI(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// 경로 파라미터 추출
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	// 쿼리 파라미터 추출
+	from_ref := c.Query("from_ref")
+	to_ref := c.Query("to_ref")
+
+	// 필수 파라미터 검증
+	if owner == "" || repo == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing required parameters: owner or repo"})
+		return
+	}
+
+	if from_ref == "" || to_ref == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing required parameters: from and to"})
+		return
+	}
+
+	// 저장소 경로 조회 및 검증
+	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
+		return
+	}
+
+	// Merge base 찾기
+	mergeBase, err := h.findMergeBase(ctx, repoPath, from_ref, to_ref)
+	if err != nil {
+		c.JSON(404, gin.H{"success": false, "error": "Merge base not found"})
+		return
+	}
+
+	// 응답 생성
+	response := gin.H{
+		"success":    true,
+		"message":    "Merge base found successfully",
+		"merge_base": mergeBase,
+		"from_ref":   from_ref,
+		"to_ref":     to_ref,
+	}
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -232,21 +302,13 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(r *http.Request) (*Comm
 		skip = parsedSkip
 	}
 
-	// TODO: 권한 서비스가 사용 가능할 때 사용자 인증 다시 활성화
-	// userID := r.Header.Get("X-USER-ID")
-	// if userID == "" {
-	// 	return nil, fmt.Errorf("missing user authentication")
-	// }
-	userID := "dev-user" // 개발용 플레이스홀더
-
 	return &CommitsRequestParams{
-		Owner:  owner,
-		Repo:   repo,
-		Ref:    ref,
-		Limit:  limit,
-		Skip:   skip,
-		Sort:   sort,
-		UserID: userID,
+		Owner: owner,
+		Repo:  repo,
+		Ref:   ref,
+		Limit: limit,
+		Skip:  skip,
+		Sort:  sort,
 	}, nil
 }
 
@@ -320,4 +382,219 @@ func (h *CommitsHandler) groupCommitsByDate(commits []git.Commit) []CommitsByDat
 	})
 
 	return result
+}
+
+// getCommitsBetween는 merge base부터 source branch의 latest commit까지의 커밋 히스토리를 반환합니다.
+// from: target branch ref (또는 merge base를 직접 지정)
+// to: source branch ref
+// merge base를 찾고, merge base부터 source branch까지의 커밋들을 반환합니다.
+func (h *CommitsHandler) getCommitsBetween(ctx context.Context, repoPath string, params *CommitsRequestParams, from, to string) ([]git.Commit, int, error) {
+	// 컨텍스트 취소 확인
+	select {
+	case <-ctx.Done():
+		return nil, 0, ctx.Err()
+	default:
+	}
+
+	// go-git 저장소 열기
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// source와 target 커밋 해결
+	sourceCommit, err := h.resolveCommit(repo, to)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to resolve source ref %s: %w", to, err)
+	}
+
+	targetCommit, err := h.resolveCommit(repo, from)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to resolve target ref %s: %w", from, err)
+	}
+
+	// merge base 찾기 (branch 분기점)
+	mergeBases, err := sourceCommit.MergeBase(targetCommit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to find merge base: %w", err)
+	}
+	if len(mergeBases) == 0 {
+		return nil, 0, fmt.Errorf("no common ancestor found between %s and %s", to, from)
+	}
+	mergeBase := mergeBases[0]
+
+	// merge base와 source commit이 같으면 빈 배열 반환
+	if mergeBase.Hash == sourceCommit.Hash {
+		return []git.Commit{}, 0, nil
+	}
+
+	// merge base부터 source commit까지의 커밋 가져오기
+	commitIter, err := repo.Log(&gogit.LogOptions{
+		From: sourceCommit.Hash,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer commitIter.Close()
+
+	var objectCommits []*object.Commit
+	mergeBaseHashStr := mergeBase.Hash.String()
+
+	err = commitIter.ForEach(func(commit *object.Commit) error {
+		// 컨텍스트 취소 확인
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// merge base에 도달하면 중지
+		if commit.Hash.String() == mergeBaseHashStr {
+			return fmt.Errorf("stop iteration")
+		}
+
+		objectCommits = append(objectCommits, commit)
+		return nil
+	})
+
+	// merge base를 찾아서 중지했는지 확인
+	if err != nil && err.Error() != "stop iteration" {
+		return nil, 0, fmt.Errorf("failed to iterate commits: %w", err)
+	}
+
+	// 역순으로 정렬 (oldest first)
+	for i, j := 0, len(objectCommits)-1; i < j; i, j = i+1, j-1 {
+		objectCommits[i], objectCommits[j] = objectCommits[j], objectCommits[i]
+	}
+
+	// git.Commit으로 변환
+	commits := make([]git.Commit, len(objectCommits))
+	for i, c := range objectCommits {
+		commits[i] = h.convertObjectCommitToGitCommit(c)
+	}
+
+	// 페이지네이션 적용
+	totalCount := len(commits)
+	start := params.Skip
+	end := start + params.Limit
+	if end > totalCount {
+		end = totalCount
+	}
+	if start > totalCount {
+		start = totalCount
+	}
+
+	if start < end {
+		commits = commits[start:end]
+	} else {
+		commits = []git.Commit{}
+	}
+
+	return commits, totalCount, nil
+}
+
+// resolveCommit은 ref를 커밋 객체로 해석합니다.
+func (h *CommitsHandler) resolveCommit(repo *gogit.Repository, ref string) (*object.Commit, error) {
+	// 해시로 직접 파싱 시도
+	if hash := plumbing.NewHash(ref); !hash.IsZero() && len(ref) >= 4 {
+		if commit, err := repo.CommitObject(hash); err == nil {
+			return commit, nil
+		}
+	}
+
+	// 참조로 해석 시도
+	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
+	if err == nil {
+		return repo.CommitObject(reference.Hash())
+	}
+
+	// refs/heads/ prefix로 브랜치 이름 시도
+	if !strings.HasPrefix(ref, "refs/") {
+		branchRef := "refs/heads/" + ref
+		if reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true); err == nil {
+			return repo.CommitObject(reference.Hash())
+		}
+
+		// refs/tags/ prefix로 태그 이름 시도
+		tagRef := "refs/tags/" + ref
+		if reference, err := repo.Reference(plumbing.ReferenceName(tagRef), true); err == nil {
+			return repo.CommitObject(reference.Hash())
+		}
+	}
+
+	return nil, fmt.Errorf("unable to resolve reference: %s", ref)
+}
+
+// findMergeBase는 두 브랜치/커밋의 공통 조상(merge base)을 찾습니다.
+func (h *CommitsHandler) findMergeBase(ctx context.Context, repoPath string, from, to string) (*git.Commit, error) {
+	// 컨텍스트 취소 확인
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// go-git 저장소 열기
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// from과 to 커밋 해결
+	fromCommit, err := h.resolveCommit(repo, from)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve ref %s: %w", from, err)
+	}
+
+	toCommit, err := h.resolveCommit(repo, to)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve ref %s: %w", to, err)
+	}
+
+	// Merge base 찾기
+	mergeBases, err := fromCommit.MergeBase(toCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find merge base: %w", err)
+	}
+
+	if len(mergeBases) == 0 {
+		return nil, fmt.Errorf("no common ancestor found between %s and %s", from, to)
+	}
+
+	// 첫 번째 merge base 반환 (가장 최근 공통 조상)
+	mergeBase := mergeBases[0]
+
+	// git.Commit으로 변환
+	result := h.convertObjectCommitToGitCommit(mergeBase)
+	return &result, nil
+}
+
+// convertObjectCommitToGitCommit는 go-git의 object.Commit을 내부 git.Commit으로 변환합니다.
+func (h *CommitsHandler) convertObjectCommitToGitCommit(c *object.Commit) git.Commit {
+	var parentHashes []string
+	for _, parent := range c.ParentHashes {
+		parentHashes = append(parentHashes, parent.String())
+	}
+
+	// 커밋 메시지 정리
+	message := strings.TrimSpace(c.Message)
+	message = strings.ReplaceAll(message, "\n", " ")
+	message = strings.ReplaceAll(message, "\r", " ")
+
+	return git.Commit{
+		Sha:     c.Hash.String(),
+		Message: message,
+		Author: git.CommitAuthor{
+			Name:  c.Author.Name,
+			Email: c.Author.Email,
+			Date:  c.Author.When,
+		},
+		Committer: git.CommitAuthor{
+			Name:  c.Committer.Name,
+			Email: c.Committer.Email,
+			Date:  c.Committer.When,
+		},
+		ParentHashes: parentHashes,
+		TreeHash:     c.TreeHash.String(),
+	}
 }
