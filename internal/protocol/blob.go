@@ -524,7 +524,7 @@ func (h *RepositoryDetailHandler) HandleGetBlobDetail(c *gin.Context) {
 	}
 
 	// 6. 파일의 커밋 히스토리 가져오기
-	commits, err := gitRepo.GetCommitsForFile(ctx, path, ref, 10, 0)
+	commits, err := gitRepo.GetCommitsForFile(ctx, path, ref, 9999999, 0)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "get_commits")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})

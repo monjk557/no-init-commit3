@@ -536,7 +536,7 @@ func (h *RepositoryDetailHandler) HandleGetTreeDetail(c *gin.Context) {
 	}
 
 	// 5. commit history 가져오기 (빈 저장소 확인용)
-	commits, err := gitRepo.GetCommits(ctx, ref, 10, 0)
+	commits, err := gitRepo.GetCommits(ctx, ref, 9999999, 0)
 	emptyRepository := false
 	if err != nil || len(commits) == 0 {
 		emptyRepository = true
