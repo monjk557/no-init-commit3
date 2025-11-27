@@ -208,6 +208,8 @@ const (
 	FileOperationUpdate FileOperation = "update"
 	// FileOperationDelete represents deleting a file
 	FileOperationDelete FileOperation = "delete"
+	// FileOperationMove represents moving/renaming a file
+	FileOperationMove FileOperation = "move"
 )
 
 // FileChange represents a change to be made to a file
@@ -416,6 +418,16 @@ func (gom *GitObjectManager) ValidateFileChanges(ctx context.Context, changes []
 			if change.Content != nil {
 				return fmt.Errorf("file change %d: content should not be provided for delete operation", i)
 			}
+		case FileOperationMove:
+			// OriginalPath is required for move operations
+			if change.OriginalPath == "" {
+				return fmt.Errorf("file change %d: original_path is required for move operation", i)
+			}
+			// Validate original path
+			if err := pathValidator.ValidateFilePath(change.OriginalPath); err != nil {
+				return fmt.Errorf("file change %d: invalid original_path %s: %w", i, change.OriginalPath, err)
+			}
+			// Content is optional for move (if not provided, original file content will be used)
 		default:
 			return fmt.Errorf("file change %d: invalid operation %s", i, change.Operation)
 		}
@@ -496,6 +508,87 @@ func (gom *GitObjectManager) CreateTreeFromChanges(ctx context.Context, repo *go
 	// Process each file change
 	for _, change := range changes {
 		switch change.Operation {
+		case FileOperationMove:
+			// For move operations, read original file content if not provided
+			var content []byte
+			if change.Content != nil {
+				content = change.Content
+			} else {
+				// Read content from original file
+				originalFile, err := baseTree.File(change.OriginalPath)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read original file %s for move: %w", change.OriginalPath, err)
+				}
+				contentStr, err := originalFile.Contents()
+				if err != nil {
+					return nil, fmt.Errorf("failed to read content from original file %s: %w", change.OriginalPath, err)
+				}
+				content = []byte(contentStr)
+			}
+
+			// Create a blob from the content
+			blob := &object.Blob{}
+			blob.Size = int64(len(content))
+
+			// Create an encoded object for the blob
+			blobReader := strings.NewReader(string(content))
+			encodedBlob := &plumbing.MemoryObject{}
+			encodedBlob.SetType(plumbing.BlobObject)
+			encodedBlob.SetSize(blob.Size)
+
+			// Write content to the encoded object
+			writer, err := encodedBlob.Writer()
+			if err != nil {
+				gom.logger.Error("Failed to create blob writer",
+					zap.String("path", change.Path),
+					zap.Error(err))
+				return nil, fmt.Errorf("failed to create blob writer for %s: %w", change.Path, err)
+			}
+
+			if _, err := io.Copy(writer, blobReader); err != nil {
+				_ = writer.Close() // errcheck
+				gom.logger.Error("Failed to write blob content",
+					zap.String("path", change.Path),
+					zap.Error(err))
+				return nil, fmt.Errorf("failed to write blob content for %s: %w", change.Path, err)
+			}
+			_ = writer.Close() // errcheck
+
+			// Store the blob object
+			blobHash, err := storer.SetEncodedObject(encodedBlob)
+			if err != nil {
+				gom.logger.Error("Failed to store blob",
+					zap.String("path", change.Path),
+					zap.Error(err))
+				return nil, fmt.Errorf("failed to store blob for %s: %w", change.Path, err)
+			}
+
+			// Determine file mode (use original file mode if not specified)
+			mode := filemode.Regular
+			if change.Mode != nil {
+				mode = *change.Mode
+			} else {
+				// Try to get mode from original file
+				originalFile, err := baseTree.File(change.OriginalPath)
+				if err == nil {
+					mode = originalFile.Mode
+				}
+			}
+
+			// Add file to new path
+			if err := treeBuilder.AddFile(change.Path, blobHash, mode); err != nil {
+				return nil, fmt.Errorf("failed to add file to tree: %w", err)
+			}
+
+			// Remove file from original path
+			if err := treeBuilder.RemoveFile(change.OriginalPath); err != nil {
+				return nil, fmt.Errorf("failed to remove original file from tree: %w", err)
+			}
+
+			// Track the change as a move (both created and deleted)
+			result.CreatedFiles = append(result.CreatedFiles, change.Path)
+			result.DeletedFiles = append(result.DeletedFiles, change.OriginalPath)
+
 		case FileOperationCreate, FileOperationUpdate:
 			// Create a blob from the content
 			blob := &object.Blob{}

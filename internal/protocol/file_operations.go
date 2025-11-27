@@ -110,11 +110,12 @@ type FileDeleteRequest struct {
 
 // MultiFileOperation represents a single file operation in a multi-file commit
 type MultiFileOperation struct {
-	Path      string `json:"path" binding:"required"`
-	Operation string `json:"operation" binding:"required"` // "create", "update", "delete"
-	Content   string `json:"content,omitempty"`            // required for create/update
-	Encoding  string `json:"encoding,omitempty"`           // optional, defaults to utf-8
-	Mode      string `json:"mode,omitempty"`               // optional file mode
+	Path         string    `json:"path" binding:"required"`
+	Operation    Operation `json:"operation" binding:"required"` // "create", "update", "delete", "move"
+	Content      string    `json:"content,omitempty"`            // required for create/update, optional for move
+	Encoding     string    `json:"encoding,omitempty"`           // optional, defaults to utf-8
+	Mode         string    `json:"mode,omitempty"`               // optional file mode
+	OriginalPath string    `json:"original_path,omitempty"`      // required for move operation
 }
 
 // MultiFileCommitRequest는 다중 파일 커밋 작업을 위한 JSON 페이로드를 나타냅니다.
@@ -149,6 +150,7 @@ const (
 	OperationCreate Operation = "create"
 	OperationUpdate Operation = "update"
 	OperationDelete Operation = "delete"
+	OperationMove   Operation = "move"
 )
 
 // FileOperationResponse represents the response for file operations
@@ -1378,9 +1380,9 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		return
 	}
 
-	// Check for file existence conflicts for create operations and validate delete operations
+	// Check for file existence conflicts for create operations and validate delete/move operations
 	for _, op := range req.Operations {
-		if op.Operation == "create" {
+		if op.Operation == OperationCreate {
 			// Check if file exists using tree.File() method
 			_, err = tree.File(op.Path)
 			if err == nil {
@@ -1394,7 +1396,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 				return
 			}
 			// If err == object.ErrFileNotFound, file doesn't exist, which is what we want for create operation
-		} else if op.Operation == "delete" {
+		} else if op.Operation == OperationDelete {
 			// Check if file exists - it must exist for delete operation
 			_, err = tree.File(op.Path)
 			if err == object.ErrFileNotFound {
@@ -1409,6 +1411,33 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 				return
 			}
 			// If err == nil, file exists, which is what we want for delete operation
+		} else if op.Operation == OperationMove {
+			// Check if original file exists - it must exist for move operation
+			_, err = tree.File(op.OriginalPath)
+			if err == object.ErrFileNotFound {
+				// Original file doesn't exist, return not found error
+				apiErr := api.NewNotFoundError("file", fmt.Sprintf("File '%s' not found in repository", op.OriginalPath))
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			} else if err != nil {
+				// Some other error occurred
+				apiErr := h.errorMapper.MapError(err, "check_file_exists")
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+			// Check if target path already exists
+			_, err = tree.File(op.Path)
+			if err == nil {
+				// Target file exists, return conflict error
+				c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("File already exists at target path: %s", op.Path)})
+				return
+			} else if err != object.ErrFileNotFound {
+				// Some other error occurred
+				apiErr := h.errorMapper.MapError(err, "check_file_exists")
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
+			// If err == object.ErrFileNotFound, target doesn't exist, which is what we want for move operation
 		}
 	}
 
@@ -1593,10 +1622,10 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 func (h *FileOperationsHandler) validateMultiFileOperation(op *MultiFileOperation) error {
 	// Validate operation type
 	switch op.Operation {
-	case "create", "update", "delete":
+	case OperationCreate, OperationUpdate, OperationDelete, OperationMove:
 		// Valid operations
 	default:
-		return fmt.Errorf("invalid operation type: %s (must be create, update, or delete)", op.Operation)
+		return fmt.Errorf("invalid operation type: %s (must be create, update, delete, or move)", op.Operation)
 	}
 
 	// Validate path
@@ -1604,14 +1633,29 @@ func (h *FileOperationsHandler) validateMultiFileOperation(op *MultiFileOperatio
 		return fmt.Errorf("invalid file path: %w", err)
 	}
 
-	// Validate content requirements
-	if (op.Operation == "create" || op.Operation == "update") && op.Content == "" {
-		return fmt.Errorf("content is required for %s operations", op.Operation)
-	}
-
-	// Validate that delete operations should not have content
-	if op.Operation == "delete" && op.Content != "" {
-		return fmt.Errorf("content should not be provided for delete operations")
+	// Validate move operation
+	if op.Operation == OperationMove {
+		if op.OriginalPath == "" {
+			return fmt.Errorf("original_path is required for move operations")
+		}
+		if op.OriginalPath == op.Path {
+			return fmt.Errorf("original_path and path cannot be the same for move operations")
+		}
+		if err := h.pathValidator.ValidateFilePath(op.OriginalPath); err != nil {
+			return fmt.Errorf("invalid original_path: %w", err)
+		}
+		// Move operation can optionally have content (for rename with content change)
+		// If content is provided, it will be used; otherwise, original file content will be used
+	} else if op.Operation == OperationDelete {
+		// Validate that delete operations should not have content
+		if op.Content != "" {
+			return fmt.Errorf("content should not be provided for delete operations")
+		}
+	} else if op.Operation == OperationCreate || op.Operation == OperationUpdate {
+		// Validate content requirements for create/update
+		if op.Content == "" {
+			return fmt.Errorf("content is required for %s operations", op.Operation)
+		}
 	}
 
 	// Validate encoding
@@ -1625,8 +1669,9 @@ func (h *FileOperationsHandler) validateMultiFileOperation(op *MultiFileOperatio
 // convertToFileChange converts a MultiFileOperation to a git.FileChange
 func (h *FileOperationsHandler) convertToFileChange(op *MultiFileOperation) (*git.FileChange, error) {
 	fileChange := &git.FileChange{
-		Path:      op.Path,
-		Operation: git.FileOperation(op.Operation),
+		Path:         op.Path,
+		Operation:    git.FileOperation(op.Operation),
+		OriginalPath: op.OriginalPath,
 	}
 
 	// Handle content encoding

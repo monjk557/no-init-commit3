@@ -320,16 +320,16 @@ services:
 
   # Git SSH (Go) - Build Locally
   collabops-git-ssh:
-    image: asia-northeast3-docker.pkg.dev/collabops-shared/git-ssh/collabops-git-ssh:latest
+    build:
+      context: ../../../../collabops-git-ssh
+      dockerfile: config/docker/Dockerfile
     platform: linux/amd64
-    pull_policy: always
-    env_file:
-      - ../../env/build-it/git-ssh.env
     ports:
-      - "${GIT_SSH_PORT:-2222}:2222"
-    depends_on:
-      - collabops-git-executor
-      - collabops-api-orchestrator
+      - "${SSH_PORT:-22}:22"
+    
+    env_file:
+      - ../../../../collabops-git-ssh/config/env/build-it/git-ssh.env
+
     networks:
       - collabops-network
     restart: unless-stopped

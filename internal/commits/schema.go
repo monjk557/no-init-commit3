@@ -99,11 +99,12 @@ type MultiFileCommitRequest struct {
 
 // MultiFileOperation represents a single file operation in a multi-file commit
 type MultiFileOperation struct {
-	Path      string `json:"path" binding:"required"`
-	Operation string `json:"operation" binding:"required"` // "create", "update", "delete"
-	Content   string `json:"content,omitempty"`            // required for create/update
-	Encoding  string `json:"encoding,omitempty"`           // optional, defaults to utf-8
-	Mode      string `json:"mode,omitempty"`               // optional file mode
+	Path         string    `json:"path" binding:"required"`
+	Operation    Operation `json:"operation" binding:"required"` // "create", "update", "delete", "move"
+	Content      string    `json:"content,omitempty"`            // required for create/update, optional for move
+	Encoding     string    `json:"encoding,omitempty"`           // optional, defaults to utf-8
+	Mode         string    `json:"mode,omitempty"`               // optional file mode
+	OriginalPath string    `json:"original_path,omitempty"`      // required for move operation
 }
 
 // CommitOptions represents additional options for commit operations
@@ -124,6 +125,8 @@ const (
 	OperationUpdate Operation = "update"
 	// OperationDelete - 파일 삭제
 	OperationDelete Operation = "delete"
+	// OperationMove - 파일 이동/이름 변경
+	OperationMove Operation = "move"
 )
 
 // OperationResult는 개별 파일 작업의 결과를 나타냅니다.

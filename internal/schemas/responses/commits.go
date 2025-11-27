@@ -10,6 +10,7 @@ const (
 	OperationCreate Operation = "create"
 	OperationUpdate Operation = "update"
 	OperationDelete Operation = "delete"
+	OperationMove   Operation = "move"
 )
 
 // OperationResult는 개별 파일 작업의 결과를 나타냅니다.

@@ -118,7 +118,7 @@ func NewCommitsHandler(cfg *config.Config, permClient permissions.PermissionClie
 	}, nil
 }
 
-// HandleCommitsAPI는 GET /repos/:owner/:repo/commits?ref=:ref&limit=:limit&skip=:skip 요청을 처리합니다.
+// HandleCommitsAPI는 GET /repos/:owner/:repo/commits?target_ref=:target_ref&source_ref=:source_ref&limit=:limit&skip=:skip 요청을 처리합니다.
 func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -130,9 +130,9 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		return
 	}
 
-	// optional parameters
-	from_ref := c.Query("from_ref")
-	to_ref := c.Query("to_ref")
+	// get commits between target and source refs
+	target_ref := c.Query("target_ref")
+	source_ref := c.Query("source_ref")
 
 	// 저장소 경로 조회 및 검증
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
@@ -146,8 +146,8 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	var commits []git.Commit
 	var totalCount int
 
-	if from_ref != "" && to_ref != "" {
-		commits, totalCount, err = h.getCommitsBetween(ctx, repoPath, params, from_ref, to_ref)
+	if target_ref != "" && source_ref != "" {
+		commits, totalCount, err = h.getCommitsBetween(ctx, repoPath, params, target_ref, source_ref)
 		if err != nil {
 			apiErr := h.errorMapper.MapError(err, "get_commits_between")
 			c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
@@ -188,56 +188,6 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	}
 
 	// JSON 응답 전송
-	c.JSON(http.StatusOK, response)
-}
-
-// HandleMergeBaseAPI는 GET /repos/:owner/:repo/commits/merge-base?from=:from&to=:to 요청을 처리합니다.
-// 두 브랜치/커밋의 공통 조상(merge base)을 찾아 반환합니다.
-func (h *CommitsHandler) HandleMergeBaseAPI(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	// 경로 파라미터 추출
-	owner := c.Param("owner")
-	repo := c.Param("repo")
-
-	// 쿼리 파라미터 추출
-	from_ref := c.Query("from_ref")
-	to_ref := c.Query("to_ref")
-
-	// 필수 파라미터 검증
-	if owner == "" || repo == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing required parameters: owner or repo"})
-		return
-	}
-
-	if from_ref == "" || to_ref == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing required parameters: from and to"})
-		return
-	}
-
-	// 저장소 경로 조회 및 검증
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
-	if err != nil {
-		c.JSON(404, gin.H{"success": false, "error": "Repository not found"})
-		return
-	}
-
-	// Merge base 찾기
-	mergeBase, err := h.findMergeBase(ctx, repoPath, from_ref, to_ref)
-	if err != nil {
-		c.JSON(404, gin.H{"success": false, "error": "Merge base not found"})
-		return
-	}
-
-	// 응답 생성
-	response := gin.H{
-		"success":    true,
-		"message":    "Merge base found successfully",
-		"merge_base": mergeBase,
-		"from_ref":   from_ref,
-		"to_ref":     to_ref,
-	}
-
 	c.JSON(http.StatusOK, response)
 }
 
@@ -388,7 +338,7 @@ func (h *CommitsHandler) groupCommitsByDate(commits []git.Commit) []CommitsByDat
 // from: target branch ref (또는 merge base를 직접 지정)
 // to: source branch ref
 // merge base를 찾고, merge base부터 source branch까지의 커밋들을 반환합니다.
-func (h *CommitsHandler) getCommitsBetween(ctx context.Context, repoPath string, params *CommitsRequestParams, from, to string) ([]git.Commit, int, error) {
+func (h *CommitsHandler) getCommitsBetween(ctx context.Context, repoPath string, params *CommitsRequestParams, target_ref, source_ref string) ([]git.Commit, int, error) {
 	// 컨텍스트 취소 확인
 	select {
 	case <-ctx.Done():
@@ -403,14 +353,14 @@ func (h *CommitsHandler) getCommitsBetween(ctx context.Context, repoPath string,
 	}
 
 	// source와 target 커밋 해결
-	sourceCommit, err := h.resolveCommit(repo, to)
+	sourceCommit, err := h.resolveCommit(repo, source_ref)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to resolve source ref %s: %w", to, err)
+		return nil, 0, fmt.Errorf("failed to resolve source ref %s: %w", source_ref, err)
 	}
 
-	targetCommit, err := h.resolveCommit(repo, from)
+	targetCommit, err := h.resolveCommit(repo, target_ref)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to resolve target ref %s: %w", from, err)
+		return nil, 0, fmt.Errorf("failed to resolve target ref %s: %w", target_ref, err)
 	}
 
 	// merge base 찾기 (branch 분기점)
@@ -419,7 +369,7 @@ func (h *CommitsHandler) getCommitsBetween(ctx context.Context, repoPath string,
 		return nil, 0, fmt.Errorf("failed to find merge base: %w", err)
 	}
 	if len(mergeBases) == 0 {
-		return nil, 0, fmt.Errorf("no common ancestor found between %s and %s", to, from)
+		return nil, 0, fmt.Errorf("no common ancestor found between %s and %s", target_ref, source_ref)
 	}
 	mergeBase := mergeBases[0]
 
@@ -523,50 +473,6 @@ func (h *CommitsHandler) resolveCommit(repo *gogit.Repository, ref string) (*obj
 	}
 
 	return nil, fmt.Errorf("unable to resolve reference: %s", ref)
-}
-
-// findMergeBase는 두 브랜치/커밋의 공통 조상(merge base)을 찾습니다.
-func (h *CommitsHandler) findMergeBase(ctx context.Context, repoPath string, from, to string) (*git.Commit, error) {
-	// 컨텍스트 취소 확인
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
-	// go-git 저장소 열기
-	repo, err := gogit.PlainOpen(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %w", err)
-	}
-
-	// from과 to 커밋 해결
-	fromCommit, err := h.resolveCommit(repo, from)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve ref %s: %w", from, err)
-	}
-
-	toCommit, err := h.resolveCommit(repo, to)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve ref %s: %w", to, err)
-	}
-
-	// Merge base 찾기
-	mergeBases, err := fromCommit.MergeBase(toCommit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find merge base: %w", err)
-	}
-
-	if len(mergeBases) == 0 {
-		return nil, fmt.Errorf("no common ancestor found between %s and %s", from, to)
-	}
-
-	// 첫 번째 merge base 반환 (가장 최근 공통 조상)
-	mergeBase := mergeBases[0]
-
-	// git.Commit으로 변환
-	result := h.convertObjectCommitToGitCommit(mergeBase)
-	return &result, nil
 }
 
 // convertObjectCommitToGitCommit는 go-git의 object.Commit을 내부 git.Commit으로 변환합니다.

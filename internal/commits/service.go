@@ -287,8 +287,9 @@ func convertCommit(c *object.Commit) Commit {
 // convertToFileChange는 MultiFileOperation을 FileChange로 변환합니다
 func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 	fileChange := &FileChange{
-		Path:      op.Path,
-		Operation: FileOperation(op.Operation),
+		Path:         op.Path,
+		Operation:    FileOperation(op.Operation),
+		OriginalPath: op.OriginalPath,
 	}
 
 	// 콘텐츠 인코딩 처리

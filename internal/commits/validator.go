@@ -9,10 +9,10 @@ import (
 func validateMultiFileOperation(op *MultiFileOperation) error {
 	// Validate operation type
 	switch op.Operation {
-	case "create", "update", "delete":
+	case OperationCreate, OperationUpdate, OperationDelete, OperationMove:
 		// Valid operations
 	default:
-		return fmt.Errorf("invalid operation type: %s (must be create, update, or delete)", op.Operation)
+		return fmt.Errorf("invalid operation type: %s (must be create, update, delete, or move)", op.Operation)
 	}
 
 	// Validate path
@@ -20,14 +20,29 @@ func validateMultiFileOperation(op *MultiFileOperation) error {
 		return fmt.Errorf("invalid file path: %w", err)
 	}
 
-	// Validate content requirements
-	if (op.Operation == "create" || op.Operation == "update") && op.Content == "" {
-		return fmt.Errorf("content is required for %s operations", op.Operation)
-	}
-
-	// Validate that delete operations should not have content
-	if op.Operation == "delete" && op.Content != "" {
-		return fmt.Errorf("content should not be provided for delete operations")
+	// Validate move operation
+	if op.Operation == OperationMove {
+		if op.OriginalPath == "" {
+			return fmt.Errorf("original_path is required for move operations")
+		}
+		if op.OriginalPath == op.Path {
+			return fmt.Errorf("original_path and path cannot be the same for move operations")
+		}
+		if err := ValidateFilePath(op.OriginalPath); err != nil {
+			return fmt.Errorf("invalid original_path: %w", err)
+		}
+		// Move operation can optionally have content (for rename with content change)
+		// If content is provided, it will be used; otherwise, original file content will be used
+	} else if op.Operation == OperationDelete {
+		// Validate that delete operations should not have content
+		if op.Content != "" {
+			return fmt.Errorf("content should not be provided for delete operations")
+		}
+	} else if op.Operation == OperationCreate || op.Operation == OperationUpdate {
+		// Validate content requirements for create/update
+		if op.Content == "" {
+			return fmt.Errorf("content is required for %s operations", op.Operation)
+		}
 	}
 
 	// Validate encoding

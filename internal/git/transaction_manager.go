@@ -286,6 +286,26 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 					return op.Error
 				}
 			}
+		} else if op.Type == FileOperationMove {
+			// For move operations, check if original file exists
+			if op.FileChange.OriginalPath == "" {
+				op.State = TransactionStateFailed
+				op.Error = fmt.Errorf("original_path is required for move operation")
+				if !txn.Options.AllowPartialCommit {
+					txn.State = TransactionStateFailed
+					return op.Error
+				}
+			} else {
+				_, err := tm.objectManager.GetFileFromTree(ctx, txn.BaseTree, op.FileChange.OriginalPath)
+				if err != nil {
+					op.State = TransactionStateFailed
+					op.Error = fmt.Errorf("original file not found for move operation: %s", op.FileChange.OriginalPath)
+					if !txn.Options.AllowPartialCommit {
+						txn.State = TransactionStateFailed
+						return op.Error
+					}
+				}
+			}
 		}
 	}
 
