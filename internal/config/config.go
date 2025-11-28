@@ -17,6 +17,7 @@ type Config struct {
 	Security      SecurityConfig
 	Permissions   PermissionsConfig
 	Performance   PerformanceConfig
+	Events        EventsConfig
 }
 
 // ServerConfig는 HTTP 서버 설정을 저장합니다
@@ -110,6 +111,12 @@ type PerformanceConfig struct {
 	ConnectionTimeout   time.Duration `json:"connection_timeout"`
 }
 
+// EventsConfig holds event publishing configuration
+type EventsConfig struct {
+	RedisURL string `json:"redis_url"` // Redis connection URL (e.g., redis://localhost:6379/0)
+	Enabled  bool   `json:"enabled"`   // Whether to enable event publishing
+}
+
 // Load는 환경변수에서 설정을 로드합니다
 func Load() (*Config, error) {
 
@@ -127,12 +134,17 @@ func Load() (*Config, error) {
 	// Loggint과 ObservabilityConfig는 환경변수에서 파싱하지 않고, 기본값을 사용합니다.
 	loggingConfig := parseLoggingConfig()
 	observabilityConfig := parseObservabilityConfig()
+	eventsConfig, err := parseEventsConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse events config: %w", err)
+	}
 
 	config := &Config{
 		Server:        serverConfig,
 		Git:           gitConfig,
 		Logging:       loggingConfig,
 		Observability: observabilityConfig,
+		Events:        eventsConfig,
 	}
 
 	// 설정 유효성 검사
@@ -265,6 +277,24 @@ func parseObservabilityConfig() ObservabilityConfig {
 			Port:     metricsPort,
 		},
 	}
+}
+
+// ------------------------------------------------------------
+// EventsConfig 파싱 (환경변수 + 하드코딩)
+// ------------------------------------------------------------
+func parseEventsConfig() (EventsConfig, error) {
+	// Redis URL from environment variable (required)
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		return EventsConfig{}, fmt.Errorf("REDIS_URL environment variable is required but not set")
+	}
+	// Enable events by default if REDIS_URL is set
+	enabled := true
+
+	return EventsConfig{
+		RedisURL: redisURL,
+		Enabled:  enabled,
+	}, nil
 }
 
 // validate는 설정 유효성 검사를 수행합니다

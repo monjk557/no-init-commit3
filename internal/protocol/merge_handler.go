@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,9 +12,11 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repository"
@@ -26,6 +29,8 @@ type MergeOperationsHandler struct {
 	errorMapper      *api.GitErrorMapper
 	objectManager    *git.GitObjectManager
 	conflictDetector *git.ConflictDetector
+	eventsClient     events.RedisStreamClient
+	config           *config.Config
 }
 
 // NewMergeOperationsHandler creates a new merge operations handler
@@ -51,12 +56,24 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 	errorMapper := api.GetDefaultMapper()
 	conflictDetector := git.NewConflictDetector(pathConfig, logger)
 
+	// Initialize events client if enabled
+	var eventsClient events.RedisStreamClient
+	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
+		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+		if err != nil {
+			// Log warning but continue without events
+			_ = err
+		}
+	}
+
 	return &MergeOperationsHandler{
 		pathConfig:       pathConfig,
 		logger:           logger,
 		errorMapper:      errorMapper,
 		objectManager:    objectManager,
 		conflictDetector: conflictDetector,
+		eventsClient:     eventsClient,
+		config:           cfg,
 	}, nil
 }
 
@@ -342,6 +359,17 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		zap.Bool("had_conflicts", mergeResult.HasConflicts),
 		zap.String("strategy", string(req.Strategy)))
 
+	// Publish commit event for merge operations
+	if h.eventsClient != nil {
+		if mergeResult.MergeCommit != nil {
+			// Merge commit was created (non-fast-forward merge)
+			h.publishMergeCommitEvent(ctx, repository, mergeResult.MergeCommit, req.TargetRef, owner, repo)
+		} else if mergeResult.IsFastForward {
+			// Fast-forward merge: target ref was updated to source commit
+			h.publishFastForwardMergeEvent(ctx, repository, sourceCommit, req.TargetRef, owner, repo)
+		}
+	}
+
 	// Send success response
 	h.SendSuccess(c, response, response.Message)
 }
@@ -588,4 +616,100 @@ func (h *MergePreviewHandler) SendSuccess(c *gin.Context, data interface{}, mess
 		"data":    data,
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+// publishMergeCommitEvent publishes a merge commit event to Redis Stream
+func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, repo *gogit.Repository, commit *object.Commit, refName, owner, repoName string) {
+	if h.eventsClient == nil {
+		return
+	}
+
+	// Get full filesystem path for the repository
+	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repoName)
+	if err != nil {
+		h.logger.Debug("Failed to get repo path for merge event",
+			zap.Error(err))
+		return
+	}
+
+	// Normalize ref name
+	if !strings.HasPrefix(refName, "refs/") {
+		refName = "refs/heads/" + refName
+	}
+
+	// Create event
+	event := &events.CommitEvent{
+		RepoPath:   repoPath,
+		EventType:  events.EventTypeMerge,
+		CommitHash: commit.Hash.String(),
+		RefName:    refName,
+		Pusher:     "git", // Default pusher identifier
+		Timestamp:  commit.Committer.When,
+	}
+
+	// Publish asynchronously to avoid blocking
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+			h.logger.Error("Failed to publish merge commit event",
+				zap.String("repo_path", repoPath),
+				zap.String("commit_hash", commit.Hash.String()),
+				zap.String("event_type", string(event.EventType)),
+				zap.Error(err))
+		}
+	}()
+}
+
+// publishFastForwardMergeEvent publishes a fast-forward merge event to Redis Stream
+func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash, refName, owner, repoName string) {
+	if h.eventsClient == nil {
+		return
+	}
+
+	// Get commit object
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		h.logger.Debug("Failed to get commit object for fast-forward merge event",
+			zap.String("commit_hash", commitHash.String()),
+			zap.Error(err))
+		return
+	}
+
+	// Get full filesystem path for the repository
+	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repoName)
+	if err != nil {
+		h.logger.Debug("Failed to get repo path for fast-forward merge event",
+			zap.Error(err))
+		return
+	}
+
+	// Normalize ref name
+	if !strings.HasPrefix(refName, "refs/") {
+		refName = "refs/heads/" + refName
+	}
+
+	// Create event
+	event := &events.CommitEvent{
+		RepoPath:   repoPath,
+		EventType:  events.EventTypeMerge,
+		CommitHash: commitHash.String(),
+		RefName:    refName,
+		Pusher:     "git", // Default pusher identifier
+		Timestamp:  commit.Committer.When,
+	}
+
+	// Publish asynchronously to avoid blocking
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+			h.logger.Warn("Failed to publish fast-forward merge event",
+				zap.String("repo_path", repoPath),
+				zap.String("commit_hash", commitHash.String()),
+				zap.Error(err))
+		}
+	}()
 }

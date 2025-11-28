@@ -1,6 +1,34 @@
 version: '3.8'
 
 services:
+  # Git Executor (Go) - Build Locally
+  collabops-git-executor:
+    build:
+      context: ../../../../collabops-git-executor
+      dockerfile: config/docker/Dockerfile
+    ports:
+      - "${GIT_EXECUTOR_PORT:-5001}:5001"
+      - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
+    env_file:
+      - ../../env/local-it/git-executor.env
+    volumes:
+      - git_pipelines_data:${GIT_REPO_ROOT:-/var/lib/git/repos}
+      - git_executor_data:${GIT_REPO_ROOT:-/var/lib/git/repos}
+    networks:
+      - collabops-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        labels: "service=collabops-git-executor"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # API Orchestrator (FastAPI) - Pull from Artifact Registry
   collabops-api-orchestrator:
     image: asia-northeast3-docker.pkg.dev/collabops-shared/api-orchestrator/collabops-api-orchestrator:latest
@@ -186,6 +214,60 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+  # WTM (WorkTree Manager)
+  collabops-service-wtm:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/service-wtm/collabops-service-wtm:latest
+    platform: linux/amd64
+    pull_policy: always 
+    ports:
+      - "${WTM_PORT:-8082}:8082"
+    env_file:
+      - ../../env/local-it/wtm.env
+    volumes:
+      # Read-write access to bare repositories (git worktree needs to create metadata)
+      - git_pipelines_data:/var/lib/git/repos:rw
+      - git_executor_data:/var/lib/git/repos:rw
+      # Read-write access for workspaces
+      - git_executor_data:/var/lib/git/pipelines:rw
+    networks:
+      - collabops-network
+    depends_on:
+      - collabops-git-executor
+      - wtm-volume-init
+    restart: unless-stopped
+    user: "2000:2000"  # Run as non-root user (UID:GID 1000)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        labels: "service=wtm"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # WTM Volume Initialization (runs once to set proper permissions)
+  wtm-volume-init:
+    image: alpine:3.19
+    user: "0:0"  # root로 실행
+    volumes:
+      - git_executor_data:/data/repos:rw
+      - git_executor_data:/data/pipelines:rw
+    command:
+      - sh
+      - -c
+      - |
+        # git_pipelines_data 볼륨 권한 설정
+        find /data/repos -type f -exec chmod o+r {} \; 2>/dev/null || true
+        find /data/repos -type d -exec chmod o+rwx {} \; 2>/dev/null || true
+        # wtm_pipelines 볼륨 권한 설정 (WTM이 사용할 work_root)
+        mkdir -p /data/pipelines
+        chown -R 2000:2000 /data/pipelines
+        chmod -R 755 /data/pipelines
+    restart: "no"
+
 
 volumes:
   orchestrator_redis_data:
@@ -193,6 +275,8 @@ volumes:
   api_service_postgres_data:
   orchestrator_postgres_data:
   git_executor_data:
+  wtm_pipelines:
+  git_pipelines_data:
     
 networks:
   collabops-network:

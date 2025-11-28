@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -24,13 +25,15 @@ import (
 type CommitsService struct {
 	logger             *logging.Logger
 	transactionManager *TransactionManager
+	eventsClient       events.RedisStreamClient
 }
 
 // NewCommitsService는 새로운 CommitsService를 생성합니다.
-func NewCommitsService(logger *logging.Logger, transactionManager *TransactionManager) *CommitsService {
+func NewCommitsService(logger *logging.Logger, transactionManager *TransactionManager, eventsClient events.RedisStreamClient) *CommitsService {
 	return &CommitsService{
 		logger:             logger,
 		transactionManager: transactionManager,
+		eventsClient:       eventsClient,
 	}
 }
 
@@ -332,7 +335,7 @@ func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 
 // ExecuteMultiFileCommit는 다중 파일 커밋 작업을 실행합니다.
 // 이 메서드는 비즈니스 로직의 핵심을 담당하며, 트랜잭션을 통해 원자적으로 처리합니다.
-func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository *repositories.RepositoryWrapper, req *MultiFileCommitRequest, branch string) (*MultiFileCommitResponse, error) {
+func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository *repositories.RepositoryWrapper, req *MultiFileCommitRequest, branch string, owner, repo string) (*MultiFileCommitResponse, error) {
 	// 기본 커밋 해시 가져오기
 	baseHash, err := repository.ResolveReference(branch)
 	if err != nil {
@@ -520,6 +523,11 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 				zap.String("branch", branch),
 				zap.String("commit_hash", result.CommitResult.Hash.String()))
 		}
+
+		// Publish commit event if enabled
+		if s.eventsClient != nil && owner != "" && repo != "" {
+			s.publishCommitEvent(ctx, repository, result.CommitResult.Hash, branch, owner, repo)
+		}
 	}
 
 	// 응답 준비
@@ -558,4 +566,54 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		zap.Duration("duration", response.Duration))
 
 	return &response, nil
+}
+
+// publishCommitEvent publishes a commit event to Redis Stream
+func (s *CommitsService) publishCommitEvent(ctx context.Context, repo *repositories.RepositoryWrapper, commitHash plumbing.Hash, refName, owner, repoName string) {
+	if s.eventsClient == nil {
+		return
+	}
+
+	// Get commit object to verify it exists
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		// Not a commit, skip
+		return
+	}
+
+	// Get repository path from the wrapper
+	repoPath := repo.Path()
+	if repoPath == "" {
+		// Skip if we can't get the path
+		return
+	}
+
+	// Normalize ref name
+	if !strings.HasPrefix(refName, "refs/") {
+		refName = "refs/heads/" + refName
+	}
+
+	// Create event
+	event := &events.CommitEvent{
+		RepoPath:   repoPath,
+		EventType:  events.EventTypeCommit,
+		CommitHash: commitHash.String(),
+		RefName:    refName,
+		Pusher:     "git", // Default pusher identifier
+		Timestamp:  commit.Committer.When,
+	}
+
+	// Publish asynchronously to avoid blocking
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := s.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+			s.logger.Error("Failed to publish commit event",
+				zap.String("repo_path", repoPath),
+				zap.String("commit_hash", commitHash.String()),
+				zap.String("event_type", string(event.EventType)),
+				zap.Error(err))
+		}
+	}()
 }

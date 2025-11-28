@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
@@ -28,6 +30,7 @@ import (
 type DuplexTCPServer struct {
 	config           *config.Config
 	permissionClient permissions.PermissionClient
+	eventsClient     events.RedisStreamClient
 	listener         net.Listener
 	connections      map[net.Conn]*DuplexConnection
 	mu               sync.RWMutex
@@ -65,9 +68,20 @@ func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
+	// Initialize events client if enabled
+	var eventsClient events.RedisStreamClient
+	if config.Events.Enabled && config.Events.RedisURL != "" {
+		eventsClient, err = events.NewRedisStreamClient(config.Events.RedisURL, logger.Logger)
+		if err != nil {
+			logger.Warn("Failed to initialize Redis events client, continuing without events",
+				zap.Error(err))
+		}
+	}
+
 	return &DuplexTCPServer{
 		config:           config,
 		permissionClient: permClient,
+		eventsClient:     eventsClient,
 		connections:      make(map[net.Conn]*DuplexConnection),
 		logger:           logger,
 	}, nil
@@ -448,7 +462,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 				zap.String("ref_name", refName))
 
 			// ref 업데이트 수행
-			if err := s.updateRef(gitRepo, oldHash, newHash, refName); err != nil {
+			if err := s.updateRef(gitRepo, oldHash, newHash, refName, owner, repo); err != nil {
 				s.logger.Error("Failed to update ref",
 					zap.String("ref_name", refName),
 					zap.Error(err))
@@ -464,7 +478,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 }
 
 // updateRef updates a Git reference
-func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, refName string) error {
+func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, refName, owner, repoName string) error {
 	// Parse hashes
 	oldHashObj := plumbing.NewHash(oldHash)
 	newHashObj := plumbing.NewHash(newHash)
@@ -500,6 +514,11 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 			return fmt.Errorf("failed to create reference %s: %w", refName, err)
 		}
 		s.logger.Info("Successfully created reference", zap.String("ref_name", refName), zap.String("hash", newHash))
+
+		// Publish commit event if enabled (only for branches, not tags)
+		if s.eventsClient != nil && strings.HasPrefix(refName, "refs/heads/") {
+			s.publishCommitEvent(repo, newHash, refName, owner, repoName, events.EventTypePush)
+		}
 		return nil
 	}
 
@@ -525,6 +544,11 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 		zap.String("ref_name", refName),
 		zap.String("old_hash", oldHash),
 		zap.String("new_hash", newHash))
+
+	// Publish commit event if enabled (only for branches, not tags, and only if hash changed)
+	if s.eventsClient != nil && oldHash != newHash && strings.HasPrefix(refName, "refs/heads/") {
+		s.publishCommitEvent(repo, newHash, refName, owner, repoName, events.EventTypePush)
+	}
 
 	return nil
 }
@@ -817,4 +841,58 @@ func (s *DuplexTCPServer) GetConnectionCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.connections)
+}
+
+// publishCommitEvent publishes a commit event to Redis Stream
+func (s *DuplexTCPServer) publishCommitEvent(repo *gogit.Repository, commitHash, refName, owner, repoName string, eventType events.CommitEventType) {
+	if s.eventsClient == nil {
+		return
+	}
+
+	// Get commit object to verify it exists
+	commit, err := repo.CommitObject(plumbing.NewHash(commitHash))
+	if err != nil {
+		s.logger.Debug("Skipping event publish; commit not found",
+			zap.String("commit_hash", commitHash),
+			zap.Error(err))
+		return
+	}
+
+	// Get full filesystem path for the repository
+	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	if err != nil {
+		s.logger.Debug("Failed to create path config for event",
+			zap.Error(err))
+		return
+	}
+
+	repoPath, err := repository.GetRepoPath(pathConfig, owner, repoName)
+	if err != nil {
+		s.logger.Debug("Failed to get repo path for event",
+			zap.Error(err))
+		return
+	}
+
+	// Create event
+	event := &events.CommitEvent{
+		RepoPath:   repoPath,
+		EventType:  eventType,
+		CommitHash: commitHash,
+		RefName:    refName,
+		Pusher:     "git", // Default pusher identifier
+		Timestamp:  commit.Committer.When,
+	}
+
+	// Publish asynchronously to avoid blocking
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := s.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+			s.logger.Warn("Failed to publish commit event",
+				zap.String("repo_path", repoPath),
+				zap.String("commit_hash", commitHash),
+				zap.Error(err))
+		}
+	}()
 }

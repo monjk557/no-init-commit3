@@ -15,6 +15,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/permissions"
@@ -43,6 +44,7 @@ type FileOperationsHandler struct {
 	responseMiddleware *api.JSONResponseMiddleware
 	errorMapper        *api.GitErrorMapper
 	refNamePattern     *regexp.Regexp
+	eventsClient       events.RedisStreamClient
 }
 
 // NewFileOperationsHandler는 새로운 파일 작업 핸들러를 생성합니다.
@@ -73,6 +75,27 @@ func NewFileOperationsHandler(cfg *config.Config, permClient permissions.Permiss
 	// Compile ref name validation pattern
 	refNamePattern := regexp.MustCompile(`^[a-zA-Z0-9._/-]+$`)
 
+	// Initialize events client if enabled
+	var eventsClient events.RedisStreamClient
+	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
+		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+		if err != nil {
+			// Log warning but continue without events
+			logger.Warn("Failed to initialize events client, continuing without event publishing",
+				zap.String("redis_url", cfg.Events.RedisURL),
+				zap.Error(err))
+		} else {
+			logger.Info("Successfully initialized events client",
+				zap.String("redis_url", cfg.Events.RedisURL))
+		}
+	} else {
+		if !cfg.Events.Enabled {
+			logger.Info("Events are disabled in configuration")
+		} else if cfg.Events.RedisURL == "" {
+			logger.Info("Redis URL is not configured, events will be disabled")
+		}
+	}
+
 	return &FileOperationsHandler{
 		config:             cfg,
 		logger:             logger,
@@ -84,6 +107,7 @@ func NewFileOperationsHandler(cfg *config.Config, permClient permissions.Permiss
 		responseMiddleware: responseMiddleware,
 		errorMapper:        errorMapper,
 		refNamePattern:     refNamePattern,
+		eventsClient:       eventsClient,
 	}, nil
 }
 
@@ -386,6 +410,11 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 		h.logger.Warn("Failed to ensure proper HEAD state",
 			zap.String("branch", req.Branch),
 			zap.Error(err))
+	}
+
+	// Publish commit event if enabled
+	if h.eventsClient != nil && req.Branch != "" {
+		h.publishCommitEvent(ctx, repository, result.Hash, req.Branch, owner, repo)
 	}
 
 	// Prepare successful response
@@ -709,6 +738,11 @@ func (h *FileOperationsHandler) HandleFileUpload(c *gin.Context) {
 				zap.String("branch", effectiveBranch),
 				zap.Error(err))
 		}
+
+		// Publish commit event if enabled
+		if h.eventsClient != nil {
+			h.publishCommitEvent(ctx, repository, result.Hash, effectiveBranch, owner, repo)
+		}
 	}
 
 	// 8) 응답 생성 및 반환
@@ -928,6 +962,11 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 		} else {
 			h.logger.Info("Updated HEAD to point to branch",
 				zap.String("branch", req.Branch))
+		}
+
+		// Publish commit event if enabled
+		if h.eventsClient != nil {
+			h.publishCommitEvent(ctx, repository, result.Hash, req.Branch, owner, repo)
 		}
 	}
 
@@ -1577,6 +1616,11 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 				zap.String("branch", branch),
 				zap.String("commit_hash", result.CommitResult.Hash.String()))
 		}
+
+		// Publish commit event if enabled
+		if h.eventsClient != nil && branch != "" {
+			h.publishCommitEvent(ctx, repository, result.CommitResult.Hash, branch, owner, repo)
+		}
 	}
 
 	// Prepare response
@@ -1729,4 +1773,54 @@ func (h *FileOperationsHandler) resolveBaseCommit(ctx context.Context, repo *gog
 	}
 
 	return headRef.Hash(), nil
+}
+
+// publishCommitEvent publishes a commit event to Redis Stream
+func (h *FileOperationsHandler) publishCommitEvent(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash, refName, owner, repoName string) {
+	if h.eventsClient == nil {
+		return
+	}
+
+	// Get commit object to verify it exists
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		// Not a commit, skip
+		return
+	}
+
+	// Get full filesystem path for the repository
+	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repoName)
+	if err != nil {
+		// Skip if we can't get the path
+		return
+	}
+
+	// Normalize ref name
+	if !strings.HasPrefix(refName, "refs/") {
+		refName = "refs/heads/" + refName
+	}
+
+	// Create event
+	event := &events.CommitEvent{
+		RepoPath:   repoPath,
+		EventType:  events.EventTypeCommit,
+		CommitHash: commitHash.String(),
+		RefName:    refName,
+		Pusher:     "git", // Default pusher identifier
+		Timestamp:  commit.Committer.When,
+	}
+
+	// Publish asynchronously to avoid blocking
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+			h.logger.Error("Failed to publish commit event",
+				zap.String("repo_path", repoPath),
+				zap.String("commit_hash", commitHash.String()),
+				zap.String("event_type", string(event.EventType)),
+				zap.Error(err))
+		}
+	}()
 }

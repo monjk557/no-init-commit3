@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -38,7 +39,18 @@ func NewCommitsHandler(cfg *config.Config) (*CommitsHandler, error) {
 	}
 
 	transactionManager := NewTransactionManager(logger)
-	service := NewCommitsService(logger, transactionManager)
+
+	// Initialize events client if enabled
+	var eventsClient events.RedisStreamClient
+	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
+		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+		if err != nil {
+			// Log warning but continue without events
+			_ = err
+		}
+	}
+
+	service := NewCommitsService(logger, transactionManager, eventsClient)
 
 	return &CommitsHandler{
 		pathConfig: pathConfig,
@@ -151,7 +163,7 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
 	defer func() { _ = repository.Close() }()
 
 	// 서비스를 통해 비즈니스 로직 실행
-	response, err := h.service.ExecuteMultiFileCommit(ctx, repository, &req, branch)
+	response, err := h.service.ExecuteMultiFileCommit(ctx, repository, &req, branch, owner, repo)
 	if err != nil {
 		// 에러 타입에 따라 적절한 HTTP 상태 코드 반환
 		errMsg := err.Error()

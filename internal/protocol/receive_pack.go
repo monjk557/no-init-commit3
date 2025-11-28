@@ -14,9 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/git"
+	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repository"
 	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
@@ -49,6 +52,8 @@ type ReceivePackHandler struct {
 	pathConfig   *repository.PathConfig
 	errorHandler *ErrorHandler
 	capabilities *ServerCapabilities
+	eventsClient events.RedisStreamClient
+	config       *config.Config
 }
 
 // NewReceivePackHandler creates a new receive-pack handler for the executor
@@ -65,10 +70,25 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 	// Get server capabilities for receive-pack
 	capabilities := DefaultServerCapabilities()
 
+	// Initialize events client if enabled
+	var eventsClient events.RedisStreamClient
+	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
+		logger, err := logging.NewLogger(cfg.Logging)
+		if err == nil {
+			eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+			if err != nil {
+				// Log warning but continue without events
+				_ = err
+			}
+		}
+	}
+
 	return &ReceivePackHandler{
 		pathConfig:   pathConfig,
 		errorHandler: errorHandler,
 		capabilities: capabilities,
+		eventsClient: eventsClient,
+		config:       cfg,
 	}, nil
 }
 
@@ -289,7 +309,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Process the push request
-	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w)
+	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo)
 	if err != nil {
 		// If we've started writing, we can't send HTTP error anymore
 		// Write an error in protocol format
@@ -427,7 +447,7 @@ func (h *ReceivePackHandler) parseReceivePackRequest(body io.Reader) (*ReceivePa
 }
 
 // processReceivePackRequest processes the push request and updates references
-func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo *gogit.Repository, req *ReceivePackRequest, w http.ResponseWriter) error {
+func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo *gogit.Repository, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName string) error {
 	pktWriter := newPktLineWriter(w)
 
 	// Validate that we have commands to process
@@ -457,7 +477,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 
 	// Process each reference update command
 	for _, cmd := range req.Commands {
-		err := h.processRefUpdate(ctx, repo, cmd)
+		err := h.processRefUpdate(ctx, repo, cmd, owner, repoName)
 		if err != nil {
 			// Report failure for this reference
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
@@ -539,7 +559,7 @@ func (h *ReceivePackHandler) validatePackfileFormat(packfileData []byte) (*Packf
 }
 
 // processRefUpdate processes a single reference update command
-func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand) error {
+func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand, owner, repoName string) error {
 	// Validate the reference name
 	if !isValidRefName(cmd.RefName) {
 		return fmt.Errorf("invalid reference name: %s", cmd.RefName)
@@ -594,6 +614,12 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.R
 		err = repo.Storer.SetReference(newRef)
 		if err != nil {
 			return fmt.Errorf("failed to update reference %s: %w", cmd.RefName, err)
+		}
+
+		// Publish commit event if new commit was created (not a delete and hash changed)
+		// Only publish for branches (refs/heads/) and when hash actually changed
+		if cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
+			h.publishCommitEvent(ctx, repo, cmd.NewHash, cmd.RefName, owner, repoName, events.EventTypePush)
 		}
 	}
 
@@ -657,4 +683,46 @@ func getRepositoryLock(repoPath string) *sync.Mutex {
 	lock = &sync.Mutex{}
 	repoLocks[repoPath] = lock
 	return lock
+}
+
+// publishCommitEvent publishes a commit event to Redis Stream
+func (h *ReceivePackHandler) publishCommitEvent(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash, refName, owner, repoName string, eventType events.CommitEventType) {
+	if h.eventsClient == nil {
+		return
+	}
+
+	// Get commit object to verify it exists
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		// Not a commit, skip
+		return
+	}
+
+	// Get full filesystem path for the repository
+	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repoName)
+	if err != nil {
+		// Skip if we can't get the path
+		return
+	}
+
+	// Create event
+	event := &events.CommitEvent{
+		RepoPath:   repoPath,
+		EventType:  eventType,
+		CommitHash: commitHash.String(),
+		RefName:    refName,
+		Pusher:     "git", // Default pusher identifier
+		Timestamp:  commit.Committer.When,
+	}
+
+	// Publish asynchronously to avoid blocking
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+			// Log error but don't fail the operation
+			_ = err
+		}
+	}()
 }
