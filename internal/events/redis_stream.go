@@ -3,7 +3,9 @@ package events
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -21,9 +23,10 @@ const (
 
 // CommitEvent represents a commit creation event
 type CommitEvent struct {
-	RepoPath   string          // Full filesystem path (e.g., /srv/git/test.git)
+	RepoPath   string          // Relative path (e.g., work_space_name/uuid.git)
 	EventType  CommitEventType // push, merge, commit
 	CommitHash string          // Commit hash (e.g., 51f2da8...)
+	OldRev     string          // Old commit hash (e.g., e2d382...) - empty for new refs
 	RefName    string          // Branch or ref name (e.g., refs/heads/main)
 	Pusher     string          // Pusher identifier (e.g., "git")
 	Timestamp  time.Time       // Event timestamp
@@ -31,7 +34,7 @@ type CommitEvent struct {
 
 // RedisStreamClient provides an interface for publishing commit events to Redis Stream
 type RedisStreamClient interface {
-	PublishCommitEvent(ctx context.Context, event *CommitEvent) error
+	AddCommitEventToStream(ctx context.Context, event *CommitEvent) error
 	Close() error
 }
 
@@ -39,6 +42,24 @@ type RedisStreamClient interface {
 type redisStreamClient struct {
 	client *redis.Client
 	logger *zap.Logger
+}
+
+// GetRelativeRepoPath converts an absolute repository path to a relative path
+// e.g., /var/lib/git/repos/owner/repo.git -> owner/repo.git
+func GetRelativeRepoPath(fullPath, repoRoot string) string {
+	// Normalize paths
+	fullPath = filepath.Clean(fullPath)
+	repoRoot = filepath.Clean(repoRoot)
+
+	// Remove repoRoot prefix
+	if strings.HasPrefix(fullPath, repoRoot) {
+		relative := strings.TrimPrefix(fullPath, repoRoot)
+		relative = strings.TrimPrefix(relative, "/")
+		return relative
+	}
+
+	// If prefix doesn't match, return as-is (might already be relative)
+	return fullPath
 }
 
 // NewRedisStreamClient creates a new Redis stream client
@@ -81,23 +102,29 @@ func NewRedisStreamClient(redisURL string, logger *zap.Logger) (RedisStreamClien
 	}, nil
 }
 
-// PublishCommitEvent publishes a commit event to Redis Stream
-// Stream key format: git:events:{event_type}
-// Message format: field-value pairs (repo_path, ref, new_rev, pusher, timestamp)
-func (r *redisStreamClient) PublishCommitEvent(ctx context.Context, event *CommitEvent) error {
-	// Build stream key: git:events:{event_type}
-	streamKey := fmt.Sprintf("git:events:%s", event.EventType)
+// AddCommitEventToStream adds a commit event to Redis Stream
+// Stream key format: git:events
+// Message format: field-value pairs (event_type, repo_path, ref, old_rev, new_rev, pusher, timestamp)
+func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *CommitEvent) error {
+	// Build stream key: git:events (unified stream for all event types)
+	streamKey := "git:events"
 
 	// Convert timestamp to Unix timestamp
 	timestamp := event.Timestamp.Unix()
 
 	// Prepare message fields as key-value pairs
 	values := map[string]interface{}{
-		"repo_path": event.RepoPath,
-		"ref":       event.RefName,
-		"new_rev":   event.CommitHash,
-		"pusher":    event.Pusher,
-		"timestamp": strconv.FormatInt(timestamp, 10),
+		"event_type": string(event.EventType),
+		"repo_path":  event.RepoPath,
+		"ref":        event.RefName,
+		"new_rev":    event.CommitHash,
+		"pusher":     event.Pusher,
+		"timestamp":  strconv.FormatInt(timestamp, 10),
+	}
+
+	// Add old_rev only if it's not empty
+	if event.OldRev != "" {
+		values["old_rev"] = event.OldRev
 	}
 
 	// Debug: Log event data before publishing

@@ -414,7 +414,8 @@ func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 
 	// Publish commit event if enabled
 	if h.eventsClient != nil && req.Branch != "" {
-		h.publishCommitEvent(ctx, repository, result.Hash, req.Branch, owner, repo)
+		oldHashStr := baseHash.String()
+		h.addCommitEventToStream(ctx, repository, oldHashStr, result.Hash, req.Branch, owner, repo)
 	}
 
 	// Prepare successful response
@@ -741,7 +742,8 @@ func (h *FileOperationsHandler) HandleFileUpload(c *gin.Context) {
 
 		// Publish commit event if enabled
 		if h.eventsClient != nil {
-			h.publishCommitEvent(ctx, repository, result.Hash, effectiveBranch, owner, repo)
+			oldHashStr := baseHash.String()
+			h.addCommitEventToStream(ctx, repository, oldHashStr, result.Hash, effectiveBranch, owner, repo)
 		}
 	}
 
@@ -966,7 +968,8 @@ func (h *FileOperationsHandler) HandleFileDELETE(c *gin.Context) {
 
 		// Publish commit event if enabled
 		if h.eventsClient != nil {
-			h.publishCommitEvent(ctx, repository, result.Hash, req.Branch, owner, repo)
+			oldHashStr := baseHash.String()
+			h.addCommitEventToStream(ctx, repository, oldHashStr, result.Hash, req.Branch, owner, repo)
 		}
 	}
 
@@ -1619,7 +1622,8 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 
 		// Publish commit event if enabled
 		if h.eventsClient != nil && branch != "" {
-			h.publishCommitEvent(ctx, repository, result.CommitResult.Hash, branch, owner, repo)
+			oldHashStr := baseHash.String()
+			h.addCommitEventToStream(ctx, repository, oldHashStr, result.CommitResult.Hash, branch, owner, repo)
 		}
 	}
 
@@ -1775,8 +1779,8 @@ func (h *FileOperationsHandler) resolveBaseCommit(ctx context.Context, repo *gog
 	return headRef.Hash(), nil
 }
 
-// publishCommitEvent publishes a commit event to Redis Stream
-func (h *FileOperationsHandler) publishCommitEvent(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash, refName, owner, repoName string) {
+// addCommitEventToStream adds a commit event to Redis Stream
+func (h *FileOperationsHandler) addCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -1795,6 +1799,9 @@ func (h *FileOperationsHandler) publishCommitEvent(ctx context.Context, repo *go
 		return
 	}
 
+	// Convert to relative path (work_space_name/uuid.git format)
+	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
+
 	// Normalize ref name
 	if !strings.HasPrefix(refName, "refs/") {
 		refName = "refs/heads/" + refName
@@ -1802,9 +1809,10 @@ func (h *FileOperationsHandler) publishCommitEvent(ctx context.Context, repo *go
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   repoPath,
+		RepoPath:   relativePath,
 		EventType:  events.EventTypeCommit,
 		CommitHash: commitHash.String(),
+		OldRev:     oldHash,
 		RefName:    refName,
 		Pusher:     "git", // Default pusher identifier
 		Timestamp:  commit.Committer.When,
@@ -1815,7 +1823,7 @@ func (h *FileOperationsHandler) publishCommitEvent(ctx context.Context, repo *go
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			h.logger.Error("Failed to publish commit event",
 				zap.String("repo_path", repoPath),
 				zap.String("commit_hash", commitHash.String()),

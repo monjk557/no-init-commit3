@@ -39,7 +39,7 @@ func TestNewRedisStreamClient(t *testing.T) {
 	}()
 }
 
-func TestPublishCommitEvent(t *testing.T) {
+func TestAddCommitEventToStream(t *testing.T) {
 	redisURL := getTestRedisURL()
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
@@ -67,7 +67,7 @@ func TestPublishCommitEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = client.PublishCommitEvent(ctx, event)
+	err = client.AddCommitEventToStream(ctx, event)
 	require.NoError(t, err, "Should publish event successfully")
 
 	// Verify event was published by reading from Redis Stream
@@ -113,7 +113,7 @@ func TestPublishCommitEvent(t *testing.T) {
 	assert.True(t, found, "Should find the published event in stream")
 }
 
-func TestPublishPushEvent(t *testing.T) {
+func TestAddPushEventToStream(t *testing.T) {
 	redisURL := getTestRedisURL()
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
@@ -137,7 +137,7 @@ func TestPublishPushEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = client.PublishCommitEvent(ctx, event)
+	err = client.AddCommitEventToStream(ctx, event)
 	require.NoError(t, err)
 
 	// Verify push event in correct stream
@@ -165,7 +165,7 @@ func TestPublishPushEvent(t *testing.T) {
 	assert.True(t, found, "Should find push event in push stream")
 }
 
-func TestPublishMergeEvent(t *testing.T) {
+func TestAddMergeEventToStream(t *testing.T) {
 	redisURL := getTestRedisURL()
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
@@ -189,7 +189,7 @@ func TestPublishMergeEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = client.PublishCommitEvent(ctx, event)
+	err = client.AddCommitEventToStream(ctx, event)
 	require.NoError(t, err)
 
 	// Verify merge event in correct stream
@@ -217,7 +217,7 @@ func TestPublishMergeEvent(t *testing.T) {
 	assert.True(t, found, "Should find merge event in merge stream")
 }
 
-func TestPublishCommitEvent_StreamLength(t *testing.T) {
+func TestAddCommitEventToStream_StreamLength(t *testing.T) {
 	redisURL := getTestRedisURL()
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
@@ -253,7 +253,7 @@ func TestPublishCommitEvent_StreamLength(t *testing.T) {
 		Timestamp:  time.Now(),
 	}
 
-	err = client.PublishCommitEvent(ctx, event)
+	err = client.AddCommitEventToStream(ctx, event)
 	require.NoError(t, err)
 
 	// Wait a bit for the event to be processed
@@ -265,7 +265,7 @@ func TestPublishCommitEvent_StreamLength(t *testing.T) {
 	assert.Greater(t, finalLength, initialLength, "Stream length should increase after publishing event")
 }
 
-func TestPublishCommitEvent_MultipleEvents(t *testing.T) {
+func TestAddCommitEventToStream_MultipleEvents(t *testing.T) {
 	redisURL := getTestRedisURL()
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
@@ -309,7 +309,7 @@ func TestPublishCommitEvent_MultipleEvents(t *testing.T) {
 	}
 
 	for _, event := range events {
-		err := client.PublishCommitEvent(ctx, event)
+		err := client.AddCommitEventToStream(ctx, event)
 		require.NoError(t, err, "Should publish each event successfully")
 	}
 

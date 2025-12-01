@@ -526,7 +526,8 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 
 		// Publish commit event if enabled
 		if s.eventsClient != nil && owner != "" && repo != "" {
-			s.publishCommitEvent(ctx, repository, result.CommitResult.Hash, branch, owner, repo)
+			oldHashStr := baseHash.String()
+			s.addCommitEventToStream(ctx, repository, oldHashStr, result.CommitResult.Hash, branch, owner, repo)
 		}
 	}
 
@@ -568,8 +569,8 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 	return &response, nil
 }
 
-// publishCommitEvent publishes a commit event to Redis Stream
-func (s *CommitsService) publishCommitEvent(ctx context.Context, repo *repositories.RepositoryWrapper, commitHash plumbing.Hash, refName, owner, repoName string) {
+// addCommitEventToStream adds a commit event to Redis Stream
+func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repositories.RepositoryWrapper, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string) {
 	if s.eventsClient == nil {
 		return
 	}
@@ -588,6 +589,11 @@ func (s *CommitsService) publishCommitEvent(ctx context.Context, repo *repositor
 		return
 	}
 
+	// Convert to relative path (work_space_name/uuid.git format)
+	// Use default RepoRoot if not available
+	defaultRepoRoot := "/var/lib/git/repos"
+	relativePath := events.GetRelativeRepoPath(repoPath, defaultRepoRoot)
+
 	// Normalize ref name
 	if !strings.HasPrefix(refName, "refs/") {
 		refName = "refs/heads/" + refName
@@ -595,9 +601,10 @@ func (s *CommitsService) publishCommitEvent(ctx context.Context, repo *repositor
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   repoPath,
+		RepoPath:   relativePath,
 		EventType:  events.EventTypeCommit,
 		CommitHash: commitHash.String(),
+		OldRev:     oldHash,
 		RefName:    refName,
 		Pusher:     "git", // Default pusher identifier
 		Timestamp:  commit.Committer.When,
@@ -608,7 +615,7 @@ func (s *CommitsService) publishCommitEvent(ctx context.Context, repo *repositor
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := s.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+		if err := s.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			s.logger.Error("Failed to publish commit event",
 				zap.String("repo_path", repoPath),
 				zap.String("commit_hash", commitHash.String()),

@@ -619,7 +619,11 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.R
 		// Publish commit event if new commit was created (not a delete and hash changed)
 		// Only publish for branches (refs/heads/) and when hash actually changed
 		if cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
-			h.publishCommitEvent(ctx, repo, cmd.NewHash, cmd.RefName, owner, repoName, events.EventTypePush)
+			oldHashStr := ""
+			if cmd.OldHash != plumbing.ZeroHash {
+				oldHashStr = cmd.OldHash.String()
+			}
+			h.addCommitEventToStream(ctx, repo, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, events.EventTypePush)
 		}
 	}
 
@@ -685,8 +689,8 @@ func getRepositoryLock(repoPath string) *sync.Mutex {
 	return lock
 }
 
-// publishCommitEvent publishes a commit event to Redis Stream
-func (h *ReceivePackHandler) publishCommitEvent(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash, refName, owner, repoName string, eventType events.CommitEventType) {
+// addCommitEventToStream adds a commit event to Redis Stream
+func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string, eventType events.CommitEventType) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -705,11 +709,15 @@ func (h *ReceivePackHandler) publishCommitEvent(ctx context.Context, repo *gogit
 		return
 	}
 
+	// Convert to relative path (work_space_name/uuid.git format)
+	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
+
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   repoPath,
+		RepoPath:   relativePath,
 		EventType:  eventType,
 		CommitHash: commitHash.String(),
+		OldRev:     oldHash,
 		RefName:    refName,
 		Pusher:     "git", // Default pusher identifier
 		Timestamp:  commit.Committer.When,
@@ -720,7 +728,7 @@ func (h *ReceivePackHandler) publishCommitEvent(ctx context.Context, repo *gogit
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			// Log error but don't fail the operation
 			_ = err
 		}

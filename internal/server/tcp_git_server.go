@@ -517,7 +517,7 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 
 		// Publish commit event if enabled (only for branches, not tags)
 		if s.eventsClient != nil && strings.HasPrefix(refName, "refs/heads/") {
-			s.publishCommitEvent(repo, newHash, refName, owner, repoName, events.EventTypePush)
+			s.addCommitEventToStream(repo, "", newHash, refName, owner, repoName, events.EventTypePush)
 		}
 		return nil
 	}
@@ -547,7 +547,7 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 
 	// Publish commit event if enabled (only for branches, not tags, and only if hash changed)
 	if s.eventsClient != nil && oldHash != newHash && strings.HasPrefix(refName, "refs/heads/") {
-		s.publishCommitEvent(repo, newHash, refName, owner, repoName, events.EventTypePush)
+		s.addCommitEventToStream(repo, oldHash, newHash, refName, owner, repoName, events.EventTypePush)
 	}
 
 	return nil
@@ -843,8 +843,8 @@ func (s *DuplexTCPServer) GetConnectionCount() int {
 	return len(s.connections)
 }
 
-// publishCommitEvent publishes a commit event to Redis Stream
-func (s *DuplexTCPServer) publishCommitEvent(repo *gogit.Repository, commitHash, refName, owner, repoName string, eventType events.CommitEventType) {
+// addCommitEventToStream adds a commit event to Redis Stream
+func (s *DuplexTCPServer) addCommitEventToStream(repo *gogit.Repository, oldHash, commitHash, refName, owner, repoName string, eventType events.CommitEventType) {
 	if s.eventsClient == nil {
 		return
 	}
@@ -873,11 +873,15 @@ func (s *DuplexTCPServer) publishCommitEvent(repo *gogit.Repository, commitHash,
 		return
 	}
 
+	// Convert to relative path (work_space_name/uuid.git format)
+	relativePath := events.GetRelativeRepoPath(repoPath, s.config.Git.RepoRoot)
+
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   repoPath,
+		RepoPath:   relativePath,
 		EventType:  eventType,
 		CommitHash: commitHash,
+		OldRev:     oldHash,
 		RefName:    refName,
 		Pusher:     "git", // Default pusher identifier
 		Timestamp:  commit.Committer.When,
@@ -888,7 +892,7 @@ func (s *DuplexTCPServer) publishCommitEvent(repo *gogit.Repository, commitHash,
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := s.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+		if err := s.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			s.logger.Warn("Failed to publish commit event",
 				zap.String("repo_path", repoPath),
 				zap.String("commit_hash", commitHash),

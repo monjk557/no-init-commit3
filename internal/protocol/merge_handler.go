@@ -361,12 +361,13 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 
 	// Publish commit event for merge operations
 	if h.eventsClient != nil {
+		targetHashStr := targetCommit.String()
 		if mergeResult.MergeCommit != nil {
 			// Merge commit was created (non-fast-forward merge)
-			h.publishMergeCommitEvent(ctx, repository, mergeResult.MergeCommit, req.TargetRef, owner, repo)
+			h.publishMergeCommitEvent(ctx, repository, targetHashStr, mergeResult.MergeCommit, req.TargetRef, owner, repo)
 		} else if mergeResult.IsFastForward {
 			// Fast-forward merge: target ref was updated to source commit
-			h.publishFastForwardMergeEvent(ctx, repository, sourceCommit, req.TargetRef, owner, repo)
+			h.publishFastForwardMergeEvent(ctx, repository, targetHashStr, sourceCommit, req.TargetRef, owner, repo)
 		}
 	}
 
@@ -619,7 +620,7 @@ func (h *MergePreviewHandler) SendSuccess(c *gin.Context, data interface{}, mess
 }
 
 // publishMergeCommitEvent publishes a merge commit event to Redis Stream
-func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, repo *gogit.Repository, commit *object.Commit, refName, owner, repoName string) {
+func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commit *object.Commit, refName, owner, repoName string) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -632,6 +633,9 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 		return
 	}
 
+	// Convert to relative path (work_space_name/uuid.git format)
+	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
+
 	// Normalize ref name
 	if !strings.HasPrefix(refName, "refs/") {
 		refName = "refs/heads/" + refName
@@ -639,9 +643,10 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   repoPath,
+		RepoPath:   relativePath,
 		EventType:  events.EventTypeMerge,
 		CommitHash: commit.Hash.String(),
+		OldRev:     oldHash,
 		RefName:    refName,
 		Pusher:     "git", // Default pusher identifier
 		Timestamp:  commit.Committer.When,
@@ -652,7 +657,7 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			h.logger.Error("Failed to publish merge commit event",
 				zap.String("repo_path", repoPath),
 				zap.String("commit_hash", commit.Hash.String()),
@@ -663,7 +668,7 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 }
 
 // publishFastForwardMergeEvent publishes a fast-forward merge event to Redis Stream
-func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Context, repo *gogit.Repository, commitHash plumbing.Hash, refName, owner, repoName string) {
+func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -685,6 +690,9 @@ func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Contex
 		return
 	}
 
+	// Convert to relative path (work_space_name/uuid.git format)
+	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
+
 	// Normalize ref name
 	if !strings.HasPrefix(refName, "refs/") {
 		refName = "refs/heads/" + refName
@@ -692,9 +700,10 @@ func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Contex
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   repoPath,
+		RepoPath:   relativePath,
 		EventType:  events.EventTypeMerge,
 		CommitHash: commitHash.String(),
+		OldRev:     oldHash,
 		RefName:    refName,
 		Pusher:     "git", // Default pusher identifier
 		Timestamp:  commit.Committer.When,
@@ -705,7 +714,7 @@ func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Contex
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.eventsClient.PublishCommitEvent(ctx, event); err != nil {
+		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			h.logger.Warn("Failed to publish fast-forward merge event",
 				zap.String("repo_path", repoPath),
 				zap.String("commit_hash", commitHash.String()),
