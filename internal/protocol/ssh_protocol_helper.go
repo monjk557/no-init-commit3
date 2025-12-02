@@ -305,22 +305,37 @@ func ParseUploadArchiveArgs(lines []string) (*UploadArchiveSpec, error) {
 
 func ParseLsRefsSection(cmds []string) (*LsRefsReq, error) {
 	r := &LsRefsReq{}
-	for _, c := range cmds {
+	for _, raw := range cmds {
+		// Trim whitespace and newlines from command (same as ParseFetchSection)
+		c := strings.TrimSpace(raw)
+		if c == "" {
+			continue
+		}
+
 		switch {
 		case c == "command=ls-refs":
+			// Command identifier, no action needed
+
 		case strings.HasPrefix(c, "agent="):
-			r.Agent = strings.TrimPrefix(c, "agent=")
+			r.Agent = strings.TrimSpace(strings.TrimPrefix(c, "agent="))
+
 		case c == "symrefs":
 			r.Symrefs = true
+
 		case c == "peel":
 			r.Peel = true
+
 		case strings.HasPrefix(c, "ref-prefix "):
 			prefix := strings.TrimSpace(c[11:])
-			r.RefPrefix = append(r.RefPrefix, prefix)
+			if prefix != "" {
+				r.RefPrefix = append(r.RefPrefix, prefix)
+			}
+
 		case c == "unborn":
 			r.Unborn = true
+
 		default:
-			// 알 수 없는 옵션은 무시
+			// 알 수 없는 옵션은 무시 (Git protocol v2 확장성을 위해)
 		}
 	}
 

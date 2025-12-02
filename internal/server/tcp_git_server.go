@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,7 +18,6 @@ import (
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repository"
 	gogit "github.com/go-git/go-git/v5"
@@ -28,13 +29,12 @@ import (
 
 // DuplexTCPServer handles bidirectional TCP communication for Git operations
 type DuplexTCPServer struct {
-	config           *config.Config
-	permissionClient permissions.PermissionClient
-	eventsClient     events.RedisStreamClient
-	listener         net.Listener
-	connections      map[net.Conn]*DuplexConnection
-	mu               sync.RWMutex
-	logger           *logging.Logger
+	config       *config.Config
+	eventsClient events.RedisStreamClient
+	listener     net.Listener
+	connections  map[net.Conn]*DuplexConnection
+	mu           sync.RWMutex
+	logger       *logging.Logger
 }
 
 // DuplexConnection represents a bidirectional connection
@@ -57,10 +57,6 @@ type sidebandWriter struct {
 // NewDuplexTCPServer creates a new duplex TCP server
 func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 	// Create permission client
-	permClient, err := permissions.NewPermissionClient(permissions.DefaultConfig())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create permission client: %w", err)
-	}
 
 	// Initialize logger
 	logger, err := logging.NewLogger(config.Logging)
@@ -79,11 +75,10 @@ func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 	}
 
 	return &DuplexTCPServer{
-		config:           config,
-		permissionClient: permClient,
-		eventsClient:     eventsClient,
-		connections:      make(map[net.Conn]*DuplexConnection),
-		logger:           logger,
+		config:       config,
+		eventsClient: eventsClient,
+		connections:  make(map[net.Conn]*DuplexConnection),
+		logger:       logger,
 	}, nil
 }
 
@@ -271,7 +266,17 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 		// ls-refs
 		// ---------------------------
 		case strings.HasPrefix(cmds[0], "command=ls-refs"):
-			lsRefsReq, err := protocol.ParseLsRefsSection(cmds)
+			// ls-refs options 섹션 읽기 (command 섹션 다음 섹션)
+			// Git protocol v2에서 ls-refs는 두 섹션으로 구성:
+			// 섹션 1: command=ls-refs + delimiter (0001)
+			// 섹션 2: peel, symrefs, ref-prefix 등의 옵션들 + flush (0000)
+			lsRefsOpts, err := s.readSection(conn.reader)
+			if err != nil {
+				return fmt.Errorf("failed to read ls-refs options: %w", err)
+			}
+			// 두 섹션의 명령들을 합쳐서 파싱
+			allCmds := append(cmds, lsRefsOpts...)
+			lsRefsReq, err := protocol.ParseLsRefsSection(allCmds)
 			if err != nil {
 				return fmt.Errorf("failed to parse ls-refs section: %w", err)
 			}
@@ -556,25 +561,15 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 // handleLsRefs : ls-refs 명령 처리 (info/refs)
 func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo string, lsRefsReq *protocol.LsRefsReq) error {
 
-	// ls-refs 응답 형식:
-	// 1. capabilities (peel, symrefs 등)
-	// 2. 실제 refs 목록
-	// 3. flush packet
-
-	// capabilities 전송 (클라이언트가 요청한 것만)
-	capabilities := []string{}
-	if lsRefsReq.Peel {
-		capabilities = append(capabilities, "peel")
-	}
-	if lsRefsReq.Symrefs {
-		capabilities = append(capabilities, "symrefs")
-	}
-
-	for _, cap := range capabilities {
-		if err := s.writePktLine(conn, cap); err != nil {
-			return fmt.Errorf("failed to write capability: %w", err)
-		}
-	}
+	// ls-refs 응답 형식 (Git protocol v2):
+	// 1. 직접 refs 목록만 전송 (capabilities는 보내지 않음)
+	// 2. flush packet
+	//
+	// 각 ref 형식:
+	// - 일반 ref: <hash> <refname>
+	// - peeled tag (peel 옵션): <tag-hash> <refname>
+	//                            peeled <commit-hash>
+	// - symbolic ref (symrefs 옵션): @<target> <refname>
 
 	// 실제 repository에서 refs 가져오기
 	// Create path config
@@ -600,6 +595,81 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 		return err
 	}
 
+	// Check if HEAD is requested
+	headRequested := false
+	if len(lsRefsReq.RefPrefix) > 0 {
+		for _, prefix := range lsRefsReq.RefPrefix {
+			if prefix == "HEAD" || strings.HasPrefix("HEAD", prefix) {
+				headRequested = true
+				break
+			}
+		}
+	} else {
+		// If no ref-prefix filter, include HEAD
+		headRequested = true
+	}
+	// Handle HEAD separately if requested
+	if headRequested {
+		headRef, err := gitRepo.Storer.Reference(plumbing.HEAD)
+
+		// 첫 번째 시도: storer에서 HEAD 가져오기
+		if err == nil {
+			if headRef.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
+				// symbolic HEAD 처리
+				targetBranch := headRef.Target().String()
+				targetRef, err := gitRepo.Reference(plumbing.ReferenceName(targetBranch), true)
+				if err != nil {
+					return fmt.Errorf("failed to resolve symbolic HEAD target: %w", err)
+				}
+
+				refLine := fmt.Sprintf("%s HEAD symref-target:%s", targetRef.Hash(), targetBranch)
+				if err := s.writePktLine(conn, refLine); err != nil {
+					return fmt.Errorf("failed to write HEAD symref: %w", err)
+				}
+
+			} else {
+				// detached HEAD 또는 symref 요청이 없는 경우
+				if resolved, err := gitRepo.Head(); err == nil {
+					refLine := fmt.Sprintf("%s HEAD", resolved.Hash())
+					if err := s.writePktLine(conn, refLine); err != nil {
+						return fmt.Errorf("failed to write HEAD hash: %w", err)
+					}
+				}
+			}
+			// HEAD를 보낸 후에도 다른 refs를 계속 보내기 위해 return하지 않음
+		} else {
+			// 두 번째 시도: HEAD 파일 직접 읽기 (bare repo에서만 문제 생길 경우)
+			headPath := filepath.Join(repoPath, "HEAD")
+			data, err := os.ReadFile(headPath)
+			if err == nil {
+				headStr := strings.TrimSpace(string(data))
+
+				// symbolic HEAD: "ref: refs/heads/main"
+				if strings.HasPrefix(headStr, "ref: ") && lsRefsReq.Symrefs {
+					targetBranch := strings.TrimPrefix(headStr, "ref: ")
+					targetRef, err := gitRepo.Reference(plumbing.ReferenceName(targetBranch), true)
+					if err != nil {
+						return fmt.Errorf("failed to resolve symbolic HEAD file target: %w", err)
+					}
+
+					refLine := fmt.Sprintf("%s HEAD symref-target:%s", targetRef.Hash(), targetBranch)
+					if err := s.writePktLine(conn, refLine); err != nil {
+						return fmt.Errorf("failed to write HEAD symref: %w", err)
+					}
+				} else {
+					// detached HEAD
+					if resolved, err := gitRepo.Head(); err == nil {
+						refLine := fmt.Sprintf("%s HEAD", resolved.Hash())
+						if err := s.writePktLine(conn, refLine); err != nil {
+							return fmt.Errorf("failed to write HEAD hash: %w", err)
+						}
+					}
+				}
+			}
+			// HEAD가 없어도 다른 refs는 보내야 하므로 계속 진행
+		}
+	}
+
 	// Get repository references
 	refs, err := gitRepo.References()
 	if err != nil {
@@ -609,6 +679,11 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 	// List references in ls-refs format with filtering
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		refName := ref.Name().String()
+
+		// Skip HEAD as it's already handled separately above
+		if refName == "HEAD" {
+			return nil
+		}
 
 		// Apply ref-prefix filtering if specified
 		if len(lsRefsReq.RefPrefix) > 0 {
@@ -627,16 +702,27 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 		// Handle different reference types
 		if ref.Type() == plumbing.HashReference {
 			// Regular hash reference
-			hash := ref.Hash().String()
+			tagHash := ref.Hash().String()
+
 			if lsRefsReq.Peel && strings.HasPrefix(refName, "refs/tags/") {
-				// For tags with peel option, get the peeled hash (actual object hash)
+				// For tags with peel option, send tag hash first, then peeled hash
 				if tagObj, err := gitRepo.TagObject(ref.Hash()); err == nil && tagObj != nil {
-					hash = tagObj.Target.String()
+					peeledHash := tagObj.Target.String()
+
+					// Format: <tag-hash> <refname>
+					refLine := fmt.Sprintf("%s %s", tagHash, refName)
+					if err := s.writePktLine(conn, refLine); err != nil {
+						return err
+					}
+
+					// Format: peeled <commit-hash>
+					peeledLine := fmt.Sprintf("peeled %s", peeledHash)
+					return s.writePktLine(conn, peeledLine)
 				}
 			}
 
 			// Format: <hash> <refname>
-			refLine := fmt.Sprintf("%s %s", hash, refName)
+			refLine := fmt.Sprintf("%s %s", tagHash, refName)
 			return s.writePktLine(conn, refLine)
 
 		} else if ref.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
@@ -773,8 +859,11 @@ func (s *DuplexTCPServer) readSection(reader *bufio.Reader) ([]string, error) {
 			return nil, fmt.Errorf("read payload: %w", err)
 		}
 
-		// 5) 명령 추가
-		commands = append(commands, string(payload))
+		// 5) 명령 추가 (개행문자 포함될 수 있으므로 trim)
+		cmdStr := strings.TrimSpace(string(payload))
+		if cmdStr != "" {
+			commands = append(commands, cmdStr)
+		}
 	}
 	return commands, nil
 }
@@ -811,9 +900,6 @@ func (s *DuplexTCPServer) writePktLine(conn *DuplexConnection, data string) erro
 	length := len(data) + 4
 	line := fmt.Sprintf("%04x%s", length, data)
 	_, err := conn.writer.WriteString(line)
-	if err != nil {
-		fmt.Printf("⛔️⛔️⛔️ ⛔️⛔️⛔️ ⛔️⛔️⛔️ ERROR: writePktLine: %v\n", err)
-	}
 	return err
 }
 
@@ -827,7 +913,6 @@ func (s *DuplexTCPServer) cleanupConnections() {
 		now := time.Now()
 		for conn, duplexConn := range s.connections {
 			if now.Sub(duplexConn.lastUsed) > 5*time.Minute {
-				fmt.Printf("🧹 Cleaning up idle connection: %s\n", conn.RemoteAddr())
 				conn.Close()
 				delete(s.connections, conn)
 			}

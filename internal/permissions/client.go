@@ -174,12 +174,6 @@ type Client struct {
 	circuitBreaker *CircuitBreaker
 }
 
-// This Method will be deprecated in the future.
-func NewPermissionClient(config *Config) (PermissionClient, error) {
-
-	return nil, nil
-}
-
 // CheckReadAccess implements PermissionClient.CheckReadAccess.
 func (c *Client) CheckReadAccess(ctx context.Context, userID, repoOwner, repoName string) (bool, error) {
 	return c.checkAccess(ctx, userID, repoOwner, repoName, OperationRead)

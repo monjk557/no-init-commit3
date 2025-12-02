@@ -87,21 +87,6 @@ type CreateRepositoryRequest struct {
 
 // Note: CommitAuthor is already defined in file_operations.go
 
-// validatePermissions validates user permissions for repository creation
-func (h *RepositoryCreationHandler) validatePermissions(c *gin.Context) error {
-	userID := c.GetHeader("X-USER-ID")
-	if userID == "" {
-		return fmt.Errorf("missing X-USER-ID header")
-	}
-
-	source := c.GetHeader("X-Source")
-	if source == "" {
-		return fmt.Errorf("missing X-Source header")
-	}
-
-	return nil
-}
-
 // HandleCreateRepository handles POST /repos/{owner}/{repo} for creating new repositories
 func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 	ctx := c.Request.Context()
