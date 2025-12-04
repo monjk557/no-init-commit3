@@ -188,6 +188,10 @@ type FileOperationResponse struct {
 	Branch     string    `json:"branch"`
 }
 
+// MultiFileCommitResponse is a type alias for responses.MultiFileCommitResponse
+// It's re-exported here for convenience in tests and API consumers
+type MultiFileCommitResponse = responses.MultiFileCommitResponse
+
 // HandleFilePUT handles PUT /repos/{owner}/{repo}/files/{path} requests
 func (h *FileOperationsHandler) HandleFilePUT(c *gin.Context) {
 	owner := c.Param("owner")
@@ -1399,13 +1403,17 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		return
 	}
 
-	// Get base commit hash
+	// Get base commit hash (always resolve from branch reference to get latest commit)
 	baseHash, err := h.resolveBaseCommit(ctx, repository, branch)
 	if err != nil {
 		apiErr := h.errorMapper.MapError(err, "resolve_base_commit")
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
+
+	h.logger.Info("Resolved base commit for validation",
+		zap.String("branch", branch),
+		zap.String("base_hash", baseHash.String()))
 
 	// Get commit and tree once for file existence checks
 	commit, err := repository.CommitObject(baseHash)
@@ -1421,6 +1429,9 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
 		return
 	}
+
+	// Track file contents from previous operations to handle update->move scenarios
+	fileContents := make(map[string][]byte)
 
 	// Check for file existence conflicts for create operations and validate delete/move operations
 	for _, op := range req.Operations {
@@ -1480,6 +1491,16 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 				return
 			}
 			// If err == object.ErrFileNotFound, target doesn't exist, which is what we want for move operation
+		}
+
+		// Track content for create and update operations so move can use updated content
+		if op.Operation == OperationCreate || op.Operation == OperationUpdate {
+			if op.Content != "" {
+				content, err := h.decodeContent(op.Content, op.Encoding)
+				if err == nil {
+					fileContents[op.Path] = content
+				}
+			}
 		}
 	}
 
@@ -1541,7 +1562,7 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 	// Convert and add operations to transaction
 	operationResults := make([]responses.OperationResult, len(req.Operations))
 	for i, op := range req.Operations {
-		fileChange, err := h.convertToFileChange(&op)
+		fileChange, err := h.convertToFileChange(&op, fileContents)
 		if err != nil {
 			operationResults[i] = responses.OperationResult{
 				Path:      op.Path,
@@ -1715,15 +1736,24 @@ func (h *FileOperationsHandler) validateMultiFileOperation(op *MultiFileOperatio
 }
 
 // convertToFileChange converts a MultiFileOperation to a git.FileChange
-func (h *FileOperationsHandler) convertToFileChange(op *MultiFileOperation) (*git.FileChange, error) {
+// fileContents map contains content from previous operations (for update->move scenarios)
+func (h *FileOperationsHandler) convertToFileChange(op *MultiFileOperation, fileContents map[string][]byte) (*git.FileChange, error) {
 	fileChange := &git.FileChange{
 		Path:         op.Path,
 		Operation:    git.FileOperation(op.Operation),
 		OriginalPath: op.OriginalPath,
 	}
 
-	// Handle content encoding
-	if op.Content != "" {
+	// For move operations, check if the original file was updated in a previous operation
+	if op.Operation == OperationMove && fileContents != nil {
+		if updatedContent, exists := fileContents[op.OriginalPath]; exists {
+			// Use the updated content from previous operation
+			fileChange.Content = updatedContent
+		}
+	}
+
+	// Handle content encoding (only if content is provided and not already set from previous operation)
+	if op.Content != "" && fileChange.Content == nil {
 		encoding := op.Encoding
 		if encoding == "" {
 			encoding = "utf-8"
@@ -1760,17 +1790,35 @@ func (h *FileOperationsHandler) convertToFileChange(op *MultiFileOperation) (*gi
 	return fileChange, nil
 }
 
-// resolveBaseCommit resolves the base commit for the given branch
-func (h *FileOperationsHandler) resolveBaseCommit(ctx context.Context, repo *gogit.Repository, branch string) (plumbing.Hash, error) {
-	// Try to resolve the branch reference
-	if branch != "main" && branch != "master" {
-		hash, err := h.objectManager.ResolveReference(ctx, repo, fmt.Sprintf("refs/heads/%s", branch))
-		if err == nil {
-			return hash, nil
-		}
+// decodeContent decodes content based on encoding
+func (h *FileOperationsHandler) decodeContent(content string, encoding string) ([]byte, error) {
+	if encoding == "" {
+		encoding = "utf-8"
 	}
 
-	// Fall back to HEAD
+	switch encoding {
+	case "utf-8":
+		return []byte(content), nil
+	case "base64":
+		decoded, err := base64.StdEncoding.DecodeString(content)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base64 content: %w", err)
+		}
+		return decoded, nil
+	default:
+		return nil, fmt.Errorf("unsupported encoding: %s", encoding)
+	}
+}
+
+// resolveBaseCommit resolves the base commit for the given branch
+func (h *FileOperationsHandler) resolveBaseCommit(ctx context.Context, repo *gogit.Repository, branch string) (plumbing.Hash, error) {
+	// Always try to resolve the branch reference first, regardless of branch name
+	hash, err := h.objectManager.ResolveReference(ctx, repo, fmt.Sprintf("refs/heads/%s", branch))
+	if err == nil {
+		return hash, nil
+	}
+
+	// Fall back to HEAD if branch reference doesn't exist
 	headRef, err := h.objectManager.GetRepositoryHead(ctx, repo)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to get repository HEAD: %w", err)

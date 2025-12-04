@@ -1,13 +1,13 @@
 module github.com/collabops/git-executor/tests
 
-go 1.23.0
-
-toolchain go1.24.4
+go 1.24
 
 replace github.com/collabops/git-executor => ../
 
 require (
 	github.com/collabops/git-executor v0.0.0-00010101000000-000000000000
+	github.com/gin-gonic/gin v1.10.1
+	github.com/go-git/go-git/v5 v5.16.2
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/zap v1.27.0
 )
@@ -21,16 +21,16 @@ require (
 	github.com/bytedance/sonic v1.14.0 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
-	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.6.1 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cyphar/filepath-securejoin v0.4.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.9 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
-	github.com/gin-gonic/gin v1.10.1 // indirect
 	github.com/go-enry/go-enry/v2 v2.9.2 // indirect
 	github.com/go-enry/go-oniguruma v1.2.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
@@ -67,6 +67,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
+	github.com/redis/go-redis/v9 v9.17.1 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/swaggo/files v1.0.1 // indirect
@@ -96,6 +97,3 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// 테스트 전용 의존성들
-require github.com/go-git/go-git/v5 v5.16.2

@@ -4,7 +4,6 @@ package protocol
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -879,14 +878,6 @@ func splitLines(content string) []string {
 	return lines
 }
 
-// isCommitNotFoundError는 오류가 커밋을 찾을 수 없어서 발생했는지 확인합니다
-func isCommitNotFoundError(err error) bool {
-	return err != nil && (err.Error() == "object not found" ||
-		err.Error() == "reference not found" ||
-		strings.Contains(err.Error(), "object not found") ||
-		strings.Contains(err.Error(), "commit not found"))
-}
-
 // calculateBranchDiff는 merge base 분석을 통해 두 브랜치 간의 diff 계산을 수행합니다
 func (h *DiffHandler) calculateBranchDiff(ctx context.Context, repoPath, baseBranch, headBranch string, contextLines int) (*DiffResponse, error) {
 	// 캐시된 방식으로 저장소 열기
@@ -1128,19 +1119,6 @@ func (h *DiffHandler) countCommitsBetween(repo *gogit.Repository, from, to *obje
 	}
 
 	return 0, fmt.Errorf("failed to iterate commits: %w", err)
-}
-
-// isBranchNotFoundError는 오류가 브랜치를 찾을 수 없어서 발생했는지 확인합니다
-func isBranchNotFoundError(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "branch") && strings.Contains(err.Error(), "not found") ||
-		strings.Contains(err.Error(), "reference not found"))
-}
-
-// isFileNotFoundError는 오류가 파일을 찾을 수 없어서 발생했는지 확인합니다
-func isFileNotFoundError(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "file not found") ||
-		strings.Contains(err.Error(), "path not found") ||
-		strings.Contains(err.Error(), "entry not found"))
 }
 
 // calculateFileDiff는 두 참조 간의 특정 파일에 대한 diff 계산을 수행합니다
@@ -1514,47 +1492,6 @@ func (h *DiffHandler) validateRequestAndPermissions(ctx context.Context, params 
 	}
 
 	return repoPath, nil
-}
-
-// sendJSONResponse는 표준화된 JSON 응답을 전송합니다
-func sendJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// 오류를 로깅하지만 이 시점에선 응답을 변경할 수 없음
-		fmt.Printf("Failed to encode JSON response: %v\n", err)
-	}
-}
-
-// sendErrorResponse는 표준화된 오류 응답을 전송합니다
-func sendErrorResponse(w http.ResponseWriter, message string, statusCode int) {
-	errorResp := ErrorResponse{
-		Success: false,
-		Error:   message,
-	}
-	sendJSONResponse(w, errorResp, statusCode)
-}
-
-// handleDiffError는 오류를 분류하고 적절한 HTTP 응답을 전송합니다
-func handleDiffError(w http.ResponseWriter, err error, operation string) {
-	if isCommitNotFoundError(err) {
-		sendErrorResponse(w, fmt.Sprintf("Commit not found: %v", err), http.StatusNotFound)
-	} else if isBranchNotFoundError(err) {
-		sendErrorResponse(w, fmt.Sprintf("Branch not found: %v", err), http.StatusNotFound)
-	} else if isFileNotFoundError(err) {
-		sendErrorResponse(w, fmt.Sprintf("File not found: %v", err), http.StatusNotFound)
-	} else if strings.Contains(err.Error(), "permission") {
-		sendErrorResponse(w, fmt.Sprintf("Permission check failed: %v", err), http.StatusInternalServerError)
-	} else if strings.Contains(err.Error(), "access denied") {
-		sendErrorResponse(w, "Access denied to repository", http.StatusForbidden)
-	} else if strings.Contains(err.Error(), "authentication") {
-		sendErrorResponse(w, err.Error(), http.StatusUnauthorized)
-	} else if strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "invalid") {
-		sendErrorResponse(w, err.Error(), http.StatusBadRequest)
-	} else {
-		sendErrorResponse(w, fmt.Sprintf("Failed to %s: %v", operation, err), http.StatusInternalServerError)
-	}
 }
 
 // extractPaginationParams는 쿼리 문자열에서 페이지네이션 파라미터를 추출합니다

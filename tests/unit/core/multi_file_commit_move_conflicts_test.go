@@ -426,9 +426,20 @@ func TestMultiFileCommit_UpdateThenMoveOriginalPath(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	// This might fail because we're trying to move a file that was just updated in the same transaction
-	// The actual behavior depends on implementation - this test documents expected behavior
-	assert.NotEqual(t, http.StatusOK, w.Code, "Should fail when trying to move a file that was updated in the same transaction")
+	// Should succeed: update happens first, then move with updated content
+	assert.Equal(t, http.StatusOK, w.Code, "Should succeed when updating a file and then moving it in the same transaction")
+
+	// Verify the response
+	var response protocol.MultiFileCommitResponse
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.True(t, response.Success, "Transaction should succeed")
+	assert.Equal(t, 2, response.TotalOperations)
+	assert.Equal(t, 2, response.SuccessfulOps)
+
+	// Note: Content verification would require accessing handler's objectManager
+	// which is not exposed. The test verifies that the operation succeeds.
+	// Content verification can be done via the file content API endpoint.
 }
 
 // TestMultiFileCommit_MoveThenMoveAgain tests that moving a file twice in the same commit fails
@@ -610,4 +621,79 @@ func TestMultiFileCommit_MoveOriginalPathUsedByOtherOperation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMultiFileCommit_UpdateThenMoveWithContentVerification tests that update followed by move
+// succeeds and the moved file contains the updated content
+func TestMultiFileCommit_UpdateThenMoveWithContentVerification(t *testing.T) {
+	handler, _, cleanup := setupTestFileOperationsHandler(t)
+	defer cleanup()
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocol.GinContextKey{}, c))
+		c.Next()
+	})
+
+	router.POST("/repos/:owner/:repo/commits", handler.HandleMultiFileCommit)
+	router.GET("/repos/:owner/:repo/files/*path", handler.HandleFileContent)
+
+	// Update old.txt with new content and then move it to new.txt
+	updatedContent := "test test test 123"
+	reqBody := protocol.MultiFileCommitRequest{
+		Message: "Update and move",
+		Branch:  "main",
+		Operations: []protocol.MultiFileOperation{
+			{
+				Operation: protocol.OperationUpdate,
+				Path:      "old.txt",
+				Content:   updatedContent,
+			},
+			{
+				Operation:    protocol.OperationMove,
+				Path:         "DONTREADME.md",
+				OriginalPath: "old.txt",
+			},
+		},
+		Author: &protocol.CommitAuthor{
+			Name:  "Test User",
+			Email: "test@example.com",
+		},
+	}
+
+	body, _ := json.Marshal(reqBody)
+	req, _ := http.NewRequest("POST", "/repos/testowner/testrepo/commits", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	// Should succeed: update happens first, then move with updated content
+	assert.Equal(t, http.StatusOK, w.Code, "Should succeed when updating a file and then moving it in the same transaction")
+
+	// Verify the response
+	var response protocol.MultiFileCommitResponse
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.True(t, response.Success, "Transaction should succeed")
+	assert.Equal(t, 2, response.TotalOperations)
+	assert.Equal(t, 2, response.SuccessfulOps)
+
+	// Verify that old.txt no longer exists
+	getReq, _ := http.NewRequest("GET", "/repos/testowner/testrepo/files/old.txt?ref=main", nil)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+	assert.NotEqual(t, http.StatusOK, getW.Code, "old.txt should not exist after move")
+
+	// Verify that DONTREADME.md exists with updated content
+	getReq2, _ := http.NewRequest("GET", "/repos/testowner/testrepo/files/DONTREADME.md?ref=main", nil)
+	getW2 := httptest.NewRecorder()
+	router.ServeHTTP(getW2, getReq2)
+	assert.Equal(t, http.StatusOK, getW2.Code, "DONTREADME.md should exist after move")
+
+	var fileResponse protocol.FileContentResponse
+	err = json.Unmarshal(getW2.Body.Bytes(), &fileResponse)
+	require.NoError(t, err)
+	assert.Equal(t, updatedContent, fileResponse.Content, "Moved file should contain updated content from update operation")
 }
