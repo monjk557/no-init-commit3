@@ -21,6 +21,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/merge"
 	"github.com/collabops/git-executor/internal/observability"
+	"github.com/collabops/git-executor/internal/overview"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/repository"
@@ -383,32 +384,55 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
-	apiV2Group.POST("/:owner/:repo", repositoryHandler.HandleCreateRepository)
+	overviewHandler, err := overview.NewRepositoryOverviewHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create overview handler", zap.Error(err))
+		return
+	}
 
-	apiV2Group.POST("/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
-	apiV2Group.PATCH("/:owner/:repo/branches/*branch", branchesHandler.HandleUpdateBranch)
-	apiV2Group.DELETE("/:owner/:repo/branches/*branch", branchesHandler.HandleDeleteBranch)
+	ownerRepoGroup := apiV2Group.Group("/:owner/:repo")
+	ownerRepoGroup.Use(ginContextMiddleware())
+	ownerRepoGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
+	ownerRepoGroup.Use(jsonResponseMiddleware.ErrorHandler())
 
-	apiV2Group.GET("/:owner/:repo/tree", treeHandlerV2.HandleTreeAPI)
+	// Repository endpoints
+	ownerRepoGroup.POST("", repositoryHandler.HandleCreateRepository)
 
-	apiV2Group.GET("/:owner/:repo/commits", commitsHandlerV2.HandleCommitsAPI)
-	apiV2Group.POST("/:owner/:repo/commits", commitsHandlerV2.HandleMultiFileCommit)
+	// Branches endpoints
+	ownerRepoGroup.POST("/branches", branchesHandler.HandleCreateBranch)
+	ownerRepoGroup.PATCH("/branches/*branch", branchesHandler.HandleUpdateBranch)
+	ownerRepoGroup.DELETE("/branches/*branch", branchesHandler.HandleDeleteBranch)
 
-	apiV2Group.GET("/:owner/:repo/tags", tagsHandler.HandleGetTags)
-	apiV2Group.POST("/:owner/:repo/tags", tagsHandler.HandleCreateTag)
-	apiV2Group.DELETE("/:owner/:repo/tags/*tag", tagsHandler.HandleDeleteTag)
+	// Tree endpoints
+	ownerRepoGroup.GET("/tree", treeHandlerV2.HandleTreeAPI)
 
-	apiV2Group.GET("/:owner/:repo/blob", blobHandlerV2.HandleBlobAPI)
+	// Commits endpoints
+	ownerRepoGroup.GET("/commits", commitsHandlerV2.HandleCommitsAPI)
+	ownerRepoGroup.POST("/commits", commitsHandlerV2.HandleMultiFileCommit)
 
-	apiV2Group.GET("/:owner/:repo/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
-	apiV2Group.GET("/:owner/:repo/diff/branches/:base/:head", diffsHandler.HandleBranchDiff)
-	apiV2Group.GET("/:owner/:repo/diff/file", diffsHandler.HandleFileDiff)
-	apiV2Group.GET("/:owner/:repo/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
-	apiV2Group.GET("/:owner/:repo/diff/patch/:base/:head", diffsHandler.HandlePatch)
+	// Tags endpoints
+	ownerRepoGroup.GET("/tags", tagsHandler.HandleGetTags)
+	ownerRepoGroup.POST("/tags", tagsHandler.HandleCreateTag)
+	ownerRepoGroup.DELETE("/tags/*tag", tagsHandler.HandleDeleteTag)
 
-	apiV2Group.GET("/:owner/:repo/merges/preview", mergePreviewHandlerV2.HandleMergePreview)
-	apiV2Group.POST("/:owner/:repo/merges", mergeOpsHandlerV2.HandleMerge)
+	// Blob endpoints
+	ownerRepoGroup.GET("/blob", blobHandlerV2.HandleBlobAPI)
 
+	// Diff endpoints
+	ownerRepoGroup.GET("/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
+	ownerRepoGroup.GET("/diff/branches/:base/:head", diffsHandler.HandleBranchDiff)
+	ownerRepoGroup.GET("/diff/file", diffsHandler.HandleFileDiff)
+	ownerRepoGroup.GET("/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
+	ownerRepoGroup.GET("/diff/patch/:base/:head", diffsHandler.HandlePatch)
+
+	// Merge endpoints
+	ownerRepoGroup.GET("/merges/preview", mergePreviewHandlerV2.HandleMergePreview)
+	ownerRepoGroup.POST("/merges", mergeOpsHandlerV2.HandleMerge)
+
+	// Overview endpoints
+	ownerRepoGroup.GET("/overview", overviewHandler.HandleGetRepositoryOverview)
+	ownerRepoGroup.GET("/overview/tree", overviewHandler.HandleGetTreeOverview)
+	ownerRepoGroup.GET("/overview/blob", overviewHandler.HandleGetBlobOverview)
 	{
 		// Repository creation endpoint - separate from existing repos
 

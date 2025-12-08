@@ -16,6 +16,32 @@ type Tagger struct {
 	Date  time.Time `json:"date"`
 }
 
+// TagsResponse는 태그 목록 응답 구조를 나타냅니다.
+type TagsResponse struct {
+	Success    bool           `json:"success"`
+	Message    string         `json:"message"`
+	Results    []Tag          `json:"results"`
+	Pagination PaginationInfo `json:"pagination"`
+}
+
+// PaginationInfo는 태그 응답의 페이지네이션 정보를 나타냅니다.
+// Python PaginatedResponse와 호환되는 필드들을 포함합니다.
+type PaginationInfo struct {
+	Count       int     `json:"count"`        // 전체 항목 수
+	Next        *string `json:"next"`         // 다음 페이지 URL
+	Previous    *string `json:"previous"`     // 이전 페이지 URL
+	CurrentPage int     `json:"current_page"` // 현재 페이지 번호
+	TotalPages  int     `json:"total_pages"`  // 전체 페이지 수
+	PageSize    int     `json:"page_size"`    // 페이지당 항목 수
+}
+
+// 기본 페이지네이션 값들
+const (
+	DefaultTagsLimit = 30
+	MaxTagsLimit     = 100
+	MinTagsLimit     = 1
+)
+
 // CreateTagRequest는 태그 생성을 위한 요청 구조체입니다.
 type CreateTagRequest struct {
 	Name      string  `json:"name" binding:"required"` // 태그 이름 (필수)

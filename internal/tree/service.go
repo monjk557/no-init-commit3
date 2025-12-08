@@ -4,24 +4,25 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 )
 
-// getTreeStructure retrieves the tree structure using the Git repository interface
-func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntriesResponse, error) {
+// GetTreeEntries는 저장소의 트리 항목을 가져옵니다.
+// pathConfig와 logger를 사용하여 TreeBuilder를 설정하고 트리 항목을 반환합니다.
+func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger, repoPath, ref, path string) ([]TreeEntry, error) {
 	// Extract owner and repo from repoPath
 	// repoPath format: /path/to/repos/owner/repo.git
-	parts := strings.Split(repoPath, "/")
-	var owner, repo string
-	if len(parts) >= 2 {
-		repo = strings.TrimSuffix(parts[len(parts)-1], ".git")
-		if len(parts) >= 3 {
-			owner = parts[len(parts)-2]
-		}
+	parts := strings.Split(strings.Trim(repoPath, "/"), "/")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid repository path")
 	}
 
+	repoName := strings.TrimSuffix(parts[len(parts)-1], ".git")
+	owner := parts[len(parts)-2]
+
 	// Create object manager using pathConfig and logger
-	objectManager, err := repositories.NewGitObjectManager(h.pathConfig, h.logger)
+	objectManager, err := repositories.NewGitObjectManager(pathConfig, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create object manager: %w", err)
 	}
@@ -30,10 +31,21 @@ func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntries
 	treeBuilder := NewTreeBuilder(nil, nil) // storer and logger not needed for GetTree
 
 	// Set repository info
-	treeBuilder.SetRepositoryInfo(objectManager, owner, repo, repoPath)
+	treeBuilder.SetRepositoryInfo(objectManager, owner, repoName, repoPath)
 
 	// Get tree entries
 	entries, err := treeBuilder.GetTree(ref, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tree: %w", err)
+	}
+
+	return entries, nil
+}
+
+// getTreeStructure retrieves the tree structure using the Git repository interface
+func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntriesResponse, error) {
+	// Get tree entries using the public function
+	entries, err := GetTreeEntries(h.pathConfig, h.logger, repoPath, ref, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tree: %w", err)
 	}

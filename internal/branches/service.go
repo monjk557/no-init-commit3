@@ -407,3 +407,47 @@ func (s *BranchService) checkBranchExists(repo *gogit.Repository, branchName str
 
 	return true, ref.Hash(), nil
 }
+
+// SimpleBranchInfo는 간단한 브랜치 정보를 나타냅니다.
+type SimpleBranchInfo struct {
+	Name      string
+	Hash      string
+	IsRemote  bool
+	IsCurrent bool
+}
+
+// GetBranches는 저장소의 모든 브랜치를 가져옵니다.
+func GetBranches(repo *gogit.Repository) ([]SimpleBranchInfo, error) {
+	refs, err := repo.References()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get references: %w", err)
+	}
+	defer refs.Close()
+
+	var branches []SimpleBranchInfo
+	headRef, _ := repo.Head()
+
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Name().IsBranch() {
+			branch := SimpleBranchInfo{
+				Name:      ref.Name().Short(),
+				Hash:      ref.Hash().String(),
+				IsRemote:  false,
+				IsCurrent: false,
+			}
+
+			if headRef != nil {
+				if headRef.Type() == plumbing.SymbolicReference {
+					branch.IsCurrent = headRef.Target() == ref.Name()
+				} else {
+					branch.IsCurrent = headRef.Name() == ref.Name()
+				}
+			}
+
+			branches = append(branches, branch)
+		}
+		return nil
+	})
+
+	return branches, err
+}

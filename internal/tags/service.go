@@ -10,16 +10,90 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-func GetTags(repoWrapper *repositories.RepositoryWrapper) ([]Tag, error) {
+// GetTags는 저장소의 모든 태그를 가져옵니다 (페이지네이션 지원).
+func GetTags(repoWrapper *repositories.RepositoryWrapper, limit, skip int) ([]Tag, int, error) {
 	repo := repoWrapper.GetRepo()
 	refs, err := repo.References()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer refs.Close()
 
-	var tags []Tag
-	return tags, nil
+	var allTags []Tag
+
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Name().IsTag() {
+			tagName := ref.Name().Short()
+			tagHash := ref.Hash()
+
+			// Annotated tag인지 확인
+			tagObj, err := repo.TagObject(tagHash)
+			isAnnotated := err == nil
+
+			tag := Tag{
+				Name:        tagName,
+				Hash:        tagHash.String(),
+				IsAnnotated: isAnnotated,
+			}
+
+			// Annotated tag인 경우 추가 정보 설정
+			if isAnnotated && tagObj != nil {
+				tag.Message = tagObj.Message
+				tag.Hash = tagObj.Target.String() // 태그가 가리키는 커밋 해시
+				tag.Tagger = &Tagger{
+					Name:  tagObj.Tagger.Name,
+					Email: tagObj.Tagger.Email,
+					Date:  tagObj.Tagger.When,
+				}
+			}
+
+			allTags = append(allTags, tag)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to iterate references: %w", err)
+	}
+
+	totalCount := len(allTags)
+
+	// 페이지네이션 적용
+	if skip > 0 && skip < totalCount {
+		allTags = allTags[skip:]
+	}
+
+	if limit > 0 && limit < len(allTags) {
+		allTags = allTags[:limit]
+	}
+
+	return allTags, totalCount, nil
+}
+
+// buildPagination은 페이지네이션 정보를 생성합니다.
+func buildPagination(totalCount, currentPage, pageSize int, baseURL string) PaginationInfo {
+	totalPages := (totalCount + pageSize - 1) / pageSize
+
+	var next, previous *string
+
+	if currentPage < totalPages {
+		nextURL := fmt.Sprintf("%s?page=%d&page_size=%d", baseURL, currentPage+1, pageSize)
+		next = &nextURL
+	}
+
+	if currentPage > 1 {
+		prevURL := fmt.Sprintf("%s?page=%d&page_size=%d", baseURL, currentPage-1, pageSize)
+		previous = &prevURL
+	}
+
+	return PaginationInfo{
+		Count:       totalCount,
+		Next:        next,
+		Previous:    previous,
+		CurrentPage: currentPage,
+		TotalPages:  totalPages,
+		PageSize:    pageSize,
+	}
 }
 
 // CreateTag creates a tag (Lightweight or Annotated)
