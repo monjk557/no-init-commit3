@@ -70,13 +70,6 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 게이트웨이에서 전달한 사용자 ID 확인
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		http.Error(w, "Missing user authentication context", http.StatusUnauthorized)
-		return
-	}
-
 	// Get repository path and validate
 	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
@@ -104,6 +97,10 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 
 	// Write service advertisement
 	_, _ = fmt.Fprintf(w, "001f# service=git-upload-pack\n")
+
+	// Write empty line (required by Git protocol)
+	// Empty line is 5 bytes total: 4 bytes for length header + 1 byte for newline
+	_, _ = fmt.Fprintf(w, "0005\n")
 
 	// Get repository references using our git package
 	// For now, we'll implement a basic version that gets HEAD and branches
