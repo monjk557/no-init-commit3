@@ -148,7 +148,7 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 	}
 
 	// 브랜치 diff 계산
-	diffResp, err := h.calculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
+	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
 		h.logger.Error("Failed to calculate branch diff", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})

@@ -193,7 +193,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 			return nil
 		}
 
-		lines := splitLines(content)
+		lines := SplitLines(content)
 		additions := len(lines)
 
 		fileDiff := FileDiff{
@@ -201,7 +201,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 			Status:    FileDiffStatusAdded,
 			Additions: additions,
 			Deletions: 0,
-			IsBinary:  isBinaryFile(content),
+			IsBinary:  IsBinaryFile(content),
 		}
 
 		// 바이너리가 아니고 contextLines > 0이면 라인 변경 생성
@@ -274,7 +274,7 @@ func (h *DiffHandler) processChanges(changes object.Changes, contextLines int) (
 		fileDiff, err := h.processChange(change, contextLines)
 		if err != nil {
 			// 로깅을 위해 파일 이름 가져오기
-			fileName := getFileName(change)
+			fileName := GetFileName(change)
 			// 오류 로깅하지만 다른 파일들은 계속 처리
 			fmt.Printf("Error processing change for %s: %v\n", fileName, err)
 			continue
@@ -291,10 +291,10 @@ func (h *DiffHandler) processChanges(changes object.Changes, contextLines int) (
 
 // processChange는 단일 파일 변경을 처리합니다
 func (h *DiffHandler) processChange(change *object.Change, contextLines int) (FileDiff, error) {
-	fileName := getFileName(change)
+	fileName := GetFileName(change)
 	fileDiff := FileDiff{
 		Path:     fileName,
-		Metadata: getFileMetadata(change),
+		Metadata: GetFileMetadata(change),
 	}
 
 	// 변경 상태 결정
@@ -323,11 +323,11 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 
 	// patch 콘텐츠와 파일명을 모두 사용한 향상된 바이너리 파일 감지
 	patchText := patch.String()
-	fileDiff.IsBinary = isBinaryFile(patchText)
+	fileDiff.IsBinary = IsBinaryFile(patchText)
 
 	// 바이너리가 아니고 contextLines > 0이면 라인 레벨 변경 생성
 	if !fileDiff.IsBinary && contextLines > 0 {
-		lines := splitLines(patchText)
+		lines := SplitLines(patchText)
 		lineChanges := h.GenerateLineChanges(lines, contextLines)
 		fileDiff.Changes = lineChanges
 	}
@@ -410,7 +410,7 @@ func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 }
 
 // getFileName은 change 객체에서 파일 이름을 추출합니다
-func getFileName(change *object.Change) string {
+func GetFileName(change *object.Change) string {
 	if change.To.Name != "" {
 		return change.To.Name
 	}
@@ -418,7 +418,7 @@ func getFileName(change *object.Change) string {
 }
 
 // splitLines는 콘텐츠를 개별 라인으로 분할합니다
-func splitLines(content string) []string {
+func SplitLines(content string) []string {
 	if content == "" {
 		return nil
 	}
@@ -441,7 +441,7 @@ func splitLines(content string) []string {
 }
 
 // calculateBranchDiff는 merge base 분석을 통해 두 브랜치 간의 diff 계산을 수행합니다
-func (h *DiffHandler) calculateBranchDiff(ctx context.Context, repoPath, baseBranch, headBranch string, contextLines int) (*DiffResponse, error) {
+func (h *DiffHandler) CalculateBranchDiff(ctx context.Context, repoPath, baseBranch, headBranch string, contextLines int) (*DiffResponse, error) {
 	// 캐시된 방식으로 저장소 열기
 	gitRepoWrapper, err := repositories.OpenRepositorySimple(repoPath)
 	if err != nil {
@@ -808,7 +808,7 @@ func (h *DiffHandler) processFileAddition(file *object.File, filePath string, co
 		return FileDiff{}, fmt.Errorf("failed to get file contents: %w", err)
 	}
 
-	lines := splitLines(content)
+	lines := SplitLines(content)
 	additions := len(lines)
 
 	fileDiff := FileDiff{
@@ -842,7 +842,7 @@ func (h *DiffHandler) processFileDeletion(file *object.File, filePath string, co
 		return FileDiff{}, fmt.Errorf("failed to get file contents: %w", err)
 	}
 
-	lines := splitLines(content)
+	lines := SplitLines(content)
 	deletions := len(lines)
 
 	fileDiff := FileDiff{
@@ -896,8 +896,8 @@ func (h *DiffHandler) processFileModification(baseFile, headFile *object.File, f
 	}
 
 	// 텍스트 파일에 대한 라인 레벨 diff 계산
-	baseLines := splitLines(baseContent)
-	headLines := splitLines(headContent)
+	baseLines := SplitLines(baseContent)
+	headLines := SplitLines(headContent)
 
 	// 간단한 라인 기반 diff 알고리즘
 	lineChanges, additions, deletions := h.calculateLineDiff(baseLines, headLines, contextLines, format)
@@ -1054,13 +1054,13 @@ func paginateFiles(files []FileDiff, pagination PaginationParams) ([]FileDiff, P
 	return files[start:end], pagination
 }
 
-// isBinaryFile은 콘텐츠와 확장자를 기반으로 파일이 바이너리인지 확인합니다
-func isBinaryFile(content string) bool {
+// IsBinaryFile은 콘텐츠와 확장자를 기반으로 파일이 바이너리인지 확인합니다
+func IsBinaryFile(content string) bool {
 	return enry.IsBinary([]byte(content))
 }
 
-// getFileMetadata는 파일 변경에 대한 메타데이터를 추출합니다
-func getFileMetadata(change *object.Change) map[string]interface{} {
+// GetFileMetadata는 파일 변경에 대한 메타데이터를 추출합니다
+func GetFileMetadata(change *object.Change) map[string]interface{} {
 	metadata := make(map[string]interface{})
 
 	// 파일 모드 정보 추출

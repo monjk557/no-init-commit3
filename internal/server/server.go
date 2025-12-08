@@ -19,6 +19,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/merge"
 	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -363,6 +364,18 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	mergePreviewHandlerV2, err := merge.NewMergePreviewHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create merge preview handler", zap.Error(err))
+		return
+	}
+
+	mergeOpsHandlerV2, err := merge.NewMergeOperationsHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create merge operations handler", zap.Error(err))
+		return
+	}
+
 	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
 
 	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
@@ -381,6 +394,9 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	apiV2Group.GET("/repository/:owner/:repo/diff/file", diffsHandler.HandleFileDiff)
 	apiV2Group.GET("/repository/:owner/:repo/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
 	apiV2Group.GET("/repository/:owner/:repo/diff/patch/:base/:head", diffsHandler.HandlePatch)
+
+	apiV2Group.GET("/repository/:owner/:repo/merges/preview", mergePreviewHandlerV2.HandleMergePreview)
+	apiV2Group.POST("/repository/:owner/:repo/merges", mergeOpsHandlerV2.HandleMerge)
 
 	{
 		// Repository creation endpoint - separate from existing repos
