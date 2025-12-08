@@ -24,6 +24,7 @@ import (
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/tags"
 	"github.com/collabops/git-executor/internal/tree"
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -323,7 +324,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	// refactoring code
 	//===============================================
 
-	apiV2Group := router.Group("/api/v2")
+	apiV2Group := router.Group("/v2/repos")
 	apiV2Group.Use(ginContextMiddleware())
 	apiV2Group.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
 	apiV2Group.Use(jsonResponseMiddleware.ErrorHandler())
@@ -337,6 +338,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	branchesHandler, err := branches.NewBranchOperationsHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create branch operations handler", zap.Error(err))
+		return
+	}
+
+	tagsHandler, err := tags.NewTagsHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create tags handler", zap.Error(err))
 		return
 	}
 
@@ -376,27 +383,31 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
-	apiV2Group.POST("/repository/:owner/:repo", repositoryHandler.HandleCreateRepository)
+	apiV2Group.POST("/:owner/:repo", repositoryHandler.HandleCreateRepository)
 
-	apiV2Group.POST("/repository/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
-	apiV2Group.PATCH("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleUpdateBranch)
-	apiV2Group.DELETE("/repository/:owner/:repo/branches/*branch", branchesHandler.HandleDeleteBranch)
+	apiV2Group.POST("/:owner/:repo/branches", branchesHandler.HandleCreateBranch)
+	apiV2Group.PATCH("/:owner/:repo/branches/*branch", branchesHandler.HandleUpdateBranch)
+	apiV2Group.DELETE("/:owner/:repo/branches/*branch", branchesHandler.HandleDeleteBranch)
 
-	apiV2Group.GET("/repository/:owner/:repo/tree", treeHandlerV2.HandleTreeAPI)
+	apiV2Group.GET("/:owner/:repo/tree", treeHandlerV2.HandleTreeAPI)
 
-	apiV2Group.GET("/repository/:owner/:repo/commits", commitsHandlerV2.HandleCommitsAPI)
-	apiV2Group.POST("/repository/:owner/:repo/commits", commitsHandlerV2.HandleMultiFileCommit)
+	apiV2Group.GET("/:owner/:repo/commits", commitsHandlerV2.HandleCommitsAPI)
+	apiV2Group.POST("/:owner/:repo/commits", commitsHandlerV2.HandleMultiFileCommit)
 
-	apiV2Group.GET("/repository/:owner/:repo/blob", blobHandlerV2.HandleBlobAPI)
+	apiV2Group.GET("/:owner/:repo/tags", tagsHandler.HandleGetTags)
+	apiV2Group.POST("/:owner/:repo/tags", tagsHandler.HandleCreateTag)
+	apiV2Group.DELETE("/:owner/:repo/tags/*tag", tagsHandler.HandleDeleteTag)
 
-	apiV2Group.GET("/repository/:owner/:repo/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
-	apiV2Group.GET("/repository/:owner/:repo/diff/branches/:base/:head", diffsHandler.HandleBranchDiff)
-	apiV2Group.GET("/repository/:owner/:repo/diff/file", diffsHandler.HandleFileDiff)
-	apiV2Group.GET("/repository/:owner/:repo/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
-	apiV2Group.GET("/repository/:owner/:repo/diff/patch/:base/:head", diffsHandler.HandlePatch)
+	apiV2Group.GET("/:owner/:repo/blob", blobHandlerV2.HandleBlobAPI)
 
-	apiV2Group.GET("/repository/:owner/:repo/merges/preview", mergePreviewHandlerV2.HandleMergePreview)
-	apiV2Group.POST("/repository/:owner/:repo/merges", mergeOpsHandlerV2.HandleMerge)
+	apiV2Group.GET("/:owner/:repo/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
+	apiV2Group.GET("/:owner/:repo/diff/branches/:base/:head", diffsHandler.HandleBranchDiff)
+	apiV2Group.GET("/:owner/:repo/diff/file", diffsHandler.HandleFileDiff)
+	apiV2Group.GET("/:owner/:repo/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
+	apiV2Group.GET("/:owner/:repo/diff/patch/:base/:head", diffsHandler.HandlePatch)
+
+	apiV2Group.GET("/:owner/:repo/merges/preview", mergePreviewHandlerV2.HandleMergePreview)
+	apiV2Group.POST("/:owner/:repo/merges", mergeOpsHandlerV2.HandleMerge)
 
 	{
 		// Repository creation endpoint - separate from existing repos
