@@ -31,7 +31,7 @@ type RepositoryDetailResponse struct {
 	Tree                 []git.TreeEntry           `json:"tree,"`
 	LatestCommits        git.Commit                `json:"latest_commits,"`
 	Branches             []git.Branch              `json:"branches,"`
-	Tags                 []git.Tag                 `json:"tag,"`
+	Tags                 []git.Tag                 `json:"tags,"`
 	Count                RepositoryCount           `json:"count,"`
 	Readme               string                    `json:"readme,"`
 	LanguageDistribution *git.LanguageDistribution `json:"language_distribution,omitempty"`

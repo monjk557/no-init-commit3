@@ -451,3 +451,72 @@ func GetBranches(repo *gogit.Repository) ([]SimpleBranchInfo, error) {
 
 	return branches, err
 }
+
+// BranchAheadBehind represents ahead/behind counts for a branch compared to another branch
+type BranchAheadBehind struct {
+	Ahead  int
+	Behind int
+}
+
+// CalculateAheadBehind calculates how many commits a branch is ahead/behind compared to a base branch
+func CalculateAheadBehind(repo *gogit.Repository, branchCommit, baseCommit *object.Commit) (*BranchAheadBehind, error) {
+	// Find merge base
+	mergeBases, err := branchCommit.MergeBase(baseCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find merge base: %w", err)
+	}
+	if len(mergeBases) == 0 {
+		return &BranchAheadBehind{Ahead: 0, Behind: 0}, nil
+	}
+	mergeBase := mergeBases[0]
+
+	// Calculate ahead count (from merge base to branch commit)
+	aheadCount, err := countCommitsBetween(repo, mergeBase, branchCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count ahead commits: %w", err)
+	}
+
+	// Calculate behind count (from merge base to base commit)
+	behindCount, err := countCommitsBetween(repo, mergeBase, baseCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count behind commits: %w", err)
+	}
+
+	return &BranchAheadBehind{
+		Ahead:  aheadCount,
+		Behind: behindCount,
+	}, nil
+}
+
+// countCommitsBetween counts commits between two commits (from excluded, to included)
+// Iterates from 'to' backwards until 'from' hash is found
+func countCommitsBetween(repo *gogit.Repository, from, to *object.Commit) (int, error) {
+	if from.Hash == to.Hash {
+		return 0, nil
+	}
+
+	iter, err := repo.Log(&gogit.LogOptions{From: to.Hash})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer iter.Close()
+
+	count := 0
+	fromHash := from.Hash.String()
+
+	walkErr := iter.ForEach(func(c *object.Commit) error {
+		if c.Hash.String() == fromHash {
+			return fmt.Errorf("stop iteration")
+		}
+		count++
+		return nil
+	})
+
+	if walkErr != nil && walkErr.Error() == "stop iteration" {
+		return count, nil
+	}
+	if walkErr == nil {
+		return count, nil
+	}
+	return 0, fmt.Errorf("failed to iterate commits: %w", walkErr)
+}

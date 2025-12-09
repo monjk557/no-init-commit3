@@ -45,7 +45,8 @@ func (s *RepositoryOverviewService) GetRemotes(ctx context.Context, repo *gogit.
 		return nil, fmt.Errorf("failed to get remotes: %w", err)
 	}
 
-	var remoteList []RemoteInfo
+	// 슬라이스 용량을 미리 할당하여 재할당 방지
+	remoteList := make([]RemoteInfo, 0, len(remotes))
 	for _, remote := range remotes {
 		remoteList = append(remoteList, RemoteInfo{
 			Name:      remote.Config().Name,
@@ -186,7 +187,8 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 	}
 
 	// 맵을 슬라이스로 변환하고 비율 계산
-	var languages []LanguageStats
+	// 용량을 미리 할당하여 재할당 방지
+	languages := make([]LanguageStats, 0, len(langStats))
 	for lang, stats := range langStats {
 		percentage := float64(0)
 		if totalBytes > 0 {

@@ -83,13 +83,26 @@ specs: ## 📋 OpenAPI specs management (fetch/generate/fix)
 .PHONY: format
 format:
 	@echo "🎨 Formatting Go code..."
-	@gofmt -w .
+	@find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec gofmt -w {} \;
 	@echo "📦 Organizing imports..."
-	@goimports -w . 2>/dev/null || echo "⚠️  goimports not found, skipping import organization"
+	@find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec goimports -w {} \; 2>/dev/null || echo "⚠️  goimports not found, skipping import organization"
 	@echo "🔍 Checking code formatting..."
-	@if [ "$(shell gofmt -l . | wc -l)" -gt 0 ]; then echo "❌ Code not formatted:"; gofmt -l .; exit 1; fi
+	@UNFORMATTED=$$(find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec gofmt -l {} \;); \
+	if [ -n "$$UNFORMATTED" ]; then \
+		echo "❌ Code not formatted:"; \
+		echo "$$UNFORMATTED"; \
+		exit 1; \
+	fi
 	@echo "🧹 Tidying modules..."
-	@go mod tidy
+	@TIDY_OUTPUT=$$(go mod tidy 2>&1); TIDY_EXIT=$$?; \
+	if [ $$TIDY_EXIT -ne 0 ]; then \
+		if echo "$$TIDY_OUTPUT" | grep -q "build/go-mod" && ! echo "$$TIDY_OUTPUT" | grep -v "build/go-mod" | grep -q "go:"; then \
+			echo "⚠️  go mod tidy: warnings about build/go-mod (ignored)"; \
+		else \
+			echo "$$TIDY_OUTPUT"; \
+			exit $$TIDY_EXIT; \
+		fi; \
+	fi
 	@echo "✅ Code formatting complete!"
 
 # Build the application

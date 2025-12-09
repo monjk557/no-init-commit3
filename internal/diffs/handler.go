@@ -56,12 +56,18 @@ func (h *DiffHandler) HandleCommitDiff(c *gin.Context) {
 		return
 	}
 
-	// 커밋 diff를 위해 base와 head 파라미터가 필수인지 검증
-	if params.Base == "" || params.Head == "" {
+	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
+	base := c.Param("base")
+	head := c.Param("head")
+	if base == "" || head == "" {
 		h.logger.Error("Missing required parameters: base or head")
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
 		return
 	}
+
+	// params에 URL 경로 파라미터 설정
+	params.Base = base
+	params.Head = head
 
 	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
@@ -124,12 +130,18 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 		return
 	}
 
-	// 브랜치 diff를 위해 base와 head 파라미터가 필수인지 검증
-	if params.Base == "" || params.Head == "" {
+	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
+	base := c.Param("base")
+	head := c.Param("head")
+	if base == "" || head == "" {
 		h.logger.Error("Missing required parameters: base or head")
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
 		return
 	}
+
+	// params에 URL 경로 파라미터 설정
+	params.Base = base
+	params.Head = head
 
 	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
@@ -309,12 +321,18 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 		return
 	}
 
-	// patch를 위해 base와 head 파라미터가 필수인지 검증
-	if params.Base == "" || params.Head == "" {
+	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
+	base := c.Param("base")
+	head := c.Param("head")
+	if base == "" || head == "" {
 		h.logger.Error("Missing required parameters: base or head")
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
 		return
 	}
+
+	// params에 URL 경로 파라미터 설정
+	params.Base = base
+	params.Head = head
 
 	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)

@@ -1,51 +1,59 @@
 package tree
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 )
 
 // GetTreeEntries는 저장소의 트리 항목을 가져옵니다.
-// pathConfig와 logger를 사용하여 TreeBuilder를 설정하고 트리 항목을 반환합니다.
+// 최적화: 캐시된 git.OpenRepositorySimple 사용하여 직접 GetTree 호출
 func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger, repoPath, ref, path string) ([]TreeEntry, error) {
-	// Extract owner and repo from repoPath
-	// repoPath format: /path/to/repos/owner/repo.git
-	parts := strings.Split(strings.Trim(repoPath, "/"), "/")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid repository path")
-	}
+	ctx := context.Background()
 
-	repoName := strings.TrimSuffix(parts[len(parts)-1], ".git")
-	owner := parts[len(parts)-2]
-
-	// Create object manager using pathConfig and logger
-	objectManager, err := repositories.NewGitObjectManager(pathConfig, logger)
+	// Open repository using the simple cache (same as v1)
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create object manager: %w", err)
+		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer func() { _ = gitRepo.Close() }()
 
-	// Use TreeBuilder with repositories package
-	treeBuilder := NewTreeBuilder(nil, nil) // storer and logger not needed for GetTree
-
-	// Set repository info
-	treeBuilder.SetRepositoryInfo(objectManager, owner, repoName, repoPath)
-
-	// Get tree entries
-	entries, err := treeBuilder.GetTree(ref, path)
+	// Get tree entries directly from git repository interface
+	entries, err := gitRepo.GetTree(ctx, ref, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tree: %w", err)
 	}
 
-	return entries, nil
+	// Convert git.TreeEntry to tree.TreeEntry
+	result := make([]TreeEntry, len(entries))
+	for i, entry := range entries {
+		result[i] = TreeEntry{
+			Path: entry.Path,
+			Name: entry.Name,
+			Type: string(entry.Type),
+		}
+	}
+
+	return result, nil
 }
 
 // getTreeStructure retrieves the tree structure using the Git repository interface
 func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntriesResponse, error) {
-	// Get tree entries using the public function
-	entries, err := GetTreeEntries(h.pathConfig, h.logger, repoPath, ref, path)
+	ctx := context.Background()
+
+	// Open repository using the simple cache (same as v1)
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+	defer func() { _ = gitRepo.Close() }()
+
+	// Get tree entries directly from git repository interface
+	entries, err := gitRepo.GetTree(ctx, ref, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tree: %w", err)
 	}
@@ -59,11 +67,11 @@ func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntries
 		// Convert type from git.EntryType to string expected by API
 		entryType := ""
 		switch entry.Type {
-		case string(EntryTypeTree):
+		case git.EntryTypeTree:
 			entryType = "tree"
-		case string(EntryTypeBlob):
+		case git.EntryTypeBlob:
 			entryType = "blob"
-		case string(EntryTypeCommit):
+		case git.EntryTypeCommit:
 			// For submodules, we'll treat them as trees for the API response
 			entryType = "tree"
 		default:
@@ -96,8 +104,10 @@ func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntries
 // getTreeStructureRecursive retrieves tree structure recursively from root to the specified path
 // Returns a map where keys are directory paths and values are tree entries in that directory
 func (h *TreeHandler) getTreeStructureRecursive(repoPath, ref, targetPath string) (map[string][]TreeEntry, error) {
-	// Open repository using the simple cache
-	gitRepo, err := repositories.OpenRepositorySimple(repoPath)
+	ctx := context.Background()
+
+	// Open repository using the simple cache (same as v1)
+	gitRepo, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
@@ -131,30 +141,10 @@ func (h *TreeHandler) getTreeStructureRecursive(repoPath, ref, targetPath string
 	// Map to store results: path -> []TreeEntry
 	result := make(map[string][]TreeEntry)
 
-	// Extract owner and repo from repoPath
-	parts := strings.Split(repoPath, "/")
-	var owner, repo string
-	if len(parts) >= 2 {
-		repo = strings.TrimSuffix(parts[len(parts)-1], ".git")
-		if len(parts) >= 3 {
-			owner = parts[len(parts)-2]
-		}
-	}
-
-	// Create object manager using pathConfig and logger
-	objectManager, err := repositories.NewGitObjectManager(h.pathConfig, h.logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create object manager: %w", err)
-	}
-
-	// Use TreeBuilder with repositories package
-	treeBuilder := NewTreeBuilder(nil, nil)
-	treeBuilder.SetRepositoryInfo(objectManager, owner, repo, repoPath)
-
 	// Explore each path from root to target
 	for _, path := range pathsToExplore {
-		// Get tree entries for this path
-		entries, err := treeBuilder.GetTree(ref, path)
+		// Get tree entries directly from git repository interface
+		entries, err := gitRepo.GetTree(ctx, ref, path)
 		if err != nil {
 			// If the requested path (or one of its parents) doesn't exist,
 			// propagate the error so the handler can return 404.
@@ -164,7 +154,7 @@ func (h *TreeHandler) getTreeStructureRecursive(repoPath, ref, targetPath string
 			continue
 		}
 
-		// Convert to responses.TreeEntry format (same as getTreeStructure)
+		// Convert to TreeEntry format
 		basePath := strings.Trim(path, "/")
 		var responseEntries []TreeEntry
 
@@ -172,11 +162,11 @@ func (h *TreeHandler) getTreeStructureRecursive(repoPath, ref, targetPath string
 			// Convert type from git.EntryType to string expected by API
 			entryType := ""
 			switch entry.Type {
-			case string(EntryTypeTree):
+			case git.EntryTypeTree:
 				entryType = "tree"
-			case string(EntryTypeBlob):
+			case git.EntryTypeBlob:
 				entryType = "blob"
-			case string(EntryTypeCommit):
+			case git.EntryTypeCommit:
 				// For submodules, we'll treat them as trees for the API response
 				entryType = "tree"
 			default:

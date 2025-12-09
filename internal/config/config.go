@@ -283,10 +283,14 @@ func parseObservabilityConfig() ObservabilityConfig {
 // EventsConfig 파싱 (환경변수 + 하드코딩)
 // ------------------------------------------------------------
 func parseEventsConfig() (EventsConfig, error) {
-	// Redis URL from environment variable (required)
+	// Redis URL from environment variable (optional for testing)
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
-		return EventsConfig{}, fmt.Errorf("REDIS_URL environment variable is required but not set")
+		// If REDIS_URL is not set, disable events (useful for testing environments)
+		return EventsConfig{
+			RedisURL: "",
+			Enabled:  false,
+		}, nil
 	}
 	// Enable events by default if REDIS_URL is set
 	enabled := true

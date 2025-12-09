@@ -3,6 +3,7 @@
 package branches
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -23,6 +24,7 @@ type BranchOperationsHandler struct {
 	logger             *logging.Logger
 	pathConfig         *repositories.PathConfig
 	pathValidator      *repositories.GitAPIPathValidator
+	repoManager        *repositories.DefaultRepositoryManager
 	objectManager      *repositories.GitObjectManager
 	responseMiddleware *api.JSONResponseMiddleware
 	errorMapper        *api.GitErrorMapper
@@ -46,6 +48,12 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 
 	// Create path validator
 	pathValidator := repositories.NewGitAPIPathValidator(pathConfig)
+
+	// Create repository manager
+	repoManager, err := repositories.NewRepositoryManager(pathConfig, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create repository manager: %w", err)
+	}
 
 	// Create object manager
 	objectManager, err := repositories.NewGitObjectManager(pathConfig, logger)
@@ -73,6 +81,7 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 		logger:             logger,
 		pathConfig:         pathConfig,
 		pathValidator:      pathValidator,
+		repoManager:        repoManager,
 		objectManager:      objectManager,
 		responseMiddleware: responseMiddleware,
 		errorMapper:        errorMapper,
@@ -81,8 +90,52 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 	}, nil
 }
 
+// repositoryContext는 저장소 관련 공통 컨텍스트를 담는 구조체입니다.
+type repositoryContext struct {
+	owner       string
+	repo        string
+	repoPath    string
+	repoWrapper *repositories.RepositoryWrapper
+}
+
+// validateAndOpenRepository는 저장소 검증 및 열기를 수행하는 공통 로직입니다.
+func (h *BranchOperationsHandler) validateAndOpenRepository(ctx context.Context, c *gin.Context, owner, repo string) (*repositoryContext, bool) {
+	// 경로 구성 요소 검증
+	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Invalid path: %v", err),
+		})
+		return nil, false
+	}
+
+	// 저장소 경로 가져오기
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return nil, false
+	}
+
+	// 저장소 열기 (존재 여부는 OpenRepository에서 확인)
+	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	if err != nil {
+		// repository not found 또는 corrupted
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return nil, false
+	}
+
+	return &repositoryContext{
+		owner:       owner,
+		repo:        repo,
+		repoPath:    repoPath,
+		repoWrapper: repoWrapper,
+	}, true
+}
+
 // HandleCreateBranch handles POST /repos/{owner}/{repo}/branches for creating new branches
 func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
+	ctx := c.Request.Context()
+
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -90,15 +143,6 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	h.logger.Info("Processing branch creation request",
 		zap.String("owner", owner),
 		zap.String("repo", repo))
-
-	// Validate path components
-	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return
-	}
 
 	// Parse and validate JSON request
 	var req CreateBranchRequest
@@ -119,15 +163,14 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 		return
 	}
 
-	// Open repository
-	repository, err := h.objectManager.OpenRepository(owner, repo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to open repository: %v", err),
-		})
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	if !ok {
 		return
 	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repository := repoCtx.repoWrapper.GetRepo()
 
 	// Call service to create branch
 	result, err := h.service.CreateBranch(repository, req)
@@ -170,6 +213,8 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 
 // HandleUpdateBranch handles PATCH /repos/{owner}/{repo}/branches/{branch} for updating branch pointers
 func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
+	ctx := c.Request.Context()
+
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -182,15 +227,6 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		zap.String("owner", owner),
 		zap.String("repo", repo),
 		zap.String("branch", branchName))
-
-	// Validate path components
-	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return
-	}
 
 	// Parse and validate JSON request
 	var req UpdateBranchRequest
@@ -240,15 +276,14 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		}
 	}
 
-	// Open repository
-	repository, err := h.objectManager.OpenRepository(owner, repo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to open repository: %v", err),
-		})
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	if !ok {
 		return
 	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repository := repoCtx.repoWrapper.GetRepo()
 
 	// Call service to update branch
 	result, err := h.service.UpdateBranch(repository, branchName, req)
@@ -278,7 +313,12 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		"previous_hash": result.PreviousHash,
 		"operation":     result.Operation,
 		"fast_forward":  result.FastForward,
-		"forced":        result.Forced,
+	}
+
+	// Only include "forced" field if currentCommit != targetCommit (v1 compatibility)
+	// When currentCommit == targetCommit, v1 omits the "forced" field
+	if result.PreviousHash != result.CommitHash {
+		responseData["forced"] = result.Forced
 	}
 
 	// Add rename-specific fields
@@ -301,6 +341,8 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 }
 
 func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
+	ctx := c.Request.Context()
+
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -316,15 +358,6 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		zap.String("raw_branch_param", c.Param("branch")),
 		zap.String("request_path", c.Request.URL.Path))
 
-	// Validate path components
-	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return
-	}
-
 	// Validate branch name
 	if err := h.validateBranchName(branchName); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -334,15 +367,14 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		return
 	}
 
-	// Open repository
-	repository, err := h.objectManager.OpenRepository(owner, repo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to open repository: %v", err),
-		})
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	if !ok {
 		return
 	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repository := repoCtx.repoWrapper.GetRepo()
 
 	// Call service to delete branch
 	result, err := h.service.DeleteBranch(repository, branchName)

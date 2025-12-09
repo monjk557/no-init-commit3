@@ -633,6 +633,7 @@ func (r *GoGitRepository) GetTags(ctx context.Context) ([]Tag, error) {
 	if err != nil {
 		return nil, NewGitError("get_tags", r.path, "", "failed to get references", err)
 	}
+	defer refs.Close()
 
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		// Check for context cancellation during iteration
@@ -644,17 +645,23 @@ func (r *GoGitRepository) GetTags(ctx context.Context) ([]Tag, error) {
 
 		// Only process tag references
 		if ref.Name().IsTag() {
-			tag := Tag{
-				Name: ref.Name().Short(),
-				Hash: ref.Hash().String(),
-			}
+			tagName := ref.Name().Short()
+			tagHash := ref.Hash()
 
 			// Try to get tag object for annotated tags
-			tagObj, err := r.repo.TagObject(ref.Hash())
-			if err == nil {
-				// This is an annotated tag
-				tag.IsAnnotated = true
+			tagObj, err := r.repo.TagObject(tagHash)
+			isAnnotated := err == nil
+
+			tag := Tag{
+				Name:        tagName,
+				Hash:        tagHash.String(),
+				IsAnnotated: isAnnotated,
+			}
+
+			// Annotated tag인 경우 추가 정보 설정
+			if isAnnotated && tagObj != nil {
 				tag.Message = tagObj.Message
+				tag.Hash = tagObj.Target.String() // 태그가 가리키는 커밋 해시
 				tag.Tagger = &CommitAuthor{
 					Name:  tagObj.Tagger.Name,
 					Email: tagObj.Tagger.Email,
@@ -670,6 +677,11 @@ func (r *GoGitRepository) GetTags(ctx context.Context) ([]Tag, error) {
 
 	if err != nil {
 		return nil, NewGitError("get_tags", r.path, "", "failed to iterate references", err)
+	}
+
+	// tags가 nil이면 빈 배열 반환 (JSON에서 null 대신 [] 반환)
+	if tags == nil {
+		tags = []Tag{}
 	}
 
 	return tags, nil

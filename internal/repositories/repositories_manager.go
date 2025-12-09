@@ -205,16 +205,10 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 }
 
 // OpenRepository opens an existing Git repository
+// Uses SimpleRepoCache for better performance (same as v1)
 func (rm *DefaultRepositoryManager) OpenRepository(path string) (*RepositoryWrapper, error) {
-	// For now, we'll return a simple wrapper around go-git repository
-	// This can be extended later to implement our Repository interface properly
-	gitRepo, err := gogit.PlainOpen(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %w", err)
-	}
-
-	// Return a wrapper that implements our Repository interface
-	return &RepositoryWrapper{repo: gitRepo, path: path}, nil
+	// Use cached repository opening for better performance
+	return OpenRepositorySimple(path)
 }
 
 // RepositoryExists checks if a repository exists at the given path

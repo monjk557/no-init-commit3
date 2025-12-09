@@ -181,7 +181,10 @@ func (s *Server) SetupRouter() *gin.Engine {
 	s.observabilityManager.SetupRoutes(router)
 
 	// Keep the original simple health check for backward compatibility
-	router.GET(s.config.Server.HealthCheckPath, s.healthCheck)
+	// Only register if not already registered (avoid conflicts in tests)
+	if s.config.Server.HealthCheckPath != "" {
+		router.GET(s.config.Server.HealthCheckPath, s.healthCheck)
+	}
 
 	// Setup Swagger documentation routes with proper configuration
 	s.setupSwaggerRoutes(router)
@@ -200,6 +203,9 @@ func (s *Server) SetupRouter() *gin.Engine {
 // setupAPIRoutesOnGroup configures API routes on a router group
 func (s *Server) setupAPIRoutesOnGroup(group *gin.RouterGroup) {
 	// Basic API info endpoint
+	// Check if route is already registered to avoid conflicts in tests
+	// Note: Gin doesn't provide a way to check if a route exists, so we'll
+	// rely on the fact that SetupRouter creates a new router each time
 	group.GET("/", func(c *gin.Context) {
 		c.Header("Content-Type", "application/json")
 		c.Status(http.StatusOK)
@@ -433,6 +439,8 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/overview", overviewHandler.HandleGetRepositoryOverview)
 	ownerRepoGroup.GET("/overview/tree", overviewHandler.HandleGetTreeOverview)
 	ownerRepoGroup.GET("/overview/blob", overviewHandler.HandleGetBlobOverview)
+	ownerRepoGroup.GET("/overview/branches", overviewHandler.HandleGetBranchesOverview)
+
 	{
 		// Repository creation endpoint - separate from existing repos
 

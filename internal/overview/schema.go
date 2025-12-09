@@ -10,6 +10,7 @@ import (
 
 // OverviewResponse is the response type for repository overview API
 type RepositoryOverviewResponse struct {
+	Success              bool                 `json:"success"`
 	Repository           string               `json:"repository"`
 	Owner                string               `json:"owner"`
 	Name                 string               `json:"name"`
@@ -100,46 +101,50 @@ func convertAuthorToGitAuthor(a commits.CommitAuthor) GitAuthor {
 }
 
 func convertBranchesToGitBranches(branches []BranchInfo) []GitBranch {
+	// 인덱스 접근 방식이 더 효율적
 	result := make([]GitBranch, len(branches))
-	for i, b := range branches {
+	for i := range branches {
 		result[i] = GitBranch{
-			Name:      b.Name,
-			Hash:      b.Hash,
-			IsRemote:  b.IsRemote,
-			IsCurrent: b.IsCurrent,
+			Name:      branches[i].Name,
+			Hash:      branches[i].Hash,
+			IsRemote:  branches[i].IsRemote,
+			IsCurrent: branches[i].IsCurrent,
 		}
 	}
 	return result
 }
 
 func convertTagsToGitTags(tags []tags.Tag) []GitTag {
+	// 인덱스 접근 방식이 더 효율적
 	result := make([]GitTag, len(tags))
-	for i, t := range tags {
+	for i := range tags {
 		result[i] = GitTag{
-			Name:        t.Name,
-			Hash:        t.Hash,
-			IsAnnotated: t.IsAnnotated,
+			Name:        tags[i].Name,
+			Hash:        tags[i].Hash,
+			IsAnnotated: tags[i].IsAnnotated,
 		}
 	}
 	return result
 }
 
 func convertTreeEntriesToGitTreeEntries(entries []tree.TreeEntry) []GitTreeEntry {
+	// 인덱스 접근 방식이 더 효율적
 	result := make([]GitTreeEntry, len(entries))
-	for i, e := range entries {
+	for i := range entries {
 		result[i] = GitTreeEntry{
-			Type: e.Type,
-			Name: e.Name,
-			Path: e.Path,
+			Type: entries[i].Type,
+			Name: entries[i].Name,
+			Path: entries[i].Path,
 		}
 	}
 	return result
 }
 
 func convertCommitsToGitCommits(commitsList []commits.Commit) []GitCommit {
+	// 인덱스 접근 방식이 더 효율적
 	result := make([]GitCommit, len(commitsList))
-	for i, c := range commitsList {
-		result[i] = convertCommitToGitCommit(c)
+	for i := range commitsList {
+		result[i] = convertCommitToGitCommit(commitsList[i])
 	}
 	return result
 }
@@ -178,4 +183,37 @@ type BlobOverviewResponse struct {
 	Branches     []GitBranch    `json:"branches"`
 	LatestCommit GitCommit      `json:"latest_commit"`
 	Commits      []GitCommit    `json:"commits"`
+}
+
+// BranchesOverviewResponse is the response type for branches overview API
+type BranchesOverviewResponse struct {
+	Default    []BranchListItem `json:"default"`
+	Yours      []BranchListItem `json:"yours"`
+	Active     []BranchListItem `json:"active"`
+	Stale      []BranchListItem `json:"stale"`
+	TotalCount int              `json:"total_count"`
+}
+
+// BranchListItem represents a single branch item in the branches overview
+type BranchListItem struct {
+	Name                string            `json:"name"`
+	Updated             string            `json:"updated"`
+	UpdatedBy           string            `json:"updated_by"`
+	CommitSHA           string            `json:"commit_sha"`
+	CommitMessage       string            `json:"commit_message"`
+	IsDefault           bool              `json:"is_default"`
+	Behind              int               `json:"behind"`
+	Ahead               int               `json:"ahead"`
+	ChangeRequest       ChangeRequestInfo `json:"change_request"`
+	CreatedBy           string            `json:"created_by"`
+	DaysSinceLastCommit int               `json:"days_since_last_commit"`
+	SortTime            time.Time         `json:"-"` // Internal field for sorting, excluded from JSON
+}
+
+// ChangeRequestInfo represents change request information for a branch
+type ChangeRequestInfo struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+	State string `json:"state"`
+	URL   string `json:"url"`
 }

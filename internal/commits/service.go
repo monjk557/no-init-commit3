@@ -38,18 +38,11 @@ func NewCommitsService(logger *logging.Logger, transactionManager *TransactionMa
 }
 
 // getCommitHistory는 Git 저장소 인터페이스를 사용하여 커밋 히스토리를 조회합니다.
-func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, params *CommitsRequestParams) ([]Commit, int, error) {
-	// 간단한 캐시를 사용하여 저장소 열기
-	gitRepo, err := repositories.OpenRepositorySimple(repoPath)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to open repository: %w", err)
-	}
-	defer func() { _ = gitRepo.Close() }()
-
+func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoWrapper *repositories.RepositoryWrapper, params *CommitsRequestParams) ([]Commit, int, error) {
 	// Git 저장소 인터페이스에서 커밋 조회
 	// 더 많은 페이지가 있는지 확인하기 위해 하나 더 요청
 	requestLimit := params.Limit + 1
-	commits, err := GetCommits(gitRepo, ctx, params.Ref, requestLimit, params.Skip)
+	commits, err := GetCommits(repoWrapper, ctx, params.Ref, requestLimit, params.Skip)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to get commits: %w", err)
 	}

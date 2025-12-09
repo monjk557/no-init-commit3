@@ -1433,9 +1433,18 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 	// Track file contents from previous operations to handle update->move scenarios
 	fileContents := make(map[string][]byte)
 
+	// Track moved original paths to detect conflicts with subsequent operations
+	movedOriginalPaths := make(map[string]int) // path -> operation index
+
 	// Check for file existence conflicts for create operations and validate delete/move operations
-	for _, op := range req.Operations {
+	for i, op := range req.Operations {
 		if op.Operation == OperationCreate {
+			// Check if this path was the original path of a previous move operation
+			if movedIdx, wasMoved := movedOriginalPaths[op.Path]; wasMoved {
+				apiErr := api.NewBadRequestError(fmt.Sprintf("Cannot create file '%s' after it was moved in operation %d", op.Path, movedIdx+1))
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
 			// Check if file exists using tree.File() method
 			_, err = tree.File(op.Path)
 			if err == nil {
@@ -1450,6 +1459,12 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 			}
 			// If err == object.ErrFileNotFound, file doesn't exist, which is what we want for create operation
 		} else if op.Operation == OperationDelete {
+			// Check if this path was moved in a previous operation
+			if movedIdx, wasMoved := movedOriginalPaths[op.Path]; wasMoved {
+				apiErr := api.NewBadRequestError(fmt.Sprintf("Cannot delete file '%s' after it was moved in operation %d", op.Path, movedIdx+1))
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
 			// Check if file exists - it must exist for delete operation
 			_, err = tree.File(op.Path)
 			if err == object.ErrFileNotFound {
@@ -1491,6 +1506,15 @@ func (h *FileOperationsHandler) HandleMultiFileCommit(c *gin.Context) {
 				return
 			}
 			// If err == object.ErrFileNotFound, target doesn't exist, which is what we want for move operation
+			// Track the original path as moved for conflict detection
+			movedOriginalPaths[op.OriginalPath] = i
+		} else if op.Operation == OperationUpdate {
+			// Check if this path was moved in a previous operation
+			if movedIdx, wasMoved := movedOriginalPaths[op.Path]; wasMoved {
+				apiErr := api.NewBadRequestError(fmt.Sprintf("Cannot update file '%s' after it was moved in operation %d", op.Path, movedIdx+1))
+				c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+				return
+			}
 		}
 
 		// Track content for create and update operations so move can use updated content

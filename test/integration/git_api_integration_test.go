@@ -317,12 +317,6 @@ func (suite *IntegrationTestSuite) makeRequest(method, path string, body interfa
 		return nil, err
 	}
 
-	req.Header.Set("X-USER-ID", "testuser")
-	req.Header.Set("X-Source", "orchestrator")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
 	return http.DefaultClient.Do(req)
 }
 

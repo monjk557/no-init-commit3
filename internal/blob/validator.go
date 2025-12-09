@@ -36,7 +36,7 @@ func ValidateBlobParams(owner, repo, path, ref string) error {
 	}
 
 	// 파일 경로 검증
-	if err := validateFilePath(path); err != nil {
+	if err := ValidateFilePath(path); err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
@@ -62,8 +62,8 @@ func validateGitRef(ref string) error {
 	return nil
 }
 
-// validateFilePath는 파일 경로를 검증하고 디렉토리 탐색 공격을 방지합니다.
-func validateFilePath(path string) error {
+// ValidateFilePath는 파일 경로를 검증하고 디렉토리 탐색 공격을 방지합니다.
+func ValidateFilePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("path cannot be empty")
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/collabops/git-executor/internal/config"
@@ -122,16 +123,38 @@ func createBlobForFileOps(t *testing.T, repo *gogit.Repository, filename, conten
 }
 
 func createTreeForFileOps(t *testing.T, repo *gogit.Repository, entries []treeEntryForFileOps) plumbing.Hash {
-	tree := &object.Tree{
-		Entries: make([]object.TreeEntry, len(entries)),
-	}
+	treeEntries := make([]object.TreeEntry, len(entries))
 
 	for i, entry := range entries {
-		tree.Entries[i] = object.TreeEntry{
+		treeEntries[i] = object.TreeEntry{
 			Name: entry.Name,
 			Mode: entry.Mode,
 			Hash: entry.Hash,
 		}
+	}
+
+	// Sort tree entries (Git requirement)
+	// Git tree entries must be sorted using the same logic as go-git's TreeEntrySorter:
+	// - Directories have "/" appended to their name for comparison
+	// - This ensures directories come before files with the same prefix
+	// - Then entries are sorted alphabetically by the modified name
+	sort.Slice(treeEntries, func(i, j int) bool {
+		name1 := treeEntries[i].Name
+		name2 := treeEntries[j].Name
+
+		// Append "/" to directory names for comparison (same as go-git's TreeEntrySorter)
+		if treeEntries[i].Mode == filemode.Dir {
+			name1 += "/"
+		}
+		if treeEntries[j].Mode == filemode.Dir {
+			name2 += "/"
+		}
+
+		return name1 < name2
+	})
+
+	tree := &object.Tree{
+		Entries: treeEntries,
 	}
 
 	treeObj := repo.Storer.NewEncodedObject()
@@ -430,12 +453,16 @@ func TestMultiFileCommit_UpdateThenMoveOriginalPath(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "Should succeed when updating a file and then moving it in the same transaction")
 
 	// Verify the response
-	var response protocol.MultiFileCommitResponse
-	err := json.Unmarshal(w.Body.Bytes(), &response)
+	// api.SendSuccess wraps the response in APIResponse with Data field
+	var apiResponse struct {
+		Success bool                             `json:"success"`
+		Data    protocol.MultiFileCommitResponse `json:"data"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &apiResponse)
 	require.NoError(t, err)
-	assert.True(t, response.Success, "Transaction should succeed")
-	assert.Equal(t, 2, response.TotalOperations)
-	assert.Equal(t, 2, response.SuccessfulOps)
+	assert.True(t, apiResponse.Success, "Transaction should succeed")
+	assert.Equal(t, 2, apiResponse.Data.TotalOperations)
+	assert.Equal(t, 2, apiResponse.Data.SuccessfulOps)
 
 	// Note: Content verification would require accessing handler's objectManager
 	// which is not exposed. The test verifies that the operation succeeds.
@@ -673,12 +700,16 @@ func TestMultiFileCommit_UpdateThenMoveWithContentVerification(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "Should succeed when updating a file and then moving it in the same transaction")
 
 	// Verify the response
-	var response protocol.MultiFileCommitResponse
-	err := json.Unmarshal(w.Body.Bytes(), &response)
+	// api.SendSuccess wraps the response in APIResponse with Data field
+	var apiResponse struct {
+		Success bool                             `json:"success"`
+		Data    protocol.MultiFileCommitResponse `json:"data"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &apiResponse)
 	require.NoError(t, err)
-	assert.True(t, response.Success, "Transaction should succeed")
-	assert.Equal(t, 2, response.TotalOperations)
-	assert.Equal(t, 2, response.SuccessfulOps)
+	assert.True(t, apiResponse.Success, "Transaction should succeed")
+	assert.Equal(t, 2, apiResponse.Data.TotalOperations)
+	assert.Equal(t, 2, apiResponse.Data.SuccessfulOps)
 
 	// Verify that old.txt no longer exists
 	getReq, _ := http.NewRequest("GET", "/repos/testowner/testrepo/files/old.txt?ref=main", nil)

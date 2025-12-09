@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	gogit "github.com/go-git/go-git/v5"
 
@@ -100,6 +101,7 @@ func NewGitObjectManager(pathConfig *PathConfig, logger *logging.Logger) (*GitOb
 }
 
 // OpenRepository opens a Git repository for manipulation
+// Uses cache for better performance (same as v2)
 func (gom *GitObjectManager) OpenRepository(owner, repo string) (*gogit.Repository, error) {
 	// Get the repository path using existing path validation
 	repoPath, err := GetRepoPath(&gom.pathConfig, owner, repo)
@@ -119,10 +121,25 @@ func (gom *GitObjectManager) OpenRepository(owner, repo string) (*gogit.Reposito
 		return nil, fmt.Errorf("repository validation failed: %w", err)
 	}
 
-	// Open the repository using go-git
-	gitRepo, err := gogit.PlainOpen(repoPath)
+	// Open the repository using cache (same as v2)
+	gitRepoInterface, err := git.OpenRepositorySimple(repoPath)
 	if err != nil {
 		gom.logger.Error("Failed to open Git repository",
+			zap.String("path", repoPath),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// Convert to *gogit.Repository (extract from GoGitRepository)
+	// GoGitRepository는 내부적으로 *gogit.Repository를 가지고 있음
+	if gogitRepo, ok := gitRepoInterface.(*git.GoGitRepository); ok {
+		return gogitRepo.GetGoGitRepo(), nil
+	}
+
+	// Fallback: 직접 열기 (should not happen)
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		gom.logger.Error("Failed to open Git repository (fallback)",
 			zap.String("path", repoPath),
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to open repository: %w", err)

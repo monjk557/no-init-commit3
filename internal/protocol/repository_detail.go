@@ -136,6 +136,12 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		emptyRepository = true
 	}
 
+	// remotes 가져오기 시도
+	remotes, err := gitRepo.GetRemotes(ctx)
+	if err != nil {
+		remotes = []git.Remote{}
+	}
+
 	// commit이 없는 빈 저장소인 경우 early return
 	if emptyRepository {
 		response := responses.RepositoryDetailResponse{
@@ -146,12 +152,12 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 			Tree:          []git.TreeEntry{},
 			LatestCommits: git.Commit{},
 			Branches:      []git.Branch{},
-			Tags:          nil,
+			Tags:          []git.Tag{},
 			Count: responses.RepositoryCount{
 				Commits:  0,
 				Branches: 0,
 				Tags:     0,
-				Remotes:  0,
+				Remotes:  len(remotes),
 				Total:    0,
 			},
 			Readme:               "",
@@ -175,20 +181,14 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 	// 7. tags 가져오기
 	tags, err := gitRepo.GetTags(ctx)
 	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_tags")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
+		// 태그 조회 실패 시 로그만 남기고 빈 배열 사용 (선택적 기능)
+		tags = []git.Tag{}
+	}
+	// tags가 nil이면 빈 배열로 초기화 (JSON에서 null 대신 [] 반환)
+	if tags == nil {
+		tags = []git.Tag{}
 	}
 	h.logger.Info("tags", zap.Any("tags", tags))
-
-	// 8. remotes 가져오기
-	remotes, err := gitRepo.GetRemotes(ctx)
-	if err != nil {
-		apiErr := h.errorMapper.MapError(err, "get_remotes")
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
-		return
-	}
-	h.logger.Info("remotes", zap.Any("remotes", remotes))
 
 	// 9. readme 가져오기
 	readmeData, err := gitRepo.GetBlob(ctx, "README.md", ref)
@@ -230,13 +230,13 @@ func (h *RepositoryDetailHandler) HandleGetRepositoryDetail(c *gin.Context) {
 		Tree:          treeEntries,
 		LatestCommits: latestCommit,
 		Branches:      branches,
-		Tags:          nil,
+		Tags:          tags,
 		Count: responses.RepositoryCount{
 			Commits:  len(commits),
 			Branches: len(branches),
-			Tags:     0,
+			Tags:     len(tags),
 			Remotes:  len(remotes),
-			Total:    len(commits) + len(branches) + 0 + len(remotes),
+			Total:    len(commits) + len(branches) + len(tags) + len(remotes),
 		},
 		Readme:               readmeContent,
 		LanguageDistribution: languageDistribution,

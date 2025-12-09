@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/branches"
@@ -15,6 +17,9 @@ import (
 	"github.com/collabops/git-executor/internal/tags"
 	"github.com/collabops/git-executor/internal/tree"
 	"github.com/gin-gonic/gin"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
@@ -94,21 +99,11 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		return nil, false
 	}
 
-	// 저장소 존재 여부 확인
-	exists, err := h.repoManager.RepositoryExists(repoPath)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
-	}
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
-	}
-
-	// 저장소 열기
+	// 저장소 열기 (존재 여부는 OpenRepository에서 확인)
 	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		// repository not found 또는 corrupted
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return nil, false
 	}
 
@@ -122,16 +117,11 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		return nil, false
 	}
 
-	// ref가 제공된 경우 검증
+	// ref가 제공된 경우 검증 (ref를 해석 가능한지 확인)
 	if ref != "" && ref != "HEAD" {
-		branchExists := false
-		for _, branch := range branchesList {
-			if branch.Name == ref {
-				branchExists = true
-				break
-			}
-		}
-		if !branchExists {
+		// ref를 해석해서 유효한지 확인
+		_, err := repoWrapper.ResolveReference(ref)
+		if err != nil {
 			_ = repoWrapper.Close()
 			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
 			return nil, false
@@ -139,7 +129,8 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 	}
 
 	// branches.SimpleBranchInfo를 overview.BranchInfo로 변환
-	var overviewBranches []BranchInfo
+	// 슬라이스 용량을 미리 할당하여 재할당 방지
+	overviewBranches := make([]BranchInfo, 0, len(branchesList))
 	for _, b := range branchesList {
 		overviewBranches = append(overviewBranches, BranchInfo{
 			Name:      b.Name,
@@ -178,11 +169,13 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	branchesList := repoCtx.branchesList
 	repoPath := repoCtx.repoPath
 
-	// 커밋 가져오기 (빈 저장소 확인 및 최신 커밋용)
+	// 커밋 가져오기 (최신 커밋 및 Count용)
+	// Count를 위해 합리적인 limit(1000)을 설정하되, 최신 커밋은 첫 번째 요소
 	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 9999999, 0)
 	if err != nil || len(commitsList) == 0 {
 		// 빈 저장소
 		response := RepositoryOverviewResponse{
+			Success:       true,
 			Repository:    fmt.Sprintf("%s/%s", owner, repo),
 			Owner:         owner,
 			Name:          repo,
@@ -210,17 +203,18 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	}
 
 	latestCommit := commitsList[0]
+	commitsCount := len(commitsList)
 
 	// 트리 항목 가져오기
 	treeEntries, err := tree.GetTreeEntries(h.pathConfig, h.logger, repoPath, repoCtx.ref, path)
 	if err != nil {
-
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
 	}
 
 	// 태그 가져오기
-	tagsList, _, err := tags.GetTags(repoCtx.repoWrapper, 9999999, 0)
+	// Repository overview에서는 태그 목록만 필요하므로 적절한 limit 설정
+	tagsList, _, err := tags.GetTags(repoCtx.repoWrapper, 100, 0)
 	if err != nil {
 		h.logger.Warn("Failed to get tags", zap.Error(err))
 		tagsList = []tags.Tag{}
@@ -234,8 +228,9 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	}
 
 	// README 가져오기
+	// README 크기 제한 (100KB) - 큰 README는 메모리 사용량을 증가시킴
 	readmeContent := ""
-	readmeData, _, err := h.blobService.GetBlobContent(ctx, owner, repo, "README.md", repoCtx.ref)
+	readmeData, _, err := h.blobService.GetBlobContent(ctx, owner, repo, "README.md", repoCtx.ref, repoCtx.repoWrapper)
 	if err != nil {
 		// README를 찾을 수 없는 것은 오류가 아님 - "not found" 오류인지 확인
 		errStr := err.Error()
@@ -243,7 +238,14 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			h.logger.Warn("Failed to get README", zap.Error(err))
 		}
 	} else {
-		readmeContent = string(readmeData)
+		// 100KB 제한
+		const maxReadmeSize = 100 * 1024
+		if len(readmeData) > maxReadmeSize {
+			readmeContent = string(readmeData[:maxReadmeSize])
+			h.logger.Warn("README truncated", zap.Int("original_size", len(readmeData)), zap.Int("truncated_size", maxReadmeSize))
+		} else {
+			readmeContent = string(readmeData)
+		}
 	}
 
 	// 언어 분포 가져오기
@@ -251,6 +253,7 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 
 	// 응답 구성
 	response := RepositoryOverviewResponse{
+		Success:       true,
 		Repository:    fmt.Sprintf("%s/%s", owner, repo),
 		Owner:         owner,
 		Name:          repo,
@@ -260,11 +263,11 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		Branches:      convertBranchesToGitBranches(branchesList),
 		Tags:          convertTagsToGitTags(tagsList),
 		Count: RepositoryCount{
-			Commits:  len(commitsList),
+			Commits:  commitsCount,
 			Branches: len(branchesList),
 			Tags:     len(tagsList),
 			Remotes:  len(remotesList),
-			Total:    len(commitsList) + len(branchesList) + len(tagsList) + len(remotesList),
+			Total:    commitsCount + len(branchesList) + len(tagsList) + len(remotesList),
 		},
 		Readme:               readmeContent,
 		LanguageDistribution: languageDistribution,
@@ -347,7 +350,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
 	// blob 가져오기
-	blobContent, _, err := h.blobService.GetBlobContent(ctx, owner, repo, path, repoCtx.ref)
+	blobContent, _, err := h.blobService.GetBlobContent(ctx, owner, repo, path, repoCtx.ref, repoCtx.repoWrapper)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "file not found"})
 		return
@@ -390,4 +393,260 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// HandleGetBranchesOverview는 브랜치 개요를 위한 GET /api/v1/repository/{owner}/{repo}/overview/branches 요청을 처리합니다
+func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	ref := c.Query("ref")
+	userEmail := c.Query("email")
+
+	// email 파라미터 필수 검증 (v1과 일관성 유지)
+	if userEmail == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Missing required parameter: email",
+		})
+		return
+	}
+
+	// ref가 제공되지 않으면 기본값으로 HEAD 사용
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	// 경로 구성 요소 검증
+	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return
+	}
+
+	// 저장소 경로 가져오기
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return
+	}
+
+	// 저장소 열기 (존재 여부는 OpenRepository에서 확인)
+	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return
+	}
+	defer func() { _ = repoWrapper.Close() }()
+
+	gitRepo := repoWrapper.GetRepo()
+
+	// ref가 제공된 경우 검증 (ref를 해석 가능한지 확인)
+	if ref != "" && ref != "HEAD" {
+		_, err := repoWrapper.ResolveReference(ref)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
+			return
+		}
+	}
+
+	// 모든 참조(브랜치) 조회
+	refs, err := gitRepo.References()
+	if err != nil {
+		h.logger.Error("failed to get references", zap.Error(err))
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
+	}
+	defer refs.Close()
+
+	var defaultBranches []BranchListItem
+	var yoursBranches []BranchListItem
+	var activeBranches []BranchListItem
+	var staleBranches []BranchListItem
+	var defaultBranch string
+	allBranchesCount := 0
+
+	// 기본 브랜치 확인
+	headRef, err := gitRepo.Head()
+	if err == nil {
+		defaultBranch = headRef.Name().Short()
+	}
+
+	// 각 참조 처리
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		// 브랜치 참조만 처리
+		if ref.Name().IsBranch() {
+			allBranchesCount++
+			branchName := ref.Name().Short()
+
+			// 커밋 정보 조회
+			commit, err := gitRepo.CommitObject(ref.Hash())
+			if err != nil {
+				h.logger.Warn("Failed to get commit for branch",
+					zap.String("branch", branchName),
+					zap.Error(err))
+				return nil // 다른 브랜치 계속 처리
+			}
+
+			// 커밋 작성자 가져오기
+			author := commit.Author.Name
+			if author == "" {
+				author = commit.Author.Email
+			}
+
+			// 마지막 커밋 이후 경과 일수 계산
+			daysSinceLastCommit := int(time.Since(commit.Author.When).Hours() / 24)
+
+			// 분류 신호 계산
+			isStale := daysSinceLastCommit >= 120
+			isYours := false
+			if userEmail != "" {
+				isYours = strings.EqualFold(commit.Author.Email, userEmail) ||
+					strings.EqualFold(commit.Author.Name, userEmail)
+			}
+
+			// 브랜치 아이템 생성; 정렬/표시는 최신 커밋 시간 기준
+			sortTime := commit.Author.When
+			branchItem := BranchListItem{
+				Name:                branchName,
+				Updated:             sortTime.Format("Jan 2, 2006"),
+				UpdatedBy:           author,
+				CommitSHA:           commit.Hash.String()[:8],
+				CommitMessage:       commit.Message,
+				IsDefault:           branchName == defaultBranch,
+				Behind:              0,
+				Ahead:               0,
+				CreatedBy:           commit.Author.Email,
+				DaysSinceLastCommit: daysSinceLastCommit,
+				SortTime:            sortTime,
+			}
+
+			// 기본 브랜치 대비 앞섬/뒤처짐 계산(GitHub 스타일)
+			if defaultBranch != "" && branchName != defaultBranch {
+				// 기본 브랜치 커밋 해시 조회
+				defaultRefName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", defaultBranch))
+				defaultRef, derr := gitRepo.Reference(defaultRefName, false)
+				if derr == nil {
+					defaultCommit, derr := gitRepo.CommitObject(defaultRef.Hash())
+					if derr == nil {
+						// 공통 조상(merge base) 찾기
+						mergeBases, mErr := commit.MergeBase(defaultCommit)
+						if mErr == nil && len(mergeBases) > 0 {
+							mergeBase := mergeBases[0]
+							// 앞선 커밋 수 계산(브랜치→기본)
+							aheadCount, aErr := countCommitsBetween(gitRepo, mergeBase, commit)
+							if aErr == nil {
+								branchItem.Ahead = aheadCount
+							}
+							// 뒤처진 커밋 수 계산(기본→브랜치)
+							behindCount, bErr := countCommitsBetween(gitRepo, mergeBase, defaultCommit)
+							if bErr == nil {
+								branchItem.Behind = behindCount
+							}
+						}
+					}
+				}
+			}
+
+			// 그룹 분류(기본 제외하고 중복 포함 가능)
+			if branchItem.IsDefault {
+				defaultBranches = append(defaultBranches, branchItem)
+			} else {
+				if isYours {
+					yoursBranches = append(yoursBranches, branchItem)
+				}
+				if isStale {
+					staleBranches = append(staleBranches, branchItem)
+				} else {
+					// Active: 최근 업데이트, 기본 브랜치 아님
+					activeBranches = append(activeBranches, branchItem)
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		h.logger.Error("Error processing references", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Error processing references"})
+		return
+	}
+
+	// 최신 생성/업데이트 순(내림차순)으로 정렬하고 Yours/Active/Stale는 각 5개로 제한
+	sort.Slice(yoursBranches, func(i, j int) bool {
+		if yoursBranches[i].SortTime.Equal(yoursBranches[j].SortTime) {
+			return yoursBranches[i].Name > yoursBranches[j].Name
+		}
+		return yoursBranches[i].SortTime.After(yoursBranches[j].SortTime)
+	})
+	if len(yoursBranches) > 5 {
+		yoursBranches = yoursBranches[:5]
+	}
+
+	sort.Slice(activeBranches, func(i, j int) bool {
+		if activeBranches[i].SortTime.Equal(activeBranches[j].SortTime) {
+			return activeBranches[i].Name > activeBranches[j].Name
+		}
+		return activeBranches[i].SortTime.After(activeBranches[j].SortTime)
+	})
+	if len(activeBranches) > 5 {
+		activeBranches = activeBranches[:5]
+	}
+
+	sort.Slice(staleBranches, func(i, j int) bool {
+		if staleBranches[i].SortTime.Equal(staleBranches[j].SortTime) {
+			return staleBranches[i].Name > staleBranches[j].Name
+		}
+		return staleBranches[i].SortTime.After(staleBranches[j].SortTime)
+	})
+	if len(staleBranches) > 5 {
+		staleBranches = staleBranches[:5]
+	}
+
+	// 응답 생성
+	response := BranchesOverviewResponse{
+		Default:    defaultBranches,
+		Yours:      yoursBranches,
+		Active:     activeBranches,
+		Stale:      staleBranches,
+		TotalCount: allBranchesCount,
+	}
+
+	h.logger.Info("Successfully retrieved branches overview",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("total_branches", allBranchesCount))
+
+	c.JSON(http.StatusOK, response)
+}
+
+// countCommitsBetween counts commits between two commits (from excluded, to included)
+// Iterates from 'to' backwards until 'from' hash is found
+func countCommitsBetween(repo *gogit.Repository, from, to *object.Commit) (int, error) {
+	if from.Hash == to.Hash {
+		return 0, nil
+	}
+
+	iter, err := repo.Log(&gogit.LogOptions{From: to.Hash})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer iter.Close()
+
+	count := 0
+	fromHash := from.Hash.String()
+
+	walkErr := iter.ForEach(func(c *object.Commit) error {
+		if c.Hash.String() == fromHash {
+			return fmt.Errorf("stop iteration")
+		}
+		count++
+		return nil
+	})
+
+	if walkErr != nil && walkErr.Error() == "stop iteration" {
+		return count, nil
+	}
+	if walkErr == nil {
+		return count, nil
+	}
+	return 0, fmt.Errorf("failed to iterate commits: %w", walkErr)
 }

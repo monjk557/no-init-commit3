@@ -1,6 +1,7 @@
 package commits
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,9 +16,12 @@ import (
 // CommitsHandler는 Git 커밋 로그 REST API 엔드포인트를 처리합니다.
 // 커밋 히스토리 조회 요청을 받아서 페이지네이션과 함께 응답합니다.
 type CommitsHandler struct {
-	pathConfig *repositories.PathConfig
-	logger     *logging.Logger
-	service    *CommitsService
+	config        *config.Config
+	pathConfig    *repositories.PathConfig
+	logger        *logging.Logger
+	pathValidator *repositories.GitAPIPathValidator
+	repoManager   *repositories.DefaultRepositoryManager
+	service       *CommitsService
 }
 
 // NewCommitsHandler는 새로운 commits 핸들러를 생성합니다.
@@ -38,6 +42,13 @@ func NewCommitsHandler(cfg *config.Config) (*CommitsHandler, error) {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
+	pathValidator := repositories.NewGitAPIPathValidator(pathConfig)
+
+	repoManager, err := repositories.NewRepositoryManager(pathConfig, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create repository manager: %w", err)
+	}
+
 	transactionManager := NewTransactionManager(logger)
 
 	// Initialize events client if enabled
@@ -53,10 +64,59 @@ func NewCommitsHandler(cfg *config.Config) (*CommitsHandler, error) {
 	service := NewCommitsService(logger, transactionManager, eventsClient)
 
 	return &CommitsHandler{
-		pathConfig: pathConfig,
-		logger:     logger,
-		service:    service,
+		config:        cfg,
+		pathConfig:    pathConfig,
+		logger:        logger,
+		pathValidator: pathValidator,
+		repoManager:   repoManager,
+		service:       service,
 	}, nil
+}
+
+// repositoryContext는 저장소 관련 공통 컨텍스트를 담는 구조체입니다.
+type repositoryContext struct {
+	owner       string
+	repo        string
+	ref         string
+	repoPath    string
+	repoWrapper *repositories.RepositoryWrapper
+}
+
+// validateAndOpenRepository는 저장소 검증 및 열기를 수행하는 공통 로직입니다.
+func (h *CommitsHandler) validateAndOpenRepository(ctx context.Context, c *gin.Context, owner, repo, ref string) (*repositoryContext, bool) {
+	// ref가 제공되지 않으면 기본값으로 HEAD 사용
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	// 경로 구성 요소 검증
+	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return nil, false
+	}
+
+	// 저장소 경로 가져오기
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return nil, false
+	}
+
+	// 저장소 열기 (존재 여부는 OpenRepository에서 확인)
+	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	if err != nil {
+		// repository not found 또는 corrupted
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return nil, false
+	}
+
+	return &repositoryContext{
+		owner:       owner,
+		repo:        repo,
+		ref:         ref,
+		repoPath:    repoPath,
+		repoWrapper: repoWrapper,
+	}, true
 }
 
 // HandleCommitsAPI는 GET /repos/:owner/:repo/commits?ref=:ref&limit=:limit&skip=:skip 요청을 처리합니다.
@@ -70,15 +130,15 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		return
 	}
 
-	// 저장소 경로 조회 및 검증
-	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, params.Owner, params.Repo, params.Ref)
+	if !ok {
 		return
 	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
 	// 커밋 히스토리 조회
-	commits, totalCount, err := h.getCommitHistory(ctx, repoPath, params)
+	commits, totalCount, err := h.getCommitHistory(ctx, repoCtx.repoWrapper, params)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -147,20 +207,14 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
 		branch = "main"
 	}
 
-	// 저장소 경로 조회 및 검증
-	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, branch)
+	if !ok {
 		return
 	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	// 저장소 열기
-	repository, err := repositories.OpenRepositorySimple(repoPath)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
-		return
-	}
-	defer func() { _ = repository.Close() }()
+	repository := repoCtx.repoWrapper
 
 	// 서비스를 통해 비즈니스 로직 실행
 	response, err := h.service.ExecuteMultiFileCommit(ctx, repository, &req, branch, owner, repo)
