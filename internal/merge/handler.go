@@ -312,7 +312,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	}
 
 	if mergeResult.MergeCommit != nil {
-		response.MergeCommit = mergeResult.MergeCommit
+		response.MergeCommit = convertCommitToInfo(mergeResult.MergeCommit)
 	}
 
 	// Add additional details

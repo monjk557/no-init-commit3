@@ -33,22 +33,23 @@ const (
 
 // MergeRequest represents the JSON payload for merge operations
 type MergeRequest struct {
-	SourceRef     string                 `json:"source_ref" binding:"required"` // Source branch/commit to merge FROM
-	TargetRef     string                 `json:"target_ref" binding:"required"` // Target branch/commit to merge INTO
-	Method        MergeMethod            `json:"method,omitempty"`              // Merge method (merge, squash, rebase) - default: merge
-	Strategy      MergeStrategy          `json:"strategy,omitempty"`            // Merge strategy (default: recursive)
-	Message       string                 `json:"message,omitempty"`             // Custom merge commit message
-	Author        *AuthorInfo            `json:"author,omitempty"`              // Merge commit author
-	Committer     *AuthorInfo            `json:"committer,omitempty"`           // Merge commit committer
-	ForceConflict bool                   `json:"force_conflict,omitempty"`      // Force merge even with conflicts
-	DryRun        bool                   `json:"dry_run,omitempty"`             // Analyze merge without performing it
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`            // Additional metadata
+	SourceRef       string                 `json:"source_ref" binding:"required"` // Source branch/commit to merge FROM
+	TargetRef       string                 `json:"target_ref" binding:"required"` // Target branch/commit to merge INTO
+	Method          MergeMethod            `json:"method,omitempty"`              // Merge method (merge, squash, rebase) - default: merge
+	Strategy        MergeStrategy          `json:"strategy,omitempty"`            // Merge strategy (default: recursive)
+	Message         string                 `json:"message,omitempty"`             // Custom merge commit message
+	Author          *AuthorInfo            `json:"author,omitempty"`              // Merge commit author
+	Committer       *AuthorInfo            `json:"committer,omitempty"`           // Merge commit committer
+	ForceConflict   bool                   `json:"force_conflict,omitempty"`      // Force merge even with conflicts
+	DryRun          bool                   `json:"dry_run,omitempty"`             // Analyze merge without performing it
+	ChangeRequestID *int                   `json:"change_request_id,omitempty"`   // Change request ID to submit after merge
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`            // Additional metadata
 }
 
 // MergeResponse represents the response for merge operations
 type MergeResponse struct {
 	Success         bool                   `json:"success"`
-	MergeCommit     *object.Commit         `json:"merge_commit"`     // Created merge commit info
+	MergeCommit     *CommitInfo            `json:"merge_commit"`     // Created merge commit info
 	IsFastForward   bool                   `json:"is_fast_forward"`  // Whether merge was fast-forward
 	HasConflicts    bool                   `json:"has_conflicts"`    // Whether conflicts were detected
 	ConflictCount   int                    `json:"conflict_count"`   // Number of conflicts
