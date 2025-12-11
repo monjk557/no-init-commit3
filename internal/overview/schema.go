@@ -189,6 +189,7 @@ type BlobOverviewResponse struct {
 
 // BranchesOverviewResponse is the response type for branches overview API
 type BranchesOverviewResponse struct {
+	Success    bool             `json:"success"`
 	Default    []BranchListItem `json:"default"`
 	Yours      []BranchListItem `json:"yours"`
 	Active     []BranchListItem `json:"active"`

@@ -627,8 +627,23 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 		staleBranches = staleBranches[:5]
 	}
 
+	// nil 슬라이스를 빈 배열로 변환 (JSON에서 null 대신 [] 반환)
+	if defaultBranches == nil {
+		defaultBranches = []BranchListItem{}
+	}
+	if yoursBranches == nil {
+		yoursBranches = []BranchListItem{}
+	}
+	if activeBranches == nil {
+		activeBranches = []BranchListItem{}
+	}
+	if staleBranches == nil {
+		staleBranches = []BranchListItem{}
+	}
+
 	// 응답 생성
 	response := BranchesOverviewResponse{
+		Success:    true,
 		Default:    defaultBranches,
 		Yours:      yoursBranches,
 		Active:     activeBranches,
