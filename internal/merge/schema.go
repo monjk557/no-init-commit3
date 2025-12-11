@@ -175,9 +175,9 @@ type MergeAnalysisResult struct {
 	IsFastForward     bool                     `json:"is_fast_forward"`    // Whether merge is fast-forward
 	ConflictCount     int                      `json:"conflict_count"`     // Total number of conflicts
 	FileConflicts     []FileConflict           `json:"file_conflicts"`     // Detailed file conflicts
-	MergeBase         *object.Commit           `json:"merge_base"`         // Common ancestor commit
-	SourceCommit      *object.Commit           `json:"source_commit"`      // Source commit info
-	TargetCommit      *object.Commit           `json:"target_commit"`      // Target commit info
+	MergeBase         *CommitInfo              `json:"merge_base"`         // Common ancestor commit
+	SourceCommit      *CommitInfo              `json:"source_commit"`      // Source commit info
+	TargetCommit      *CommitInfo              `json:"target_commit"`      // Target commit info
 	Strategy          MergeStrategy            `json:"strategy"`           // Merge strategy used
 	AutoResolvable    int                      `json:"auto_resolvable"`    // Number of auto-resolvable conflicts
 	SeverityBreakdown map[ConflictSeverity]int `json:"severity_breakdown"` // Conflicts by severity
@@ -191,6 +191,39 @@ type AuthorInfo struct {
 	Name  string    `json:"name"`
 	Email string    `json:"email"`
 	Date  time.Time `json:"date"`
+}
+
+// CommitInfo represents commit information for API responses
+type CommitInfo struct {
+	SHA       string     `json:"sha"`        // Commit hash
+	Message   string     `json:"message"`    // Commit message
+	Author    AuthorInfo `json:"author"`     // Author information
+	Committer AuthorInfo `json:"committer"`  // Committer information
+	CreatedAt string     `json:"created_at"` // Creation timestamp (ISO 8601)
+	TreeSHA   string     `json:"tree_sha"`   // Tree hash
+}
+
+// convertCommitToInfo converts object.Commit to CommitInfo
+func convertCommitToInfo(c *object.Commit) *CommitInfo {
+	if c == nil {
+		return nil
+	}
+	return &CommitInfo{
+		SHA:     c.Hash.String(),
+		Message: c.Message,
+		Author: AuthorInfo{
+			Name:  c.Author.Name,
+			Email: c.Author.Email,
+			Date:  c.Author.When,
+		},
+		Committer: AuthorInfo{
+			Name:  c.Committer.Name,
+			Email: c.Committer.Email,
+			Date:  c.Committer.When,
+		},
+		CreatedAt: c.Committer.When.Format(time.RFC3339),
+		TreeSHA:   c.TreeHash.String(),
+	}
 }
 
 // CommitStats는 브랜치 비교를 위한 커밋 수 차이를 나타냅니다

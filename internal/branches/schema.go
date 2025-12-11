@@ -4,8 +4,6 @@ package branches
 
 import (
 	"time"
-
-	"github.com/collabops/git-executor/internal/schemas/common"
 )
 
 // CreateBranchResponse는 브랜치 생성 응답을 나타냅니다.
@@ -27,6 +25,42 @@ type CreateBranchData struct {
 	Details     CreateBranchDetails `json:"details"`
 }
 
+// BranchInfo는 Git 브랜치에 대한 정보를 나타냅니다 (단위 테스트 호환성용).
+// 브랜치 이름, 커밋 SHA, 참조 경로 및 HEAD 여부를 포함합니다.
+type BranchInfo struct {
+	Name       string      `json:"name"`
+	CommitSHA  string      `json:"commit_sha"`
+	RefPath    string      `json:"ref_path"`
+	IsHead     bool        `json:"is_head"`
+	LastCommit *CommitInfo `json:"last_commit,omitempty"`
+	Date       time.Time   `json:"date"`
+}
+
+// GetBranchesResponse는 브랜치 목록 응답을 나타냅니다.
+type GetBranchesResponse struct {
+	Success    bool           `json:"success"`
+	Branches   []BranchInfo   `json:"branches"`
+	Pagination PaginationInfo `json:"pagination"`
+}
+
+// PaginationInfo는 브랜치 응답의 페이지네이션 정보를 나타냅니다.
+// Python PaginatedResponse와 호환되는 필드들을 포함합니다.
+type PaginationInfo struct {
+	Count       int     `json:"count"`        // 전체 항목 수
+	Next        *string `json:"next"`         // 다음 페이지 URL
+	Previous    *string `json:"previous"`     // 이전 페이지 URL
+	CurrentPage int     `json:"current_page"` // 현재 페이지 번호
+	TotalPages  int     `json:"total_pages"`  // 전체 페이지 수
+	PageSize    int     `json:"page_size"`    // 페이지당 항목 수
+}
+
+// 기본 페이지네이션 값들
+const (
+	DefaultBranchesLimit = 30
+	MaxBranchesLimit     = 100
+	MinBranchesLimit     = 1
+)
+
 // CreateBranchDetails는 브랜치 생성의 추가 세부 정보를 포함합니다.
 type CreateBranchDetails struct {
 	Checkout  bool   `json:"checkout"`
@@ -43,16 +77,6 @@ type UpdateBranchResponse struct {
 	PreviousHash string `json:"previous_hash"`
 	Operation    string `json:"operation"`
 	FastForward  bool   `json:"fast_forward"`
-}
-
-// BranchInfo는 Git 브랜치에 대한 정보를 나타냅니다 (단위 테스트 호환성용).
-// 브랜치 이름, 커밋 SHA, 참조 경로 및 HEAD 여부를 포함합니다.
-type BranchInfo struct {
-	Name       string             `json:"name"`
-	CommitSHA  string             `json:"commit_sha"`
-	RefPath    string             `json:"ref_path"`
-	IsHead     bool               `json:"is_head"`
-	LastCommit *common.CommitInfo `json:"last_commit,omitempty"`
 }
 
 // BranchesListResponse는 브랜치 목록 응답을 나타냅니다 (GitHub 브랜치 페이지 스타일).
@@ -118,4 +142,12 @@ type RenameBranchRequest struct {
 	OldName string `json:"old_name" binding:"required"` // 기존 브랜치 이름
 	NewName string `json:"new_name" binding:"required"` // 새로운 브랜치 이름
 	Force   bool   `json:"force,omitempty"`             // force rename even if new name already exists
+}
+
+type CommitInfo struct {
+	SHA     string    `json:"sha"`
+	Message string    `json:"message"`
+	Author  string    `json:"author"`
+	Email   string    `json:"email"`
+	Date    time.Time `json:"date"`
 }

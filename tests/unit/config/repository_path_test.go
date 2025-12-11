@@ -1,10 +1,10 @@
-package core_test
+package config_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,7 +12,7 @@ import (
 // Test repository path configuration - important for security
 func TestRepositoryPathConfig(t *testing.T) {
 	// Test basic path config creation
-	pathConfig, err := repository.NewPathConfig("/tmp/test-repos")
+	pathConfig, err := repositories.NewPathConfig("/tmp/test-repos")
 	require.NoError(t, err)
 	assert.NotNil(t, pathConfig)
 }

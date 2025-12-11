@@ -5,23 +5,23 @@ import (
 
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/tags"
-	"github.com/collabops/git-executor/internal/tree"
 )
 
 // OverviewResponse is the response type for repository overview API
 type RepositoryOverviewResponse struct {
-	Success              bool                 `json:"success"`
-	Repository           string               `json:"repository"`
-	Owner                string               `json:"owner"`
-	Name                 string               `json:"name"`
-	Path                 string               `json:"path"`
-	Tree                 []GitTreeEntry       `json:"tree"`
-	LatestCommits        GitCommit            `json:"latest_commits"`
-	Branches             []GitBranch          `json:"branches"`
-	Tags                 []GitTag             `json:"tags"`
-	Count                RepositoryCount      `json:"count"`
-	Readme               string               `json:"readme"`
-	LanguageDistribution LanguageDistribution `json:"language_distribution"`
+	Success              bool                     `json:"success"`
+	Message              string                   `json:"message"`
+	Repository           string                   `json:"repository"`
+	Owner                string                   `json:"owner"`
+	Name                 string                   `json:"name"`
+	Path                 string                   `json:"path"`
+	Tree                 []GitTreeEntryWithCommit `json:"tree"`
+	LatestCommits        GitCommit                `json:"latest_commits"`
+	Branches             []GitBranch              `json:"branches"`
+	Tags                 []GitTag                 `json:"tags"`
+	Count                RepositoryCount          `json:"count"`
+	Readme               string                   `json:"readme"`
+	LanguageDistribution LanguageDistribution     `json:"language_distribution"`
 }
 
 // RepositoryCount provides counts of different repository types
@@ -80,6 +80,17 @@ type GitTreeEntry struct {
 	Path string `json:"path"`
 }
 
+// GitTreeEntryWithCommit는 커밋 정보를 포함한 트리 항목입니다.
+type GitTreeEntryWithCommit struct {
+	Type         string     `json:"type"`
+	Name         string     `json:"name"`
+	Path         string     `json:"path"`
+	Mode         *string    `json:"mode,omitempty"`          // 파일 모드 (Unix permissions)
+	Hash         *string    `json:"hash,omitempty"`          // Git object hash
+	Size         *int64     `json:"size,omitempty"`          // 파일 크기 (바이트, blob인 경우만)
+	LatestCommit *GitCommit `json:"latest_commit,omitempty"` // 최신 커밋 정보
+}
+
 // 변환 함수들 - 다른 패키지의 타입을 overview 패키지 타입으로 변환
 func convertCommitToGitCommit(c commits.Commit) GitCommit {
 	return GitCommit{
@@ -127,19 +138,6 @@ func convertTagsToGitTags(tags []tags.Tag) []GitTag {
 	return result
 }
 
-func convertTreeEntriesToGitTreeEntries(entries []tree.TreeEntry) []GitTreeEntry {
-	// 인덱스 접근 방식이 더 효율적
-	result := make([]GitTreeEntry, len(entries))
-	for i := range entries {
-		result[i] = GitTreeEntry{
-			Type: entries[i].Type,
-			Name: entries[i].Name,
-			Path: entries[i].Path,
-		}
-	}
-	return result
-}
-
 func convertCommitsToGitCommits(commitsList []commits.Commit) []GitCommit {
 	// 인덱스 접근 방식이 더 효율적
 	result := make([]GitCommit, len(commitsList))
@@ -166,23 +164,27 @@ type RemoteInfo struct {
 
 // TreeOverviewResponse is the response type for tree overview API
 type TreeOverviewResponse struct {
-	Success      bool           `json:"success"`
-	Tree         []GitTreeEntry `json:"tree"`
-	Branches     []GitBranch    `json:"branches"`
-	LatestCommit GitCommit      `json:"latest_commit"`
-	Commits      []GitCommit    `json:"commits"`
+	Success      bool                     `json:"success"`
+	Repository   string                   `json:"repository"`
+	Owner        string                   `json:"owner"`
+	Name         string                   `json:"name"`
+	Path         string                   `json:"path"`
+	Tree         []GitTreeEntryWithCommit `json:"tree"`
+	Branches     []GitBranch              `json:"branches"`
+	LatestCommit GitCommit                `json:"latest_commit"`
+	Commits      []GitCommit              `json:"commits"`
 }
 
 // BlobOverviewResponse is the response type for blob overview API
 type BlobOverviewResponse struct {
-	Success      bool           `json:"success"`
-	Content      string         `json:"content"`
-	Lines        int            `json:"lines"`
-	Size         int64          `json:"size"`
-	Tree         []GitTreeEntry `json:"tree"`
-	Branches     []GitBranch    `json:"branches"`
-	LatestCommit GitCommit      `json:"latest_commit"`
-	Commits      []GitCommit    `json:"commits"`
+	Success      bool                     `json:"success"`
+	Content      string                   `json:"content"`
+	Lines        int                      `json:"lines"`
+	Size         int64                    `json:"size"`
+	Tree         []GitTreeEntryWithCommit `json:"tree"`
+	Branches     []GitBranch              `json:"branches"`
+	LatestCommit GitCommit                `json:"latest_commit"`
+	Commits      []GitCommit              `json:"commits"`
 }
 
 // BranchesOverviewResponse is the response type for branches overview API
@@ -216,4 +218,15 @@ type ChangeRequestInfo struct {
 	Title string `json:"title"`
 	State string `json:"state"`
 	URL   string `json:"url"`
+}
+
+// TreeWithCommitOverviewResponse is the response type for tree with commit overview API
+type TreeWithCommitOverviewResponse struct {
+	Success    bool                     `json:"success"`
+	Repository string                   `json:"repository"`
+	Owner      string                   `json:"owner"`
+	Name       string                   `json:"name"`
+	Path       string                   `json:"path"`
+	Tree       []GitTreeEntryWithCommit `json:"tree"`
+	Branches   []GitBranch              `json:"branches"`
 }

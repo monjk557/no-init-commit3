@@ -16,10 +16,9 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
-	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/protocol"
-	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/repositories"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
@@ -304,16 +303,17 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				return fmt.Errorf("fetch not supported: %w", err)
 			}
 
-			// 저장소 열기
-			pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+			// 저장소 열기 (캐시 사용)
+			pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
 			if err != nil {
 				return fmt.Errorf("failed to create path config: %w", err)
 			}
-			repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repo)
+			repoPath, err := repositories.GetRepoPath(pathConfig, owner, repo)
 			if err != nil {
 				return fmt.Errorf("failed to get repository path: %w", err)
 			}
-			gitRepo, err := git.OpenRepository(repoPath)
+			// 캐시를 사용하여 저장소 열기
+			repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
 			if err != nil {
 				// 프로토콜 호환 에러 응답
 				pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
@@ -323,16 +323,13 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				_ = conn.writer.Flush()
 				return nil
 			}
-			defer gitRepo.Close()
+			defer repoWrapper.Close()
 
-			goGitRepo, ok := gitRepo.(*git.GoGitRepository)
-			if !ok {
-				return fmt.Errorf("repository is not a GoGitRepository")
-			}
-			underlyingRepo := goGitRepo.GetGoGitRepo()
+			// 내부의 *gogit.Repository 가져오기 (캐시에서)
+			underlyingRepo := repoWrapper.GetRepo()
 
 			// 전송 대상 오브젝트 계산
-			objectHashes, err := protocol.BuildFetchObjectList(underlyingRepo.Storer, gitRepo, fetchReq)
+			objectHashes, err := protocol.BuildFetchObjectList(underlyingRepo.Storer, underlyingRepo, fetchReq)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch object list: %w", err)
 			}
@@ -392,12 +389,12 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo string) error {
 
 	// 1) Repository 열기
-	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
 		return fmt.Errorf("failed to create path config: %w", err)
 	}
 
-	repoPath, err := repository.GetRepoPath(pathConfig, owner, repo)
+	repoPath, err := repositories.GetRepoPath(pathConfig, owner, repo)
 	if err != nil {
 		return fmt.Errorf("failed to get repo path: %w", err)
 	}
@@ -573,13 +570,13 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 
 	// 실제 repository에서 refs 가져오기
 	// Create path config
-	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
 		return fmt.Errorf("failed to create path config: %w", err)
 	}
 
 	// Get repository path
-	repoPath, err := repository.GetAndValidateRepoPath(pathConfig, owner, repo)
+	repoPath, err := repositories.GetAndValidateRepoPath(pathConfig, owner, repo)
 	if err != nil {
 		return fmt.Errorf("failed to get repository path: %w", err)
 	}
@@ -944,14 +941,14 @@ func (s *DuplexTCPServer) addCommitEventToStream(repo *gogit.Repository, oldHash
 	}
 
 	// Get full filesystem path for the repository
-	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
+	pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
 		s.logger.Debug("Failed to create path config for event",
 			zap.Error(err))
 		return
 	}
 
-	repoPath, err := repository.GetRepoPath(pathConfig, owner, repoName)
+	repoPath, err := repositories.GetRepoPath(pathConfig, owner, repoName)
 	if err != nil {
 		s.logger.Debug("Failed to get repo path for event",
 			zap.Error(err))

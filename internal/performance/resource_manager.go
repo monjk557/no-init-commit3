@@ -15,7 +15,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/repositories"
 )
 
 // ResourceManager는 포괄적인 리소스 관리와 성능 최적화를 제공합니다.
@@ -104,7 +104,7 @@ func NewResourceManager(cfg *config.Config) (*ResourceManager, error) {
 	// Use default resource config if not specified
 	resourceCfg := DefaultResourceConfig()
 
-	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
+	pathConfig, err := repositories.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
@@ -140,7 +140,7 @@ func NewResourceManager(cfg *config.Config) (*ResourceManager, error) {
 // 빈번하게 사용되는 저장소들을 메모리에 캐시하여 성능을 향상시킵니다.
 type RepositoryPool struct {
 	config     *ResourceConfig
-	pathConfig *repository.PathConfig
+	pathConfig *repositories.PathConfig
 	logger     *logging.Logger
 	repos      map[string]*RepositoryCacheEntry
 	mu         sync.RWMutex
@@ -155,7 +155,7 @@ type RepositoryCacheEntry struct {
 }
 
 // NewRepositoryPool creates a new repository pool
-func NewRepositoryPool(config *ResourceConfig, pathConfig *repository.PathConfig, logger *logging.Logger) *RepositoryPool {
+func NewRepositoryPool(config *ResourceConfig, pathConfig *repositories.PathConfig, logger *logging.Logger) *RepositoryPool {
 	return &RepositoryPool{
 		config:     config,
 		pathConfig: pathConfig,
@@ -183,7 +183,7 @@ func (rp *RepositoryPool) GetRepository(ctx context.Context, owner, repo string)
 	rp.mu.RUnlock()
 
 	// Repository not in pool, create it
-	repoPath, err := repository.GetRepoPath(rp.pathConfig, owner, repo)
+	repoPath, err := repositories.GetRepoPath(rp.pathConfig, owner, repo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get repository path: %w", err)
 	}

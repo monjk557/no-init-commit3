@@ -10,7 +10,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/repositories"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -50,14 +49,14 @@ func (s *BlobService) GetBlobContent(ctx context.Context, owner, repo, path, ref
 		}
 
 		// 저장소 열기 (캐시 사용)
-		gitRepo, err := git.OpenRepositorySimple(repoPath)
+		gitRepo, err := repositories.OpenRepositorySimple(repoPath)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to open repository: %w", err)
 		}
 		defer func() { _ = gitRepo.Close() }()
 
 		// Blob 내용 가져오기
-		content, err = gitRepo.GetBlob(ctx, path, ref)
+		content, err = getBlobFromGogitRepo(ctx, gitRepo.GetRepo(), path, ref)
 		if err != nil {
 			return nil, "", fmt.Errorf("file not found: %w", err)
 		}

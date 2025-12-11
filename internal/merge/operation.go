@@ -8,7 +8,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/collabops/git-executor/internal/schemas/common"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -823,14 +822,23 @@ func getMergeTypeForMethod(method MergeMethod, result *MergeResult) string {
 	}
 }
 
-// commitToInfo converts a commit object to CommitInfo
-func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) *common.CommitInfo {
-	return &common.CommitInfo{
-		SHA:       commit.Hash.String(),
-		Message:   commit.Message,
-		Author:    common.AuthorInfo{Name: commit.Author.Name, Email: commit.Author.Email, Date: commit.Author.When},
-		Committer: common.AuthorInfo{Name: commit.Committer.Name, Email: commit.Committer.Email, Date: commit.Committer.When},
-		CreatedAt: commit.Author.When,
+// commitToInfo converts a commit object to a simple commit info map
+// Note: common.CommitInfo was removed, using map[string]interface{} instead
+func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) map[string]interface{} {
+	return map[string]interface{}{
+		"sha":     commit.Hash.String(),
+		"message": commit.Message,
+		"author": map[string]interface{}{
+			"name":  commit.Author.Name,
+			"email": commit.Author.Email,
+			"date":  commit.Author.When,
+		},
+		"committer": map[string]interface{}{
+			"name":  commit.Committer.Name,
+			"email": commit.Committer.Email,
+			"date":  commit.Committer.When,
+		},
+		"created_at": commit.Author.When,
 	}
 }
 

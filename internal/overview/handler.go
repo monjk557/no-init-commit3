@@ -15,10 +15,10 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/tags"
-	"github.com/collabops/git-executor/internal/tree"
 	"github.com/gin-gonic/gin"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
@@ -169,6 +169,9 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	branchesList := repoCtx.branchesList
 	repoPath := repoCtx.repoPath
 
+	// path 설정 (tree overview와 동일한 방식)
+	repoCtx.path = path
+
 	// 커밋 가져오기 (최신 커밋 및 Count용)
 	// Count를 위해 합리적인 limit(1000)을 설정하되, 최신 커밋은 첫 번째 요소
 	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 9999999, 0)
@@ -176,11 +179,12 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		// 빈 저장소
 		response := RepositoryOverviewResponse{
 			Success:       true,
+			Message:       "Repository overview fetched successfully",
 			Repository:    fmt.Sprintf("%s/%s", owner, repo),
 			Owner:         owner,
 			Name:          repo,
 			Path:          repoPath,
-			Tree:          []GitTreeEntry{},
+			Tree:          []GitTreeEntryWithCommit{},
 			LatestCommits: convertCommitToGitCommit(commits.Commit{}),
 			Branches:      convertBranchesToGitBranches(branchesList),
 			Tags:          []GitTag{},
@@ -205,9 +209,18 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	latestCommit := commitsList[0]
 	commitsCount := len(commitsList)
 
-	// 트리 항목 가져오기
-	treeEntries, err := tree.GetTreeEntries(h.pathConfig, h.logger, repoPath, repoCtx.ref, path)
+	// 트리 항목 가져오기 (커밋 정보 포함) - tree overview와 동일한 방식
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
 	if err != nil {
+		// 경로 관련 오류인지 확인
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "failed to find path") ||
+			strings.Contains(errMsg, "path not found") ||
+			strings.Contains(errMsg, "path is not a tree") {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
+			return
+		}
+		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
 	}
@@ -254,11 +267,12 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	// 응답 구성
 	response := RepositoryOverviewResponse{
 		Success:       true,
+		Message:       "Repository overview fetched successfully",
 		Repository:    fmt.Sprintf("%s/%s", owner, repo),
 		Owner:         owner,
 		Name:          repo,
 		Path:          repoPath,
-		Tree:          convertTreeEntriesToGitTreeEntries(treeEntries),
+		Tree:          treeEntriesWithCommit,
 		LatestCommits: convertCommitToGitCommit(latestCommit),
 		Branches:      convertBranchesToGitBranches(branchesList),
 		Tags:          convertTagsToGitTags(tagsList),
@@ -293,9 +307,11 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 
 	repoCtx.path = path
 
-	// 트리 항목 가져오기
-	treeEntries, err := tree.GetTreeEntries(h.pathConfig, h.logger, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	// 트리 항목 가져오기 (커밋 정보 포함)
+	gitRepo := repoCtx.repoWrapper.GetRepo()
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
 	if err != nil {
+		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
 	}
@@ -316,7 +332,11 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 	// 응답 구성
 	response := TreeOverviewResponse{
 		Success:      true,
-		Tree:         convertTreeEntriesToGitTreeEntries(treeEntries),
+		Repository:   fmt.Sprintf("%s/%s", owner, repo),
+		Owner:        owner,
+		Name:         repo,
+		Path:         path,
+		Tree:         treeEntriesWithCommit,
 		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
 		LatestCommit: convertCommitToGitCommit(latestCommit),
 		Commits:      convertCommitsToGitCommits(commitsList),
@@ -360,8 +380,14 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 	lines := strings.Count(strings.ReplaceAll(string(blobContent), "\r\n", "\n"), "\n") + 1
 	size := int64(len(blobContent))
 
-	// tree entries 가져오기
-	treeEntries, err := tree.GetTreeEntries(h.pathConfig, h.logger, repoCtx.repoPath, repoCtx.ref, "")
+	// tree entries 가져오기 (커밋 정보 포함)
+	// blob overview에서는 파일의 부모 디렉토리 경로를 사용
+	parentPath := ""
+	if idx := strings.LastIndex(path, "/"); idx != -1 {
+		parentPath = path[:idx]
+	}
+	gitRepo := repoCtx.repoWrapper.GetRepo()
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, parentPath)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -386,7 +412,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		Content:      string(blobContent),
 		Lines:        lines,
 		Size:         size,
-		Tree:         convertTreeEntriesToGitTreeEntries(treeEntries),
+		Tree:         treeEntriesWithCommit,
 		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
 		LatestCommit: convertCommitToGitCommit(latestCommit),
 		Commits:      convertCommitsToGitCommits(commitsList),
@@ -616,6 +642,176 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 		zap.Int("total_branches", allBranchesCount))
 
 	c.JSON(http.StatusOK, response)
+}
+
+// HandleGetTreeWithCommitOverview는 트리와 커밋 정보를 함께 반환하는 GET /api/v1/repository/{owner}/{repo}/overview/tree/commits 요청을 처리합니다
+func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Context) {
+	ctx := c.Request.Context()
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	ref := c.Query("ref")
+	path := c.Query("path")
+
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
+	if !ok {
+		return
+	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repoCtx.path = path
+	gitRepo := repoCtx.repoWrapper.GetRepo()
+
+	// 트리 항목 가져오기 (커밋 정보 포함)
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	if err != nil {
+		// 경로 관련 오류인지 확인
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "failed to find path") ||
+			strings.Contains(errMsg, "path not found") ||
+			strings.Contains(errMsg, "path is not a tree") {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
+			return
+		}
+		// 실제 저장소 손상 오류인 경우
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
+	}
+
+	// 응답 구성
+	response := TreeWithCommitOverviewResponse{
+		Success:    true,
+		Repository: fmt.Sprintf("%s/%s", owner, repo),
+		Owner:      owner,
+		Name:       repo,
+		Path:       path,
+		Tree:       treeEntriesWithCommit,
+		Branches:   convertBranchesToGitBranches(repoCtx.branchesList),
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// getTreeWithCommit는 트리 항목과 각 항목의 최근 커밋 정보를 함께 가져옵니다.
+func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, repoPath, ref, path string) ([]GitTreeEntryWithCommit, error) {
+	// ref를 커밋 해시로 해석
+	refObj, err := gitRepo.ResolveRevision(plumbing.Revision(ref))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve reference: %w", err)
+	}
+
+	// Get commit
+	commit, err := gitRepo.CommitObject(*refObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit: %w", err)
+	}
+
+	// Get tree
+	treeObj, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tree: %w", err)
+	}
+
+	// Navigate to the specified path
+	var targetTree *object.Tree = treeObj
+	if path != "" {
+		treeEntry, err := treeObj.FindEntry(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find path: %w", err)
+		}
+		if treeEntry.Mode != filemode.Dir {
+			return nil, fmt.Errorf("path is not a tree: %s", path)
+		}
+		targetTree, err = gitRepo.TreeObject(treeEntry.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get target tree: %w", err)
+		}
+	}
+
+	// Normalize base path (remove leading/trailing slashes)
+	basePath := strings.Trim(path, "/")
+
+	// 각 tree entry에 대해 커밋 정보 가져오기 (commit service 활용)
+	// 중요: 커밋 정보 조회 실패해도 모든 tree entry는 반드시 포함되어야 함
+	treeEntriesWithCommit := make([]GitTreeEntryWithCommit, 0, len(targetTree.Entries))
+	for _, entry := range targetTree.Entries {
+		// Path는 full path from repository root
+		fullPath := entry.Name
+		if basePath != "" {
+			fullPath = basePath + "/" + entry.Name
+		}
+
+		// Entry type 결정
+		entryType := "blob"
+		if entry.Mode == filemode.Dir {
+			entryType = "tree"
+		} else if entry.Mode == filemode.Submodule {
+			entryType = "commit"
+		}
+
+		// Mode를 문자열로 변환 (Unix permissions)
+		modeStr := fmt.Sprintf("%o", entry.Mode)
+		// Hash를 문자열로 변환
+		hashStr := entry.Hash.String()
+
+		// Size 계산 (blob인 경우만)
+		var size *int64
+		if entryType == "blob" {
+			// Blob 객체 가져오기
+			blobObj, err := gitRepo.BlobObject(entry.Hash)
+			if err == nil {
+				blobSize := blobObj.Size
+				size = &blobSize
+			}
+		}
+
+		// 각 entry에 대한 최근 커밋 가져오기 (overview service 활용)
+		// 커밋 정보는 선택사항이므로 에러가 발생해도 tree entry는 반드시 포함
+		var commitInfo *GitCommit
+
+		// 커밋 정보 조회를 안전하게 수행 (에러가 발생해도 tree entry는 포함)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// panic이 발생해도 tree entry는 포함
+					h.logger.Error("Panic while getting commit for path, continuing without commit info",
+						zap.String("path", fullPath),
+						zap.String("type", entryType),
+						zap.Any("panic", r))
+				}
+			}()
+
+			if entryType == "blob" || entryType == "tree" {
+				// 파일이나 디렉토리의 경우 해당 경로의 최근 커밋 조회
+				// tree인 경우 하위를 재귀적으로 탐색하여 가장 최근 커밋을 가져옴
+				isTree := entryType == "tree"
+
+				commit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, ref, fullPath, isTree)
+				if err != nil {
+					// 커밋 조회 실패는 경고만 하고 계속 진행 (tree entry는 포함)
+					h.logger.Warn("Failed to get commit for path, continuing without commit info",
+						zap.String("path", fullPath),
+						zap.String("type", entryType),
+						zap.Error(err))
+				} else {
+					commitInfo = commit
+				}
+			}
+		}()
+
+		// 커밋 정보가 없어도 tree entry는 반드시 포함
+		treeEntriesWithCommit = append(treeEntriesWithCommit, GitTreeEntryWithCommit{
+			Type:         entryType,
+			Name:         entry.Name,
+			Path:         fullPath,
+			Mode:         &modeStr,
+			Hash:         &hashStr,
+			Size:         size,
+			LatestCommit: commitInfo,
+		})
+	}
+
+	return treeEntriesWithCommit, nil
 }
 
 // countCommitsBetween counts commits between two commits (from excluded, to included)

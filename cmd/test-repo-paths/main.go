@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/repositories"
 )
 
 // 테스트 7: 패키지 통합 기능 테스트
@@ -24,14 +24,14 @@ func testPackageIntegration() {
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// 테스트 설정 생성
-	testConfig, err := repository.NewPathConfig(tempDir)
+	testConfig, err := repositories.NewPathConfig(tempDir)
 	if err != nil {
 		fmt.Printf("❌ Failed to create test config: %v\n", err)
 		return
 	}
 
 	// 전역 설정으로 지정
-	err = repository.SetGlobalConfig(testConfig)
+	err = repositories.SetGlobalConfig(testConfig)
 	if err != nil {
 		fmt.Printf("❌ Failed to set global config: %v\n", err)
 		return
@@ -41,7 +41,7 @@ func testPackageIntegration() {
 	fmt.Println("\n🚀 High-Level Integration Functions:")
 
 	// 1. 리포지토리 경로 가져오기 및 검증
-	path, err := repository.GetAndValidateRepoPath(testConfig, "integration", "test")
+	path, err := repositories.GetAndValidateRepoPath(testConfig, "integration", "test")
 	if err != nil {
 		fmt.Printf("❌ GetAndValidateRepoPath failed: %v\n", err)
 	} else {
@@ -57,7 +57,7 @@ func testPackageIntegration() {
 	}
 
 	// 3. 리포지토리 접근 권한 확인
-	verifiedPath, err := repository.VerifyRepositoryAccess(testConfig, "integration", "valid-repo")
+	verifiedPath, err := repositories.VerifyRepositoryAccess(testConfig, "integration", "valid-repo")
 	if err != nil {
 		fmt.Printf("❌ VerifyRepositoryAccess failed: %v\n", err)
 	} else {
@@ -65,7 +65,7 @@ func testPackageIntegration() {
 	}
 
 	// 4. 리포지토리 정보 조회
-	info, err := repository.GetRepositoryInfo(testConfig, "integration", "valid-repo")
+	info, err := repositories.GetRepositoryInfo(testConfig, "integration", "valid-repo")
 	if err != nil {
 		fmt.Printf("❌ GetRepositoryInfo failed: %v\n", err)
 	} else {
@@ -82,7 +82,7 @@ func testPackageIntegration() {
 	fmt.Println("\n🌐 Default Configuration Functions:")
 
 	// 전역 설정 사용
-	defaultPath, err := repository.GetAndValidateRepoPathWithDefault("global", "test")
+	defaultPath, err := repositories.GetAndValidateRepoPathWithDefault("global", "test")
 	if err != nil {
 		fmt.Printf("❌ GetAndValidateRepoPathWithDefault failed: %v\n", err)
 	} else {
@@ -102,7 +102,7 @@ func testPackageIntegration() {
 		{"../malicious", "attack"},
 	}
 
-	batchInfo := repository.GetBatchRepositoryInfo(testConfig, repos)
+	batchInfo := repositories.GetBatchRepositoryInfo(testConfig, repos)
 	fmt.Printf("✅ Batch Repository Info:\n")
 	fmt.Printf("   Total: %d\n", batchInfo.TotalCount)
 	fmt.Printf("   Valid: %d\n", batchInfo.ValidCount)
@@ -117,7 +117,7 @@ func testPackageIntegration() {
 	fmt.Println("\n🚫 Error Handling:")
 
 	// 잘못된 경로 시도
-	_, err = repository.GetAndValidateRepoPath(testConfig, "../invalid", "repo")
+	_, err = repositories.GetAndValidateRepoPath(testConfig, "../invalid", "repo")
 	if err != nil {
 		fmt.Printf("✅ CORRECTLY BLOCKED invalid path: %v\n", err)
 	} else {
@@ -125,7 +125,7 @@ func testPackageIntegration() {
 	}
 
 	// 존재하지 않는 리포지토리 접근 시도
-	_, err = repository.VerifyRepositoryAccess(testConfig, "missing", "repo")
+	_, err = repositories.VerifyRepositoryAccess(testConfig, "missing", "repo")
 	if err != nil {
 		fmt.Printf("✅ CORRECTLY BLOCKED missing repo access: %v\n", err)
 	} else {
@@ -139,7 +139,7 @@ func main() {
 
 	// Test 1: Path Configuration
 	fmt.Println("\n📁 Test 1: Path Configuration")
-	config, err := repository.NewPathConfig("/var/lib/git/repos")
+	config, err := repositories.NewPathConfig("/var/lib/git/repos")
 	if err != nil {
 		log.Fatalf("❌ Failed to create path config: %v", err)
 	}
@@ -157,7 +157,7 @@ func main() {
 	}
 
 	for _, tc := range testCases {
-		path, err := repository.GetRepoPath(config, tc.owner, tc.repo)
+		path, err := repositories.GetRepoPath(config, tc.owner, tc.repo)
 		if err != nil {
 			fmt.Printf("❌ %s: %v\n", tc.description, err)
 		} else {
@@ -182,7 +182,7 @@ func main() {
 
 	fmt.Println("\n✅ Valid paths:")
 	for _, path := range validPaths {
-		err := repository.ValidateRepoPath(config, path)
+		err := repositories.ValidateRepoPath(config, path)
 		if err != nil {
 			fmt.Printf("❌ UNEXPECTED: %s -> %v\n", path, err)
 		} else {
@@ -192,7 +192,7 @@ func main() {
 
 	fmt.Println("\n🚫 Invalid paths (should be blocked):")
 	for _, path := range invalidPaths {
-		err := repository.ValidateRepoPath(config, path)
+		err := repositories.ValidateRepoPath(config, path)
 		if err != nil {
 			fmt.Printf("✅ BLOCKED: %s -> %v\n", path, err)
 		} else {
@@ -217,7 +217,7 @@ func main() {
 	}
 
 	for _, attack := range attackVectors {
-		_, err := repository.GetRepoPath(config, attack.owner, attack.repo)
+		_, err := repositories.GetRepoPath(config, attack.owner, attack.repo)
 		if err != nil {
 			fmt.Printf("✅ BLOCKED: %s -> %v\n", attack.description, err)
 		} else {
@@ -227,7 +227,7 @@ func main() {
 
 	// Test 5: Default Configuration
 	fmt.Println("\n⚙️  Test 5: Default Configuration")
-	defaultPath, err := repository.GetRepoPathWithDefault("example", "project")
+	defaultPath, err := repositories.GetRepoPathWithDefault("example", "project")
 	if err != nil {
 		fmt.Printf("❌ Default config failed: %v\n", err)
 	} else {
@@ -245,13 +245,13 @@ func main() {
 		defer func() { _ = os.RemoveAll(tempDir) }()
 
 		// 테스트 설정 생성
-		testConfig, err := repository.NewPathConfig(tempDir)
+		testConfig, err := repositories.NewPathConfig(tempDir)
 		if err != nil {
 			fmt.Printf("❌ Failed to create test config: %v\n", err)
 		} else {
 			// 존재하지 않는 리포지토리 테스트
 			nonExistentPath := filepath.Join(tempDir, "user", "missing.git")
-			err = repository.EnsureRepoExists(testConfig, nonExistentPath)
+			err = repositories.EnsureRepoExists(testConfig, nonExistentPath)
 			if err != nil {
 				fmt.Printf("✅ CORRECTLY BLOCKED non-existent repo: %v\n", err)
 			} else {
@@ -264,7 +264,7 @@ func main() {
 			if err != nil {
 				fmt.Printf("❌ Failed to create mock repo: %v\n", err)
 			} else {
-				err = repository.EnsureRepoExists(testConfig, bareRepoPath)
+				err = repositories.EnsureRepoExists(testConfig, bareRepoPath)
 				if err != nil {
 					fmt.Printf("❌ UNEXPECTED: Valid bare repo rejected: %v\n", err)
 				} else {
@@ -278,7 +278,7 @@ func main() {
 			if err != nil {
 				fmt.Printf("❌ Failed to create mock non-bare repo: %v\n", err)
 			} else {
-				err = repository.EnsureRepoExists(testConfig, nonBareRepoPath)
+				err = repositories.EnsureRepoExists(testConfig, nonBareRepoPath)
 				if err != nil {
 					fmt.Printf("❌ UNEXPECTED: Valid non-bare repo rejected: %v\n", err)
 				} else {
@@ -289,7 +289,7 @@ func main() {
 			// 잘못된 리포지토리 테스트 (빈 디렉토리)
 			invalidRepoPath := filepath.Join(tempDir, "user", "invalid.git")
 			_ = os.MkdirAll(invalidRepoPath, 0755)
-			err = repository.EnsureRepoExists(testConfig, invalidRepoPath)
+			err = repositories.EnsureRepoExists(testConfig, invalidRepoPath)
 			if err != nil {
 				fmt.Printf("✅ CORRECTLY BLOCKED invalid repo: %v\n", err)
 			} else {
@@ -325,7 +325,7 @@ func createMockBareRepo(repoPath string) error {
 	files := map[string]string{
 		"HEAD":        "ref: refs/heads/main\n",
 		"config":      "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n",
-		"description": "Unnamed repository; edit this file 'description' to name the repository.\n",
+		"description": "Unnamed repository; edit this file 'description' to name the repositories.\n",
 	}
 
 	for filename, content := range files {
@@ -362,7 +362,7 @@ func createMockNonBareRepo(repoPath string) error {
 	files := map[string]string{
 		"HEAD":        "ref: refs/heads/main\n",
 		"config":      "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n",
-		"description": "Unnamed repository; edit this file 'description' to name the repository.\n",
+		"description": "Unnamed repository; edit this file 'description' to name the repositories.\n",
 	}
 
 	for filename, content := range files {

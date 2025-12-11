@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
-	"github.com/collabops/git-executor/internal/permissions"
 )
 
 // HealthStatus는 전반적인 헬스 상태를 나타냅니다.
@@ -49,19 +48,17 @@ type CheckResult struct {
 
 // HealthChecker는 애플리케이션의 헬스 체크를 관리합니다.
 type HealthChecker struct {
-	config           *config.Config
-	permissionClient permissions.PermissionClient
-	startTime        time.Time
-	version          string
+	config    *config.Config
+	startTime time.Time
+	version   string
 }
 
 // NewHealthChecker는 새로운 헬스 체커를 생성합니다.
-func NewHealthChecker(cfg *config.Config, permClient permissions.PermissionClient, version string) *HealthChecker {
+func NewHealthChecker(cfg *config.Config, version string) *HealthChecker {
 	return &HealthChecker{
-		config:           cfg,
-		permissionClient: permClient,
-		startTime:        time.Now(),
-		version:          version,
+		config:    cfg,
+		startTime: time.Now(),
+		version:   version,
 	}
 }
 
@@ -279,54 +276,20 @@ func (h *HealthChecker) checkFilesystem(ctx context.Context) CheckResult {
 func (h *HealthChecker) checkPermissionService(ctx context.Context) CheckResult {
 	start := time.Now()
 
-	if h.permissionClient == nil {
-		return CheckResult{
-			Status:      StatusDegraded,
-			Message:     "Permission service not configured (running in degraded mode)",
-			Duration:    time.Since(start).String(),
-			LastChecked: time.Now().UTC(),
-		}
+	// Permission service check is disabled (permissions package removed)
+	// Return degraded status as permission service is not available
+	return CheckResult{
+		Status:      StatusDegraded,
+		Message:     "Permission service not configured (running in degraded mode)",
+		Duration:    time.Since(start).String(),
+		LastChecked: time.Now().UTC(),
 	}
 
-	// Test permission service with a lightweight health check
-	// This assumes your permission client has a health check method
-	// If not, you could do a test permission check with a known user/repo
-	select {
-	case <-ctx.Done():
-		return CheckResult{
-			Status:      StatusDegraded,
-			Message:     "Permission service check timed out",
-			Duration:    time.Since(start).String(),
-			LastChecked: time.Now().UTC(),
-			Error:       "timeout",
-		}
-	default:
-		// Simplified check - try to make a permission check call
-		// In a real implementation, you'd want a dedicated health check method
-		_, err := h.permissionClient.CheckReadAccess(ctx, "health-check-user", "health-check-owner", "health-check-repo")
-
-		// For health checks, we expect this call to fail (user doesn't exist)
-		// but we want to ensure the service is reachable
-		if err != nil {
-			// Check if error indicates service is unavailable vs normal "user not found" type errors
-			errStr := err.Error()
-			if isServiceUnavailableError(errStr) {
-				return CheckResult{
-					Status:      StatusDegraded,
-					Message:     "Permission service is unavailable (graceful degradation enabled)",
-					Duration:    time.Since(start).String(),
-					LastChecked: time.Now().UTC(),
-					Error:       err.Error(),
-				}
-			}
-		}
-
-		return CheckResult{
-			Status:      StatusHealthy,
-			Message:     "Permission service is reachable",
-			Duration:    time.Since(start).String(),
-			LastChecked: time.Now().UTC(),
-		}
+	return CheckResult{
+		Status:      StatusHealthy,
+		Message:     "Permission service is reachable",
+		Duration:    time.Since(start).String(),
+		LastChecked: time.Now().UTC(),
 	}
 }
 

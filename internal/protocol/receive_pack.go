@@ -16,11 +16,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
-	"github.com/collabops/git-executor/internal/git"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -49,7 +49,7 @@ type RefUpdateCommand struct {
 
 // ReceivePackHandler handles Git Smart HTTP protocol for push operations (executor side)
 type ReceivePackHandler struct {
-	pathConfig   *repository.PathConfig
+	pathConfig   *repositories.PathConfig
 	errorHandler *ErrorHandler
 	capabilities *ServerCapabilities
 	eventsClient events.RedisStreamClient
@@ -59,7 +59,7 @@ type ReceivePackHandler struct {
 // NewReceivePackHandler creates a new receive-pack handler for the executor
 func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 	// Initialize path configuration
-	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
+	pathConfig, err := repositories.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
@@ -104,36 +104,34 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 
 	// Validate service parameter
 	if service != "git-receive-pack" {
-		h.errorHandler.HandleError(w, r, ErrInvalidService, "receive_pack_info_refs")
+		http.Error(w, "Invalid service parameter", http.StatusBadRequest)
 		return
 	}
 
 	// Get user ID from gateway context (forwarded header)
 	userID := r.Header.Get("X-USER-ID")
 	if userID == "" {
-		h.errorHandler.HandleError(w, r, ErrMissingUserContext, "receive_pack_info_refs")
+		http.Error(w, "Missing user authentication context", http.StatusUnauthorized)
 		return
 	}
 
 	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		wrappedErr := fmt.Errorf("invalid repository path: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack_info_refs")
+		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	// Ensure repository exists
-	if err := repository.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
+	if err := repositories.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
 		h.errorHandler.HandleError(w, r, ErrRepositoryNotFound, "receive_pack_info_refs")
 		return
 	}
 
 	// Open repository using go-git with caching
-	gitRepo, err := git.OpenRepositorySimple(repoPath)
+	gitRepo, err := repositories.OpenRepositorySimple(repoPath)
 	if err != nil {
-		wrappedErr := fmt.Errorf("failed to open repository: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack_info_refs")
+		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
 		return
 	}
 	defer func() { _ = gitRepo.Close() }()
@@ -160,7 +158,7 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 }
 
 // writeReferencesWithCapabilities writes Git references with server capabilities for receive-pack
-func (h *ReceivePackHandler) writeReferencesWithCapabilities(ctx context.Context, w http.ResponseWriter, repo git.Repository) error {
+func (h *ReceivePackHandler) writeReferencesWithCapabilities(ctx context.Context, w http.ResponseWriter, repo *repositories.RepositoryWrapper) error {
 	// Get all repository references
 	refs, err := h.getAllReferences(ctx, repo)
 	if err != nil {
@@ -205,11 +203,11 @@ func (h *ReceivePackHandler) writeReferencesWithCapabilities(ctx context.Context
 }
 
 // getAllReferences retrieves all references from the repository
-func (h *ReceivePackHandler) getAllReferences(ctx context.Context, repo git.Repository) ([]Reference, error) {
+func (h *ReceivePackHandler) getAllReferences(ctx context.Context, repo *repositories.RepositoryWrapper) ([]Reference, error) {
 	var refs []Reference
 
 	// Try to get commits to find references
-	commits, err := repo.GetCommits(ctx, "HEAD", 1, 0)
+	commits, err := commits.GetCommits(repo, ctx, "HEAD", 1, 0)
 	if err != nil {
 		// Repository might be empty - return empty refs list
 		return refs, nil
@@ -263,29 +261,27 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// Get user ID from gateway context (forwarded header)
 	userID := r.Header.Get("X-USER-ID")
 	if userID == "" {
-		h.errorHandler.HandleError(w, r, ErrMissingUserContext, "receive_pack")
+		http.Error(w, "Missing user authentication context", http.StatusUnauthorized)
 		return
 	}
 
 	// Get repository path and validate
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		wrappedErr := fmt.Errorf("invalid repository path: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack")
+		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	// Ensure repository exists
-	if err := repository.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
-		h.errorHandler.HandleError(w, r, ErrRepositoryNotFound, "receive_pack")
+	if err := repositories.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
+		http.Error(w, fmt.Sprintf("Repository not found: %v", err), http.StatusNotFound)
 		return
 	}
 
 	// Parse the receive-pack request from client (forwarded by gateway)
 	receiveReq, err := h.parseReceivePackRequest(r.Body)
 	if err != nil {
-		wrappedErr := fmt.Errorf("invalid receive-pack request: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack")
+		http.Error(w, fmt.Sprintf("Invalid receive-pack request: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -299,8 +295,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	storage := filesystem.NewStorage(fs, nil)
 	gitRepo, err := gogit.Open(storage, fs)
 	if err != nil {
-		wrappedErr := fmt.Errorf("failed to open repository: %w", err)
-		h.errorHandler.HandleError(w, r, wrappedErr, "receive_pack")
+		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -703,7 +698,7 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *g
 	}
 
 	// Get full filesystem path for the repository
-	repoPath, err := repository.GetRepoPath(h.pathConfig, owner, repoName)
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
 	if err != nil {
 		// Skip if we can't get the path
 		return

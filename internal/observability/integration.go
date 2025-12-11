@@ -10,7 +10,6 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/permissions"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -67,7 +66,7 @@ type Manager struct {
 }
 
 // NewManager creates a new observability manager with the given configuration
-func NewManager(cfg *config.Config, permClient permissions.PermissionClient, version string) (*Manager, error) {
+func NewManager(cfg *config.Config, version string) (*Manager, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
@@ -106,7 +105,7 @@ func NewManager(cfg *config.Config, permClient permissions.PermissionClient, ver
 	}
 
 	// Initialize health checker (with or without permission client)
-	healthChecker := NewHealthChecker(cfg, permClient, version)
+	healthChecker := NewHealthChecker(cfg, version)
 
 	// Initialize logger
 	logger, err := logging.NewLogger(obsConfig.Logging)

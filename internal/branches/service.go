@@ -36,6 +36,49 @@ type CreateBranchResult struct {
 	Details     CreateBranchDetails
 }
 
+// GetBranches는 저장소의 모든 브랜치를 가져옵니다.
+func (s *BranchService) GetBranches(repo *gogit.Repository) ([]BranchInfo, error) {
+	refs, err := repo.References()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get references: %w", err)
+	}
+	defer refs.Close()
+
+	var branches []BranchInfo
+	headRef, _ := repo.Head()
+
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Name().IsBranch() {
+			branch := BranchInfo{
+				Name:      ref.Name().Short(),
+				CommitSHA: ref.Hash().String(),
+				RefPath:   ref.Name().String(),
+				IsHead:    false,
+			}
+
+			if headRef != nil {
+				if headRef.Type() == plumbing.SymbolicReference {
+					branch.IsHead = headRef.Target() == ref.Name()
+				} else {
+					branch.IsHead = headRef.Name() == ref.Name()
+				}
+			}
+
+			// 커밋 날짜 가져오기
+			commit, err := repo.CommitObject(ref.Hash())
+			if err == nil {
+				// 커밋이 존재하면 Author 날짜 사용 (Committer 날짜가 더 최신일 수 있지만 일반적으로 Author 사용)
+				branch.Date = commit.Author.When
+			}
+
+			branches = append(branches, branch)
+		}
+		return nil
+	})
+
+	return branches, err
+}
+
 // CreateBranch는 새로운 브랜치를 생성합니다.
 func (s *BranchService) CreateBranch(repo *gogit.Repository, req CreateBranchRequest) (*CreateBranchResult, error) {
 	// Set default source if not provided - support both field names for compatibility

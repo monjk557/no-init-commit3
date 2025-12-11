@@ -10,10 +10,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
-	"github.com/collabops/git-executor/internal/git"
-	"github.com/collabops/git-executor/internal/permissions"
-	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/repositories"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -21,9 +20,8 @@ import (
 
 // SSHProtocolHandler handles SSH-forwarded Git operations
 type SSHProtocolHandler struct {
-	pathConfig       *repository.PathConfig
-	permissionClient permissions.PermissionClient
-	errorHandler     *ErrorHandler
+	pathConfig   *repositories.PathConfig
+	errorHandler *ErrorHandler
 }
 
 // SSHRequest represents a validated SSH-forwarded Git request
@@ -38,13 +36,13 @@ type SSHRequest struct {
 }
 
 // NewSSHProtocolHandler creates a new SSH protocol handler
-func NewSSHProtocolHandler(cfg *config.Config, permissionClient permissions.PermissionClient) (*SSHProtocolHandler, error) {
+func NewSSHProtocolHandler(cfg *config.Config) (*SSHProtocolHandler, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
 	// Create path configuration for repository path validation
-	pathConfig, err := repository.NewPathConfig(cfg.Git.RepoRoot)
+	pathConfig, err := repositories.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
@@ -53,9 +51,8 @@ func NewSSHProtocolHandler(cfg *config.Config, permissionClient permissions.Perm
 	errorHandler := NewErrorHandler(nil)
 
 	return &SSHProtocolHandler{
-		pathConfig:       pathConfig,
-		permissionClient: permissionClient,
-		errorHandler:     errorHandler,
+		pathConfig:   pathConfig,
+		errorHandler: errorHandler,
 	}, nil
 }
 
@@ -88,9 +85,9 @@ func (h *SSHProtocolHandler) ValidateSSHRequest(r *http.Request, operation strin
 	}
 
 	// Validate repository path using existing path validation
-	repoPath, err := repository.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return nil, WrapRepositoryError(err, fmt.Sprintf("%s/%s", owner, repo))
+		return nil, fmt.Errorf("failed to get repository path: %w", err)
 	}
 
 	// Extract protocol version if specified (optional for SSH)
@@ -117,29 +114,15 @@ func (h *SSHProtocolHandler) CheckSSHPermissions(ctx context.Context, req *SSHRe
 	switch req.Operation {
 	case "git-upload-pack":
 		// Check read permission for fetch operations
-		hasPermission, err := h.permissionClient.CheckReadAccess(ctx, req.UserID, req.Owner, req.Repo)
-		if err != nil {
-			return WrapPermissionError(err, "check_read_access")
-		}
-		if !hasPermission {
-			return NewGitProtocolError("access_denied", "Access denied to repository", http.StatusForbidden, true)
-		}
+		return fmt.Errorf("permission check not implemented")
 
 	case "git-receive-pack":
 		// Check write permission for push operations
-		hasPermission, err := h.permissionClient.CheckWriteAccess(ctx, req.UserID, req.Owner, req.Repo)
-		if err != nil {
-			return WrapPermissionError(err, "check_write_access")
-		}
-		if !hasPermission {
-			return NewGitProtocolError("write_access_denied", "Write access denied to repository", http.StatusForbidden, true)
-		}
+		return fmt.Errorf("permission check not implemented")
 
 	default:
-		return NewGitProtocolError("unknown_operation", fmt.Sprintf("Unknown operation: %s", req.Operation), http.StatusBadRequest, true)
+		return fmt.Errorf("unknown operation: %s", req.Operation)
 	}
-
-	return nil
 }
 
 // sendEmptyPackfile sends an empty packfile (for when objects can't be found)
@@ -222,16 +205,16 @@ func (h *SSHProtocolHandler) generatePackfileWithObjects(ctx context.Context, re
 }
 
 // EnsureSSHRepository ensures the repository exists and can be opened
-func (h *SSHProtocolHandler) EnsureSSHRepository(ctx context.Context, req *SSHRequest) (git.Repository, error) {
+func (h *SSHProtocolHandler) EnsureSSHRepository(ctx context.Context, req *SSHRequest) (*repositories.RepositoryWrapper, error) {
 	// Ensure repository exists using existing repository utilities
-	if err := repository.EnsureRepoExists(h.pathConfig, req.RepoPath); err != nil {
-		return nil, WrapRepositoryError(err, req.RepoPath)
+	if err := repositories.EnsureRepoExists(h.pathConfig, req.RepoPath); err != nil {
+		return nil, fmt.Errorf("failed to ensure repository exists: %w", err)
 	}
 
 	// Open repository using go-git
-	repo, err := git.OpenRepository(req.RepoPath)
+	repo, err := repositories.OpenRepositorySimple(req.RepoPath)
 	if err != nil {
-		return nil, WrapRepositoryError(err, req.RepoPath)
+		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
 
 	return repo, nil
@@ -398,7 +381,7 @@ func (h *SSHProtocolHandler) HandleSSHReceivePack(w http.ResponseWriter, r *http
 }
 
 // processSSHUploadPack processes the SSH upload-pack operation (fetch)
-func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo git.Repository, opts *SSHStreamingOptions) {
+func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo *repositories.RepositoryWrapper, opts *SSHStreamingOptions) {
 	// Set content type for SSH upload-pack (no service advertisement)
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 
@@ -445,7 +428,7 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 }
 
 // processSSHReceivePack processes the SSH receive-pack operation (push)
-func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo git.Repository, opts *SSHStreamingOptions) {
+func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo *repositories.RepositoryWrapper, opts *SSHStreamingOptions) {
 	// Set content type for SSH receive-pack
 	w.Header().Set("Content-Type", opts.ContentType)
 
@@ -559,7 +542,7 @@ func (h *SSHProtocolHandler) parseGitProtocolRequest(input io.ReadCloser) (map[s
 // handleSSHUploadPackCommand handles git-upload-pack commands for SSH
 func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
 	// Open repository with simple caching
-	gitRepo, err := git.OpenRepositorySimple(repoPath)
+	gitRepo, err := repositories.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
@@ -569,7 +552,7 @@ func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, rep
 	defer func() { _ = gitRepo.Close() }()
 
 	// Get the underlying go-git repository for operations that need it
-	cache := git.GetSimpleCache()
+	cache := repositories.GetSimpleCache()
 	goGitRepo, err := cache.Get(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to get go-git repository: %w", err)
@@ -590,7 +573,7 @@ func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, rep
 // handleSSHReceivePackCommand handles git-receive-pack commands for SSH
 func (h *SSHProtocolHandler) handleSSHReceivePackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
 	// Open repository with simple caching
-	gitRepo, err := git.OpenRepositorySimple(repoPath)
+	gitRepo, err := repositories.OpenRepositorySimple(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
@@ -667,7 +650,7 @@ func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, r
 }
 
 // handleLsRefs handles the ls-refs command for SSH upload-pack
-func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repo git.Repository, output *SSHProtocolWriter) error {
+func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repo *repositories.RepositoryWrapper, output *SSHProtocolWriter) error {
 	// Check for nil repository to prevent panic
 	if repo == nil {
 		// Write empty response for nil repository
@@ -676,7 +659,7 @@ func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repo git.Reposito
 	}
 
 	// Get commits to find HEAD reference
-	commits, err := repo.GetCommits(ctx, "HEAD", 1, 0)
+	commits, err := commits.GetCommits(repo, ctx, "HEAD", 1, 0)
 	if err != nil {
 		// Repository might be empty or HEAD might not exist - write empty response
 		_, err := output.Write([]byte("0000"))

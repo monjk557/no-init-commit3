@@ -24,12 +24,10 @@ import (
 	"github.com/collabops/git-executor/internal/overview"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
-	"github.com/collabops/git-executor/internal/repository"
+	"github.com/collabops/git-executor/internal/state"
 	"github.com/collabops/git-executor/internal/tags"
 	"github.com/collabops/git-executor/internal/tree"
 	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 )
 
@@ -66,18 +64,6 @@ func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
 		c.Redirect(http.StatusFound, redirectPath)
 	})
 
-	// Serve OpenAPI specification from configured path
-	docsGroup.GET("/collabops-git-executor.yaml", func(c *gin.Context) {
-		// Try to serve from embedded file first, fallback to filesystem
-		specPath := "./specs/generated/collabops-git-executor.yaml"
-		c.File(specPath)
-	})
-
-	// Serve Swagger UI
-	docsGroup.GET("/swagger/*any", ginSwagger.WrapHandler(
-		swaggerFiles.Handler,
-		ginSwagger.URL(path.Join(docsPath, "collabops-git-executor.yaml")),
-	))
 }
 
 // ginContextMiddleware - Gin 컨텍스트를 요청 컨텍스트에 저장하는 미들웨어
@@ -102,7 +88,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// 심플 캐시는 첫 사용 시 자동으로 초기화됨
 
 	// Initialize observability manager (without permission client)
-	obsManager, err := observability.NewManager(cfg, nil, "1.0.0")
+	obsManager, err := observability.NewManager(cfg, "1.0.0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create observability manager: %w", err)
 	}
@@ -231,110 +217,14 @@ func (s *Server) setupAPIRoutesOnGroup(group *gin.RouterGroup) {
 // setupRestAPIRoutes configures REST API routes for Git operations
 func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	// Create path configuration for handlers
-	pathConfig, err := repository.NewPathConfig(s.config.Git.RepoRoot)
-	if err != nil {
-		s.logger.Error("Failed to create path config", zap.Error(err))
-		return
-	}
-
-	// Initialize handlers for REST API endpoints (without permission client)
-	treeHandler, err := protocol.NewTreeHandler(s.config, nil)
-	if err != nil {
-		s.logger.Error("Failed to create tree handler", zap.Error(err))
-		return
-	}
-
-	blobHandler, err := protocol.NewBlobHandler(pathConfig, nil)
-	if err != nil {
-		s.logger.Error("Failed to create blob handler", zap.Error(err))
-		return
-	}
-
-	commitsHandler, err := protocol.NewCommitsHandler(s.config, nil)
-	if err != nil {
-		s.logger.Error("Failed to create commits handler", zap.Error(err))
-		return
-	}
-
-	// Initialize diff handler for enhanced Git operations
-	diffHandler, err := protocol.NewDiffHandler(s.config, nil)
-	if err != nil {
-		s.logger.Error("Failed to create diff handler", zap.Error(err))
-		return
-	}
-
-	// Initialize file operations handler for server-side Git REST APIs
-	fileOpsHandler, err := protocol.NewFileOperationsHandler(s.config, nil)
-	if err != nil {
-		s.logger.Error("Failed to create file operations handler", zap.Error(err))
-		return
-	}
-
-	// Initialize branch operations handler for branch management APIs
-	branchOpsHandler, err := protocol.NewBranchOperationsHandler(s.config, nil)
-	if err != nil {
-		s.logger.Error("Failed to create branch operations handler", zap.Error(err))
-		return
-	}
-
-	// Initialize repository state handler for repository management APIs
-	repoStateHandler, err := protocol.NewRepositoryStateHandler(s.config, nil)
-	if err != nil {
-		s.logger.Error("Failed to create repository state handler", zap.Error(err))
-		return
-	}
-
-	// Initialize repository creation handler for repository creation APIs
-	repoCreationHandler, err := protocol.NewRepositoryCreationHandler(s.config)
-	if err != nil {
-		s.logger.Error("Failed to create repository creation handler", zap.Error(err))
-		return
-	}
-
-	// Initialize merge handler for merge operations
-	mergeOpsHandler, err := protocol.NewMergeOperationsHandler(s.config)
-	if err != nil {
-		s.logger.Error("Failed to create merge handler", zap.Error(err))
-		return
-	}
-
-	// Initialize merge preview handler for merge preview operations
-	mergePreviewHandler, err := protocol.NewMergePreviewHandler(s.config)
-	if err != nil {
-		s.logger.Error("Failed to create merge preview handler", zap.Error(err))
-		return
-	}
 
 	// Initialize JSON response middleware for proper error handling
 	jsonResponseMiddleware := api.NewJSONResponseMiddleware(s.logger, "v1")
 
-	// Git diff endpoints with enhanced middleware
-	reposGroup := router.Group("/repos")
-	reposGroup.Use(ginContextMiddleware()) // Add chi compatibility middleware
-	reposGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
-	reposGroup.Use(jsonResponseMiddleware.ErrorHandler())
-
-	// Repository detail handler for repository detail APIs
-	repositoryDetailHandler, err := protocol.NewRepositoryDetailHandler(s.config)
-	if err != nil {
-		s.logger.Error("Failed to create repository detail handler", zap.Error(err))
-		return
-	}
-
-	apiGroup := router.Group("/api/v1")
-	apiGroup.GET("/repository/:owner/:repo", repositoryDetailHandler.HandleGetRepositoryDetail)
-	apiGroup.GET("/repository/:owner/:repo/blob", repositoryDetailHandler.HandleGetBlobDetail)
-	apiGroup.GET("/repository/:owner/:repo/tree", repositoryDetailHandler.HandleGetTreeDetail)
-	apiGroup.GET("/repository/:owner/:repo/branches", branchOpsHandler.HandleGetBranchesDetail)
-
-	//===============================================
-	// refactoring code
-	//===============================================
-
-	apiV2Group := router.Group("/v2/repos")
-	apiV2Group.Use(ginContextMiddleware())
-	apiV2Group.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
-	apiV2Group.Use(jsonResponseMiddleware.ErrorHandler())
+	apiGroup := router.Group("/repos")
+	apiGroup.Use(ginContextMiddleware())
+	apiGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
+	apiGroup.Use(jsonResponseMiddleware.ErrorHandler())
 
 	repositoryHandler, err := repositories.NewRepositoryCreationHandler(s.config)
 	if err != nil {
@@ -354,19 +244,19 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
-	treeHandlerV2, err := tree.NewTreeHandler(s.config)
+	treeHandler, err := tree.NewTreeHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create tree handler", zap.Error(err))
 		return
 	}
 
-	commitsHandlerV2, err := commits.NewCommitsHandler(s.config)
+	commitsHandler, err := commits.NewCommitsHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create commits handler", zap.Error(err))
 		return
 	}
 
-	blobHandlerV2, err := blob.NewBlobHandler(s.config)
+	blobHandler, err := blob.NewBlobHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create blob handler", zap.Error(err))
 		return
@@ -378,15 +268,21 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
-	mergePreviewHandlerV2, err := merge.NewMergePreviewHandler(s.config)
+	mergePreviewHandler, err := merge.NewMergePreviewHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create merge preview handler", zap.Error(err))
 		return
 	}
 
-	mergeOpsHandlerV2, err := merge.NewMergeOperationsHandler(s.config)
+	mergeOpsHandler, err := merge.NewMergeOperationsHandler(s.config)
 	if err != nil {
 		s.logger.Error("Failed to create merge operations handler", zap.Error(err))
+		return
+	}
+
+	stateHandler, err := state.NewStateHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create state handler", zap.Error(err))
 		return
 	}
 
@@ -396,25 +292,27 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
-	ownerRepoGroup := apiV2Group.Group("/:owner/:repo")
+	ownerRepoGroup := apiGroup.Group("/:owner/:repo")
 	ownerRepoGroup.Use(ginContextMiddleware())
 	ownerRepoGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
 	ownerRepoGroup.Use(jsonResponseMiddleware.ErrorHandler())
 
 	// Repository endpoints
 	ownerRepoGroup.POST("", repositoryHandler.HandleCreateRepository)
+	ownerRepoGroup.GET("/state", stateHandler.HandleGetRepositoryState)
 
 	// Branches endpoints
+	ownerRepoGroup.GET("/branches", branchesHandler.HandleGetBranches)
 	ownerRepoGroup.POST("/branches", branchesHandler.HandleCreateBranch)
 	ownerRepoGroup.PATCH("/branches/*branch", branchesHandler.HandleUpdateBranch)
 	ownerRepoGroup.DELETE("/branches/*branch", branchesHandler.HandleDeleteBranch)
 
 	// Tree endpoints
-	ownerRepoGroup.GET("/tree", treeHandlerV2.HandleTreeAPI)
+	ownerRepoGroup.GET("/tree", treeHandler.HandleTreeAPI)
 
 	// Commits endpoints
-	ownerRepoGroup.GET("/commits", commitsHandlerV2.HandleCommitsAPI)
-	ownerRepoGroup.POST("/commits", commitsHandlerV2.HandleMultiFileCommit)
+	ownerRepoGroup.GET("/commits", commitsHandler.HandleCommitsAPI)
+	ownerRepoGroup.POST("/commits", commitsHandler.HandleMultiFileCommit)
 
 	// Tags endpoints
 	ownerRepoGroup.GET("/tags", tagsHandler.HandleGetTags)
@@ -422,7 +320,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.DELETE("/tags/*tag", tagsHandler.HandleDeleteTag)
 
 	// Blob endpoints
-	ownerRepoGroup.GET("/blob", blobHandlerV2.HandleBlobAPI)
+	ownerRepoGroup.GET("/blob", blobHandler.HandleBlobAPI)
 
 	// Diff endpoints
 	ownerRepoGroup.GET("/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
@@ -432,97 +330,16 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/diff/patch/:base/:head", diffsHandler.HandlePatch)
 
 	// Merge endpoints
-	ownerRepoGroup.GET("/merges/preview", mergePreviewHandlerV2.HandleMergePreview)
-	ownerRepoGroup.POST("/merges", mergeOpsHandlerV2.HandleMerge)
+	ownerRepoGroup.GET("/merges/preview", mergePreviewHandler.HandleMergePreview)
+	ownerRepoGroup.POST("/merges", mergeOpsHandler.HandleMerge)
 
 	// Overview endpoints
 	ownerRepoGroup.GET("/overview", overviewHandler.HandleGetRepositoryOverview)
 	ownerRepoGroup.GET("/overview/tree", overviewHandler.HandleGetTreeOverview)
+	ownerRepoGroup.GET("/overview/tree/commits", overviewHandler.HandleGetTreeWithCommitOverview)
 	ownerRepoGroup.GET("/overview/blob", overviewHandler.HandleGetBlobOverview)
 	ownerRepoGroup.GET("/overview/branches", overviewHandler.HandleGetBranchesOverview)
 
-	{
-		// Repository creation endpoint - separate from existing repos
-
-		ownerGroup := reposGroup.Group("/:owner")
-		{
-			repoGroup := ownerGroup.Group("/:repo")
-			{
-				// Repository creation endpoint
-				repoGroup.POST("", repoCreationHandler.HandleCreateRepository)
-				// Tree endpoint
-				repoGroup.GET("/tree", treeHandler.HandleTreeAPI)
-				// Blob endpoint
-				repoGroup.GET("/blob", blobHandler.HandleBlobAPIGin)
-
-				commitGroup := repoGroup.Group("/commits")
-				{
-					// Commits endpoint
-					commitGroup.GET("", commitsHandler.HandleCommitsAPI)
-					// Multi-file commit endpoints
-					commitGroup.POST("", fileOpsHandler.HandleMultiFileCommit)
-				}
-
-				// Diff endpoints
-				diffGroup := repoGroup.Group("/diff")
-				{
-					// Compare two commits
-					diffGroup.GET("/commits/:base/:head", diffHandler.HandleCommitDiff)
-					// Compare two branches
-					diffGroup.GET("/branches/:base/:head", diffHandler.HandleBranchDiff)
-					// Compare specific file between two references
-					diffGroup.GET("/file", diffHandler.HandleFileDiff)
-					// Single commit diff endpoint
-					diffGroup.GET("/commit/:sha", diffHandler.HandleSingleCommitDiff)
-				}
-
-				// Merge endpoints
-				mergeGroup := repoGroup.Group("/merges")
-				{
-					// Preview merge
-					mergeGroup.GET("/preview", mergePreviewHandler.HandleMergePreview)
-					// Perform merge
-					mergeGroup.POST("", mergeOpsHandler.HandleMerge)
-				}
-
-				// Patch endpoints
-				patchGroup := repoGroup.Group("/patch")
-				{
-					// Generate Git patch format for commit range
-					patchGroup.GET("/:base/:head", diffHandler.HandlePatch)
-				}
-
-				// File operations endpoints (server-side Git REST APIs)
-				filesGroup := repoGroup.Group("/files")
-				{
-					// GET endpoint for reading file content
-					filesGroup.GET("/*path", fileOpsHandler.HandleFileContent)
-					// Upload endpoint for creating/updating files
-					filesGroup.POST("/*path", fileOpsHandler.HandleFileUpload)
-					// PUT endpoint for creating/updating files
-					filesGroup.PUT("/*path", fileOpsHandler.HandleFilePUT)
-					// DELETE endpoint for deleting files
-					filesGroup.DELETE("/*path", fileOpsHandler.HandleFileDELETE)
-				}
-
-				// Branch operations endpoints
-				branchesGroup := repoGroup.Group("/branches")
-				{
-					// POST endpoint for creating branches
-					branchesGroup.POST("", branchOpsHandler.HandleCreateBranch)
-					// PATCH endpoint for updating branches (commit update) or renaming branches (wildcard route)
-					branchesGroup.PATCH("/*branch", branchOpsHandler.HandleUpdateBranch)
-					// DELETE endpoint for deleting branches
-					branchesGroup.DELETE("/*branch", branchOpsHandler.HandleDeleteBranch)
-				}
-
-				// Repository state endpoints
-				repoGroup.GET("/state", repoStateHandler.HandleGetRepositoryState)
-				repoGroup.GET("/head", repoStateHandler.HandleGetRepositoryHead)
-				repoGroup.GET("/references", repoStateHandler.HandleGetRepositoryReferences)
-			}
-		}
-	}
 }
 
 // healthCheck handles health check requests

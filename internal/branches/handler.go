@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/collabops/git-executor/internal/api"
@@ -130,6 +131,129 @@ func (h *BranchOperationsHandler) validateAndOpenRepository(ctx context.Context,
 		repoPath:    repoPath,
 		repoWrapper: repoWrapper,
 	}, true
+}
+
+// HandleGetBranches handles GET /repos/{owner}/{repo}/branches for getting branches
+func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Extract URL parameters
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	// 파라미터 추출 및 검증
+	limitStr := c.Query("limit")
+	skipStr := c.Query("skip")
+
+	// limit 파라미터 파싱 및 검증
+	limit := DefaultBranchesLimit
+	if limitStr != "" {
+		parsedLimit, err := strconv.Atoi(limitStr)
+		if err != nil || parsedLimit < MinBranchesLimit {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("invalid limit: must be >= %d", MinBranchesLimit)})
+			return
+		}
+		if parsedLimit > MaxBranchesLimit {
+			limit = MaxBranchesLimit
+		} else {
+			limit = parsedLimit
+		}
+	}
+
+	// skip 파라미터 파싱 및 검증
+	skip := 0
+	if skipStr != "" {
+		parsedSkip, err := strconv.Atoi(skipStr)
+		if err != nil || parsedSkip < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid skip: must be >= 0"})
+			return
+		}
+		skip = parsedSkip
+	}
+
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	if !ok {
+		return
+	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repository := repoCtx.repoWrapper.GetRepo()
+
+	// 모든 브랜치 가져오기
+	allBranches, err := h.service.GetBranches(repository)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
+	}
+
+	totalCount := len(allBranches)
+
+	// 페이지네이션 적용
+	var branches []BranchInfo
+	if skip >= totalCount {
+		// skip이 전체 개수보다 크면 빈 배열
+		branches = []BranchInfo{}
+	} else {
+		end := skip + limit
+		if end > totalCount {
+			end = totalCount
+		}
+		branches = allBranches[skip:end]
+	}
+
+	// 페이지네이션 정보 계산
+	currentPage := 1
+	if limit > 0 {
+		currentPage = skip/limit + 1
+	}
+
+	// 페이지네이션 정보와 함께 응답 생성
+	response := GetBranchesResponse{
+		Success:  true,
+		Branches: branches,
+		Pagination: PaginationInfo{
+			Count:       totalCount,
+			Next:        buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).Next,
+			Previous:    buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).Previous,
+			CurrentPage: currentPage,
+			TotalPages:  buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).TotalPages,
+			PageSize:    limit,
+		},
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// buildPagination은 페이지네이션 정보를 생성합니다.
+func buildPagination(totalCount, currentPage, pageSize int, baseURL string) PaginationInfo {
+	totalPages := (totalCount + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+
+	var next, previous *string
+
+	// limit과 skip을 사용하므로 URL 파라미터도 limit/skip으로 생성
+	if currentPage < totalPages {
+		nextSkip := (currentPage) * pageSize
+		nextURL := fmt.Sprintf("%s?limit=%d&skip=%d", baseURL, pageSize, nextSkip)
+		next = &nextURL
+	}
+
+	if currentPage > 1 {
+		prevSkip := (currentPage - 2) * pageSize
+		prevURL := fmt.Sprintf("%s?limit=%d&skip=%d", baseURL, pageSize, prevSkip)
+		previous = &prevURL
+	}
+
+	return PaginationInfo{
+		Count:       totalCount,
+		Next:        next,
+		Previous:    previous,
+		CurrentPage: currentPage,
+		TotalPages:  totalPages,
+		PageSize:    pageSize,
+	}
 }
 
 // HandleCreateBranch handles POST /repos/{owner}/{repo}/branches for creating new branches

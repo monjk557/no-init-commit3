@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/go-enry/go-enry/v2"
 	"github.com/go-enry/go-enry/v2/data"
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
@@ -213,4 +215,103 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 		TotalBytes: totalBytes,
 		TotalFiles: totalFiles,
 	}
+}
+
+// GetLatestCommitForPath는 특정 경로의 최근 커밋을 가져옵니다.
+// blob인 경우 해당 파일의 최근 커밋, tree인 경우 하위를 재귀적으로 탐색하여 가장 최근 커밋을 반환합니다.
+func (s *RepositoryOverviewService) GetLatestCommitForPath(ctx context.Context, repo *gogit.Repository, ref, filePath string, isTree bool) (*GitCommit, error) {
+	// 컨텍스트 취소 확인
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// ref를 커밋 해시로 해석
+	commitHash, err := s.objectManager.ResolveReference(repo, ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve reference: %w", err)
+	}
+
+	// 경로 정규화 (슬래시 제거 및 정리)
+	normalizedPath := strings.Trim(filePath, "/")
+
+	// 커밋 로그 가져오기 (경로 필터링)
+	// PathFilter는 변경된 파일 경로만 필터링하므로, 디렉토리 경로 자체는 매칭되지 않음
+	var pathFilter func(string) bool
+	if isTree {
+		// tree인 경우: 해당 경로로 시작하는 모든 하위 파일 경로 포함
+		// 예: "src" -> "src/main.go", "src/utils/helper.go" 등 모두 포함
+		if normalizedPath == "" {
+			// 루트 경로인 경우 모든 경로 포함
+			pathFilter = func(path string) bool {
+				return true
+			}
+		} else {
+			// 경로가 정확히 일치하거나 하위 경로인지 확인
+			// 디렉토리 경로 자체는 커밋에 포함되지 않으므로 하위 파일만 체크
+			pathFilter = func(path string) bool {
+				return path == normalizedPath || strings.HasPrefix(path, normalizedPath+"/")
+			}
+		}
+	} else {
+		// blob인 경우: 정확히 일치하는 경로만
+		pathFilter = func(path string) bool {
+			return path == normalizedPath
+		}
+	}
+
+	commitIter, err := repo.Log(&gogit.LogOptions{
+		From:       commitHash,
+		PathFilter: pathFilter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer commitIter.Close()
+
+	// 첫 번째 커밋 가져오기 (가장 최근 커밋)
+	var latestCommit *object.Commit
+	err = commitIter.ForEach(func(c *object.Commit) error {
+		latestCommit = c
+		// 첫 번째 커밋만 가져오고 중지
+		return io.EOF
+	})
+
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to iterate commits: %w", err)
+	}
+
+	if latestCommit == nil {
+		// 해당 경로에 대한 커밋이 없는 경우 nil 반환 (에러 아님)
+		return nil, nil
+	}
+
+	// GitCommit으로 변환
+	return &GitCommit{
+		SHA:          latestCommit.Hash.String(),
+		Message:      latestCommit.Message,
+		Author:       convertAuthorToGitAuthorFromObject(latestCommit.Author),
+		Committer:    convertAuthorToGitAuthorFromObject(latestCommit.Committer),
+		ParentHashes: convertParentHashes(latestCommit.ParentHashes),
+		TreeHash:     latestCommit.TreeHash.String(),
+	}, nil
+}
+
+// convertAuthorToGitAuthorFromObject는 object.Signature를 GitAuthor로 변환합니다.
+func convertAuthorToGitAuthorFromObject(sig object.Signature) GitAuthor {
+	return GitAuthor{
+		Name:  sig.Name,
+		Email: sig.Email,
+		Date:  sig.When,
+	}
+}
+
+// convertParentHashes는 plumbing.Hash 슬라이스를 string 슬라이스로 변환합니다.
+func convertParentHashes(hashes []plumbing.Hash) []string {
+	result := make([]string, len(hashes))
+	for i, hash := range hashes {
+		result[i] = hash.String()
+	}
+	return result
 }

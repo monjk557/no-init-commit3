@@ -255,7 +255,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				ConflictSummary: rebaseAnalysis,
 				Details:         details,
 			}
-			h.SendSuccess(c, response, "Rebase dry run analysis completed successfully")
+			c.JSON(http.StatusOK, response)
 			return
 		}
 
@@ -277,7 +277,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				"recommendations":       conflictAnalysis.Recommendations,
 			},
 		}
-		h.SendSuccess(c, response, "Merge analysis completed successfully")
+		c.JSON(http.StatusOK, response)
 		return
 	}
 
@@ -359,7 +359,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	}
 
 	// Send success response
-	h.SendSuccess(c, response, response.Message)
+	c.JSON(http.StatusOK, response)
 }
 
 // HandleMergePreview handles GET /repos/{owner}/{repo}/merges/preview for merge analysis
@@ -470,8 +470,8 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 		return
 	}
 
-	// Send success response
-	h.SendSuccess(c, previewResult, "Merge preview completed successfully")
+	// Send response directly without wrapping in data field
+	c.JSON(http.StatusOK, previewResult)
 }
 
 // validatePath validates the owner and repo path components
@@ -574,26 +574,6 @@ func (h *MergePreviewHandler) resolveReference(repo *gogit.Repository, ref strin
 	}
 
 	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference: %s", ref)
-}
-
-// SendSuccess sends a successful JSON response
-func (h *MergeOperationsHandler) SendSuccess(c *gin.Context, data interface{}, message string) {
-	response := map[string]interface{}{
-		"success": true,
-		"message": message,
-		"data":    data,
-	}
-	c.JSON(http.StatusOK, response)
-}
-
-// SendSuccess sends a successful JSON response
-func (h *MergePreviewHandler) SendSuccess(c *gin.Context, data interface{}, message string) {
-	response := map[string]interface{}{
-		"success": true,
-		"message": message,
-		"data":    data,
-	}
-	c.JSON(http.StatusOK, response)
 }
 
 // publishMergeCommitEvent publishes a merge commit event to Redis Stream

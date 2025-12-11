@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/collabops/git-executor/internal/git"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
@@ -430,7 +429,7 @@ func ValidateFetchSupport(r *FetchReq) error {
 // fetch 대상 해시 집합 계산 (revlist)
 // - wants/haves 기반으로 전송해야 할 객체 목록을 만든다
 // - include-tag 지원: wants와 연관된 annotated tag를 찾아 추가(선택)
-func BuildFetchObjectList(st storer.EncodedObjectStorer, repo git.Repository, r *FetchReq) ([]plumbing.Hash, error) {
+func BuildFetchObjectList(st storer.EncodedObjectStorer, repo *gogit.Repository, r *FetchReq) ([]plumbing.Hash, error) {
 	objs, err := revlist.Objects(st, r.Wants, r.Haves)
 	if err != nil {
 		return nil, fmt.Errorf("revlist.Objects failed: %w", err)
@@ -461,7 +460,7 @@ func BuildFetchObjectList(st storer.EncodedObjectStorer, repo git.Repository, r 
 }
 
 // wants와 연결된 annotated tags 찾아 추가 (간단 구현)
-func collectRelatedTags(repo git.Repository, wants []plumbing.Hash) ([]plumbing.Hash, error) {
+func collectRelatedTags(repo *gogit.Repository, wants []plumbing.Hash) ([]plumbing.Hash, error) {
 	if len(wants) == 0 {
 		return nil, nil
 	}
@@ -471,14 +470,7 @@ func collectRelatedTags(repo git.Repository, wants []plumbing.Hash) ([]plumbing.
 	}
 
 	// Get the underlying go-git repository
-	goGitRepo, ok := repo.(*git.GoGitRepository)
-	if !ok {
-		// If it's not a GoGitRepository, we can't access references
-		// Return empty result for now
-		return nil, nil
-	}
-
-	underlyingRepo := goGitRepo.GetGoGitRepo()
+	underlyingRepo := repo
 	refs, err := underlyingRepo.References()
 	if err != nil {
 		return nil, err
@@ -490,7 +482,7 @@ func collectRelatedTags(repo git.Repository, wants []plumbing.Hash) ([]plumbing.
 		if !strings.HasPrefix(ref.Name().String(), "refs/tags/") {
 			return nil
 		}
-		tagObj, e := underlyingRepo.TagObject(ref.Hash())
+		tagObj, e := repo.TagObject(ref.Hash())
 		if e != nil || tagObj == nil {
 			return nil // lightweight tag
 		}
