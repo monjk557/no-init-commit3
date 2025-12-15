@@ -1,0 +1,276 @@
+[
+    {
+      "section": 1,
+      "title": "Go HTTP 프레임워크와 성능 최적화",
+      "summary": "net/http, gin, fiber, fasthttp 기반 프레임워크들의 특성과 트레이드오프",
+      "conclusion": "극단적인 성능이 필요한 경우 fiber나 fasthttp가 선택지가 될 수 있으나, 일반적인 서비스에서는 gin 또는 net/http가 더 안전한 선택이 된다.",
+      "frameworks": [
+        {
+          "name": "net/http",
+          "type": "표준 패키지",
+          "pros": [
+            "가장 안정적",
+            "대규모 트래픽 환경에서 예측 가능성 높음"
+          ],
+          "cons": [
+            "라우팅 기능 없음 (외부 패키지 필요)"
+          ],
+          "use_case": "Google, Kubernetes, Prometheus 등 대규모 프로젝트에서 사용"
+        },
+        {
+          "name": "gin",
+          "type": "서드파티 프레임워크",
+          "pros": [
+            "Tree 기반 라우터 알고리즘",
+            "학습 곡선 낮음",
+            "성능과 개발 생산성 균형"
+          ],
+          "cons": [],
+          "use_case": "대부분의 서비스에 적합"
+        },
+        {
+          "name": "fiber",
+          "type": "fasthttp 기반",
+          "pros": [
+            "높은 성능",
+            "메모리 재사용 적극 활용"
+          ],
+          "cons": [
+            "요청 스코프 벗어난 데이터 사용 시 주의 필요",
+            "내부 버퍼 재사용으로 인한 메모리 라이프사이클 이해 필수"
+          ],
+          "use_case": "극단적인 성능이 필요한 경우",
+          "warning": "공식 문서와 다수 사례에서 반복적으로 경고되는 메모리 안전성 이슈"
+        }
+      ],
+      "references": [
+        "Go 커뮤니티와 Google 내부 서비스 사례에서 net/http는 여전히 가장 안정적인 기준점",
+        "Google, Kubernetes, Prometheus 계열 프로젝트들은 net/http 기반 + 외부 패키지 조합",
+        "Gin은 httprouter 계열의 트리 기반 라우팅 사용 (공식 문서 성능 근거)",
+        "Fiber/fasthttp의 메모리 재사용 전략은 공식 문서와 이슈에서 반복적으로 강조됨"
+      ],
+      "tips": [
+        {
+          "title": "Fiber / fasthttp 사용 시 메모리 안전성",
+          "description": "요청 컨텍스트가 반환하는 string이나 byte slice가 내부 버퍼를 재사용하므로, 요청 스코프를 벗어나 사용하는 경우 반드시 복사 필요",
+          "principle": "경계를 넘길 때 복사",
+          "code_example": {
+            "bad": "result := c.Params(\"foo\")\ngo func() { useString(result) }()",
+            "good": "buffer := make([]byte, len(result))\ncopy(buffer, result)\nresultCopy := string(buffer)\ngo func() { useString(resultCopy) }()"
+          },
+          "note": "Unsafe.String이나 unsafe.SliceData를 활용한 zero-copy는 성능 최적화가 정말 필요한 구간에서만 제한적으로 사용"
+        }
+      ]
+    },
+    {
+      "section": 2,
+      "title": "Go의 최소 추상 철학과 함수형적 접근",
+      "summary": "Go는 함수형 언어가 아니며, 순수 함수와 부수 효과를 분리하는 실용적 접근만을 취한다",
+      "core_philosophy": "불필요한 추상을 제거하고, 반드시 필요한 추상만 최소 크기로 유지",
+      "principles": {
+        "concurrency": "goroutine과 channel이라는 최소한의 도구만 제공",
+        "object_oriented": "struct, method, interface, embedding으로 제한",
+        "error_handling": "예외가 아닌 다중 반환값으로 명시적으로 표현"
+      },
+      "tradeoffs": {
+        "pros": "생산성 향상",
+        "cons": "복잡한 동시성 로직에서는 테스트와 유지보수 어려움"
+      },
+      "references": [
+        "Rob Pike의 Go Proverbs와 Effective Go 전반에 걸쳐 일관되게 드러남",
+        "Google 내부에서 context 표준화도 같은 맥락 (최소한의 API로 취소, 데드라인, 요청 스코프 데이터 전달)",
+        "필요한 것만 제공하고, 나머지는 조합으로 해결"
+      ],
+      "tips": [
+        {
+          "title": "순수 로직과 부수 효과 분리 기준",
+          "rules": [
+            "입력과 출력만으로 설명 가능한 로직은 순수 함수로 유지",
+            "시간, I/O, 네트워크, 고루틴 생성은 '경계'로 밀어냄",
+            "테스트에서 순수 로직은 병렬(t.Parallel)로 돌릴 수 있어야 함"
+          ]
+        }
+      ]
+    },
+    {
+      "section": 3,
+      "title": "최소 추상의 한계와 동시성 복잡성 문제",
+      "summary": "Go의 CSP 기반 동시성 모델이 실제 대규모 시스템에서 겪는 어려움",
+      "challenges": [
+        "goroutine과 channel이 복잡하게 얽힌 구조에서 cancellation, graceful shutdown, 테스트 안정성 확보 어려움",
+        "non-deterministic select, 시간 의존 테스트, CI 환경에서의 flaky test 문제"
+      ],
+      "root_cause": "Go 자체의 결함이 아니라, 최소 추상을 그대로 노출한 상태에서 복잡한 도메인을 다루려 할 때 발생",
+      "references": [
+        "대규모 Go 서비스 사례(Uber, Kubernetes 등)에서도 goroutine과 channel만으로 복잡한 수명 관리 어려움",
+        "errgroup, run.Group 같은 '준표준' 도구들이 등장 (최소 추상 유지하되 동시성의 생명주기 구조화 시도)",
+        "문제는 Go의 동시성 모델이 아니라, 복잡한 도메인을 그대로 노출시키는 설계에 있음"
+      ],
+      "tips": [
+        {
+          "title": "동시성 제어 기본 도구 선택 기준",
+          "tools": [
+            {
+              "use_case": "단순 병렬 처리",
+              "tool": "worker pool"
+            },
+            {
+              "use_case": "상태 공유",
+              "tool": "sync.Map (read-heavy일 때)"
+            },
+            {
+              "use_case": "조건 기반 대기/신호",
+              "tool": "sync.Cond (channel로 대체 불가할 때만)",
+              "code_example": "cond := sync.NewCond(&sync.Mutex{})\nready := false\n\ngo func() {\n\tcond.L.Lock()\n\tfor !ready {\n\t\tcond.Wait()\n\t}\n\tcond.L.Unlock()\n}()",
+              "warning": "sync.Cond는 강력하지만 디버깅이 어렵기 때문에, 공용 유틸이나 캡슐화된 구조 안에서만 사용"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section": 4,
+      "title": "Effect 개념과 Effect Handler에 대한 소개",
+      "summary": "부수 효과를 도메인 로직 밖으로 밀어내려는 시도",
+      "definition": {
+        "effect": "입력과 출력만으로 표현할 수 없는 작업 (I/O, 시간, 네트워크, 동시성 같은 부수 효과)",
+        "core_idea": "Effect를 즉시 실행하지 않고, 선언된 값 또는 작업으로 취급하여 실행 시점을 위임"
+      },
+      "concepts": {
+        "pure_function": "표로 표현 가능한 변환(tableizable)으로 간주하고, 핵심 데이터 변환 로직으로 유지",
+        "side_effects": "Effect로 분리하여 격리",
+        "effect_handler": "Effect를 실제로 수행하는 주체 (동시성 제어, 실행 순서, 자원 관리를 한 곳에서 담당)"
+      },
+      "benefits": "goroutine과 wait group을 비즈니스 로직에서 제거하고, 도메인 로직이 본질적인 문제에만 집중",
+      "tradeoffs": {
+        "pros": "도메인 로직 단순화",
+        "cons": "Effect를 과도하게 미루는 구조는 디버깅과 추적을 어렵게 만들 수 있음"
+      },
+      "references": [
+        "Effect 개념은 함수형 언어에서 오래된 패턴",
+        "Go에서는 '동시성/부수 효과를 도메인 로직 밖으로 밀어내려는 시도'로 해석",
+        "Effect handler는 context, errgroup, supervisor 패턴을 하나의 개념으로 묶은 설계에 가까움",
+        "Go 커뮤니티에서 표준으로 합의된 패턴은 아님",
+        "복잡한 orchestration 레이어에서만 제한적으로 적용하는 것이 현실적"
+      ],
+      "tips": [
+        {
+          "title": "Effect 패턴 적용 가이드라인",
+          "rules": [
+            "도메인 로직은 effect를 '선언'만 하고 실행하지 않음",
+            "handler는 infra / runner / orchestration 레이어에만 둠",
+            "effect가 중첩되기 시작하면 도입을 재검토"
+          ]
+        }
+      ]
+    },
+    {
+      "section": 5,
+      "title": "Effect 패턴에 대한 기술적 검증 및 위치 정리",
+      "summary": "Effect handler 패턴은 Go의 표준 패턴이 아니며, 실험적 접근으로 보는 것이 타당",
+      "status": "선택적 실험",
+      "verification": {
+        "pattern_age": "Effect 개념 자체는 오래된 패턴 (함수형 언어 전반에서 공통)",
+        "go_standard": "Effect handler 패턴은 Go의 표준 패턴 아님",
+        "official_guides": "Uber나 Google의 공식 가이드에도 명시적으로 포함되어 있지 않음"
+      },
+      "recommendation": {
+        "scope": "동시성이나 오케스트레이션 복잡도가 높은 레이어에서만 선택적으로 고려",
+        "safe_layers": ["Runner", "Task orchestration", "infra 레이어"],
+        "restricted_layers": ["핵심 도메인 로직"]
+      },
+      "references": [
+        "Go 공식 문서와 대형 OSS 기준: 동시성 문제의 1차 해법은 context 기반 취소 전파와 errgroup",
+        "Effect handler는 이 기준을 넘어서야 할 만큼 복잡한 경우에만 고려할 수 있는 실험적 도구",
+        "내부 코드 규칙에서는 Effect 패턴을 '표준'이 아닌 '선택적 실험'으로 분류하고, 적용 범위와 금지 영역을 명확히 하는 것이 중요"
+      ],
+      "tips": [
+        {
+          "title": "Effect 패턴 도입 전 체크리스트",
+          "questions": [
+            "errgroup + context로 해결 가능한가?",
+            "goroutine 수명과 종료 조건이 한눈에 보이는가?",
+            "테스트에서 handler 없이도 도메인 로직이 검증 가능한가?"
+          ]
+        }
+      ]
+    },
+    {
+      "section": 6,
+      "title": "Go 테스트 설계와 TDD 관련 세션 정리",
+      "summary": "Go 테스트 설계와 TDD에 대한 실전 팁",
+      "key_concepts": [
+        {
+          "concept": "main 함수 분리",
+          "description": "main 함수의 로직을 run 함수로 분리하고, 테스트에서는 run을 직접 호출하거나 TestMain에서 서버를 한 번만 기동",
+          "benefit": "테스트 코드에서 별도의 setup 없이 실제 HTTP 요청 기반 테스트 작성 가능"
+        },
+        {
+          "concept": "t.Parallel",
+          "description": "순수 로직 테스트에서는 적극 권장",
+          "benefit": "동시성 안전성을 조기에 검증",
+          "warning": "DB나 외부 리소스를 사용하는 테스트에는 주의 필요"
+        },
+        {
+          "concept": "TDD",
+          "description": "AI 기반 개발 환경에서도 여전히 중요",
+          "role": "테스트는 '무엇이 완료 상태인지'와 '무엇이 변하면 안 되는지'를 명확히 정의"
+        }
+      ],
+      "references": [
+        "main을 run으로 분리하는 패턴은 Mat Ryer, Dave Cheney 등 Go 커뮤니티에서 반복적으로 공유된 실전 팁",
+        "테스트를 '실제 서버처럼' 작성하게 만들어 mock 의존도를 낮춤",
+        "t.Parallel은 Go 테스트의 핵심 기능이며, 순수 로직 테스트에서 병렬 안전성을 확보하는 데 큰 도움",
+        "DB, 파일 시스템 같은 공유 리소스가 있는 경우에는 테스트 격리가 선행되어야 함"
+      ],
+      "tips": [
+        {
+          "title": "Go 테스트 실전 팁",
+          "tip1": {
+            "title": "t.Parallel 기본 사용",
+            "description": "가능한 테스트에는 t.Parallel을 기본으로 사용",
+            "reason": "동시성 버그는 테스트에서 먼저 발견하는 것이 가장 싸다"
+          },
+          "tip2": {
+            "title": "병렬 테스트에서 유니크 데이터 사용",
+            "description": "병렬 테스트에서는 항상 유니크 데이터를 사용",
+            "code_example": "unique := time.Now().UnixNano()\nbody := fmt.Sprintf(`{\"username\":\"user_%d\"}`, unique)"
+          },
+          "tip3": {
+            "title": "mock보다 real test 우선",
+            "description": "TestMain에서 서버를 한 번만 띄우고 실제 HTTP 요청으로 검증"
+          }
+        }
+      ]
+    },
+    {
+      "section": 7,
+      "title": "Go-스러운 추상화 원칙",
+      "summary": "Small Interface 원칙은 Go 설계 철학의 핵심",
+      "core_principle": "인터페이스가 커질수록 추상화는 약해진다",
+      "key_rules": [
+        "인터페이스는 설계하는 것이 아니라 발견하는 것",
+        "사용하는 쪽에서 정의하는 것이 바람직",
+        "반환 타입으로는 인터페이스보다 구조체를 사용",
+        "입력으로 인터페이스를 받는 패턴이 권장됨",
+        "Options pattern은 설정 관리와 생성자 설계에서 널리 사용 (telescoping constructor 문제 해결)"
+      ],
+      "references": [
+        "Small Interface, Discover interfaces, Accept interfaces return structs는 Rob Pike와 Go 팀이 수년간 강조해온 핵심 원칙",
+        "추상을 '미리 설계'하지 말고, 중복과 사용 패턴이 드러났을 때 발견하라는 의미",
+        "Options pattern은 Dave Cheney를 비롯해 많은 Go 라이브러리에서 사실상 표준처럼 사용",
+        "생성자가 없는 Go의 특성을 고려한, 가장 Go다운 설정 관리 방식"
+      ],
+      "tips": [
+        {
+          "title": "추상화 관련 내부 규칙 예시",
+          "rules": [
+            "인터페이스는 소비자가 정의한다",
+            "반환값은 구조체로, 입력은 인터페이스로 받는다",
+            "인터페이스에 메서드를 추가할 때는 반드시 테스트 영향 범위를 검토한다",
+            "설정 값이 3개를 넘어가면 Options pattern을 고려한다"
+          ]
+        }
+      ]
+    }
+  ]

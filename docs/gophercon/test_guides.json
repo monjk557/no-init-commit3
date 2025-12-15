@@ -1,0 +1,253 @@
+[
+    {
+      "section": 1,
+      "title": "Mutation Testing 개요 및 원칙",
+      "summary": "의도적인 버그를 삽입하여 테스트 신뢰성을 검증하는 기법",
+      "definition": {
+        "mutation_testing": "코드에 의도적인 버그(mutation)를 삽입하고 테스트가 이를 감지하는지 확인하는 기법",
+        "mutant": "원본 코드에서 작은 변경(mutation)을 적용한 버전",
+        "killed_mutant": "테스트가 감지(실패)한 mutation",
+        "survived_mutant": "테스트가 감지하지 못한(통과한) mutation - 테스트 보완 필요"
+      },
+      "core_philosophy": "테스트가 단순히 통과하는 것이 아니라, 올바른 이유로 통과하는지 검증",
+      "benefits": [
+        "테스트 커버리지의 품질 측정 (라인 커버리지의 한계 극복)",
+        "약한 테스트 조기 발견",
+        "에러 메시지 검증 누락 방지",
+        "회귀 방지 신뢰도 향상"
+      ],
+      "references": [
+        "WTM 프로젝트의 Mutation Testing 실행 결과 (2025-12-13)",
+        "security_test.go에서 발견된 약한 테스트 사례: HTTP 상태 코드만 검증하고 에러 메시지 미검증"
+      ]
+    },
+    {
+      "section": 2,
+      "title": "Mutation Testing 수행 절차",
+      "summary": "체계적인 mutation testing 실행 가이드",
+      "procedure": [
+        {
+          "step": 1,
+          "name": "mutation_targets_identify",
+          "description": "critical 로직에서 mutation 대상 코드 식별",
+          "examples": [
+            "조건문 (if time.Now().After(expiry) → if true)",
+            "비교 연산자 (Before → After)",
+            "논리 연산자 (AND → OR)",
+            "경계값 체크 (> → >=)",
+            "함수 호출 결과 무시 (if condition → if false)"
+          ]
+        },
+        {
+          "step": 2,
+          "name": "mutation_insert",
+          "description": "단일 mutation 삽입 (한 번에 하나씩)",
+          "warning": "여러 mutation을 동시에 삽입하면 원인 파악 어려움"
+        },
+        {
+          "step": 3,
+          "name": "test_execute",
+          "description": "관련 테스트 실행 및 결과 확인"
+        },
+        {
+          "step": 4,
+          "name": "result_analyze",
+          "cases": {
+            "test_failed": "테스트 신뢰 OK → 다음 mutation으로",
+            "test_passed": "약한 테스트 발견 → 테스트 강화 필요"
+          }
+        },
+        {
+          "step": 5,
+          "name": "code_restore",
+          "description": "mutation 제거하여 원본 코드 복구"
+        },
+        {
+          "step": 6,
+          "name": "document",
+          "description": "결과 문서화 및 패턴 정리"
+        }
+      ]
+    },
+    {
+      "section": 3,
+      "title": "WTM 프로젝트 Mutation 체크리스트",
+      "summary": "패키지별 critical mutation 대상 목록",
+      "packages": {
+        "workspace/service.go": {
+          "mutations_tested": [
+            {
+              "target": "TTL 체크: time.Now().After(existing.ExpiresAt)",
+              "mutation": "if true { ... }",
+              "test_result": "KILLED - TestTTLRace_*, TestTTL_ExpirationAndReuse 등에서 감지",
+              "status": "verified"
+            },
+            {
+              "target": "PathExists 체크: s.fsManager.PathExists(existing.Path)",
+              "mutation": "if false { ... }",
+              "test_result": "KILLED - TestLayer1_PathExistsCheck에서 감지",
+              "status": "verified"
+            }
+          ]
+        },
+        "workspace/store.go": {
+          "mutations_tested": [
+            {
+              "target": "GetExpired: now.After(workspace.ExpiresAt)",
+              "mutation": "now.Before(workspace.ExpiresAt)",
+              "test_result": "KILLED - TestGetExpired, TestTTL_GetExpiredReturnsOnlyExpired에서 감지",
+              "status": "verified"
+            }
+          ]
+        },
+        "eviction/evictor.go": {
+          "mutations_tested": [
+            {
+              "target": "LRU 정렬: LastUsedAt.Before()",
+              "mutation": "LastUsedAt.After() (MRU로 변경)",
+              "test_result": "KILLED - TestEviction_PriorityOrder에서 감지",
+              "status": "verified"
+            },
+            {
+              "target": "RefCount 0 우선순위",
+              "mutation": "RefCount 체크 로직 제거",
+              "test_result": "KILLED - TestEviction_ZeroRefCountCandidates에서 감지",
+              "status": "verified"
+            }
+          ]
+        },
+        "filesystem/manager.go": {
+          "mutations_tested": [
+            {
+              "target": "길이 제한: len(name) > MaxNameLength",
+              "mutation": "if false && len(name) > MaxNameLength",
+              "test_result": "KILLED - E2E Test_Security_LongFieldValues, Unit TestValidateName_LengthLimit에서 감지",
+              "status": "verified",
+              "note": "Unit test 부재로 E2E에서만 감지 → Unit test 추가하여 보완"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "section": 4,
+      "title": "약한 테스트 패턴과 해결책",
+      "summary": "Mutation testing으로 발견된 약한 테스트 유형 및 개선 방안",
+      "weak_patterns": [
+        {
+          "pattern_name": "status_code_only",
+          "description": "HTTP 상태 코드만 검증하고 에러 메시지 미검증",
+          "example": {
+            "bad": "assert.Equal(t, http.StatusUnprocessableEntity, resp.Code)",
+            "good": "assert.Equal(t, http.StatusUnprocessableEntity, resp.Code)\nassert.Contains(t, resp.Body.String(), \"cannot exceed\")"
+          },
+          "risk": "다른 에러로 인해 같은 상태 코드가 반환되어도 테스트 통과",
+          "discovered_in": "security_test.go의 대문자 유효성 검사 테스트"
+        },
+        {
+          "pattern_name": "missing_unit_test",
+          "description": "E2E 테스트만 있고 unit test 부재",
+          "example": "filesystem/manager.go의 길이 제한 검사",
+          "risk": "E2E 환경 의존성, 느린 피드백 사이클",
+          "solution": "critical 로직은 반드시 unit test로도 커버"
+        },
+        {
+          "pattern_name": "boundary_missing",
+          "description": "경계값 테스트 부재",
+          "example": "정확히 100자 vs 101자 vs 200자",
+          "risk": "off-by-one 에러 미발견",
+          "solution": "경계값 테이블 드리븐 테스트 작성"
+        }
+      ]
+    },
+    {
+      "section": 5,
+      "title": "테스트 헬퍼 함수 사용 가이드",
+      "summary": "에러 메시지 검증을 강제하는 assertion 패턴",
+      "helper_location": "tests/utils/assertions.go",
+      "helpers": [
+        {
+          "name": "AssertErrorResponse",
+          "signature": "AssertErrorResponse(t *testing.T, resp *httptest.ResponseRecorder, expectedStatus int, expectedPattern string)",
+          "purpose": "HTTP 상태 코드와 에러 메시지 패턴을 함께 검증",
+          "usage": "utils.AssertErrorResponse(t, w, http.StatusUnprocessableEntity, \"cannot exceed\")",
+          "benefit": "에러 메시지 검증 누락 방지, mutation에 의한 false positive 차단"
+        },
+        {
+          "name": "AssertSuccessResponse",
+          "signature": "AssertSuccessResponse(t *testing.T, resp *httptest.ResponseRecorder, expectedStatus int)",
+          "purpose": "성공 응답 검증"
+        }
+      ],
+      "best_practices": [
+        "에러 응답 테스트 시 반드시 에러 메시지 패턴 지정",
+        "테스트 이름에 검증하려는 핵심 동작 명시",
+        "에러 메시지에 검증 누락 교훈 코멘트 추가"
+      ]
+    },
+    {
+      "section": 6,
+      "title": "테스트 작성 체크리스트",
+      "summary": "신규 테스트 작성 시 확인 사항",
+      "checklist": [
+        {
+          "item": "에러 메시지 검증",
+          "question": "상태 코드뿐 아니라 에러 메시지도 검증하는가?",
+          "importance": "high"
+        },
+        {
+          "item": "경계값 테스트",
+          "question": "유효/무효 경계값을 모두 테스트하는가?",
+          "importance": "high"
+        },
+        {
+          "item": "Unit + E2E 균형",
+          "question": "critical 로직은 unit test로도 커버되는가?",
+          "importance": "medium"
+        },
+        {
+          "item": "Mutation 예상",
+          "question": "이 테스트가 if 조건을 반전시키면 실패하는가?",
+          "importance": "high"
+        },
+        {
+          "item": "테스트 이름 명확성",
+          "question": "테스트 이름만으로 무엇을 검증하는지 알 수 있는가?",
+          "importance": "medium"
+        }
+      ]
+    },
+    {
+      "section": 7,
+      "title": "실무 적용 가이드라인",
+      "summary": "Mutation testing의 실용적 적용 방안",
+      "when_to_use": [
+        "새로운 critical 기능 개발 시 테스트 품질 검증",
+        "버그 수정 후 회귀 테스트 신뢰성 확보",
+        "코드 리뷰 시 테스트 충분성 판단"
+      ],
+      "frequency": {
+        "recommendation": "critical 변경사항에 대해 선택적 적용",
+        "reason": "모든 코드에 적용하기에는 시간 소모가 큼",
+        "focus_areas": ["보안 관련 코드", "비즈니스 핵심 로직", "금전/데이터 무결성 관련"]
+      },
+      "automation_options": [
+        {
+          "tool": "go-mutesting",
+          "url": "https://github.com/zimmski/go-mutesting",
+          "note": "Go용 자동 mutation testing 도구"
+        },
+        {
+          "tool": "manual",
+          "description": "이 가이드의 수동 절차 따르기",
+          "benefit": "도구 학습 없이 즉시 적용 가능"
+        }
+      ],
+      "tips": [
+        "처음에는 핵심 로직 2-3개에만 적용하여 경험 쌓기",
+        "발견된 약한 테스트는 즉시 문서화하여 팀 공유",
+        "CI에서 자동화하기보다 코드 리뷰 과정에서 선택적 적용 권장"
+      ]
+    }
+  ]
+  
