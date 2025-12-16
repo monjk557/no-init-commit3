@@ -7,11 +7,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/revlist"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
@@ -55,55 +53,6 @@ type FetchReq struct {
 	SidebandAll bool
 	// PackfileURIs 등은 미지원이라면 필드만 두고 무시 처리
 	PackfileURIs bool
-}
-
-type PushReq struct {
-	Agent string
-	Push  bool
-}
-
-type UploadArchiveSpec struct {
-	Format    string   // "tar" | "zip" ...
-	Prefix    string   // e.g. "repo-1/"
-	Treeish   string   // e.g. "HEAD" or "refs/heads/main"
-	Pathspecs []string // 선택: 포함할 경로들
-}
-
-func (it *HashIter) Next() (plumbing.EncodedObject, error) {
-	if it.i >= len(it.Hashes) {
-		return nil, io.EOF
-	}
-	obj, err := it.St.EncodedObject(plumbing.AnyObject, it.Hashes[it.i])
-	it.i++
-	return obj, err
-}
-func (it *HashIter) ForEach(cb func(plumbing.EncodedObject) error) error {
-	for {
-		obj, err := it.Next()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if err := cb(obj); err != nil {
-			return err
-		}
-	}
-}
-
-func WritePackfile(w io.Writer, st storer.EncodedObjectStorer, hashes []plumbing.Hash) error {
-
-	// Use go-git's packfile encoder with the correct signature
-	enc := packfile.NewEncoder(w, st, true) // ref-delta 사용 여부
-
-	// The encoder.Encode method expects []plumbing.Hash, not []*ObjectToPack
-	_, err := enc.Encode(hashes, 0)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // "packfile" 섹션 헤더 (pkt-line + flush)
@@ -268,36 +217,6 @@ func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
 	return pw.Flush()
 }
 
-func ParseUploadArchiveArgs(lines []string) (*UploadArchiveSpec, error) {
-	spec := &UploadArchiveSpec{}
-
-	for _, a := range lines {
-		if a == "" {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(a, "--format="):
-			spec.Format = strings.TrimPrefix(a, "--format=")
-		case strings.HasPrefix(a, "--prefix="):
-			spec.Prefix = strings.TrimPrefix(a, "--prefix=")
-		case strings.HasPrefix(a, "--"):
-			// 다른 옵션은 필요 시 추가 처리
-		default:
-			// positional: 첫 번째는 tree-ish, 나머지는 pathspec
-			if spec.Treeish == "" {
-				spec.Treeish = a
-			} else {
-				spec.Pathspecs = append(spec.Pathspecs, a)
-			}
-		}
-	}
-	if spec.Treeish == "" {
-		return nil, fmt.Errorf("missing tree-ish")
-	}
-
-	return spec, nil
-}
-
 // 사용 예:
 // upload-pack: caps := []string{"ls-refs", "fetch"}
 // receive-pack: caps := []string{"receive-pack"}
@@ -391,22 +310,6 @@ func ParseFetchSection(cmds []string) (*FetchReq, error) {
 	return r, nil
 }
 
-func ParsePushSection(cmds []string) error {
-	r := &PushReq{}
-	for _, c := range cmds {
-		switch {
-		case c == "command=fetch":
-		case strings.HasPrefix(c, "agent="):
-			r.Agent = strings.TrimPrefix(c, "agent=")
-		case c == "push":
-			r.Push = true
-		default:
-			// 알 수 없는 옵션은 무시
-		}
-	}
-	return nil
-}
-
 // 옵션 검증/정책: 지원 불가 옵션 앞단에서 차단(섹션 헤더 전 ERR)
 // 사용처: fetch 처리 진입 직전에 호출
 func ValidateFetchSupport(r *FetchReq) error {
@@ -493,6 +396,3 @@ func collectRelatedTags(repo *gogit.Repository, wants []plumbing.Hash) ([]plumbi
 	})
 	return out, nil
 }
-
-// (선택) deepen-since 값을 time.Time으로 변환할 때 사용
-func DeepenSinceTime(unix int64) time.Time { return time.Unix(unix, 0).UTC() }

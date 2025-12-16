@@ -172,9 +172,8 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	// path 설정 (tree overview와 동일한 방식)
 	repoCtx.path = path
 
-	// 커밋 가져오기 (최신 커밋 및 Count용)
-	// Count를 위해 합리적인 limit(1000)을 설정하되, 최신 커밋은 첫 번째 요소
-	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 9999999, 0)
+	// 최신 커밋 1개만 가져오기 (성능 최적화)
+	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
 	if err != nil || len(commitsList) == 0 {
 		// 빈 저장소
 		response := RepositoryOverviewResponse{
@@ -207,10 +206,19 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	}
 
 	latestCommit := commitsList[0]
-	commitsCount := len(commitsList)
+
+	// 커밋 개수만 세기 (성능 최적화: 커밋 객체를 메모리에 로드하지 않고 카운트만)
+	commitsCount, err := commits.CountCommits(repoCtx.repoWrapper, ctx, repoCtx.ref)
+	if err != nil {
+		h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
+		// 폴백: 최소한 1개는 있다는 것을 알 수 있음
+		commitsCount = 1
+	}
 
 	// 트리 항목 가져오기 (커밋 정보 포함) - tree overview와 동일한 방식
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	// 성능 최적화: 커밋 정보 조회는 선택적으로 처리 (기본값: false)
+	includeCommits := c.Query("include_commits") == "true"
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path, includeCommits)
 	if err != nil {
 		// 경로 관련 오류인지 확인
 		errMsg := strings.ToLower(err.Error())
@@ -261,8 +269,18 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		}
 	}
 
-	// 언어 분포 가져오기
-	languageDistribution := h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
+	// 언어 분포 가져오기 (성능 최적화: 선택적으로 처리)
+	// include_languages 파라미터가 true일 때만 계산
+	var languageDistribution LanguageDistribution
+	if c.Query("include_languages") == "true" {
+		languageDistribution = h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
+	} else {
+		languageDistribution = LanguageDistribution{
+			Languages:  []LanguageStats{},
+			TotalBytes: 0,
+			TotalFiles: 0,
+		}
+	}
 
 	// 응답 구성
 	response := RepositoryOverviewResponse{
@@ -309,15 +327,16 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	includeCommits := c.Query("include_commits") == "true"
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path, includeCommits)
 	if err != nil {
 		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
 	}
 
-	// 커밋 가져오기
-	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 9999999, 0)
+	// 최신 커밋 1개만 가져오기 (성능 최적화)
+	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -327,6 +346,21 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 	var latestCommit commits.Commit
 	if len(commitsList) > 0 {
 		latestCommit = commitsList[0]
+	}
+
+	// 커밋 목록은 선택적으로 가져오기 (성능 최적화)
+	var allCommits []commits.Commit
+	if c.Query("include_all_commits") == "true" {
+		// 전체 커밋 목록이 필요한 경우에만 가져오기 (최대 1000개로 제한)
+		const maxCommitsForList = 1000
+		allCommits, err = commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, maxCommitsForList, 0)
+		if err != nil {
+			h.logger.Warn("Failed to get all commits for tree overview", zap.Error(err))
+			allCommits = []commits.Commit{}
+		}
+	} else {
+		// 기본값: 최신 커밋만 포함
+		allCommits = commitsList
 	}
 
 	// 응답 구성
@@ -339,7 +373,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		Tree:         treeEntriesWithCommit,
 		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
 		LatestCommit: convertCommitToGitCommit(latestCommit),
-		Commits:      convertCommitsToGitCommits(commitsList),
+		Commits:      convertCommitsToGitCommits(allCommits),
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -387,14 +421,15 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		parentPath = path[:idx]
 	}
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, parentPath)
+	includeCommits := c.Query("include_commits") == "true"
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, parentPath, includeCommits)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
 	}
 
-	// 커밋 가져오기 (전체 커밋 히스토리)
-	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 9999999, 0)
+	// 최신 커밋 1개만 가져오기 (성능 최적화)
+	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -406,6 +441,21 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		latestCommit = commitsList[0]
 	}
 
+	// 커밋 목록은 선택적으로 가져오기 (성능 최적화)
+	var allCommits []commits.Commit
+	if c.Query("include_all_commits") == "true" {
+		// 전체 커밋 목록이 필요한 경우에만 가져오기 (최대 1000개로 제한)
+		const maxCommitsForList = 1000
+		allCommits, err = commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, maxCommitsForList, 0)
+		if err != nil {
+			h.logger.Warn("Failed to get all commits for blob overview", zap.Error(err))
+			allCommits = []commits.Commit{}
+		}
+	} else {
+		// 기본값: 최신 커밋만 포함
+		allCommits = commitsList
+	}
+
 	// 응답 구성
 	response := BlobOverviewResponse{
 		Success:      true,
@@ -415,7 +465,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		Tree:         treeEntriesWithCommit,
 		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
 		LatestCommit: convertCommitToGitCommit(latestCommit),
-		Commits:      convertCommitsToGitCommits(commitsList),
+		Commits:      convertCommitsToGitCommits(allCommits),
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -678,7 +728,8 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	gitRepo := repoCtx.repoWrapper.GetRepo()
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	includeCommits := c.Query("include_commits") == "true"
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path, includeCommits)
 	if err != nil {
 		// 경로 관련 오류인지 확인
 		errMsg := strings.ToLower(err.Error())
@@ -708,7 +759,8 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 }
 
 // getTreeWithCommit는 트리 항목과 각 항목의 최근 커밋 정보를 함께 가져옵니다.
-func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, repoPath, ref, path string) ([]GitTreeEntryWithCommit, error) {
+// includeCommits가 false이면 커밋 정보를 조회하지 않아 성능이 크게 향상됩니다.
+func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, repoPath, ref, path string, includeCommits bool) ([]GitTreeEntryWithCommit, error) {
 	// ref를 커밋 해시로 해석
 	refObj, err := gitRepo.ResolveRevision(plumbing.Revision(ref))
 	if err != nil {
@@ -784,35 +836,38 @@ func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRe
 		// 커밋 정보는 선택사항이므로 에러가 발생해도 tree entry는 반드시 포함
 		var commitInfo *GitCommit
 
-		// 커밋 정보 조회를 안전하게 수행 (에러가 발생해도 tree entry는 포함)
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// panic이 발생해도 tree entry는 포함
-					h.logger.Error("Panic while getting commit for path, continuing without commit info",
-						zap.String("path", fullPath),
-						zap.String("type", entryType),
-						zap.Any("panic", r))
+		// 성능 최적화: includeCommits가 false이면 커밋 정보를 조회하지 않음
+		if includeCommits {
+			// 커밋 정보 조회를 안전하게 수행 (에러가 발생해도 tree entry는 포함)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// panic이 발생해도 tree entry는 포함
+						h.logger.Error("Panic while getting commit for path, continuing without commit info",
+							zap.String("path", fullPath),
+							zap.String("type", entryType),
+							zap.Any("panic", r))
+					}
+				}()
+
+				if entryType == "blob" || entryType == "tree" {
+					// 파일이나 디렉토리의 경우 해당 경로의 최근 커밋 조회
+					// tree인 경우 하위를 재귀적으로 탐색하여 가장 최근 커밋을 가져옴
+					isTree := entryType == "tree"
+
+					commit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, ref, fullPath, isTree)
+					if err != nil {
+						// 커밋 조회 실패는 경고만 하고 계속 진행 (tree entry는 포함)
+						h.logger.Warn("Failed to get commit for path, continuing without commit info",
+							zap.String("path", fullPath),
+							zap.String("type", entryType),
+							zap.Error(err))
+					} else {
+						commitInfo = commit
+					}
 				}
 			}()
-
-			if entryType == "blob" || entryType == "tree" {
-				// 파일이나 디렉토리의 경우 해당 경로의 최근 커밋 조회
-				// tree인 경우 하위를 재귀적으로 탐색하여 가장 최근 커밋을 가져옴
-				isTree := entryType == "tree"
-
-				commit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, ref, fullPath, isTree)
-				if err != nil {
-					// 커밋 조회 실패는 경고만 하고 계속 진행 (tree entry는 포함)
-					h.logger.Warn("Failed to get commit for path, continuing without commit info",
-						zap.String("path", fullPath),
-						zap.String("type", entryType),
-						zap.Error(err))
-				} else {
-					commitInfo = commit
-				}
-			}
-		}()
+		}
 
 		// 커밋 정보가 없어도 tree entry는 반드시 포함
 		treeEntriesWithCommit = append(treeEntriesWithCommit, GitTreeEntryWithCommit{

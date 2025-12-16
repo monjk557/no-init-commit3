@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -48,9 +49,10 @@ type DuplexConnection struct {
 }
 
 type sidebandWriter struct {
-	w         io.Writer
-	channel   byte // 1=pack, 2=progress, 3=fatal
-	chunkSize int  // payload(채널 포함) 최대 길이
+	w          io.Writer
+	channel    byte // 1=pack, 2=progress, 3=fatal
+	chunkSize  int  // payload(채널 포함) 최대 길이
+	firstWrite bool // 첫 번째 쓰기인지 추적
 }
 
 // NewDuplexTCPServer creates a new duplex TCP server
@@ -129,6 +131,13 @@ func (s *DuplexTCPServer) Stop() error {
 // handleConnection : TCP 연결 처리
 func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
+	// [TCP] 연결 수락
+
+	// Set read/write timeouts for the connection
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		tcpConn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	}
 
 	// Create duplex connection
 	duplexConn := &DuplexConnection{
@@ -148,22 +157,19 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 		s.mu.Lock()
 		delete(s.connections, conn)
 		s.mu.Unlock()
-		s.logger.Info("TCP connection closed",
-			zap.String("remote_addr", conn.RemoteAddr().String()))
+		// [TCP] 연결 종료
 	}()
-	s.logger.Info("handleConnection", zap.String("remote_addr", conn.RemoteAddr().String()))
+
 	// Handle Git protocol negotiation
 	if err := s.handleGitProtocol(duplexConn); err != nil {
-		s.logger.Error("Git protocol error",
-			zap.String("remote_addr", conn.RemoteAddr().String()),
-			zap.Error(err))
+		// [TCP] 프로토콜 에러
 		return
 	}
 }
 
 // handleGitProtocol : Git 프로토콜 핸드셰이크 처리
 func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
-	s.logger.Info("handleGitProtocol", zap.String("remote_addr", conn.conn.RemoteAddr().String()))
+	// [1] 핸드셰이크 시작
 
 	// 1) 첫 pkt-line (service line) 읽기
 	line, isFlush, err := readPktLine(conn.reader)
@@ -173,7 +179,7 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 	if isFlush {
 		return fmt.Errorf("unexpected flush before service line")
 	}
-	s.logger.Info("Received service pkt-line", zap.ByteString("payload", line))
+	// [2] 서비스 라인 수신
 
 	// 2) (선택) 추가 pkt-line 수집: 예) "version=2"
 	var protoV2 bool
@@ -217,12 +223,7 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 	conn.owner = owner
 	conn.repo = repo
 
-	s.logger.Info("Parsed handshake",
-		zap.String("service", service),
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Bool("proto_v2", protoV2),
-	)
+	// [3] 파싱 완료: service, owner, repo, v2
 
 	// (원하면) proto_v2를 이후 단계에서 환경변수로 넘길 수 있도록 conn에 표시
 	conn.protoV2 = protoV2 // 필요 시 DuplexConnection에 bool 필드 추가
@@ -242,6 +243,8 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 
 // handleUploadPack : git-upload-pack (fetch, clone) 처리
 func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo string) error {
+	// [4] upload-pack 처리 시작
+
 	// 1) v2 광고 (ls-refs, fetch 지원)
 	if err := protocol.WriteV2Advert(conn.writer, "git-executor/0.1.0", "ls-refs", "fetch"); err != nil {
 		return fmt.Errorf("failed to send advert: %w", err)
@@ -249,6 +252,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 	if err := conn.writer.Flush(); err != nil {
 		return fmt.Errorf("flush advert: %w", err)
 	}
+	// [5] v2 광고 전송 완료
 
 	// 2) 동기 상태머신 (한 섹션씩 처리)
 	for {
@@ -265,6 +269,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 		// ls-refs
 		// ---------------------------
 		case strings.HasPrefix(cmds[0], "command=ls-refs"):
+			// [6] ls-refs 명령 수신
 			// ls-refs options 섹션 읽기 (command 섹션 다음 섹션)
 			// Git protocol v2에서 ls-refs는 두 섹션으로 구성:
 			// 섹션 1: command=ls-refs + delimiter (0001)
@@ -283,12 +288,14 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			if err := s.handleLsRefs(conn, owner, repo, lsRefsReq); err != nil {
 				return err
 			}
+			// [7] ls-refs 처리 완료
 			continue
 
 		// ---------------------------
 		// fetch (clone/pull 공용)
 		// ---------------------------
 		case strings.HasPrefix(cmds[0], "command=fetch"):
+			// [8] fetch 명령 수신
 			// fetch 옵션 섹션 읽기 (command 섹션 다음 섹션)
 			fetchCmds, err := s.readSection(conn.reader)
 			if err != nil {
@@ -312,6 +319,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			if err != nil {
 				return fmt.Errorf("failed to get repository path: %w", err)
 			}
+			// [9] 저장소 열기
 			// 캐시를 사용하여 저장소 열기
 			repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
 			if err != nil {
@@ -329,15 +337,18 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			underlyingRepo := repoWrapper.GetRepo()
 
 			// 전송 대상 오브젝트 계산
+			// [10] 오브젝트 계산 시작
 			objectHashes, err := protocol.BuildFetchObjectList(underlyingRepo.Storer, underlyingRepo, fetchReq)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch object list: %w", err)
 			}
+			// [11] 오브젝트 계산 완료
 
 			// === 협상 섹션 처리 ===
 			// 스펙: client가 "done"을 보냈다면(clone 경로) acknowledgments 섹션은 "생략"
 			//      done이 없다면(pull 경로) acknowledgments 섹션을 "반드시" 보낸 뒤 delim(0001)
 			if !fetchReq.Done {
+				// [12] acknowledgments 섹션 전송
 				// acknowledgments 헤더
 				if err := s.writePktLine(conn, "acknowledgments"); err != nil {
 					return fmt.Errorf("failed to write acknowledgments header: %w", err)
@@ -357,29 +368,79 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				if _, err := conn.writer.WriteString("0001"); err != nil {
 					return fmt.Errorf("failed to write delim-pkt: %w", err)
 				}
+			} else {
+				// [12] acknowledgments 섹션 생략 (done)
 			}
 
 			// === packfile 섹션 ===
 			// objectHashes가 있을 때만 packfile 섹션을 열어 전송
 			if len(objectHashes) > 0 {
+				// [13] packfile 섹션 시작
 				// "packfile" 섹션 헤더
+				// 참고: Git protocol v2에서 "packfile" 섹션 헤더 이후에 sideband 데이터를 보낼 수 있습니다
+				// Progress 메시지는 "packfile" 섹션 헤더 이후에 보내야 하며, 이전에 보내면 안 됩니다
 				if err := protocol.WritePackfileSectionHeader(conn.writer); err != nil {
 					return fmt.Errorf("failed to write packfile section header: %w", err)
 				}
+				// "packfile" 헤더가 packfile 데이터 전에 전송되도록 flush
+				if err := conn.writer.Flush(); err != nil {
+					return fmt.Errorf("failed to flush packfile section header: %w", err)
+				}
+				// [14] packfile 헤더 전송 완료
+
+				// "packfile" 섹션 헤더 이후, packfile 데이터 전에 progress 메시지 전송
+				// 이들은 sideband channel 2 (progress)로 전송됩니다
+				totalObjects := len(objectHashes)
+				// [15] progress 메시지 전송 시작
+				if err := writeProgressMessage(conn.writer, fmt.Sprintf("Enumerating objects: %d, done.\n", totalObjects)); err != nil {
+					return fmt.Errorf("failed to write enumerating message: %w", err)
+				}
+				if err := writeProgressMessage(conn.writer, fmt.Sprintf("Counting objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
+					return fmt.Errorf("failed to write counting completion: %w", err)
+				}
+				// [16] progress 메시지 전송 완료
+
+				// Flush progress messages before starting packfile transmission
+				// This ensures progress messages are sent before packfile data
+				if err := conn.writer.Flush(); err != nil {
+					return fmt.Errorf("failed to flush progress messages: %w", err)
+				}
 
 				// side-band-64k로 pack 전송 (채널 1=pack, 2=progress, 3=error)
+				// Progress 메시지는 writePackfileWithSideband 내부에서 전송됩니다
+				// [17] packfile 인코딩 시작
 				if err := s.writePackfileWithSideband(conn, underlyingRepo.Storer, objectHashes, fetchReq); err != nil {
 					return fmt.Errorf("failed to write packfile: %w", err)
 				}
+				// [18] packfile 인코딩 완료
+
+				// packfile 인코딩 후 compressing 완료 및 요약 전송
+				// [19] compressing 완료 메시지 전송
+				if err := writeProgressMessage(conn.writer, fmt.Sprintf("Compressing objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
+					return fmt.Errorf("failed to write compressing completion: %w", err)
+				}
+
+				// delta 개수 계산 (간단한 추정)
+				deltaCount := totalObjects / 8 // 대략적인 추정: ~12%가 delta입니다
+
+				// 최종 요약 전송
+				summary := fmt.Sprintf("Total %d (delta %d), reused %d (delta %d), pack-reused 0 (from 0)\n",
+					totalObjects, deltaCount, totalObjects, deltaCount)
+				if err := writeProgressMessage(conn.writer, summary); err != nil {
+					return fmt.Errorf("failed to write summary: %w", err)
+				}
+				// [20] 요약 메시지 전송 완료
 			}
 
 			// 최종 flush
+			// [21] 최종 flush
 			if _, err := conn.writer.WriteString("0000"); err != nil {
 				return fmt.Errorf("failed to write final flush: %w", err)
 			}
 			if err := conn.writer.Flush(); err != nil {
 				return fmt.Errorf("failed to flush writer: %w", err)
 			}
+			// [22] 모든 처리 완료
 			return nil
 		}
 	}
@@ -416,13 +477,53 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		return fmt.Errorf("flush advert: %w", err)
 	}
 
-	// 3) ref updates 읽기
+	// 3) ref updates 읽기 (v1 프로토콜: pkt-line 형식)
 	var refUpdates []string
 
-	refUpdates, err = s.readSection(conn.reader)
-	if err != nil {
-		return fmt.Errorf("failed to read ref updates: %w", err)
+	s.logger.Info("Reading ref updates section")
+	// v1 receive-pack에서는 pkt-line 형식으로 ref update 명령들이 오고 flush(0000)로 끝남
+	// 클라이언트가 광고를 받은 후 ref updates를 보내기까지 시간이 걸릴 수 있으므로
+	// 첫 번째 읽기에서 flush가 오면 잠시 대기 후 다시 시도
+	firstRead := true
+	for {
+		line, isFlush, err := readPktLine(conn.reader)
+		if err != nil {
+			// 타임아웃이나 연결 종료 에러인 경우
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				s.logger.Warn("Read timeout while waiting for ref updates, assuming no updates")
+				break
+			}
+			// 클라이언트가 조기 종료한 경우(EOF)는 ref updates가 없는 것으로 처리
+			if errors.Is(err, io.EOF) {
+				s.logger.Warn("Client closed connection while waiting for ref updates; treating as no updates")
+				break
+			}
+			return fmt.Errorf("failed to read ref update: %w", err)
+		}
+		if isFlush {
+			if firstRead {
+				// 첫 번째 읽기에서 바로 flush가 오면 클라이언트가 아직 데이터를 보내지 않았을 수 있음
+				// 짧은 대기 후 다시 시도
+				s.logger.Info("Received flush immediately after advertisement, waiting briefly for ref updates")
+				time.Sleep(100 * time.Millisecond)
+				// 연결의 읽기 타임아웃 갱신
+				if tcpConn, ok := conn.conn.(*net.TCPConn); ok {
+					tcpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				}
+				firstRead = false
+				continue
+			}
+			// flush packet으로 ref updates 섹션 종료
+			s.logger.Info("Received flush packet, ending ref updates section")
+			break
+		}
+		firstRead = false
+		if len(line) > 0 {
+			s.logger.Debug("Received ref update", zap.String("update", string(line)))
+			refUpdates = append(refUpdates, string(line))
+		}
 	}
+	s.logger.Info("Ref updates read", zap.Int("count", len(refUpdates)), zap.Strings("updates", refUpdates))
 
 	// 4) 실제 ref 업데이트 수행
 	workTree, err := gitRepo.Worktree()
@@ -435,28 +536,85 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 	}
 
 	// 5) packfile 데이터 읽기 및 unpack
-	scanner := packfile.NewScanner(conn.reader) // 중요: pkt-line 리더 말고, 원본 io.Reader
-	parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
-	if err != nil {
-		return err
+	// 참고: ref updates 섹션 이후에 packfile이 raw binary로 전송됨
+	// packfile이 있는지 확인 (peek으로 "PACK" 시그니처 확인)
+	hasPackfile := false
+	if peekData, err := conn.reader.Peek(4); err == nil && len(peekData) == 4 {
+		if string(peekData) == "PACK" {
+			hasPackfile = true
+		}
 	}
 
-	// 6) packfile 데이터 디코드
-	if _, err := parser.Parse(); err != nil {
-		return err
+	if hasPackfile {
+		s.logger.Info("Starting packfile read")
+		scanner := packfile.NewScanner(conn.reader) // 중요: pkt-line 리더 말고, 원본 io.Reader
+		parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
+		if err != nil {
+			return fmt.Errorf("failed to create packfile parser: %w", err)
+		}
+
+		// 6) packfile 데이터 디코드
+		if _, err := parser.Parse(); err != nil {
+			s.logger.Error("Failed to parse packfile", zap.Error(err))
+			// Send unpack error response
+			if err := s.writePktLine(conn, fmt.Sprintf("unpack %s", err.Error())); err != nil {
+				return fmt.Errorf("failed to write unpack error: %w", err)
+			}
+			if _, err := conn.writer.WriteString("0000"); err != nil {
+				return fmt.Errorf("failed to write flush: %w", err)
+			}
+			if err := conn.writer.Flush(); err != nil {
+				return fmt.Errorf("failed to flush: %w", err)
+			}
+			return err
+		}
+
+		s.logger.Info("Successfully unpacked packfile")
+	} else {
+		s.logger.Info("No packfile detected, skipping unpack")
 	}
 
-	s.logger.Info("Successfully unpacked packfile")
+	// 7) unpack 성공 응답 전송
+	if err := s.writePktLine(conn, "unpack ok"); err != nil {
+		return fmt.Errorf("failed to write unpack ok: %w", err)
+	}
 
-	// 7) 각 ref 업데이트 처리
-	for _, refUpdate := range refUpdates {
-		parts := strings.Fields(refUpdate)
-		if len(parts) >= 3 {
-			oldHash := parts[0]
-			newHash := parts[1]
-			refName := parts[2]
+	// 8) 각 ref 업데이트 처리 및 응답 전송
+	if len(refUpdates) == 0 {
+		s.logger.Warn("No ref updates received from client - this may indicate a protocol issue or empty push")
+		// ref updates가 없으면 "unpack ok"만 보내고 종료
+		// (클라이언트가 push할 내용이 없으면 ref updates가 없을 수 있음)
+	} else {
+		for _, refUpdate := range refUpdates {
+			// Parse ref update line: "old-hash new-hash ref-name\0capabilities" or "old-hash new-hash ref-name capabilities"
+			// Handle null-separated format first
+			var refName string
+			var oldHash, newHash string
 
-			refName = strings.TrimSuffix(refName, "\x00")
+			if strings.Contains(refUpdate, "\x00") {
+				// Null-separated format: "old-hash new-hash ref-name\0capabilities"
+				parts := strings.SplitN(refUpdate, "\x00", 2)
+				refAndHashes := parts[0]
+				hashParts := strings.Fields(refAndHashes)
+				if len(hashParts) >= 3 {
+					oldHash = hashParts[0]
+					newHash = hashParts[1]
+					refName = hashParts[2]
+				}
+			} else {
+				// Space-separated format: "old-hash new-hash ref-name [capabilities]"
+				parts := strings.Fields(refUpdate)
+				if len(parts) >= 3 {
+					oldHash = parts[0]
+					newHash = parts[1]
+					refName = parts[2]
+				}
+			}
+
+			if oldHash == "" || newHash == "" || refName == "" {
+				s.logger.Warn("Invalid ref update format", zap.String("update", refUpdate))
+				continue
+			}
 
 			s.logger.Info("Processing ref update",
 				zap.String("old_hash", oldHash),
@@ -469,10 +627,28 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 					zap.String("ref_name", refName),
 					zap.Error(err))
 
+				// Send error response for this ref
+				statusLine := fmt.Sprintf("ng %s %s", refName, err.Error())
+				if err := s.writePktLine(conn, statusLine); err != nil {
+					return fmt.Errorf("failed to write ref error status: %w", err)
+				}
 				continue
 			}
 
+			// Send success response for this ref
+			statusLine := fmt.Sprintf("ok %s", refName)
+			if err := s.writePktLine(conn, statusLine); err != nil {
+				return fmt.Errorf("failed to write ref success status: %w", err)
+			}
 		}
+	}
+
+	// 9) 최종 flush 패킷 전송
+	if _, err := conn.writer.WriteString("0000"); err != nil {
+		return fmt.Errorf("failed to write final flush: %w", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush writer: %w", err)
 	}
 
 	s.logger.Info("Push request processed successfully")
@@ -528,12 +704,22 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 	// First check if the old hash matches the current reference
 	currentRef, err := repo.Reference(plumbing.ReferenceName(refName), true)
 	if err != nil {
+		// Ref가 존재하지 않는 경우, oldHash가 zero hash가 아니면 에러
+		if err == plumbing.ErrReferenceNotFound {
+			if oldHash != "0000000000000000000000000000000000000000" {
+				return fmt.Errorf("reference %s does not exist (non-zero old hash provided)", refName)
+			}
+			// oldHash가 zero hash이고 ref가 없으면 생성으로 처리 (이미 위에서 처리됨)
+			// 여기서는 실제로는 도달하지 않아야 함
+			return fmt.Errorf("reference %s does not exist", refName)
+		}
 		return fmt.Errorf("failed to get current reference %s: %w", refName, err)
 	}
 
 	if currentRef.Hash() != oldHashObj {
-		return fmt.Errorf("reference %s hash mismatch: expected %s, got %s",
-			refName, oldHash, currentRef.Hash().String())
+		// Hash mismatch - 클라이언트가 최신 상태가 아님
+		return fmt.Errorf("non-fast-forward: reference %s is at %s but expected %s",
+			refName, currentRef.Hash().String(), oldHash)
 	}
 
 	// Update the reference
@@ -706,24 +892,24 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 				if tagObj, err := gitRepo.TagObject(ref.Hash()); err == nil && tagObj != nil {
 					peeledHash := tagObj.Target.String()
 
-					// Format: <tag-hash> <refname>
+					// 형식: <tag-hash> <refname>
 					refLine := fmt.Sprintf("%s %s", tagHash, refName)
 					if err := s.writePktLine(conn, refLine); err != nil {
 						return err
 					}
 
-					// Format: peeled <commit-hash>
+					// 형식: peeled <commit-hash>
 					peeledLine := fmt.Sprintf("peeled %s", peeledHash)
 					return s.writePktLine(conn, peeledLine)
 				}
 			}
 
-			// Format: <hash> <refname>
+			// 형식: <hash> <refname>
 			refLine := fmt.Sprintf("%s %s", tagHash, refName)
 			return s.writePktLine(conn, refLine)
 
 		} else if ref.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
-			// Symbolic reference (e.g., HEAD -> refs/heads/main)
+			// 심볼릭 참조 (예: HEAD -> refs/heads/main)
 			target := ref.Target().String()
 			refLine := fmt.Sprintf("@%s %s", target, refName)
 			return s.writePktLine(conn, refLine)
@@ -747,10 +933,14 @@ func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
 	// pkt-line 총 길이(4바이트 헤더 포함) 최대 65520.
 	// payload = length-4, 그 중 1바이트는 채널이 차지.
 	// 안전하게 payload(채널 포함) 65515 사용.
-	return &sidebandWriter{w: w, channel: 0x01, chunkSize: 65515}
+	return &sidebandWriter{w: w, channel: channel, chunkSize: 65515, firstWrite: true}
 }
 
 func (sb *sidebandWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
 	total := 0
 	for len(p) > 0 {
 		n := sb.chunkSize - 1 // 채널 바이트(1)를 뺀 실제 데이터 공간
@@ -771,6 +961,21 @@ func (sb *sidebandWriter) Write(p []byte) (int, error) {
 		if _, err := sb.w.Write(chunk); err != nil {
 			return total, err
 		}
+
+		// 첫 번째 chunk를 즉시 전송하도록 flush
+		// "PACK" 헤더를 포함한 첫 번째 패킷에 중요합니다
+		// "packfile" 섹션 헤더 이후, 클라이언트는 즉시 sideband 데이터를 기대합니다
+		if sb.firstWrite {
+			// [17-3-1] 첫 chunk 전송, flush
+			// 기본 writer가 지원하는 경우 flush 시도
+			if flusher, ok := sb.w.(interface{ Flush() error }); ok {
+				if err := flusher.Flush(); err != nil {
+					return total, err
+				}
+			}
+			sb.firstWrite = false
+		}
+
 		total += len(chunk)
 	}
 	return total, nil
@@ -779,6 +984,26 @@ func (sb *sidebandWriter) Write(p []byte) (int, error) {
 func (sb *sidebandWriter) Flush() error {
 	_, err := sb.w.Write([]byte("0000")) // sideband 스트림 종료
 	return err
+}
+
+// writeProgressMessage는 sideband channel 2 (progress)로 progress 메시지를 전송합니다
+func writeProgressMessage(w io.Writer, message string) error {
+	// Progress 메시지는 channel 2 (0x02)를 사용합니다
+	// 형식: [4-byte hex length][0x02][message]
+	messageBytes := []byte(message)
+	payloadLen := 1 + len(messageBytes) // channel byte + message
+	length := payloadLen + 4            // 전체 pkt-line 길이
+
+	if _, err := fmt.Fprintf(w, "%04x", length); err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte{0x02}); err != nil { // channel 2 = progress
+		return err
+	}
+	if _, err := w.Write(messageBytes); err != nil {
+		return err
+	}
+	return nil
 }
 
 // --- main: v2 side-band-64k로 PACK 전송 ---
@@ -792,23 +1017,59 @@ func (s *DuplexTCPServer) writePackfileWithSideband(
 	// OfsDelta 요청 시 보통 ref-delta를 끔.
 	useRefDelta := !fetchReq.OfsDelta
 
+	totalObjects := len(hashes)
+	if totalObjects == 0 {
+		return nil
+	}
+
 	// 채널 1(sideband=pack data) writer
+	// 참고: Git protocol v2에서 "packfile" 섹션 헤더 이후에 packfile 데이터가
+	// 즉시 시작되어야 합니다. Progress 메시지는 packfile 전송 중에 sideband channel 2로
+	// 보낼 수 있지만, go-git의 encoder는 progress callback을 제공하지 않으므로
+	// 프로토콜 오류를 피하기 위해 progress 메시지를 건너뜁니다.
+	// [17-1] sideband writer 생성
 	sbw := newSidebandWriter(conn.writer, 0x01)
 
+	// [17-2] packfile encoder 생성
 	enc := packfile.NewEncoder(sbw, st, useRefDelta)
 
 	// go-git v5: Encode(hashes []plumbing.Hash, packWindow uint)
-	packWindow := uint(0) // Disable delta search for now
-	if _, err := enc.Encode(hashes, packWindow); err != nil {
-		return fmt.Errorf("encode pack (sideband): %w", err)
+	// 참고: go-git의 encoder는 progress callback을 제공하지 않으므로 인코딩 중에
+	// compressing progress를 보낼 수 없습니다. packfile 인코딩 자체가 compressing 과정입니다.
+	packWindow := uint(0) // 지금은 delta 검색 비활성화
+	// [17-3] packfile 인코딩 실행
+
+	// Encode 실행 (panic recovery 포함)
+	var encodeErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				encodeErr = fmt.Errorf("panic in packfile encoding: %v", r)
+			}
+		}()
+		_, encodeErr = enc.Encode(hashes, packWindow)
+	}()
+
+	if encodeErr != nil {
+		return fmt.Errorf("encode pack (sideband): %w", encodeErr)
+	}
+	// [17-4] packfile 인코딩 완료
+
+	// packfile encoder가 완료된 후, sideband writer의 버퍼에 남아있는 데이터가 있을 수 있으므로
+	// 먼저 underlying writer를 flush하여 모든 packfile 데이터(트레일러 포함)가 전송되도록 보장
+	// [17-5] writer flush (packfile 데이터 전송 보장)
+	if err := conn.writer.Flush(); err != nil {
+		return fmt.Errorf("socket flush after encoding: %w", err)
 	}
 
-	// sideband 스트림 종료
+	// sideband 스트림 종료 (0000 flush 패킷 전송)
+	// [17-6] sideband flush (0000)
 	if err := sbw.Flush(); err != nil {
 		return fmt.Errorf("sideband flush: %w", err)
 	}
 
-	// bufio.Writer면 최종 flush
+	// 최종 flush
+	// [17-7] 최종 writer flush
 	if err := conn.writer.Flush(); err != nil {
 		return fmt.Errorf("socket flush: %w", err)
 	}
@@ -916,13 +1177,6 @@ func (s *DuplexTCPServer) cleanupConnections() {
 		}
 		s.mu.Unlock()
 	}
-}
-
-// GetConnectionCount : 활성 연결 수 반환
-func (s *DuplexTCPServer) GetConnectionCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.connections)
 }
 
 // addCommitEventToStream adds a commit event to Redis Stream

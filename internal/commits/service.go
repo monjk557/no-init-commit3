@@ -249,6 +249,56 @@ func GetCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref str
 	return commits, nil
 }
 
+// CountCommits는 특정 ref의 전체 커밋 개수를 효율적으로 세는 함수입니다.
+// 커밋 객체를 메모리에 로드하지 않고 iterator를 순회하면서 카운트만 합니다.
+func CountCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref string) (int, error) {
+	// 컨텍스트 취소 확인
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+
+	// 참조를 커밋 해시로 변환
+	hash, err := rw.ResolveReference(ref)
+	if err != nil {
+		return 0, err
+	}
+
+	// 내부 저장소 가져오기
+	gitRepo := rw.GetRepo()
+	if gitRepo == nil {
+		return 0, fmt.Errorf("repository is closed")
+	}
+
+	// 커밋 반복자 가져오기
+	commitIter, err := gitRepo.Log(&git.LogOptions{
+		From: hash,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer commitIter.Close()
+
+	count := 0
+	err = commitIter.ForEach(func(c *object.Commit) error {
+		// 컨텍스트 취소 확인
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		count++
+		return nil
+	})
+
+	if err != nil && err != io.EOF {
+		return 0, fmt.Errorf("failed to iterate commits: %w", err)
+	}
+
+	return count, nil
+}
+
 // convertCommit은 go-git 커밋을 내부 Commit 형식으로 변환합니다.
 // 커밋 메시지를 정리하고 작성자/커밋터 정보를 설정합니다.
 func convertCommit(c *object.Commit) Commit {
@@ -511,10 +561,6 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 				zap.String("commit_hash", result.CommitResult.Hash.String()),
 				zap.Error(err))
 			// 전체 작업을 실패시키지 않지만 에러를 로깅
-		} else {
-			s.logger.Info("브랜치 참조 업데이트 완료",
-				zap.String("branch", branch),
-				zap.String("commit_hash", result.CommitResult.Hash.String()))
 		}
 
 		// Publish commit event if enabled
@@ -548,16 +594,6 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 			"failed_operations": result.FailedOperations,
 		}
 	}
-
-	// 성공 로깅
-	s.logger.Info("다중 파일 커밋 완료",
-		zap.String("transaction_id", result.TransactionID),
-		zap.String("commit_sha", response.CommitSHA),
-		zap.Int("total_operations", response.TotalOperations),
-		zap.Int("successful_operations", response.SuccessfulOps),
-		zap.Int("failed_operations", response.FailedOps),
-		zap.Bool("validation_only", response.ValidationOnly),
-		zap.Duration("duration", response.Duration))
 
 	return &response, nil
 }

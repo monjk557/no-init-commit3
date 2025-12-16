@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -68,16 +67,11 @@ func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
 // Write implements io.Writer for sidebandWriter
 // 데이터를 64k 청크로 나눠서 side-band 포맷으로 전송
 func (sb *sidebandWriter) Write(p []byte) (int, error) {
-	fmt.Printf("[upload-pack] [side-band] Write called with %d bytes\n", len(p))
-
 	if len(p) == 0 {
-		fmt.Printf("[upload-pack] [side-band] Write: empty data, returning 0\n")
 		return 0, nil
 	}
 
-	chunksWritten := 0
 	total := 0
-	originalLen := len(p)
 
 	for len(p) > 0 {
 		n := sb.chunkSize - 1 // 채널 바이트(1)를 뺀 실제 데이터 공간
@@ -90,53 +84,38 @@ func (sb *sidebandWriter) Write(p []byte) (int, error) {
 		payloadLen := 1 + len(chunk) // [channel][data...]
 		length := payloadLen + 4     // pkt-line 총 길이
 
-		fmt.Printf("[upload-pack] [side-band] Writing chunk: length=%d (hex: %04x), payload=%d, channel=0x%02x, data_len=%d\n", length, length, payloadLen, sb.channel, len(chunk))
+		// Write length as exactly 4 hex characters (4 bytes)
+		lengthHex := fmt.Sprintf("%04x", length)
+		if len(lengthHex) != 4 {
+			return total, fmt.Errorf("invalid pkt-line length: %s", lengthHex)
+		}
 
-		if _, err := fmt.Fprintf(sb.w, "%04x", length); err != nil {
-			fmt.Printf("[upload-pack] [side-band] ERROR: Failed to write length header: %v\n", err)
+		if _, err := sb.w.Write([]byte(lengthHex)); err != nil {
 			return total, err
 		}
 		if _, err := sb.w.Write([]byte{sb.channel}); err != nil {
-			fmt.Printf("[upload-pack] [side-band] ERROR: Failed to write channel byte: %v\n", err)
 			return total, err
 		}
 		if _, err := sb.w.Write(chunk); err != nil {
-			fmt.Printf("[upload-pack] [side-band] ERROR: Failed to write data chunk: %v\n", err)
 			return total, err
 		}
 
-		// Flush HTTP response writer to ensure data is sent immediately
-		// This is critical for the first packet containing "PACK" header
-		if sb.flusher != nil {
-			if sb.firstWrite {
-				// First write must be flushed immediately so client receives "PACK" header
-				fmt.Printf("[upload-pack] [side-band] First write, flushing immediately\n")
-				sb.flusher.Flush()
-				sb.firstWrite = false
-			} else {
-				// For subsequent writes, flush periodically (every packet for small packets)
-				// This ensures streaming behavior
+		// 첫 번째 chunk를 즉시 전송하도록 flush
+		if sb.firstWrite {
+			if sb.flusher != nil {
 				sb.flusher.Flush()
 			}
+			sb.firstWrite = false
 		}
 
-		chunksWritten++
 		total += len(chunk)
 	}
-
-	fmt.Printf("[upload-pack] [side-band] Write completed: wrote %d chunks, total %d/%d bytes (channel=0x%02x)\n", chunksWritten, total, originalLen, sb.channel)
 	return total, nil
 }
 
 // Flush writes the flush packet to end sideband stream
 func (sb *sidebandWriter) Flush() error {
-	fmt.Printf("[upload-pack] [side-band] Flushing (sending 0000)\n")
 	_, err := sb.w.Write([]byte("0000"))
-	if err != nil {
-		fmt.Printf("[upload-pack] [side-band] ERROR: Flush failed: %v\n", err)
-	} else {
-		fmt.Printf("[upload-pack] [side-band] Flush completed\n")
-	}
 	return err
 }
 
@@ -196,6 +175,8 @@ func (h *UploadPackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reques
 	defer func() { _ = gitRepo.Close() }()
 
 	// Set response headers for Git Smart HTTP protocol
+	// Git HTTP responses MUST NOT be compressed (gzip, brotli, etc.)
+	w.Header().Del("Content-Encoding")
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
 	w.Header().Set("Cache-Control", "no-cache")
 
@@ -259,54 +240,42 @@ func (h *UploadPackHandler) writeReferences(ctx context.Context, w http.Response
 // HandleUploadPack handles POST /repos/:owner/:repo/git-upload-pack
 // This endpoint processes want/have negotiation and streams packfiles to the gateway
 func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("[upload-pack] [1/7] HandleUploadPack: Started\n")
 	ctx := r.Context()
 
 	// Extract path parameters from gateway-forwarded request
 	owner := URLParam(r, "owner")
 	repo := URLParam(r, "repo")
-	fmt.Printf("[upload-pack] [2/7] HandleUploadPack: Extracted params owner=%s, repo=%s\n", owner, repo)
 
-	// Get user ID from gateway context (forwarded header)
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		fmt.Printf("[upload-pack] ERROR: Missing user authentication context\n")
-		http.Error(w, "Missing user authentication context", http.StatusUnauthorized)
-		return
-	}
-	fmt.Printf("[upload-pack] [3/7] HandleUploadPack: User ID=%s\n", userID)
+	// // Get user ID from gateway context (forwarded header)
+	// userID := r.Header.Get("X-USER-ID")
+	// if userID == "" {
+	// 	http.Error(w, "Missing user authentication context", http.StatusUnauthorized)
+	// 	return
+	// }
 
 	// Get repository path and validate
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		fmt.Printf("[upload-pack] ERROR: Invalid repository path: %v\n", err)
 		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("[upload-pack] [4/7] HandleUploadPack: Repository path=%s\n", repoPath)
 
 	// Ensure repository exists
 	if err := repositories.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
-		fmt.Printf("[upload-pack] ERROR: Repository not found: %v\n", err)
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
 
 	// Parse the upload-pack request from client (forwarded by gateway)
-	fmt.Printf("[upload-pack] [5/7] HandleUploadPack: Parsing request body\n")
 	uploadReq, err := h.parseUploadPackRequest(r.Body)
 	if err != nil {
-		fmt.Printf("[upload-pack] ERROR: Failed to parse request: %v\n", err)
 		http.Error(w, fmt.Sprintf("Invalid upload-pack request: %v", err), http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("[upload-pack] [5/7] HandleUploadPack: Parsed request - wants=%d, haves=%d, capabilities=%v\n", len(uploadReq.Wants), len(uploadReq.Haves), uploadReq.Capabilities)
 
 	// Open repository using go-git
-	fmt.Printf("[upload-pack] [6/7] HandleUploadPack: Opening repository\n")
 	gitRepoWrapper, err := repositories.OpenRepositorySimple(repoPath)
 	if err != nil {
-		fmt.Printf("[upload-pack] ERROR: Failed to open repository: %v\n", err)
 		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -315,29 +284,36 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	defer func() { _ = gitRepoWrapper.Close() }()
 
 	// Set response headers for Git Smart HTTP protocol
+	// Git HTTP responses MUST NOT be compressed (gzip, brotli, etc.)
+	w.Header().Del("Content-Encoding")
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Transfer-Encoding", "chunked")
 
 	// Enable flushing for streaming responses
-	if flusher, ok := w.(http.Flusher); ok {
-		defer flusher.Flush()
-		fmt.Printf("[upload-pack] [6/7] HandleUploadPack: HTTP Flusher enabled\n")
-	}
+	flusher, hasFlusher := w.(http.Flusher)
 
 	// Create a packet line writer
 	pktWriter := &pktLineWriter{w: w}
 
 	// Process want/have negotiation
-	fmt.Printf("[upload-pack] [7/7] HandleUploadPack: Starting negotiation and packfile generation\n")
 	err = h.processWantHaveNegotiation(ctx, gitRepo, uploadReq, pktWriter)
 	if err != nil {
-		fmt.Printf("[upload-pack] ERROR: Negotiation failed: %v\n", err)
 		// If we've started writing, we can't send HTTP error anymore
 		// Write an error packet instead
 		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		// Flush error response
+		if hasFlusher {
+			flusher.Flush()
+		}
 		return
 	}
-	fmt.Printf("[upload-pack] [DONE] HandleUploadPack: Completed successfully\n")
+
+	// Ensure all packfile data is flushed to client
+	// This is critical to prevent "bad pack header" errors
+	if hasFlusher {
+		flusher.Flush()
+	}
 }
 
 // parseUploadPackRequest parses the upload-pack request body in pkt-line format
@@ -438,111 +414,87 @@ func (h *UploadPackHandler) hasSideBand64k(caps []string) bool {
 
 // processWantHaveNegotiation handles the want/have negotiation and packfile generation
 func (h *UploadPackHandler) processWantHaveNegotiation(ctx context.Context, repo *gogit.Repository, req *UploadPackRequest, pktWriter *pktLineWriter) error {
-	fmt.Printf("[upload-pack] [negotiation-1/4] Starting negotiation\n")
-
+	fmt.Printf("[HTTP upload-pack] processWantHaveNegotiation 시작: wants=%d, haves=%d\n", len(req.Wants), len(req.Haves))
 	if len(req.Wants) == 0 {
-		fmt.Printf("[upload-pack] ERROR: No wants specified\n")
 		return fmt.Errorf("no wants specified")
 	}
 
 	// Check if all wanted objects exist
-	fmt.Printf("[upload-pack] [negotiation-2/4] Validating %d wanted objects\n", len(req.Wants))
 	for _, want := range req.Wants {
 		hash := plumbing.NewHash(want)
 		_, err := repo.Object(plumbing.AnyObject, hash)
 		if err != nil {
-			fmt.Printf("[upload-pack] ERROR: Object %s not found: %v\n", want, err)
 			return fmt.Errorf("object %s not found: %w", want, err)
 		}
 	}
-	fmt.Printf("[upload-pack] [negotiation-2/4] All wanted objects validated\n")
 
 	useSideBand := h.hasSideBand64k(req.Capabilities)
-	fmt.Printf("[upload-pack] [negotiation-3/4] Side-band-64k: %v\n", useSideBand)
+	fmt.Printf("[HTTP upload-pack] useSideBand=%v\n", useSideBand)
 
 	// Send NAK (no acknowledgment)
 	// Note: NAK is part of negotiation phase, so it must be sent as regular pkt-line,
 	// NOT in side-band format. Side-band is only used for packfile data.
-	fmt.Printf("[upload-pack] [negotiation-3/4] Sending NAK (regular pkt-line)\n")
+	fmt.Printf("[HTTP upload-pack] NAK 전송\n")
 	if err := pktWriter.writeLine("NAK"); err != nil {
-		fmt.Printf("[upload-pack] ERROR: Failed to write NAK: %v\n", err)
 		return fmt.Errorf("failed to write NAK: %w", err)
 	}
 
 	// Flush to end negotiation phase
-	fmt.Printf("[upload-pack] [negotiation-3/4] Flushing negotiation phase\n")
+	fmt.Printf("[HTTP upload-pack] 협상 단계 flush\n")
 	if err := pktWriter.flush(); err != nil {
-		fmt.Printf("[upload-pack] ERROR: Failed to flush negotiation: %v\n", err)
 		return fmt.Errorf("failed to flush negotiation: %w", err)
 	}
 
-	// Generate and stream packfile
-	fmt.Printf("[upload-pack] [negotiation-4/4] Starting packfile generation (useSideBand=%v)\n", useSideBand)
-	err := h.generateAndStreamPackfile(ctx, repo, req, pktWriter, useSideBand)
-	if err != nil {
-		fmt.Printf("[upload-pack] ERROR: Packfile generation failed: %v\n", err)
-		return fmt.Errorf("failed to generate packfile: %w", err)
+	// Ensure negotiation phase is fully flushed before starting packfile
+	// This is critical - packfile data must start immediately after flush packet
+	if httpW, ok := pktWriter.w.(http.ResponseWriter); ok {
+		if flusher, ok := httpW.(http.Flusher); ok {
+			flusher.Flush()
+		}
 	}
 
-	fmt.Printf("[upload-pack] [negotiation-DONE] Negotiation completed successfully\n")
+	// Generate and stream packfile
+	fmt.Printf("[HTTP upload-pack] packfile 생성 및 스트리밍 시작\n")
+	err := h.generateAndStreamPackfile(ctx, repo, req, pktWriter, useSideBand)
+	if err != nil {
+		fmt.Printf("[HTTP upload-pack] packfile 생성 실패: %v\n", err)
+		return fmt.Errorf("failed to generate packfile: %w", err)
+	}
+	fmt.Printf("[HTTP upload-pack] packfile 생성 및 스트리밍 완료\n")
+
 	return nil
 }
 
 // generateAndStreamPackfile generates and streams a packfile for the requested objects
 func (h *UploadPackHandler) generateAndStreamPackfile(ctx context.Context, repo *gogit.Repository, req *UploadPackRequest, pktWriter *pktLineWriter, useSideBand bool) error {
-	fmt.Printf("[upload-pack] [packfile-1/7] Starting packfile generation\n")
-
 	// Get repository storer for packfile encoding
 	storer := repo.Storer
 
 	// Convert wants and haves to plumbing.Hash
-	fmt.Printf("[upload-pack] [packfile-2/7] Converting wants/haves to hashes\n")
-	fmt.Printf("[upload-pack] [packfile-2/7] req.Wants count: %d\n", len(req.Wants))
 	wantHashes := make([]plumbing.Hash, 0, len(req.Wants))
-	for i, want := range req.Wants {
-		fmt.Printf("[upload-pack] [packfile-2/7] Converting want[%d]: %s\n", i, want)
+	for _, want := range req.Wants {
 		wantHashes = append(wantHashes, plumbing.NewHash(want))
 	}
-	fmt.Printf("[upload-pack] [packfile-2/7] Want hashes: %d\n", len(wantHashes))
 
-	fmt.Printf("[upload-pack] [packfile-2/7] req.Haves count: %d\n", len(req.Haves))
 	haveHashes := make([]plumbing.Hash, 0, len(req.Haves))
-	for i, have := range req.Haves {
-		fmt.Printf("[upload-pack] [packfile-2/7] Converting have[%d]: %s\n", i, have)
+	for _, have := range req.Haves {
 		haveHashes = append(haveHashes, plumbing.NewHash(have))
 	}
-	fmt.Printf("[upload-pack] [packfile-2/7] Have hashes: %d\n", len(haveHashes))
 
 	// Use go-git's revlist.Objects to calculate which objects to send
 	// This automatically handles commits, trees, blobs, and excludes objects the client already has
-	fmt.Printf("[upload-pack] [packfile-3/7] About to call revlist.Objects with %d wants, %d haves\n", len(wantHashes), len(haveHashes))
-	if len(wantHashes) > 0 {
-		fmt.Printf("[upload-pack] [packfile-3/7] First want hash: %s\n", wantHashes[0].String())
-	}
-	fmt.Printf("[upload-pack] [packfile-3/7] Calculating objects to send using revlist.Objects\n")
-	fmt.Printf("[upload-pack] [packfile-3/7] storer is nil: %v\n", storer == nil)
-	fmt.Printf("[upload-pack] [packfile-3/7] Calling revlist.Objects NOW...\n")
 	objectHashes, err := revlist.Objects(storer, wantHashes, haveHashes)
-	fmt.Printf("[upload-pack] [packfile-3/7] revlist.Objects returned, err=%v, objects=%d\n", err, len(objectHashes))
-	os.Stdout.Sync() // Force flush
 	if err != nil {
-		fmt.Printf("[upload-pack] ERROR: revlist.Objects failed: %v\n", err)
-		os.Stdout.Sync()
 		return fmt.Errorf("failed to calculate objects to send: %w", err)
 	}
-	fmt.Printf("[upload-pack] [packfile-3/7] Objects to send: %d\n", len(objectHashes))
-	os.Stdout.Sync()
-	fmt.Printf("[upload-pack] [packfile-3/7] Checking if objects is empty...\n")
-	os.Stdout.Sync()
+
+	fmt.Printf("[HTTP upload-pack] objectHashes 계산 완료: %d개\n", len(objectHashes))
 
 	if len(objectHashes) == 0 {
-		fmt.Printf("[upload-pack] [packfile-4/7] No objects to send, sending empty packfile\n")
-		os.Stdout.Sync()
 		// No objects to send, just send empty packfile
+		fmt.Printf("[HTTP upload-pack] 빈 packfile 전송\n")
 		return h.sendEmptyPackfile(pktWriter.w, useSideBand)
 	}
-	fmt.Printf("[upload-pack] [packfile-4/7] Objects found, proceeding to create packfile\n")
-	os.Stdout.Sync()
 
 	// Determine if we should use ref-delta or ofs-delta
 	useRefDelta := true
@@ -552,35 +504,27 @@ func (h *UploadPackHandler) generateAndStreamPackfile(ctx context.Context, repo 
 			break
 		}
 	}
-	fmt.Printf("[upload-pack] [packfile-4/7] Use ref-delta: %v\n", useRefDelta)
 
 	// Create writer for packfile
-	fmt.Printf("[upload-pack] [packfile-5/7] Creating packfile writer (useSideBand=%v)\n", useSideBand)
-
-	// Get the underlying HTTP ResponseWriter from HandleUploadPack for flushing
-	// We need to pass it through the context or get it differently
-	// For now, try to extract it from pktWriter.w if possible
 	var httpWriter io.Writer = pktWriter.w
 	var sbWriter *sidebandWriter
 	if useSideBand {
 		// Try to get http.ResponseWriter from pktWriter.w
 		// pktWriter.w should be the http.ResponseWriter passed to HandleUploadPack
-		fmt.Printf("[upload-pack] [packfile-5/7] Checking if writer is http.ResponseWriter...\n")
 		if httpW, ok := pktWriter.w.(http.ResponseWriter); ok {
-			fmt.Printf("[upload-pack] [packfile-5/7] Writer is http.ResponseWriter, using it for side-band\n")
 			httpWriter = httpW
+			fmt.Printf("[HTTP upload-pack] http.ResponseWriter 추출 성공\n")
 		} else {
-			fmt.Printf("[upload-pack] [packfile-5/7] Warning: Writer is not http.ResponseWriter, flusher may not work\n")
+			fmt.Printf("[HTTP upload-pack] WARNING: pktWriter.w가 http.ResponseWriter가 아님: %T\n", pktWriter.w)
 		}
 		// Use side-band writer for 64k chunks
 		sbWriter = newSidebandWriter(httpWriter, 0x01) // channel 1 = pack data
-		fmt.Printf("[upload-pack] [packfile-5/7] Created side-band writer (channel=0x01, hasFlusher=%v)\n", sbWriter.flusher != nil)
+		fmt.Printf("[HTTP upload-pack] sideband writer 생성 완료 (channel=0x01)\n")
 	} else {
-		fmt.Printf("[upload-pack] [packfile-5/7] Using regular writer (no side-band)\n")
+		fmt.Printf("[HTTP upload-pack] WARNING: useSideBand=false, sideband을 사용하지 않음\n")
 	}
 
 	// Create packfile encoder
-	fmt.Printf("[upload-pack] [packfile-6/7] Creating packfile encoder\n")
 	var packWriter io.Writer
 	if useSideBand {
 		packWriter = sbWriter
@@ -590,31 +534,11 @@ func (h *UploadPackHandler) generateAndStreamPackfile(ctx context.Context, repo 
 	enc := packfile.NewEncoder(packWriter, storer, useRefDelta)
 
 	// Encode packfile with the collected objects
-	// packWindow of 0 disables delta search for simplicity
 	packWindow := uint(0)
-	fmt.Printf("[upload-pack] [packfile-6/7] Encoding packfile with %d objects (packWindow=%d)\n", len(objectHashes), packWindow)
-
-	// Before encoding, log first few object hashes for debugging
-	if len(objectHashes) > 0 {
-		maxLog := 5
-		if len(objectHashes) < maxLog {
-			maxLog = len(objectHashes)
-		}
-		fmt.Printf("[upload-pack] [packfile-6/7] First %d object hashes: ", maxLog)
-		for i := 0; i < maxLog; i++ {
-			fmt.Printf("%s ", objectHashes[i].String()[:8])
-		}
-		fmt.Printf("\n")
-	}
-
-	fmt.Printf("[upload-pack] [packfile-6/7] About to call enc.Encode with %d objects, packWindow=%d\n", len(objectHashes), packWindow)
-
-	// Call enc.Encode with panic recovery
 	var encodeErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("[upload-pack] ERROR: Panic in enc.Encode: %v\n", r)
 				encodeErr = fmt.Errorf("panic in packfile encoding: %v", r)
 			}
 		}()
@@ -622,31 +546,35 @@ func (h *UploadPackHandler) generateAndStreamPackfile(ctx context.Context, repo 
 	}()
 
 	if encodeErr != nil {
-		fmt.Printf("[upload-pack] ERROR: Packfile encoding failed: %v\n", encodeErr)
 		return fmt.Errorf("failed to encode packfile: %w", encodeErr)
 	}
-	fmt.Printf("[upload-pack] [packfile-6/7] Packfile encoding completed\n")
 
 	// Flush side-band stream if using side-band
-	fmt.Printf("[upload-pack] [packfile-7/7] Flushing packfile stream\n")
 	if useSideBand {
-		fmt.Printf("[upload-pack] [packfile-7/7] Flushing side-band stream\n")
+		// packfile encoder가 완료된 후, sideband writer의 버퍼에 남아있는 데이터가 있을 수 있으므로
+		// 먼저 underlying writer를 flush하여 모든 packfile 데이터(트레일러 포함)가 전송되도록 보장
+		if httpW, ok := httpWriter.(http.ResponseWriter); ok {
+			if flusher, ok := httpW.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+		// 그 다음 sideband 스트림 종료 (0000 flush 패킷 전송)
 		if err := sbWriter.Flush(); err != nil {
-			fmt.Printf("[upload-pack] ERROR: Side-band flush failed: %v\n", err)
 			return fmt.Errorf("failed to flush side-band stream: %w", err)
 		}
-		fmt.Printf("[upload-pack] [packfile-7/7] Side-band stream flushed (sent 0000)\n")
+		// 최종 HTTP ResponseWriter flush
+		if httpW, ok := httpWriter.(http.ResponseWriter); ok {
+			if flusher, ok := httpW.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
 	} else {
 		// For non-side-band, send flush packet
-		fmt.Printf("[upload-pack] [packfile-7/7] Flushing regular pkt-line\n")
 		if err := pktWriter.flush(); err != nil {
-			fmt.Printf("[upload-pack] ERROR: Regular flush failed: %v\n", err)
 			return fmt.Errorf("failed to flush: %w", err)
 		}
-		fmt.Printf("[upload-pack] [packfile-7/7] Regular flush completed (sent 0000)\n")
 	}
 
-	fmt.Printf("[upload-pack] [packfile-DONE] Packfile generation completed successfully\n")
 	return nil
 }
 
@@ -671,7 +599,6 @@ func (h *UploadPackHandler) collectTreeObjects(tree *object.Tree, collected map[
 
 // sendEmptyPackfile sends an empty packfile (for repositories with no objects to send)
 func (h *UploadPackHandler) sendEmptyPackfile(w io.Writer, useSideBand bool) error {
-	fmt.Printf("[upload-pack] [empty-packfile] Sending empty packfile (useSideBand=%v)\n", useSideBand)
 	// Pack header: "PACK" + version(4 bytes) + object count(4 bytes)
 	packHeader := []byte{
 		'P', 'A', 'C', 'K', // PACK magic
@@ -729,7 +656,6 @@ func (p *pktLineWriter) writeLine(data string) error {
 	}
 
 	line := fmt.Sprintf("%04x%s", length, data)
-
 	_, err := p.w.Write([]byte(line))
 	return err
 }

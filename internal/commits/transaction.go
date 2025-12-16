@@ -212,11 +212,6 @@ func generateRandomID(length int) string {
 func (tm *TransactionManager) BeginTransaction(ctx context.Context, repo *repositories.RepositoryWrapper, baseCommit plumbing.Hash, commitInfo CommitInfo, options TransactionOptions) (*Transaction, error) {
 	txnID := fmt.Sprintf("txn_%d_%s", time.Now().UnixNano(), generateRandomID(8))
 
-	tm.logger.Info("새 트랜잭션 시작",
-		zap.String("transaction_id", txnID),
-		zap.String("base_commit", baseCommit.String()),
-		zap.Duration("timeout", options.Timeout))
-
 	// 타임아웃이 지정되지 않은 경우 기본값 설정
 	if options.Timeout == 0 {
 		options.Timeout = tm.defaultTimeout
@@ -309,10 +304,6 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 
 	txn.State = TransactionStateValidating
 
-	tm.logger.Info("트랜잭션 검증",
-		zap.String("transaction_id", txn.ID),
-		zap.Int("operation_count", len(txn.Operations)))
-
 	// 개별 작업 검증
 	for _, op := range txn.Operations {
 		op.State = TransactionStateValidating
@@ -334,9 +325,6 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 	// 여기까지 왔다면 검증 통과
 	txn.State = TransactionStateActive
 
-	tm.logger.Info("트랜잭션 검증 성공",
-		zap.String("transaction_id", txn.ID))
-
 	return nil
 }
 
@@ -350,10 +338,6 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 	}
 
 	txn.State = TransactionStateCommitting
-
-	tm.logger.Info("트랜잭션 커밋",
-		zap.String("transaction_id", txn.ID),
-		zap.Int("operation_count", len(txn.Operations)))
 
 	result := &TransactionResult{
 		TransactionID:        txn.ID,
@@ -374,9 +358,6 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		result.EndTime = time.Now()
 		result.Duration = result.EndTime.Sub(result.StartTime)
 		txn.State = TransactionStateCommitted
-
-		tm.logger.Info("검증 전용 트랜잭션 완료",
-			zap.String("transaction_id", txn.ID))
 
 		return result, nil
 	}
@@ -427,13 +408,6 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 	result.CommitResult = commitResult
 	result.EndTime = time.Now()
 	result.Duration = result.EndTime.Sub(result.StartTime)
-
-	tm.logger.Info("트랜잭션 커밋 성공",
-		zap.String("transaction_id", txn.ID),
-		zap.String("commit_hash", commitResult.Hash.String()),
-		zap.Duration("duration", result.Duration),
-		zap.Int("successful_operations", len(result.SuccessfulOperations)),
-		zap.Int("failed_operations", len(result.FailedOperations)))
 
 	return result, nil
 }
