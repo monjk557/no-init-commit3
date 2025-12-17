@@ -215,10 +215,8 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		commitsCount = 1
 	}
 
-	// 트리 항목 가져오기 (커밋 정보 포함) - tree overview와 동일한 방식
-	// 성능 최적화: 커밋 정보 조회는 선택적으로 처리 (기본값: false)
-	includeCommits := c.Query("include_commits") == "true"
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path, includeCommits)
+	// 트리 항목 가져오기 (커밋 정보 포함)
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 경로 관련 오류인지 확인
 		errMsg := strings.ToLower(err.Error())
@@ -327,8 +325,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	includeCommits := c.Query("include_commits") == "true"
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path, includeCommits)
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
@@ -421,8 +418,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		parentPath = path[:idx]
 	}
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	includeCommits := c.Query("include_commits") == "true"
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, parentPath, includeCommits)
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, parentPath)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -728,8 +724,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	gitRepo := repoCtx.repoWrapper.GetRepo()
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
-	includeCommits := c.Query("include_commits") == "true"
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path, includeCommits)
+	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 경로 관련 오류인지 확인
 		errMsg := strings.ToLower(err.Error())
@@ -759,8 +754,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 }
 
 // getTreeWithCommit는 트리 항목과 각 항목의 최근 커밋 정보를 함께 가져옵니다.
-// includeCommits가 false이면 커밋 정보를 조회하지 않아 성능이 크게 향상됩니다.
-func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, repoPath, ref, path string, includeCommits bool) ([]GitTreeEntryWithCommit, error) {
+func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, repoPath, ref, path string) ([]GitTreeEntryWithCommit, error) {
 	// ref를 커밋 해시로 해석
 	refObj, err := gitRepo.ResolveRevision(plumbing.Revision(ref))
 	if err != nil {
@@ -798,10 +792,8 @@ func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRe
 	// Normalize base path (remove leading/trailing slashes)
 	basePath := strings.Trim(path, "/")
 
-	// 각 tree entry에 대해 커밋 정보 가져오기 (commit service 활용)
-	// 중요: 커밋 정보 조회 실패해도 모든 tree entry는 반드시 포함되어야 함
-	treeEntriesWithCommit := make([]GitTreeEntryWithCommit, 0, len(targetTree.Entries))
-	for _, entry := range targetTree.Entries {
+	entries := make([]entryInfo, len(targetTree.Entries))
+	for i, entry := range targetTree.Entries {
 		// Path는 full path from repository root
 		fullPath := entry.Name
 		if basePath != "" {
@@ -832,53 +824,54 @@ func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRe
 			}
 		}
 
-		// 각 entry에 대한 최근 커밋 가져오기 (overview service 활용)
-		// 커밋 정보는 선택사항이므로 에러가 발생해도 tree entry는 반드시 포함
-		var commitInfo *GitCommit
-
-		// 성능 최적화: includeCommits가 false이면 커밋 정보를 조회하지 않음
-		if includeCommits {
-			// 커밋 정보 조회를 안전하게 수행 (에러가 발생해도 tree entry는 포함)
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						// panic이 발생해도 tree entry는 포함
-						h.logger.Error("Panic while getting commit for path, continuing without commit info",
-							zap.String("path", fullPath),
-							zap.String("type", entryType),
-							zap.Any("panic", r))
-					}
-				}()
-
-				if entryType == "blob" || entryType == "tree" {
-					// 파일이나 디렉토리의 경우 해당 경로의 최근 커밋 조회
-					// tree인 경우 하위를 재귀적으로 탐색하여 가장 최근 커밋을 가져옴
-					isTree := entryType == "tree"
-
-					commit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, ref, fullPath, isTree)
-					if err != nil {
-						// 커밋 조회 실패는 경고만 하고 계속 진행 (tree entry는 포함)
-						h.logger.Warn("Failed to get commit for path, continuing without commit info",
-							zap.String("path", fullPath),
-							zap.String("type", entryType),
-							zap.Error(err))
-					} else {
-						commitInfo = commit
-					}
-				}
-			}()
+		entries[i] = entryInfo{
+			index:     i,
+			entryType: entryType,
+			name:      entry.Name,
+			fullPath:  fullPath,
+			modeStr:   modeStr,
+			hashStr:   hashStr,
+			size:      size,
 		}
+	}
 
-		// 커밋 정보가 없어도 tree entry는 반드시 포함
-		treeEntriesWithCommit = append(treeEntriesWithCommit, GitTreeEntryWithCommit{
-			Type:         entryType,
-			Name:         entry.Name,
-			Path:         fullPath,
-			Mode:         &modeStr,
-			Hash:         &hashStr,
-			Size:         size,
-			LatestCommit: commitInfo,
-		})
+	// 커밋 정보를 병렬로 조회 (service 레이어에서 처리)
+	pathInfos := make([]CommitPathInfo, 0, len(entries))
+	pathToIndex := make(map[string]int, len(entries))
+
+	for i := range entries {
+		if entries[i].entryType == "blob" || entries[i].entryType == "tree" {
+			isTree := entries[i].entryType == "tree"
+			pathInfos = append(pathInfos, CommitPathInfo{
+				Path:   entries[i].fullPath,
+				IsTree: isTree,
+			})
+			pathToIndex[entries[i].fullPath] = i
+		}
+	}
+
+	// service에서 병렬로 커밋 정보 조회
+	commitMap := h.service.GetLatestCommitsForPaths(ctx, gitRepo, ref, pathInfos)
+
+	// 결과를 entries에 매핑
+	for path, commit := range commitMap {
+		if idx, ok := pathToIndex[path]; ok {
+			entries[idx].commitInfo = commit
+		}
+	}
+
+	// 결과를 원래 순서대로 변환
+	treeEntriesWithCommit := make([]GitTreeEntryWithCommit, len(entries))
+	for i, e := range entries {
+		treeEntriesWithCommit[i] = GitTreeEntryWithCommit{
+			Type:         e.entryType,
+			Name:         e.name,
+			Path:         e.fullPath,
+			Mode:         &e.modeStr,
+			Hash:         &e.hashStr,
+			Size:         e.size,
+			LatestCommit: e.commitInfo,
+		}
 	}
 
 	return treeEntriesWithCommit, nil

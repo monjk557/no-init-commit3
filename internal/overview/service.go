@@ -248,10 +248,11 @@ func (s *RepositoryOverviewService) GetLatestCommitForPath(ctx context.Context, 
 				return true
 			}
 		} else {
-			// 경로가 정확히 일치하거나 하위 경로인지 확인
-			// 디렉토리 경로 자체는 커밋에 포함되지 않으므로 하위 파일만 체크
+			// 하위 경로인지 확인 (디렉토리 경로 자체는 커밋에 포함되지 않으므로 하위 파일만 체크)
+			// normalizedPath가 "src"인 경우 "src/main.go", "src/utils/helper.go" 등을 포함
+			normalizedPathWithSlash := normalizedPath + "/"
 			pathFilter = func(path string) bool {
-				return path == normalizedPath || strings.HasPrefix(path, normalizedPath+"/")
+				return strings.HasPrefix(path, normalizedPathWithSlash) || path == normalizedPath
 			}
 		}
 	} else {
@@ -274,7 +275,7 @@ func (s *RepositoryOverviewService) GetLatestCommitForPath(ctx context.Context, 
 	var latestCommit *object.Commit
 	err = commitIter.ForEach(func(c *object.Commit) error {
 		latestCommit = c
-		// 첫 번째 커밋만 가져오고 중지
+		// 첫 번째 커밋만 가져오고 중지 (성능 최적화)
 		return io.EOF
 	})
 
@@ -283,19 +284,224 @@ func (s *RepositoryOverviewService) GetLatestCommitForPath(ctx context.Context, 
 	}
 
 	if latestCommit == nil {
-		// 해당 경로에 대한 커밋이 없는 경우 nil 반환 (에러 아님)
-		return nil, nil
+
+		fallbackIter, err := repo.Log(&gogit.LogOptions{
+			From: commitHash,
+		})
+		if err != nil {
+			return nil, nil
+		}
+		defer fallbackIter.Close()
+
+		err = fallbackIter.ForEach(func(c *object.Commit) error {
+			currentTree, err := c.Tree()
+			if err != nil {
+				return nil
+			}
+
+			var parentTree *object.Tree
+			if len(c.ParentHashes) > 0 {
+				parentCommit, err := repo.CommitObject(c.ParentHashes[0])
+				if err == nil {
+					parentTree, _ = parentCommit.Tree()
+				}
+			}
+
+			var currEntry *object.TreeEntry
+			var parentEntry *object.TreeEntry
+
+			if normalizedPath != "" {
+				currEntry, _ = currentTree.FindEntry(normalizedPath)
+				if parentTree != nil {
+					parentEntry, _ = parentTree.FindEntry(normalizedPath)
+				}
+			} else {
+				// 루트 경로는 항상 트리 존재
+				currEntry = &object.TreeEntry{}
+				if parentTree != nil {
+					parentEntry = &object.TreeEntry{}
+				}
+			}
+
+			// 둘 다 없으면 변화 없음
+			if currEntry == nil && parentEntry == nil {
+				return nil
+			}
+
+			// 신규 생성 / 삭제 / hash 변경
+			if currEntry == nil || parentEntry == nil ||
+				currEntry.Hash != parentEntry.Hash {
+				latestCommit = c
+				return io.EOF
+			}
+
+			return nil
+		})
+
+		if err != nil && err != io.EOF {
+			return nil, nil
+		}
+
+		if latestCommit == nil {
+			return nil, nil
+		}
 	}
 
 	// GitCommit으로 변환
+	return s.convertCommit(latestCommit), nil
+}
+
+// convertCommit은 object.Commit을 GitCommit으로 변환합니다.
+func (s *RepositoryOverviewService) convertCommit(commit *object.Commit) *GitCommit {
 	return &GitCommit{
-		SHA:          latestCommit.Hash.String(),
-		Message:      latestCommit.Message,
-		Author:       convertAuthorToGitAuthorFromObject(latestCommit.Author),
-		Committer:    convertAuthorToGitAuthorFromObject(latestCommit.Committer),
-		ParentHashes: convertParentHashes(latestCommit.ParentHashes),
-		TreeHash:     latestCommit.TreeHash.String(),
-	}, nil
+		SHA:          commit.Hash.String(),
+		Message:      commit.Message,
+		Author:       convertAuthorToGitAuthorFromObject(commit.Author),
+		Committer:    convertAuthorToGitAuthorFromObject(commit.Committer),
+		ParentHashes: convertParentHashes(commit.ParentHashes),
+		TreeHash:     commit.TreeHash.String(),
+	}
+}
+
+// CommitPathInfo represents a path and its type for commit lookup
+type CommitPathInfo struct {
+	Path   string
+	IsTree bool
+}
+
+func (s *RepositoryOverviewService) GetLatestCommitsForPaths(
+	ctx context.Context,
+	repo *gogit.Repository,
+	ref string,
+	pathInfos []CommitPathInfo,
+) map[string]*GitCommit {
+
+	result := make(map[string]*GitCommit, len(pathInfos))
+	if len(pathInfos) == 0 {
+		return result
+	}
+
+	// 아직 매칭 안 된 path들
+	type pendingPath struct {
+		info CommitPathInfo
+	}
+	pending := make(map[string]pendingPath, len(pathInfos))
+	for _, pi := range pathInfos {
+		pending[pi.Path] = pendingPath{info: pi}
+	}
+
+	// ref 해석
+	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
+	if err != nil {
+		return result
+	}
+
+	iter, err := repo.Log(&gogit.LogOptions{From: *hash})
+	if err != nil {
+		return result
+	}
+	defer iter.Close()
+
+	_ = iter.ForEach(func(c *object.Commit) error {
+		// 취소 체크
+		select {
+		case <-ctx.Done():
+			return io.EOF
+		default:
+		}
+
+		// 전부 찾았으면 종료
+		if len(pending) == 0 {
+			return io.EOF
+		}
+
+		currentTree, err := c.Tree()
+		if err != nil {
+			return nil
+		}
+
+		var parentTree *object.Tree
+		if len(c.ParentHashes) > 0 {
+			parent, err := repo.CommitObject(c.ParentHashes[0])
+			if err == nil {
+				parentTree, _ = parent.Tree()
+			}
+		}
+
+		// 초기 커밋 처리
+		if parentTree == nil {
+			for path, p := range pending {
+				if matchInTree(currentTree, path, p.info.IsTree) {
+					result[path] = s.convertCommit(c)
+					delete(pending, path)
+				}
+			}
+			return nil
+		}
+
+		// diff 계산
+		changes, err := object.DiffTree(parentTree, currentTree)
+		if err != nil {
+			return nil
+		}
+
+		for path, p := range pending {
+			if diffMatchesPath(changes, path, p.info.IsTree) {
+				result[path] = s.convertCommit(c)
+				delete(pending, path)
+			}
+		}
+
+		return nil
+	})
+
+	return result
+}
+
+func matchInTree(tree *object.Tree, path string, isTree bool) bool {
+	if path == "" {
+		return true
+	}
+
+	if !isTree {
+		_, err := tree.File(path)
+		return err == nil
+	}
+
+	found := false
+	_ = tree.Files().ForEach(func(f *object.File) error {
+		if f.Name == path || strings.HasPrefix(f.Name, path+"/") {
+			found = true
+			return io.EOF
+		}
+		return nil
+	})
+	return found
+}
+
+func diffMatchesPath(changes object.Changes, path string, isTree bool) bool {
+	for _, ch := range changes {
+		from := ch.From.Name
+		to := ch.To.Name
+
+		if !isTree {
+			if from == path || to == path {
+				return true
+			}
+			continue
+		}
+
+		if path == "" {
+			return true
+		}
+
+		if from == path || to == path ||
+			strings.HasPrefix(from, path+"/") ||
+			strings.HasPrefix(to, path+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // convertAuthorToGitAuthorFromObject는 object.Signature를 GitAuthor로 변환합니다.

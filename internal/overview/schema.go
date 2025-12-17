@@ -231,3 +231,15 @@ type TreeWithCommitOverviewResponse struct {
 	Tree       []GitTreeEntryWithCommit `json:"tree"`
 	Branches   []GitBranch              `json:"branches"`
 }
+
+// 각 tree entry의 기본 정보를 먼저 수집
+type entryInfo struct {
+	index      int
+	entryType  string
+	name       string
+	fullPath   string
+	modeStr    string
+	hashStr    string
+	size       *int64
+	commitInfo *GitCommit
+}
