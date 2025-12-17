@@ -10,6 +10,7 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // BlobHandler는 Git blob REST API 엔드포인트를 처리합니다.
@@ -134,6 +135,16 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 	// Blob 내용 가져오기 (이미 열린 repository 사용)
 	content, contentType, err := h.service.GetBlobContent(ctx, owner, repo, path, repoCtx.ref, repoCtx.repoWrapper)
 	if err != nil {
+		// 파일이 너무 큰 경우 특별 처리
+		if strings.Contains(err.Error(), "too large") {
+			h.logger.Warn("File too large to display", zap.String("path", path))
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"error":   "This file is too large to display",
+				"reason":  err.Error(),
+			})
+			return
+		}
 		statusCode := h.getErrorStatusCode(err)
 		h.sendError(c, err, statusCode)
 		return

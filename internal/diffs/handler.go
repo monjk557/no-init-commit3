@@ -88,6 +88,16 @@ func (h *DiffHandler) HandleCommitDiff(c *gin.Context) {
 	// diff 계산
 	diffResp, err := h.calculateCommitDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
+		// DiffTooLargeError인 경우 특별 처리
+		if diffErr, ok := err.(*DiffTooLargeError); ok {
+			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"error":   "This diff is too large to display",
+				"reason":  diffErr.Reason,
+			})
+			return
+		}
 		h.logger.Error("Failed to calculate commit diff", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
@@ -162,6 +172,16 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 	// 브랜치 diff 계산
 	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
+		// DiffTooLargeError인 경우 특별 처리
+		if diffErr, ok := err.(*DiffTooLargeError); ok {
+			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"error":   "This diff is too large to display",
+				"reason":  diffErr.Reason,
+			})
+			return
+		}
 		h.logger.Error("Failed to calculate branch diff", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -256,6 +276,16 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
 	// 파일 diff 계산
 	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, params.Base, params.Head, contextLines, format)
 	if err != nil {
+		// DiffTooLargeError인 경우 특별 처리
+		if diffErr, ok := err.(*DiffTooLargeError); ok {
+			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"error":   "This diff is too large to display",
+				"reason":  diffErr.Reason,
+			})
+			return
+		}
 		h.logger.Error("Failed to calculate file diff", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -303,6 +333,16 @@ func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) {
 	// 단일 커밋 diff 계산
 	response, err := h.calculateSingleCommitDiff(ctx, repoPath, sha, contextLines)
 	if err != nil {
+		// DiffTooLargeError인 경우 특별 처리
+		if diffErr, ok := err.(*DiffTooLargeError); ok {
+			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"error":   "This diff is too large to display",
+				"reason":  diffErr.Reason,
+			})
+			return
+		}
 		h.logger.Error("Failed to calculate single commit diff", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return

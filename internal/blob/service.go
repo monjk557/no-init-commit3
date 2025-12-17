@@ -15,6 +15,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
+// MaxBlobSize는 blob의 최대 크기입니다 (50MB)
+const MaxBlobSize = 50 * 1024 * 1024
+
 // BlobService는 blob 관련 비즈니스 로직을 처리하는 서비스입니다.
 type BlobService struct {
 	pathConfig *repositories.PathConfig
@@ -117,6 +120,18 @@ func getBlobFromGogitRepo(ctx context.Context, repo *gogit.Repository, path, ref
 		return nil, fmt.Errorf("file not found: %w", err)
 	}
 
+	// 파일 크기 체크
+	if file.Size > MaxBlobSize {
+		return nil, fmt.Errorf("file is too large (%d bytes > %d bytes)", file.Size, MaxBlobSize)
+	}
+
+	// 컨텍스트 취소 확인
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	// Blob 내용 읽기
 	reader, err := file.Blob.Reader()
 	if err != nil {
@@ -124,9 +139,16 @@ func getBlobFromGogitRepo(ctx context.Context, repo *gogit.Repository, path, ref
 	}
 	defer func() { _ = reader.Close() }()
 
-	content, err := io.ReadAll(reader)
+	// 제한된 리더 사용 (MaxBlobSize + 1 바이트까지만 읽기)
+	limitedReader := io.LimitReader(reader, MaxBlobSize+1)
+	content, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read blob content: %w", err)
+	}
+
+	// 실제로 제한을 초과했는지 확인
+	if len(content) > MaxBlobSize {
+		return nil, fmt.Errorf("file is too large (%d bytes > %d bytes)", len(content), MaxBlobSize)
 	}
 
 	return content, nil
