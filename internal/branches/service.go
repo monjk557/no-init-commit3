@@ -98,7 +98,7 @@ func (s *BranchService) CreateBranch(repo *gogit.Repository, req CreateBranchReq
 
 	// Handle existing branch
 	if branchExists && !req.Force {
-		return nil, fmt.Errorf("branch '%s' already exists. Use force=true to overwrite", req.Name)
+		return nil, fmt.Errorf("branch '%s' already exists.", req.Name)
 	}
 
 	// Resolve source reference

@@ -3,9 +3,6 @@ package branches
 import (
 	"fmt"
 	"strings"
-
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // validateBranchName은 Git 브랜치 명명 규칙에 따라 브랜치 이름을 검증합니다.
@@ -64,18 +61,4 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 	}
 
 	return nil
-}
-
-// checkBranchExists checks if a branch exists and returns its commit hash
-func (h *BranchOperationsHandler) checkBranchExists(repo *gogit.Repository, branchName string) (bool, plumbing.Hash, error) {
-	refName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", branchName))
-	ref, err := repo.Reference(refName, false)
-	if err != nil {
-		if err == plumbing.ErrReferenceNotFound {
-			return false, plumbing.ZeroHash, nil
-		}
-		return false, plumbing.ZeroHash, err
-	}
-
-	return true, ref.Hash(), nil
 }

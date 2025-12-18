@@ -302,6 +302,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/state", stateHandler.HandleGetRepositoryState)
 
 	// Branches endpoints
+	ownerRepoGroup.GET("/branches/validate/*name", branchesHandler.HandleValidateBranchName)
 	ownerRepoGroup.GET("/branches", branchesHandler.HandleGetBranches)
 	ownerRepoGroup.POST("/branches", branchesHandler.HandleCreateBranch)
 	ownerRepoGroup.PATCH("/branches/*branch", branchesHandler.HandleUpdateBranch)

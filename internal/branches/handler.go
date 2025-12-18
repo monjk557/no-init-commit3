@@ -133,6 +133,43 @@ func (h *BranchOperationsHandler) validateAndOpenRepository(ctx context.Context,
 	}, true
 }
 
+// HandleGetBranchesByName handles GET /repos/{owner}/{repo}/branches for getting branches
+func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Extract URL parameters
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	name := c.Param("name")
+
+	// limit 파라미터 파싱 및 검증
+
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	if !ok {
+		// validateAndOpenRepository already sent the response
+		return
+	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repository := repoCtx.repoWrapper.GetRepo()
+	if repository == nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return
+	}
+
+	// get branches by name
+	isAvailable, _, err := h.service.checkBranchExists(repository, name)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"is_available": !isAvailable,
+	})
+}
+
 // HandleGetBranches handles GET /repos/{owner}/{repo}/branches for getting branches
 func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -302,7 +339,7 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "already exists") {
-			statusCode = http.StatusBadRequest
+			statusCode = http.StatusConflict
 		} else if strings.Contains(err.Error(), "failed to resolve") {
 			statusCode = http.StatusBadRequest
 		}

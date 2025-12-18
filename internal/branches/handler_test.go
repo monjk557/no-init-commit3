@@ -176,7 +176,8 @@ func TestHandleCreateBranch_AlreadyExists(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	// Should return 409 Conflict when branch already exists
+	assert.Equal(t, http.StatusConflict, w.Code)
 
 	var response map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &response)
@@ -483,4 +484,169 @@ func TestHandleDeleteBranch_InvalidBranchName(t *testing.T) {
 
 	assert.False(t, response["success"].(bool))
 	assert.Contains(t, response["error"].(string), "branch name")
+}
+
+// TestHandleCreateBranch_DuplicateBranchName_409 tests that creating a branch with the same name returns 409 Conflict
+func TestHandleCreateBranch_DuplicateBranchName_409(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create test repository
+	createTestRepository(t, tempDir, "testowner", "testrepo")
+
+	// Create a branch first using the API
+	router := gin.New()
+	router.POST("/repos/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	firstRequest := CreateBranchRequest{
+		Name:   "feature/test-branch",
+		Source: "master",
+	}
+
+	body, err := json.Marshal(firstRequest)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/repos/testowner/testrepo/branches", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// First creation should succeed
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Try to create the same branch again
+	duplicateRequest := CreateBranchRequest{
+		Name:   "feature/test-branch",
+		Source: "master",
+		Force:  false,
+	}
+
+	body, err = json.Marshal(duplicateRequest)
+	require.NoError(t, err)
+
+	req = httptest.NewRequest("POST", "/repos/testowner/testrepo/branches", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Should return 409 Conflict
+	assert.Equal(t, http.StatusConflict, w.Code, "Duplicate branch creation should return 409 Conflict")
+
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.False(t, response["success"].(bool))
+	assert.Contains(t, response["error"].(string), "already exists")
+}
+
+// TestHandleValidateBranchName_Available tests validation API when branch name is available
+func TestHandleValidateBranchName_Available(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create test repository
+	createTestRepository(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/new-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.True(t, response["success"].(bool))
+	assert.True(t, response["is_available"].(bool), "New branch name should be available")
+}
+
+// TestHandleValidateBranchName_NotAvailable tests validation API when branch name already exists
+func TestHandleValidateBranchName_NotAvailable(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create test repository
+	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
+
+	// Create branch manually first
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	require.NoError(t, err)
+
+	head, err := gitRepo.Head()
+	require.NoError(t, err)
+
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/existing-branch"), head.Hash())
+	err = gitRepo.Storer.SetReference(branchRef)
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/existing-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.True(t, response["success"].(bool))
+	assert.False(t, response["is_available"].(bool), "Existing branch name should not be available")
+}
+
+// TestHandleValidateBranchName_WithSlash tests validation API with branch names containing slashes
+func TestHandleValidateBranchName_WithSlash(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create test repository
+	createTestRepository(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/feature/new-feature", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.True(t, response["success"].(bool))
+	// Branch with one slash should be valid and available
+	assert.True(t, response["is_available"].(bool))
+}
+
+// TestHandleValidateBranchName_RepositoryNotFound tests validation API when repository doesn't exist
+func TestHandleValidateBranchName_RepositoryNotFound(t *testing.T) {
+	handler, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Don't create repository
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/nonexistent/branches/validate/some-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.False(t, response["success"].(bool))
+	assert.Contains(t, response["error"].(string), "repository not found")
 }
