@@ -122,8 +122,8 @@ const (
 	MaxFileSize = 5 * 1024 * 1024
 	// MaxFileLines는 단일 파일의 최대 라인 수
 	MaxFileLines = 50000
-	// MaxTotalFiles는 전체 diff의 최대 파일 수
-	MaxTotalFiles = 1000
+	// MaxTotalFiles는 전체 diff의 최대 파일 수 (메타데이터만 포함하는 경우 제한 없음)
+	MaxTotalFiles = 100000
 	// MaxTotalLines는 전체 diff의 최대 라인 수
 	MaxTotalLines = 100000
 	// MaxPatchSize는 단일 patch의 최대 크기 (10MB)
@@ -133,7 +133,7 @@ const (
 	MaxChangedLines = 10000
 	// MaxFilesWithChanges는 Changes(라인별 diff)를 포함할 최대 파일 수
 	// 나머지 파일들은 메타데이터만 포함하고 Changes는 nil로 설정
-	MaxFilesWithChanges = 5
+	MaxFilesWithChanges = 10
 )
 
 // DiffTooLargeError는 diff가 너무 커서 표시할 수 없을 때 사용하는 에러입니다

@@ -2,7 +2,6 @@ package diffs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -17,41 +16,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
-
-// estimateFileDiffSize는 FileDiff의 JSON 직렬화 크기를 추정합니다 (바이트 단위)
-func estimateFileDiffSize(fileDiff FileDiff) int {
-	// 기본 메타데이터 크기 추정 (JSON 키 이름 + 값)
-	size := 200 // 기본 필드들 (path, status, additions, deletions, is_binary 등)
-
-	// Path 크기
-	size += len(fileDiff.Path)
-
-	// OldPath 크기 (있는 경우)
-	if fileDiff.OldPath != "" {
-		size += len(fileDiff.OldPath) + 20 // "old_path" 키 포함
-	}
-
-	// Metadata 크기 (있는 경우)
-	if fileDiff.Metadata != nil {
-		metadataJSON, _ := json.Marshal(fileDiff.Metadata)
-		size += len(metadataJSON) + 20 // "metadata" 키 포함
-	}
-
-	// Changes 배열 크기
-	if fileDiff.Changes != nil {
-		// 각 LineChange의 크기 추정
-		for _, change := range fileDiff.Changes {
-			// LineChange 기본 필드: type, line, content
-			size += 50                  // 기본 필드 오버헤드
-			size += len(change.Content) // 실제 라인 내용
-		}
-		// 배열 오버헤드 (대괄호, 쉼표 등)
-		size += 20
-	}
-
-	// JSON 오버헤드 (20% 추가)
-	return int(float64(size) * 1.2)
-}
 
 // generatePatch는 커밋 범위에 대한 Git patch 형식 출력을 생성합니다
 func (h *DiffHandler) generatePatch(repoPath, base, head string) (string, error) {
@@ -232,41 +196,68 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 		default:
 		}
 
-		// 파일 크기 체크
-		if file.Size > MaxFileSize {
-			return &DiffTooLargeError{
-				Reason: fmt.Sprintf("file %s is too large (%d bytes > %d bytes)", file.Name, file.Size, MaxFileSize),
-			}
+		// 파일 수가 너무 많으면 경고만 출력하고 계속 진행 (메타데이터는 모두 포함)
+		if len(fileDiffs) > 0 && len(fileDiffs)%1000 == 0 {
+			fmt.Printf("Processing file %d in initial commit...\n", len(fileDiffs))
 		}
 
-		// 전체 파일 수 제한 체크
-		if len(fileDiffs) >= MaxTotalFiles {
-			return &DiffTooLargeError{
-				Reason: fmt.Sprintf("too many files in initial commit (%d >= %d)", len(fileDiffs), MaxTotalFiles),
+		// 파일 크기가 너무 크면 메타데이터만 포함하고 내용은 건너뛰기
+		if file.Size > MaxFileSize {
+			fileDiff := FileDiff{
+				Path:      file.Name,
+				Status:    FileDiffStatusAdded,
+				Additions: 0, // 크기 제한으로 인해 정확한 라인 수를 알 수 없음
+				Deletions: 0,
+				IsBinary:  isBinaryFileByExtension(file.Name),
+				Changes:   nil,
 			}
+			fileDiffs = append(fileDiffs, fileDiff)
+			stats.FilesChanged++
+			fmt.Printf("Warning: file %s is too large (%d bytes > %d bytes), metadata only\n", file.Name, file.Size, MaxFileSize)
+			return nil
 		}
 
 		content, err := file.Contents()
 		if err != nil {
-			// 오류를 로깅하지만 다른 파일들은 계속 처리
-			fmt.Printf("Error getting content for %s: %v\n", file.Name, err)
+			// 오류가 발생해도 최소한의 메타데이터는 포함
+			fileDiff := FileDiff{
+				Path:      file.Name,
+				Status:    FileDiffStatusAdded,
+				Additions: 0,
+				Deletions: 0,
+				IsBinary:  isBinaryFileByExtension(file.Name),
+				Changes:   nil,
+			}
+			fileDiffs = append(fileDiffs, fileDiff)
+			stats.FilesChanged++
+			fmt.Printf("Error getting content for %s: %v (metadata only)\n", file.Name, err)
 			return nil
 		}
 
 		lines := SplitLines(content)
 		additions := len(lines)
 
-		// 파일 라인 수 제한 체크
-		if len(lines) > MaxFileLines {
-			return &DiffTooLargeError{
-				Reason: fmt.Sprintf("file %s has too many lines (%d > %d)", file.Name, len(lines), MaxFileLines),
-			}
-		}
-
 		// 바이너리 파일 감지 (파일 확장자와 콘텐츠 모두 확인)
 		isBinaryByExt := isBinaryFileByExtension(file.Name)
 		isBinaryByContent := IsBinaryFile(content)
 		isBinary := isBinaryByExt || isBinaryByContent
+
+		// 파일 라인 수 제한 체크 - 너무 많으면 메타데이터만 포함
+		if len(lines) > MaxFileLines {
+			fileDiff := FileDiff{
+				Path:      file.Name,
+				Status:    FileDiffStatusAdded,
+				Additions: additions,
+				Deletions: 0,
+				IsBinary:  isBinary,
+				Changes:   nil,
+			}
+			fileDiffs = append(fileDiffs, fileDiff)
+			stats.FilesChanged++
+			stats.TotalAdditions += additions
+			fmt.Printf("Warning: file %s has too many lines (%d > %d), metadata only\n", file.Name, len(lines), MaxFileLines)
+			return nil
+		}
 
 		fileDiff := FileDiff{
 			Path:      file.Name,
@@ -285,27 +276,31 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 			return nil
 		}
 
-		// Changes를 포함할지 여부 결정 (최상위 5개만)
-		includeChanges := filesWithChangesCount < MaxFilesWithChanges
-
 		// 변경된 라인 수 체크 (additions만 있으므로 additions 기준)
 		if additions > MaxChangedLines {
 			// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
 			fileDiff.Changes = nil
-		} else if includeChanges && contextLines > 0 {
-			// 최상위 5개이고, contextLines > 0이면 라인 변경 생성
-			var lineChanges []LineChange
-			for i, line := range lines {
-				lineChanges = append(lineChanges, LineChange{
-					Type:    LineChangeTypeAdd,
-					LineNum: i + 1,
-					Content: "+" + line,
-				})
+		} else if contextLines > 0 {
+			// validation 통과한 파일 중에서 최대 10개까지만 changes 포함
+			canIncludeChanges := filesWithChangesCount < MaxFilesWithChanges
+			if canIncludeChanges {
+				// 라인 변경 생성
+				var lineChanges []LineChange
+				for i, line := range lines {
+					lineChanges = append(lineChanges, LineChange{
+						Type:    LineChangeTypeAdd,
+						LineNum: i + 1,
+						Content: "+" + line,
+					})
+				}
+				fileDiff.Changes = lineChanges
+				filesWithChangesCount++
+			} else {
+				// 이미 10개를 초과한 경우 Changes를 포함하지 않음
+				fileDiff.Changes = nil
 			}
-			fileDiff.Changes = lineChanges
-			filesWithChangesCount++
 		} else {
-			// 최상위 5개가 아니면 Changes를 포함하지 않음
+			// contextLines가 0이면 Changes를 포함하지 않음
 			fileDiff.Changes = nil
 		}
 
@@ -317,14 +312,17 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 	})
 
 	if err != nil {
-		// DiffTooLargeError인 경우 그대로 반환
+		// DiffTooLargeError인 경우에도 이미 처리된 파일들은 포함
+		// 에러는 로깅만 하고 계속 진행
 		if diffErr, ok := err.(*DiffTooLargeError); ok {
-			return nil, diffErr
+			fmt.Printf("Warning in initial commit: %s\n", diffErr.Reason)
+		} else {
+			fmt.Printf("Error iterating tree files: %v\n", err)
 		}
-		return nil, fmt.Errorf("failed to iterate tree files: %w", err)
+		// 에러가 발생해도 이미 처리된 파일들은 반환
 	}
 
-	// 5개를 초과하는 파일이 있으면 truncated로 표시
+	// 10개를 초과하는 파일이 있으면 truncated로 표시
 	truncated := len(fileDiffs) > MaxFilesWithChanges
 
 	return &DiffResponse{
@@ -367,58 +365,91 @@ func (h *DiffHandler) calculateCommitDiffBetween(ctx context.Context, baseCommit
 }
 
 // processChanges는 go-git 변경 사항을 구조화된 FileDiff 객체로 변환합니다
-// 모든 파일의 메타데이터는 포함하되, Changes(라인별 diff)는 최상위 5개 파일만 포함합니다
+// 모든 파일의 메타데이터는 포함하되, Changes(라인별 diff)는 validation 통과한 최대 10개 파일만 포함합니다
 func (h *DiffHandler) processChanges(changes object.Changes, contextLines int) ([]FileDiff, DiffStats, bool, error) {
-	// 전체 파일 수 제한 체크
-	if len(changes) > MaxTotalFiles {
-		return nil, DiffStats{}, false, &DiffTooLargeError{
-			Reason: fmt.Sprintf("too many files changed (%d > %d)", len(changes), MaxTotalFiles),
-		}
-	}
+	// 1단계: 먼저 모든 파일의 메타데이터를 빠르게 수집 (patch 생성 없이)
+	fileDiffs := make([]FileDiff, 0, len(changes))
+	changeIndices := make([]int, 0, MaxFilesWithChanges) // changes가 필요한 파일 인덱스
 
-	var fileDiffs []FileDiff
-	var stats DiffStats
-	filesWithChangesCount := 0 // Changes를 포함한 파일 수
-
-	// 모든 파일을 처리하되, Changes는 최상위 5개만 포함
-	for _, change := range changes {
-		// Changes를 포함할지 여부 결정 (최상위 5개만)
-		includeChanges := filesWithChangesCount < MaxFilesWithChanges
-
-		fileDiff, err := h.processChange(change, contextLines)
-		if err != nil {
-			// DiffTooLargeError인 경우 즉시 반환
-			if _, ok := err.(*DiffTooLargeError); ok {
-				return nil, DiffStats{}, false, err
-			}
-			// 로깅을 위해 파일 이름 가져오기
-			fileName := GetFileName(change)
-			// 오류 로깅하지만 다른 파일들은 계속 처리
-			fmt.Printf("Error processing change for %s: %v\n", fileName, err)
-			continue
+	for i, change := range changes {
+		fileName := GetFileName(change)
+		fileDiff := FileDiff{
+			Path:     fileName,
+			Status:   h.getChangeStatus(change),
+			Metadata: GetFileMetadata(change),
+			Changes:  nil,
 		}
 
-		// 최상위 5개 파일이 아니면 Changes를 제거 (메타데이터는 유지)
-		if !includeChanges && fileDiff.Changes != nil {
-			fileDiff.Changes = nil
-		} else if includeChanges {
-			filesWithChangesCount++
+		if change.From.Name != change.To.Name && change.From.Name != "" && change.To.Name != "" {
+			fileDiff.OldPath = change.From.Name
+		}
+
+		// 바이너리 파일 체크 (확장자만으로 빠르게)
+		fileDiff.IsBinary = isBinaryFileByExtension(fileName)
+
+		// changes가 필요한 파일 후보로 추가 (바이너리가 아니고 contextLines > 0인 경우)
+		if !fileDiff.IsBinary && contextLines > 0 && len(changeIndices) < MaxFilesWithChanges {
+			changeIndices = append(changeIndices, i)
 		}
 
 		fileDiffs = append(fileDiffs, fileDiff)
+	}
+
+	// 2단계: changes가 필요한 파일만 patch 생성하여 처리
+	filesWithChangesCount := 0
+	for _, idx := range changeIndices {
+		if filesWithChangesCount >= MaxFilesWithChanges {
+			break
+		}
+
+		change := changes[idx]
+		fileDiff, err := h.processChangeWithPatch(change, contextLines)
+		if err != nil {
+			// 에러 발생 시 메타데이터는 유지하고 통계만 업데이트
+			if diffErr, ok := err.(*DiffTooLargeError); ok {
+				fmt.Printf("Warning: %s - %s\n", fileDiffs[idx].Path, diffErr.Reason)
+			} else {
+				fmt.Printf("Error processing change for %s: %v\n", fileDiffs[idx].Path, err)
+			}
+			// 통계 정보가 있으면 업데이트
+			if fileDiff.Additions > 0 || fileDiff.Deletions > 0 {
+				fileDiffs[idx].Additions = fileDiff.Additions
+				fileDiffs[idx].Deletions = fileDiff.Deletions
+				fileDiffs[idx].IsBinary = fileDiff.IsBinary
+			}
+		} else {
+			// 통계 정보 업데이트
+			fileDiffs[idx].Additions = fileDiff.Additions
+			fileDiffs[idx].Deletions = fileDiff.Deletions
+			fileDiffs[idx].IsBinary = fileDiff.IsBinary
+
+			// validation 통과한 파일만 changes 포함
+			if fileDiff.Changes != nil {
+				fileDiffs[idx].Changes = fileDiff.Changes
+				filesWithChangesCount++
+			}
+		}
+	}
+
+	// 3단계: 통계 계산
+	var stats DiffStats
+	for _, fileDiff := range fileDiffs {
 		stats.FilesChanged++
 		stats.TotalAdditions += fileDiff.Additions
 		stats.TotalDeletions += fileDiff.Deletions
 	}
 
-	// 5개를 초과하는 파일이 있으면 truncated로 표시
-	truncated := len(fileDiffs) > MaxFilesWithChanges
+	// changes가 포함된 파일 수 제한 적용 (이미 2단계에서 처리됨)
+
+	// 10개를 초과하는 파일이 있으면 truncated로 표시
+	truncated := filesWithChangesCount >= MaxFilesWithChanges
 
 	return fileDiffs, stats, truncated, nil
 }
 
-// processChange는 단일 파일 변경을 처리합니다
-func (h *DiffHandler) processChange(change *object.Change, contextLines int) (FileDiff, error) {
+// processChangeWithPatch는 patch를 생성하여 단일 파일 변경을 처리합니다
+// 이 함수는 changes가 필요한 파일에만 사용됩니다
+func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines int) (FileDiff, error) {
 	fileName := GetFileName(change)
 	fileDiff := FileDiff{
 		Path:     fileName,
@@ -441,6 +472,11 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 	// 라인 레벨 변경을 위한 patch 정보 가져오기
 	patch, err := change.Patch()
 	if err != nil {
+		// patch를 가져올 수 없어도 메타데이터는 포함
+		fileDiff.Additions = 0
+		fileDiff.Deletions = 0
+		fileDiff.IsBinary = isBinaryFileByExtension(fileName)
+		fileDiff.Changes = nil
 		return fileDiff, fmt.Errorf("failed to get patch: %w", err)
 	}
 
@@ -448,6 +484,13 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 	patchText := patch.String()
 	patchSize := len([]byte(patchText))
 	if patchSize > MaxPatchSize {
+		// patch가 너무 커도 메타데이터는 포함
+		// patch에서 최소한의 통계 정보는 추출 시도
+		additions, deletions := h.countPatchLines(patch)
+		fileDiff.Additions = additions
+		fileDiff.Deletions = deletions
+		fileDiff.IsBinary = isBinaryFileByExtension(fileName)
+		fileDiff.Changes = nil
 		return fileDiff, &DiffTooLargeError{
 			Reason: fmt.Sprintf("patch for file %s is too large (%d bytes > %d bytes)", fileName, patchSize, MaxPatchSize),
 		}
@@ -484,8 +527,9 @@ func (h *DiffHandler) processChange(change *object.Change, contextLines int) (Fi
 	if contextLines > 0 {
 		lines := SplitLines(patchText)
 
-		// 파일 라인 수 제한 체크
+		// 파일 라인 수 제한 체크 - 너무 많으면 메타데이터만 포함
 		if len(lines) > MaxFileLines {
+			fileDiff.Changes = nil
 			return fileDiff, &DiffTooLargeError{
 				Reason: fmt.Sprintf("file %s has too many lines (%d > %d)", fileName, len(lines), MaxFileLines),
 			}
@@ -1367,6 +1411,20 @@ func isBinaryFileByExtension(fileName string) bool {
 	}
 
 	return binaryExtensions[ext]
+}
+
+// getChangeStatus는 change 객체에서 파일 상태를 추출합니다
+func (h *DiffHandler) getChangeStatus(change *object.Change) FileDiffStatus {
+	switch {
+	case change.From.Name == "" && change.To.Name != "":
+		return FileDiffStatusAdded
+	case change.From.Name != "" && change.To.Name == "":
+		return FileDiffStatusDeleted
+	case change.From.Name != change.To.Name:
+		return FileDiffStatusRenamed
+	default:
+		return FileDiffStatusModified
+	}
 }
 
 // GetFileMetadata는 파일 변경에 대한 메타데이터를 추출합니다
