@@ -1,0 +1,434 @@
+name: Build API Specs Image
+
+on:
+  push:
+    branches: [main]  # 실제 배포 (이미지 푸시)
+    paths:
+      - 'internal/**'
+      - 'specs/**'
+      - 'config/**'
+      - 'config/docker/Dockerfile'
+      - 'config/docker/specs/nginx.conf'
+      - '.github/workflows/build-specs.yml'
+  pull_request:
+    branches: [main]  # 테스트만 (이미지 푸시 안함)
+    paths:
+      - 'internal/**'
+      - 'specs/**'
+
+env:
+  REGION: asia-northeast3
+  REPOSITORY: collabops-git-executor
+  IMAGE: collabops-git-executor-specs
+
+jobs:
+  generate-openapi-specs:
+    name: Generate OpenAPI Specifications
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      pull-requests: 'write'
+    outputs:
+      specs-ready: ${{ steps.generate-specs.outputs.ready }}
+      specs-version: ${{ steps.generate-specs.outputs.version }}
+      specs-changed: ${{ steps.verify-specs.outputs.specs_changed }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Verify OpenAPI prerequisites
+        run: |
+          echo "🔍 Verifying OpenAPI generation prerequisites..."
+
+          # Check required files
+          echo "Checking required files..."
+          [ -f "config/docker/Dockerfile" ] && echo "✓ config/docker/Dockerfile exists" || { echo "✗ config/docker/Dockerfile not found" ; exit 1; }
+          [ -f "config/docker/specs/nginx.conf" ] && echo "✓ config/docker/specs/nginx.conf exists" || { echo "✗ config/docker/specs/nginx.conf not found" ; exit 1; }
+
+          # Check spec generation requirements
+          echo "Checking spec generation requirements..."
+          [ -f "specs/Makefile" ] && echo "✓ specs/Makefile exists" || { echo "✗ specs/Makefile not found" ; exit 1; }
+          [ -f "specs/generate.go" ] && echo "✓ specs/generate.go exists" || { echo "✗ specs/generate.go not found" ; exit 1; }
+          [ -f "go.mod" ] && echo "✓ go.mod exists" || { echo "✗ go.mod not found" ; exit 1; }
+          [ -f "Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.5'  # Updated to match go.mod toolchain
+          check-latest: true
+
+      - name: Install Go dependencies
+        run: |
+          echo "📦 Installing Go dependencies..."
+          make install
+          echo "✅ Dependencies installed successfully"
+
+      - name: Validate Go environment
+        run: |
+          echo "🔍 Validating Go environment..."
+          go version
+          go env GOROOT
+          go env GOPATH
+          echo "✓ Go environment validated"
+
+      - name: Generate OpenAPI specifications
+        id: generate-specs
+        run: |
+          echo "🚀 Generating OpenAPI specs using Go code analysis..."
+
+          # Generate specs using make specs
+          echo "🚀 Running make specs to generate OpenAPI specs..."
+          make specs
+
+          # Verify generated files
+          if [ -f "specs/generated/collabops-git-executor.yaml" ]; then
+            echo "✅ Spec file generated successfully"
+
+            # Show file sizes
+            ls -la specs/generated/
+
+            # Count API endpoints
+            api_count=$(grep -c "^  /" specs/generated/collabops-git-executor.yaml || echo "0")
+            echo "🛣️  API endpoints found: $api_count"
+
+            # Set outputs for next job
+            echo "ready=true" >> $GITHUB_OUTPUT
+            echo "version=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Spec generation failed"
+            exit 1
+          fi
+
+      - name: Compare API specifications
+        id: verify-specs
+        run: |
+          echo "🔍 Comparing API specs with existing..."
+
+          # Check if the spec file exists in git (committed version)
+          if git show HEAD:specs/generated/collabops-git-executor.yaml >/dev/null 2>&1; then
+            echo "📋 Comparing newly generated spec with committed version..."
+
+            # Save the committed version to compare
+            git show HEAD:specs/generated/collabops-git-executor.yaml > specs_committed.yml
+
+            # Compare newly generated spec with committed version
+            if diff specs/generated/collabops-git-executor.yaml specs_committed.yml >/dev/null 2>&1; then
+              echo "✅ No changes detected in API spec"
+              echo "specs_changed=false" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ Changes detected in API spec!"
+              echo "specs_changed=true" >> $GITHUB_OUTPUT
+
+              # Generate detailed analysis of changes for PR comments
+              echo "spec_details<<EOF" >> $GITHUB_OUTPUT
+              echo "## 🔄 Git Executor API 스펙 변경사항 감지" >> $GITHUB_OUTPUT
+              echo "" >> $GITHUB_OUTPUT
+
+              # Get basic stats
+              new_lines=$(wc -l < specs/generated/collabops-git-executor.yaml)
+              committed_lines=$(wc -l < specs_committed.yml)
+              new_endpoints=$(grep -c "^  /" specs/generated/collabops-git-executor.yaml || echo "0")
+              committed_endpoints=$(grep -c "^  /" specs_committed.yml || echo "0")
+
+              echo "### 📊 스펙 통계" >> $GITHUB_OUTPUT
+              echo "- **새로 생성된 스펙**: $new_lines lines, $new_endpoints endpoints" >> $GITHUB_OUTPUT
+              echo "- **커밋된 스펙**: $committed_lines lines, $committed_endpoints endpoints" >> $GITHUB_OUTPUT
+              echo "" >> $GITHUB_OUTPUT
+
+              # Analyze differences with safe diff output
+              echo "### 🔍 주요 변경사항" >> $GITHUB_OUTPUT
+              echo "" >> $GITHUB_OUTPUT
+
+              # Get safe diff output (escape special characters)
+              diff specs/generated/collabops-git-executor.yaml specs_committed.yml > spec_diff.txt || true
+
+              # Count different types of changes
+              schema_count=$(grep -c "schemas/" spec_diff.txt || echo "0")
+              endpoint_count=$(grep -c "^[<>].*  /" spec_diff.txt || echo "0")
+              component_count=$(grep -c "components:" spec_diff.txt || echo "0")
+
+              if [ "$schema_count" -gt 0 ]; then
+                echo "- **🔧 스키마 변경**: $schema_count 건" >> $GITHUB_OUTPUT
+              fi
+
+              if [ "$endpoint_count" -gt 0 ]; then
+                echo "- **🛣️ 엔드포인트 변경**: $endpoint_count 건" >> $GITHUB_OUTPUT
+              fi
+
+              if [ "$component_count" -gt 0 ]; then
+                echo "- **⚙️ 컴포넌트 변경**: $component_count 건" >> $GITHUB_OUTPUT
+              fi
+
+              # Show a sample of key changes (safe text only)
+              changed_lines=$(wc -l < spec_diff.txt)
+              echo "**📊 총 변경사항**: $changed_lines 줄 수정" >> $GITHUB_OUTPUT
+
+              # Cleanup diff file
+              rm -f spec_diff.txt
+
+              echo "EOF" >> $GITHUB_OUTPUT
+            fi
+
+            # Cleanup temporary file
+            rm -f specs_committed.yml
+          else
+            echo "📝 No existing API spec found in git - this is the first generation"
+            echo "specs_changed=true" >> $GITHUB_OUTPUT
+            echo "spec_details<<EOF" >> $GITHUB_OUTPUT
+            echo "## 📝 새로운 Git Executor API 스펙 생성" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "이 프로젝트의 첫 번째 API 스펙 생성입니다." >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload OpenAPI specifications
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-specifications-${{ steps.generate-specs.outputs.version }}
+          path: |
+            specs/generated/collabops-git-executor.yaml
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Fail workflow if specs are out of sync
+        if: steps.verify-specs.outputs.specs_changed == 'true'
+        run: |
+          echo "❌ Git Executor API 스펙이 최신 상태가 아닙니다!"
+          echo "Go API 코드 변경사항이 있지만 OpenAPI 스펙이 업데이트되지 않았습니다."
+          echo ""
+          echo "🔧 해결 방법:"
+          echo "1. 로컬에서 API 스펙 생성: make specs"
+          echo "2. 변경사항 커밋: git add specs/generated/ && git commit -m '📋 Update Git Executor OpenAPI specs'"
+          echo "3. 푸시: git push"
+          echo ""
+          echo "이 워크플로우는 스펙이 동기화될 때까지 실패합니다."
+          exit 1
+
+      - name: Warn about specs update (main branch)
+        if: steps.verify-specs.outputs.specs_changed == 'true' && github.event_name == 'push'
+        run: |
+          echo "📋 ======================================================"
+          echo "🔄 Git Executor API 스펙 변경사항이 감지되었습니다"
+          echo ""
+          echo "📋 변경사항 세부정보:"
+          echo "Go API의 엔드포인트, 스키마, 또는 핸들러가 변경되었습니다."
+          echo ""
+          echo "🚀 Go code analysis 자동 처리 중:"
+          echo "  ✅ API 스펙이 자동으로 업데이트됩니다"
+          echo "  ✅ 오프라인 스펙 생성으로 빠른 CI 실행"
+          echo "  ✅ 서버 실행 없이 Go AST 분석 방식"
+          echo ""
+          echo "💡 스펙이 main 브랜치에 자동으로 업데이트됩니다!"
+          echo "======================================================"
+
+  # main 브랜치에서만 실제 이미지 빌드 & 푸시
+  build-and-push:
+    name: Build & Push Specs Server Image
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: generate-openapi-specs
+    # Note: This job runs regardless of spec changes - specs are always kept in sync
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Download OpenAPI specifications
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi-specifications-${{ needs.generate-openapi-specs.outputs.specs-version }}
+          path: specs/generated/
+
+      - name: Verify image build prerequisites
+        run: |
+          echo "🔍 Verifying Docker image build prerequisites..."
+
+          # Check required secrets (GCP only)
+          echo "Checking required secrets..."
+          [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ] && echo "✓ GCP_WORKLOAD_IDENTITY_PROVIDER is set" || { echo "✗ GCP_WORKLOAD_IDENTITY_PROVIDER is not set" ; exit 1; }
+          [ -n "${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}" ] && echo "✓ GCP_SERVICE_ACCOUNT_SHARED is set" || { echo "✗ GCP_SERVICE_ACCOUNT_SHARED is not set" ; exit 1; }
+          [ -n "${{ secrets.GCP_PROJECT_ID_SHARED }}" ] && echo "✓ GCP_PROJECT_ID_SHARED is set" || { echo "✗ GCP_PROJECT_ID_SHARED is not set" ; exit 1; }
+
+          # Check required files
+          echo "Checking required files..."
+          [ -f "config/docker/Dockerfile" ] && echo "✓ config/docker/Dockerfile exists" || { echo "✗ config/docker/Dockerfile not found" ; exit 1; }
+          [ -f "config/docker/specs/nginx.conf" ] && echo "✓ config/docker/specs/nginx.conf exists" || { echo "✗ config/docker/specs/nginx.conf not found" ; exit 1; }
+
+          # Verify downloaded specs
+          echo "Verifying downloaded OpenAPI specs..."
+          [ -f "specs/generated/collabops-git-executor.yaml" ] && echo "✓ Spec downloaded" || { echo "✗ Spec not found" ; exit 1; }
+
+      - name: Authenticate with Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
+          project_id: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+
+      - name: Verify GCP Configuration
+        id: gcp-verify
+        run: |
+          echo "🔍 Verifying GCP configuration..."
+
+          # Check gcloud auth
+          echo "Checking gcloud authentication..."
+          gcloud auth list
+
+          # Check current project
+          echo "Checking current project..."
+          CURRENT_PROJECT=$(gcloud config get-value project)
+          if [ "$CURRENT_PROJECT" != "${{ secrets.GCP_PROJECT_ID_SHARED }}" ]; then
+            echo "❌ Project mismatch: Current=$CURRENT_PROJECT, Expected=${{ secrets.GCP_PROJECT_ID_SHARED }}"
+            exit 1
+          fi
+          echo "✓ Project correctly set to: $CURRENT_PROJECT"
+
+          # Verify Artifact Registry repository exists
+          echo "Verifying Artifact Registry repository..."
+          if gcloud artifacts repositories list --location=${{ env.REGION }} --filter="name:${{ env.REPOSITORY }}" --format="value(name)" | grep -q "${{ env.REPOSITORY }}"; then
+            echo "✓ Repository ${{ env.REPOSITORY }} exists"
+          else
+            echo "⚠️ Repository ${{ env.REPOSITORY }} will be verified during Docker push"
+          fi
+
+      - name: Verify Service Account Permissions
+        run: |
+          echo "🔍 Verifying service account permissions..."
+
+          # Get current authenticated account
+          CURRENT_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)")
+          echo "Currently authenticated as: $CURRENT_ACCOUNT"
+
+          # Test Artifact Registry access
+          echo "Testing Artifact Registry access..."
+          if gcloud artifacts repositories list --location=${{ env.REGION }} >/dev/null 2>&1; then
+            echo "✓ Can list Artifact Registry repositories"
+          else
+            echo "❌ Cannot list Artifact Registry repositories - check IAM permissions"
+            echo "Required roles: roles/artifactregistry.writer or roles/artifactregistry.admin"
+            exit 1
+          fi
+
+          # Check if specific repository exists or can be accessed
+          if gcloud artifacts repositories describe ${{ env.REPOSITORY }} --location=${{ env.REGION }} >/dev/null 2>&1; then
+            echo "✓ Repository '${{ env.REPOSITORY }}' exists and is accessible"
+          else
+            echo "⚠️ Repository '${{ env.REPOSITORY }}' doesn't exist or is not accessible"
+            echo "Creating repository..."
+            if gcloud artifacts repositories create ${{ env.REPOSITORY }} \
+              --repository-format=docker \
+              --location=${{ env.REGION }} \
+              --description="Docker repository for CollabOps Git Executor"; then
+              echo "✓ Repository created successfully"
+            else
+              echo "❌ Failed to create repository - check IAM permissions"
+              exit 1
+            fi
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          echo "🔐 Configuring Docker for Artifact Registry..."
+
+          # Configure Docker to use gcloud as credential helper for Artifact Registry
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+          echo "✓ Docker authentication configured successfully"
+
+      - name: Build and push specs server image
+        id: docker_build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./config/docker/Dockerfile
+          target: specs
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:latest
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image deployment
+        id: verify-push
+        run: |
+          echo "🔍 Verifying specs server image deployment..."
+
+          # Function to check if image exists in GCP (deploy.yaml pattern)
+          check_image_tag() {
+            local tag=$1
+            local max_attempts=5
+            local attempt=1
+            local wait_time=10
+
+            while [ $attempt -le $max_attempts ]; do
+              echo "Checking tag '$tag' (Attempt $attempt/$max_attempts)..."
+              if gcloud artifacts docker images describe \
+                ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:$tag \
+                >/dev/null 2>&1; then
+                echo "✓ Tag '$tag' exists"
+                return 0
+              fi
+              echo "Tag not found yet, waiting ${wait_time}s..."
+              sleep $wait_time
+              attempt=$((attempt + 1))
+              wait_time=$((wait_time + 5))
+            done
+            echo "❌ Tag '$tag' not found after $max_attempts attempts"
+            return 1
+          }
+
+          # Check all image tags
+          failed=0
+          for tag in "latest" "${{ github.sha }}" "${{ github.ref_name }}"; do
+            if ! check_image_tag "$tag"; then
+              failed=1
+            fi
+          done
+
+          # Final verification
+          if [ $failed -eq 0 ]; then
+            echo "✅ All image tags verified successfully!"
+          else
+            echo "❌ Some image tags were not found"
+            exit 1
+          fi
+
+      - name: Show deployment summary
+        if: success()
+        run: |
+          echo "✨ OpenAPI Specs Server Deployment Summary ✨"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Image Details:"
+          echo "   Type: Static file server (nginx + specs)"
+          echo "   Size: ~80MB (ultra-lightweight)"
+          echo "   Tags: latest, ${{ github.sha }}, ${{ github.ref_name }}"
+          echo ""
+          echo "☁️ GCP Artifact Registry:"
+          echo "   Registry: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}"
+          echo "   Repository: ${{ env.REPOSITORY }}"
+          echo "   Image: ${{ env.IMAGE }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🚀 Service Details:"
+          echo "   • Server: nginx alpine"
+          echo "   • Content: OpenAPI specs"
+          echo "   • Endpoints: /api/schema/, /health"
+          echo "   • Auto-mapping: projects, issues, change-requests"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎉 GCP Artifact Registry deployment completed successfully!"
+

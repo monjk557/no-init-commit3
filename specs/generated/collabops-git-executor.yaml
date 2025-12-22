@@ -6,13 +6,17 @@ info:
 
     ## Features
     - **Repository Management**: Create and initialize new Git repositories
-    - **Single File Operations**: Create, update, and delete individual files
     - **Multi-file Commits**: Atomic operations across multiple files
     - **Branch Management**: Create, update, and delete Git branches
+    - **Tag Management**: Create, list, and delete Git tags
+    - **Tree Operations**: Browse repository directory structure
+    - **Blob Operations**: Retrieve file contents
+    - **Commit Operations**: Get commit history and create commits
+    - **Diff Operations**: Compare commits, branches, and files
     - **Repository State**: Query repository metadata and current state
     - **Merge Operations**: Perform Git merges with conflict detection
     - **Merge Preview**: Non-destructive merge analysis and conflict detection
-    - **Performance Optimization**: Built-in caching, pooling, and resource management
+    - **Overview Operations**: Get comprehensive repository overviews
 
     ## Authentication
     All API endpoints require the following headers:
@@ -60,29 +64,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateRepositoryRequest'
-            examples:
-              basicRepository:
-                summary: Create basic repository with defaults
-                value:
-                  description: "My new repository"
-                  initial_commit: true
-              customRepository:
-                summary: Create repository with custom settings
-                value:
-                  description: "Advanced project repository"
-                  initial_commit: true
-                  default_branch: "develop"
-                  author:
-                    name: "John Doe"
-                    email: "john@example.com"
-                  initial_files:
-                    "README.md": "# My Project\n\nWelcome to my project!"
-                    "src/main.js": "console.log('Hello World');"
-              bareRepository:
-                summary: Create bare repository without initial commit
-                value:
-                  description: "Bare repository for deployment"
-                  initial_commit: false
       responses:
         '201':
           description: Repository created successfully
@@ -92,223 +73,117 @@ paths:
                 $ref: '#/components/schemas/CreateRepositoryResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '409':
           description: Repository already exists
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-              example:
-                status: error
-                error:
-                  code: "repository_exists"
-                  message: "Repository already exists at this location"
-                meta:
-                  request_id: "req_1234567890"
-                  timestamp: "2023-01-01T12:00:00Z"
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /repos/{owner}/{repo}/files/{path}:
-    put:
-      summary: Create or update a file
-      description: |
-        Creates a new file or updates an existing file in the repository.
-        The operation is atomic and creates a single commit.
-      operationId: createOrUpdateFile
-      tags:
-        - File Operations
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-        - $ref: '#/components/parameters/FilePath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/FileOperationRequest'
-            examples:
-              createFile:
-                summary: Create a new file
-                value:
-                  content: "SGVsbG8gV29ybGQ="
-                  commit_message: "Add hello.txt"
-                  branch: "main"
-                  author:
-                    name: "John Doe"
-                    email: "john@example.com"
-              updateFile:
-                summary: Update existing file
-                value:
-                  content: "VXBkYXRlZCBjb250ZW50"
-                  commit_message: "Update hello.txt with new content"
-                  branch: "main"
-                  author:
-                    name: "John Doe"
-                    email: "john@example.com"
-      responses:
-        '200':
-          description: File created or updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FileOperationResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
-    delete:
-      summary: Delete a file
-      description: |
-        Deletes a file from the repository. The operation is atomic and creates a single commit.
-      operationId: deleteFile
-      tags:
-        - File Operations
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-        - $ref: '#/components/parameters/FilePath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/FileDeleteRequest'
-      responses:
-        '200':
-          description: File deleted successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FileOperationResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
-  /repos/{owner}/{repo}/commits:
+  /repos/{owner}/{repo}/state:
     get:
-      summary: Get commit history
+      summary: Get repository state
       description: |
-        Retrieves the commit history for a repository with pagination support.
-        Returns commits in reverse chronological order (newest first).
-      operationId: getCommitHistory
+        Returns comprehensive information about the repository's current state including metadata, HEAD information, and references.
+      operationId: getRepositoryState
       tags:
         - Repository State
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
-        - name: ref
-          in: query
-          description: Branch name, tag, or commit SHA to start from
-          schema:
-            type: string
-            default: "HEAD"
-            example: "main"
-        - name: limit
-          in: query
-          description: Maximum number of commits to return
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 30
-            example: 30
-        - name: skip
-          in: query
-          description: Number of commits to skip (for pagination)
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-            example: 0
       responses:
         '200':
-          description: Commit history retrieved successfully
+          description: Repository state retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CommitHistoryResponse'
+                $ref: '#/components/schemas/RepositoryStateData'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
-    post:
-      summary: Create multi-file commit
+  /repos/{owner}/{repo}/branches/validate/{name}:
+    get:
+      summary: Validate branch name availability
       description: |
-        Creates a single commit with multiple file operations (create, update, delete).
-        All operations are atomic - either all succeed or all fail.
-      operationId: createMultiFileCommit
+        Checks if a branch name is available (not already exists) in the repository.
+      operationId: validateBranchName
       tags:
-        - Multi-file Operations
+        - Branch Operations
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MultiFileCommitRequest'
-            example:
-              base_branch: "main"
-              operations:
-                - operation: "create"
-                  path: "src/main.js"
-                  content: "Y29uc29sZS5sb2coJ0hlbGxvIFdvcmxkJyk7"
-                - operation: "update"
-                  path: "README.md"
-                  content: "IyBVcGRhdGVkIFJlYWRtZQ=="
-                - operation: "delete"
-                  path: "old-file.txt"
-              commit_message: "Restructure project files"
-              author:
-                name: "John Doe"
-                email: "john@example.com"
+        - name: name
+          in: path
+          required: true
+          description: Branch name to validate
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9_/-]+$'
       responses:
         '200':
-          description: Multi-file commit created successfully
+          description: Branch name validation result
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MultiFileCommitResponse'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  is_available:
+                    type: boolean
+                    description: true if branch name is available (does not exist)
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
   /repos/{owner}/{repo}/branches:
+    get:
+      summary: Get branches list
+      description: |
+        Retrieves a list of branches in the repository with pagination support.
+      operationId: getBranches
+      tags:
+        - Branch Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: limit
+          in: query
+          description: Maximum number of branches to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - name: skip
+          in: query
+          description: Number of branches to skip (for pagination)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Branches retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetBranchesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
     post:
       summary: Create a new branch
       description: |
@@ -325,23 +200,17 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateBranchRequest'
-            example:
-              name: "feature/new-feature"
-              source: "main"
-              description: "New feature development branch"
       responses:
         '200':
           description: Branch created successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BranchResponse'
+                $ref: '#/components/schemas/CreateBranchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           description: Branch already exists
           content:
@@ -355,14 +224,20 @@ paths:
     patch:
       summary: Update a branch
       description: |
-        Updates a branch to point to a different commit. Supports both fast-forward and forced updates.
+        Updates a branch to point to a different commit or renames the branch.
+        Either 'target' (for commit update) or 'new_name' (for rename) must be provided, but not both.
       operationId: updateBranch
       tags:
         - Branch Operations
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
-        - $ref: '#/components/parameters/BranchName'
+        - name: branch
+          in: path
+          required: true
+          description: Branch name
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -375,58 +250,185 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BranchResponse'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/UpdateBranchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          description: Update would not be fast-forward and force=false
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/InternalError'
-
     delete:
       summary: Delete a branch
       description: |
-        Deletes a Git branch. Protected branches and the current HEAD cannot be deleted unless forced.
+        Deletes a Git branch from the repository.
       operationId: deleteBranch
       tags:
         - Branch Operations
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
-        - $ref: '#/components/parameters/BranchName'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DeleteBranchRequest'
+        - name: branch
+          in: path
+          required: true
+          description: Branch name to delete
+          schema:
+            type: string
       responses:
         '200':
           description: Branch deleted successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BranchResponse'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      branch_name:
+                        type: string
+                      commit_hash:
+                        type: string
+                      operation:
+                        type: string
+                        example: "delete"
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/tree:
+    get:
+      summary: Get tree structure
+      description: |
+        Retrieves the directory structure (tree) of the repository at a specific reference and path.
+      operationId: getTree
+      tags:
+        - Tree Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          description: Branch name, tag, or commit SHA
+          schema:
+            type: string
+            default: "HEAD"
+        - name: path
+          in: query
+          description: Directory path within the repository
+          schema:
+            type: string
+        - name: recursive
+          in: query
+          description: Whether to recursively get all subdirectories
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Tree structure retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeEntriesRecursiveResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/commits:
+    get:
+      summary: Get commit history
+      description: |
+        Retrieves the commit history for a repository with pagination support.
+        Returns commits in reverse chronological order (newest first).
+      operationId: getCommits
+      tags:
+        - Commit Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          description: Branch name, tag, or commit SHA to start from
+          schema:
+            type: string
+            default: "HEAD"
+        - name: limit
+          in: query
+          description: Maximum number of commits to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - name: skip
+          in: query
+          description: Number of commits to skip (for pagination)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          description: Sort option - "date" for date-grouped commits, empty for default
+          schema:
+            type: string
+            enum: ["date", ""]
+      responses:
+        '200':
+          description: Commit history retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      summary: Create multi-file commit
+      description: |
+        Creates a single commit with multiple file operations (create, update, delete, move).
+        All operations are atomic - either all succeed or all fail.
+      operationId: createMultiFileCommit
+      tags:
+        - Commit Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultiFileCommitRequest'
+      responses:
+        '200':
+          description: Multi-file commit created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MultiFileCommitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: Branch is protected or current HEAD
+          description: Conflict detected
           content:
             application/json:
               schema:
@@ -434,89 +436,512 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /repos/{owner}/{repo}/state:
+  /repos/{owner}/{repo}/tags:
     get:
-      summary: Get repository state
+      summary: Get tags list
       description: |
-        Returns comprehensive information about the repository's current state including metadata, HEAD information, and working tree status.
-      operationId: getRepositoryState
+        Retrieves a list of tags in the repository with pagination support.
+      operationId: getTags
       tags:
-        - Repository State
+        - Tag Operations
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
-      responses:
-        '200':
-          description: Repository state retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RepositoryStateResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
-  /repos/{owner}/{repo}/head:
-    get:
-      summary: Get repository HEAD information
-      description: |
-        Returns detailed information about the current HEAD reference and its associated commit.
-      operationId: getRepositoryHead
-      tags:
-        - Repository State
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-      responses:
-        '200':
-          description: HEAD information retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HeadInfoResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
-  /repos/{owner}/{repo}/references:
-    get:
-      summary: Get repository references
-      description: |
-        Returns all branches and tags in the repository with their commit information.
-      operationId: getRepositoryReferences
-      tags:
-        - Repository State
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-        - name: type
+        - name: limit
           in: query
-          description: Filter references by type
+          description: Maximum number of tags to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - name: skip
+          in: query
+          description: Number of tags to skip (for pagination)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Tags retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      summary: Create a tag
+      description: |
+        Creates a new Git tag (lightweight or annotated) pointing to a specific commit.
+      operationId: createTag
+      tags:
+        - Tag Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTagRequest'
+      responses:
+        '200':
+          description: Tag created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tag:
+                    $ref: '#/components/schemas/Tag'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/tags/{tag}:
+    delete:
+      summary: Delete a tag
+      description: |
+        Deletes a Git tag from the repository.
+      operationId: deleteTag
+      tags:
+        - Tag Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: tag
+          in: path
+          required: true
+          description: Tag name to delete
           schema:
             type: string
-            enum: [branches, tags, all]
-            default: all
       responses:
         '200':
-          description: References retrieved successfully
+          description: Tag deleted successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReferencesResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tag:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/blob:
+    get:
+      summary: Get blob content
+      description: |
+        Retrieves the content of a file (blob) from the repository at a specific reference and path.
+      operationId: getBlob
+      tags:
+        - Blob Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: path
+          in: query
+          required: true
+          description: File path within the repository
+          schema:
+            type: string
+        - name: ref
+          in: query
+          description: Branch name, tag, or commit SHA
+          schema:
+            type: string
+            default: "HEAD"
+      responses:
+        '200':
+          description: Blob content retrieved successfully
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            text/plain:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: File too large to display
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/diff/commits/{base}/{head}:
+    get:
+      summary: Get commit diff
+      description: |
+        Calculates the diff between two commits.
+      operationId: getCommitDiff
+      tags:
+        - Diff Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: base
+          in: path
+          required: true
+          description: Base commit SHA or reference
+          schema:
+            type: string
+        - name: head
+          in: path
+          required: true
+          description: Head commit SHA or reference
+          schema:
+            type: string
+        - name: context
+          in: query
+          description: Number of context lines around changes
+          schema:
+            type: integer
+            minimum: 0
+            default: 3
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            minimum: 1
+        - name: page_size
+          in: query
+          description: Number of files per page
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Commit diff retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: Diff too large to display
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/diff/branches/{base}/{head}:
+    get:
+      summary: Get branch diff
+      description: |
+        Calculates the diff between two branches, including commit statistics.
+      operationId: getBranchDiff
+      tags:
+        - Diff Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: base
+          in: path
+          required: true
+          description: Base branch name
+          schema:
+            type: string
+        - name: head
+          in: path
+          required: true
+          description: Head branch name
+          schema:
+            type: string
+        - name: context
+          in: query
+          description: Number of context lines around changes
+          schema:
+            type: integer
+            minimum: 0
+            default: 3
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            minimum: 1
+        - name: page_size
+          in: query
+          description: Number of files per page
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Branch diff retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: Diff too large to display
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/diff/file:
+    get:
+      summary: Get file diff
+      description: |
+        Calculates the diff for a specific file between two references.
+      operationId: getFileDiff
+      tags:
+        - Diff Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: path
+          in: query
+          required: true
+          description: File path within the repository
+          schema:
+            type: string
+        - name: base
+          in: query
+          required: true
+          description: Base commit SHA or reference
+          schema:
+            type: string
+        - name: head
+          in: query
+          required: true
+          description: Head commit SHA or reference
+          schema:
+            type: string
+        - name: context
+          in: query
+          description: Number of context lines around changes
+          schema:
+            type: integer
+            minimum: 0
+            default: 3
+        - name: full_context
+          in: query
+          description: Include full file context
+          schema:
+            type: boolean
+            default: false
+        - name: format
+          in: query
+          description: Diff format
+          schema:
+            type: string
+            enum: ["unified", "context", "normal"]
+            default: "unified"
+      responses:
+        '200':
+          description: File diff retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: Diff too large to display
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/diff/commit/{sha}:
+    get:
+      summary: Get single commit diff
+      description: |
+        Calculates the diff for a single commit (changes introduced by that commit).
+      operationId: getSingleCommitDiff
+      tags:
+        - Diff Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: sha
+          in: path
+          required: true
+          description: Commit SHA
+          schema:
+            type: string
+        - name: context
+          in: query
+          description: Number of context lines around changes
+          schema:
+            type: integer
+            minimum: 0
+            default: 3
+      responses:
+        '200':
+          description: Single commit diff retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleCommitDiffResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: Diff too large to display
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/diff/patch/{base}/{head}:
+    get:
+      summary: Get patch file
+      description: |
+        Generates a patch file (unified diff format) between two references.
+      operationId: getPatch
+      tags:
+        - Diff Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: base
+          in: path
+          required: true
+          description: Base commit SHA or reference
+          schema:
+            type: string
+        - name: head
+          in: path
+          required: true
+          description: Head commit SHA or reference
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Patch file generated successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+          headers:
+            Content-Disposition:
+              description: Attachment filename
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/merges/preview:
+    get:
+      summary: Preview a merge operation
+      description: |
+        Performs a non-destructive merge analysis to preview conflicts, changes, and recommendations before performing the actual merge.
+      operationId: previewMerge
+      tags:
+        - Merge Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: source_ref
+          in: query
+          required: true
+          description: Source branch or commit to merge FROM
+          schema:
+            type: string
+        - name: target_ref
+          in: query
+          required: true
+          description: Target branch or commit to merge INTO
+          schema:
+            type: string
+        - name: strategy
+          in: query
+          description: Merge strategy
+          schema:
+            type: string
+            enum: [recursive, resolve, ort, ours, theirs, subtree]
+            default: recursive
+        - name: include_changes
+          in: query
+          description: Include detailed file changes
+          schema:
+            type: boolean
+            default: false
+        - name: include_content
+          in: query
+          description: Include file content previews
+          schema:
+            type: boolean
+            default: false
+        - name: max_file_size
+          in: query
+          description: Max file size for content preview (bytes)
+          schema:
+            type: integer
+            default: 1048576
+        - name: max_files
+          in: query
+          description: Max files to analyze
+          schema:
+            type: integer
+            default: 1000
+        - name: compare_strategy
+          in: query
+          description: Comparison strategy
+          schema:
+            type: string
+            enum: [tree, diff, full]
+            default: tree
+      responses:
+        '200':
+          description: Merge preview generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePreviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -539,15 +964,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/MergeRequest'
-            example:
-              source_branch: "feature/new-feature"
-              target_branch: "main"
-              commit_message: "Merge feature/new-feature into main"
-              author:
-                name: "John Doe"
-                email: "john@example.com"
-              fast_forward: false
-              force: false
       responses:
         '200':
           description: Merge completed successfully
@@ -557,10 +973,6 @@ paths:
                 $ref: '#/components/schemas/MergeResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -568,59 +980,206 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MergeConflictResponse'
+                $ref: '#/components/schemas/MergeResponse'
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /repos/{owner}/{repo}/merges/preview:
+  /repos/{owner}/{repo}/overview:
     get:
-      summary: Preview a merge operation
+      summary: Get repository overview
       description: |
-        Performs a non-destructive merge analysis to preview conflicts, changes, and recommendations before performing the actual merge.
-      operationId: previewMerge
+        Returns comprehensive repository overview including tree, latest commits, branches, tags, and metadata.
+      operationId: getRepositoryOverview
       tags:
-        - Merge Operations
+        - Overview Operations
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
-        - name: source
+        - name: ref
           in: query
-          required: true
-          description: Source branch or commit for the merge
+          description: Branch name, tag, or commit SHA
           schema:
             type: string
-        - name: target
+            default: "HEAD"
+        - name: path
           in: query
-          required: true
-          description: Target branch for the merge
+          description: Directory path within the repository
           schema:
             type: string
-        - name: strategy
+        - name: include_languages
           in: query
-          description: Analysis strategy for the preview
-          schema:
-            type: string
-            enum: [tree, diff, full]
-            default: tree
-        - name: include_content
-          in: query
-          description: Include file content in the preview
+          description: Include language distribution statistics
           schema:
             type: boolean
             default: false
       responses:
         '200':
-          description: Merge preview generated successfully
+          description: Repository overview retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MergePreviewResponse'
+                $ref: '#/components/schemas/RepositoryOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/overview/tree:
+    get:
+      summary: Get tree overview
+      description: |
+        Returns tree structure with commit information and branches.
+      operationId: getTreeOverview
+      tags:
+        - Overview Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          description: Branch name, tag, or commit SHA
+          schema:
+            type: string
+            default: "HEAD"
+        - name: path
+          in: query
+          description: Directory path within the repository
+          schema:
+            type: string
+        - name: include_all_commits
+          in: query
+          description: Include all commits (up to 1000)
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Tree overview retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeOverviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/overview/tree/commits:
+    get:
+      summary: Get tree with commit overview
+      description: |
+        Returns tree structure with commit information for each entry.
+      operationId: getTreeWithCommitOverview
+      tags:
+        - Overview Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          description: Branch name, tag, or commit SHA
+          schema:
+            type: string
+            default: "HEAD"
+        - name: path
+          in: query
+          description: Directory path within the repository
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tree with commit overview retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeWithCommitOverviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/overview/blob:
+    get:
+      summary: Get blob overview
+      description: |
+        Returns file content with tree structure, branches, and commit information.
+      operationId: getBlobOverview
+      tags:
+        - Overview Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: path
+          in: query
+          required: true
+          description: File path within the repository
+          schema:
+            type: string
+        - name: ref
+          in: query
+          description: Branch name, tag, or commit SHA
+          schema:
+            type: string
+            default: "HEAD"
+        - name: include_all_commits
+          in: query
+          description: Include all commits (up to 1000)
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Blob overview retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlobOverviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /repos/{owner}/{repo}/overview/branches:
+    get:
+      summary: Get branches overview
+      description: |
+        Returns branches categorized by default, yours, active, and stale with detailed information.
+      operationId: getBranchesOverview
+      tags:
+        - Overview Operations
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          description: Branch name, tag, or commit SHA
+          schema:
+            type: string
+            default: "HEAD"
+        - name: email
+          in: query
+          required: true
+          description: User email to identify "yours" branches
+          schema:
+            type: string
+            format: email
+      responses:
+        '200':
+          description: Branches overview retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchesOverviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -655,44 +1214,22 @@ components:
         pattern: '^[a-zA-Z0-9_.-]+$'
         example: "testrepo"
 
-    FilePath:
-      name: path
-      in: path
-      required: true
-      description: File path within the repository
-      schema:
-        type: string
-        example: "src/main.js"
-
-    BranchName:
-      name: branch
-      in: path
-      required: true
-      description: Branch name
-      schema:
-        type: string
-        pattern: '^[a-zA-Z0-9/_.-]+$'
-        example: "feature/new-feature"
-
   schemas:
     CreateRepositoryRequest:
       type: object
       properties:
-        description:
-          type: string
-          maxLength: 500
-          description: Optional description for the repository
-          example: "My awesome project repository"
+        private:
+          type: boolean
+          description: Whether the repository is private
         initial_commit:
           type: boolean
           default: true
-          description: Whether to create an initial commit with default files
+          description: Whether to create an initial commit
         default_branch:
           type: string
           pattern: '^[a-zA-Z0-9/_.-]+$'
           default: "main"
           description: Name of the default branch
-          example: "main"
         author:
           $ref: '#/components/schemas/CommitAuthor'
           description: Author information for the initial commit
@@ -701,237 +1238,1302 @@ components:
           additionalProperties:
             type: string
           description: Map of file paths to their content for the initial commit
-          example:
-            "README.md": "# My Project\n\nWelcome to my project!"
-            "src/main.js": "console.log('Hello World');"
         metadata:
           type: object
           additionalProperties: true
           description: Additional metadata for the repository
 
     CreateRepositoryResponse:
-      allOf:
-        - type: object
-          required:
-            - success
-            - repository
-            - owner
-            - name
-            - created_at
-          properties:
-            success:
-              type: boolean
-              example: true
-              description: Whether the operation was successful
-            repository:
-              type: string
-              description: Full repository identifier
-              example: "myowner/myrepo"
-            owner:
-              type: string
-              description: Repository owner
-              example: "myowner"
-            name:
-              type: string
-              description: Repository name
-              example: "myrepo"
-            path:
-              type: string
-              description: Server-side path to the repository
-              example: "/var/lib/git/repos/myowner/myrepo.git"
-            description:
-              type: string
-              description: Repository description
-              example: "My awesome project"
-            default_branch:
-              type: string
-              description: Default branch name
-              example: "main"
-            initial_commit:
-              type: string
-              description: SHA of the initial commit (if created)
-              example: "a1b2c3d4e5f6789012345678901234567890abcd"
-            created_at:
-              type: string
-              format: date-time
-              description: Repository creation timestamp
-              example: "2023-01-01T12:00:00Z"
-            metadata:
-              type: object
-              additionalProperties: true
-              description: Additional repository metadata
-
-    FileOperationRequest:
       type: object
       required:
-        - content
-        - commit_message
-        - branch
+        - success
+        - repository
+        - owner
+        - name
+        - created_at
       properties:
-        content:
+        success:
+          type: boolean
+        repository:
           type: string
-          format: base64
-          description: Base64-encoded file content
-          example: "SGVsbG8gV29ybGQ="
-        commit_message:
+          description: Full repository identifier
+          example: "myowner/myrepo"
+        owner:
           type: string
-          maxLength: 1000
-          description: Commit message for the operation
-          example: "Add new feature file"
-        branch:
+        name:
           type: string
-          description: Target branch for the commit
-          example: "main"
-        author:
-          $ref: '#/components/schemas/CommitAuthor'
-        committer:
-          $ref: '#/components/schemas/CommitAuthor'
-
-    FileDeleteRequest:
-      type: object
-      required:
-        - commit_message
-        - branch
-      properties:
-        commit_message:
-          type: string
-          maxLength: 1000
-          description: Commit message for the deletion
-          example: "Remove deprecated file"
-        branch:
-          type: string
-          description: Target branch for the commit
-          example: "main"
-        author:
-          $ref: '#/components/schemas/CommitAuthor'
-        committer:
-          $ref: '#/components/schemas/CommitAuthor'
-
-    MultiFileCommitRequest:
-      type: object
-      required:
-        - base_branch
-        - operations
-        - commit_message
-      properties:
-        base_branch:
-          type: string
-          description: Base branch for the multi-file operation
-          example: "main"
-        operations:
-          type: array
-          items:
-            $ref: '#/components/schemas/FileOperation'
-          minItems: 1
-          maxItems: 100
-        commit_message:
-          type: string
-          maxLength: 1000
-          description: Commit message for all operations
-          example: "Restructure project files"
-        author:
-          $ref: '#/components/schemas/CommitAuthor'
-        committer:
-          $ref: '#/components/schemas/CommitAuthor'
-        options:
-          $ref: '#/components/schemas/CommitOptions'
-
-    FileOperation:
-      type: object
-      required:
-        - operation
-        - path
-      properties:
-        operation:
-          type: string
-          enum: [create, update, delete]
-          description: Type of operation to perform
         path:
           type: string
-          description: File path for the operation
-          example: "src/components/Button.tsx"
-        content:
+          description: Server-side path to the repository
+        default_branch:
           type: string
-          format: base64
-          description: Base64-encoded content (required for create/update)
-        mode:
+        initial_commit:
           type: string
-          enum: ["100644", "100755", "120000"]
-          default: "100644"
-          description: File mode (regular, executable, symlink)
+          description: SHA of the initial commit (if created)
+        created_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+
+    RepositoryStateData:
+      type: object
+      required:
+        - success
+        - repository_name
+        - owner
+      properties:
+        success:
+          type: boolean
+        repository_name:
+          type: string
+        owner:
+          type: string
+        head:
+          $ref: '#/components/schemas/HeadInfo'
+        references:
+          $ref: '#/components/schemas/References'
+        repository_info:
+          $ref: '#/components/schemas/RepositoryInfo'
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          $ref: '#/components/schemas/Details'
+
+    HeadInfo:
+      type: object
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+        target:
+          type: string
+        commit_sha:
+          type: string
+        commit_info:
+          $ref: '#/components/schemas/CommitInfo'
+        is_branch:
+          type: boolean
+        reference:
+          type: string
+        commit:
+          $ref: '#/components/schemas/CommitInfo'
+        is_detached:
+          type: boolean
+
+    References:
+      type: object
+      properties:
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReferenceInfo'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReferenceInfo'
+        count:
+          $ref: '#/components/schemas/ReferenceCount'
+
+    ReferenceInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        full_name:
+          type: string
+        commit_sha:
+          type: string
+        is_head:
+          type: boolean
+        is_protected:
+          type: boolean
+        last_modified:
+          type: string
+        commit:
+          $ref: '#/components/schemas/CommitInfo'
+
+    ReferenceCount:
+      type: object
+      properties:
+        branches:
+          type: integer
+        tags:
+          type: integer
+        remotes:
+          type: integer
+        total:
+          type: integer
+
+    RepositoryInfo:
+      type: object
+      properties:
+        path:
+          type: string
+        default_branch:
+          type: string
+        size:
+          type: integer
+        branch_count:
+          type: integer
+        tag_count:
+          type: integer
+        commit_count:
+          type: integer
+        is_bare:
+          type: boolean
+        has_worktree:
+          type: boolean
+        git_directory:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_modified:
+          type: string
+          format: date-time
+
+    Details:
+      type: object
+      properties:
+        request_path:
+          type: string
+        method:
+          type: string
+        includes:
+          type: object
+          additionalProperties:
+            type: boolean
+        request_type:
+          type: string
 
     CreateBranchRequest:
       type: object
       required:
         - name
-        - source
       properties:
         name:
           type: string
-          pattern: '^[a-zA-Z0-9/_.-]+$'
-          description: Name for the new branch
-          example: "feature/new-feature"
+          pattern: '^[a-zA-Z0-9_/-]+$'
         source:
           type: string
-          description: Source branch or commit SHA
-          example: "main"
-        description:
+        source_branch:
           type: string
-          maxLength: 500
-          description: Optional description for the branch
+        force:
+          type: boolean
+          default: false
+        checkout:
+          type: boolean
+          default: false
+        author_name:
+          type: string
+        author_email:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    CreateBranchResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/CreateBranchData'
+
+    CreateBranchData:
+      type: object
+      properties:
+        branch_name:
+          type: string
+        commit_sha:
+          type: string
+        source:
+          type: string
+        ref_path:
+          type: string
+        is_new_branch:
+          type: boolean
+        message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        details:
+          $ref: '#/components/schemas/CreateBranchDetails'
+
+    CreateBranchDetails:
+      type: object
+      properties:
+        checkout:
+          type: boolean
+        force_used:
+          type: boolean
+        author:
+          type: string
 
     UpdateBranchRequest:
       type: object
-      required:
-        - target
       properties:
         target:
           type: string
-          description: Target commit SHA or branch name
-          example: "feature/new-feature"
+          description: Commit SHA or branch name to point to (for commit update)
+        new_name:
+          type: string
+          description: New branch name (for rename operation)
         force:
           type: boolean
           default: false
-          description: Force update even if not fast-forward
+        message:
+          type: string
 
-    DeleteBranchRequest:
+    UpdateBranchResponse:
       type: object
       properties:
-        force:
+        branch_name:
+          type: string
+        commit_hash:
+          type: string
+        previous_hash:
+          type: string
+        operation:
+          type: string
+        fast_forward:
           type: boolean
-          default: false
-          description: Force deletion of protected branches
+        forced:
+          type: boolean
+        old_branch_name:
+          type: string
+        new_branch_name:
+          type: string
+        ref_path:
+          type: string
+        head_updated:
+          type: boolean
 
-    MergeRequest:
+    GetBranchesResponse:
       type: object
       required:
-        - source_branch
-        - target_branch
+        - success
       properties:
-        source_branch:
+        success:
+          type: boolean
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchInfo'
+        pagination:
+          $ref: '#/components/schemas/PaginationInfo'
+
+    BranchInfo:
+      type: object
+      properties:
+        name:
           type: string
-          description: Source branch to merge from
-          example: "feature/new-feature"
-        target_branch:
+        commit_sha:
           type: string
-          description: Target branch to merge into
-          example: "main"
-        commit_message:
+        ref_path:
           type: string
-          maxLength: 1000
-          description: Custom merge commit message
+        is_head:
+          type: boolean
+        last_commit:
+          $ref: '#/components/schemas/CommitInfo'
+        date:
+          type: string
+          format: date-time
+
+    TreeEntriesRecursiveResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/TreeEntry'
+
+    TreeEntry:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [tree, blob, commit]
+        name:
+          type: string
+        path:
+          type: string
+
+    CommitsResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        results:
+          oneOf:
+            - type: array
+              items:
+                $ref: '#/components/schemas/Commit'
+            - type: array
+              items:
+                $ref: '#/components/schemas/CommitsByDate'
+        pagination:
+          $ref: '#/components/schemas/PaginationInfo'
+
+    CommitsByDate:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommitMetadata'
+
+    CommitMetadata:
+      type: object
+      properties:
+        sha:
+          type: string
+        author:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+        message:
+          type: string
+        parents:
+          type: array
+          items:
+            type: string
+
+    Commit:
+      type: object
+      properties:
+        sha:
+          type: string
         author:
           $ref: '#/components/schemas/CommitAuthor'
         committer:
           $ref: '#/components/schemas/CommitAuthor'
-        fast_forward:
+        message:
+          type: string
+        parent_hashes:
+          type: array
+          items:
+            type: string
+        tree_hash:
+          type: string
+
+    MultiFileCommitRequest:
+      type: object
+      required:
+        - message
+        - operations
+      properties:
+        message:
+          type: string
+        branch:
+          type: string
+        author:
+          $ref: '#/components/schemas/CommitAuthor'
+        committer:
+          $ref: '#/components/schemas/CommitAuthor'
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/MultiFileOperation'
+          minItems: 1
+        options:
+          $ref: '#/components/schemas/CommitOptions'
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    MultiFileOperation:
+      type: object
+      required:
+        - path
+        - operation
+      properties:
+        path:
+          type: string
+        operation:
+          type: string
+          enum: [create, update, delete, move]
+        content:
+          type: string
+        encoding:
+          type: string
+          default: "utf-8"
+        mode:
+          type: string
+        original_path:
+          type: string
+          description: Required for move operation
+
+    CommitOptions:
+      type: object
+      properties:
+        validate_only:
+          type: boolean
+        allow_partial_commit:
+          type: boolean
+        timeout:
+          type: string
+          format: duration
+        dry_run:
+          type: boolean
+
+    MultiFileCommitResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        commit_sha:
+          type: string
+        transaction_id:
+          type: string
+        message:
+          type: string
+        total_operations:
+          type: integer
+        successful_operations:
+          type: integer
+        failed_operations:
+          type: integer
+        operation_results:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationResult'
+        validation_only:
+          type: boolean
+        duration_ms:
+          type: integer
+        details:
+          type: object
+          additionalProperties: true
+
+    OperationResult:
+      type: object
+      properties:
+        path:
+          type: string
+        operation:
+          type: string
+        success:
+          type: boolean
+        error:
+          type: string
+
+    TagsResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+        pagination:
+          $ref: '#/components/schemas/PaginationInfo'
+
+    Tag:
+      type: object
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+        is_annotated:
+          type: boolean
+        message:
+          type: string
+        tagger:
+          $ref: '#/components/schemas/Tagger'
+
+    Tagger:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+          format: date-time
+
+    CreateTagRequest:
+      type: object
+      required:
+        - name
+        - hash
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+        message:
+          type: string
+        tagger:
+          $ref: '#/components/schemas/Tagger'
+        annotated:
           type: boolean
           default: false
-          description: Only allow fast-forward merges
-        force:
+
+    DiffResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        base:
+          type: string
+        head:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileDiff'
+        stats:
+          $ref: '#/components/schemas/DiffStats'
+        commits:
+          $ref: '#/components/schemas/CommitStats'
+        commits_by_date:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommitsByDate'
+        merge_base:
+          type: string
+        truncated:
+          type: boolean
+
+    SingleCommitDiffResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        commit:
+          $ref: '#/components/schemas/CommitMetadata'
+        base:
+          type: string
+        head:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileDiff'
+        stats:
+          $ref: '#/components/schemas/DiffStats'
+
+    FileDiff:
+      type: object
+      properties:
+        path:
+          type: string
+        status:
+          type: string
+          enum: [added, deleted, modified, renamed]
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineChange'
+        is_binary:
+          type: boolean
+        old_path:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    LineChange:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [add, del, context]
+        line:
+          type: integer
+        content:
+          type: string
+
+    DiffStats:
+      type: object
+      properties:
+        total_additions:
+          type: integer
+        total_deletions:
+          type: integer
+        files_changed:
+          type: integer
+
+    CommitStats:
+      type: object
+      properties:
+        ahead:
+          type: integer
+        behind:
+          type: integer
+
+    MergeRequest:
+      type: object
+      required:
+        - source_ref
+        - target_ref
+      properties:
+        source_ref:
+          type: string
+          description: Source branch/commit to merge FROM
+        target_ref:
+          type: string
+          description: Target branch/commit to merge INTO
+        method:
+          type: string
+          enum: [merge, squash, rebase]
+          default: merge
+        strategy:
+          type: string
+          enum: [recursive, resolve, ort, ours, theirs, subtree]
+          default: recursive
+        message:
+          type: string
+        author:
+          $ref: '#/components/schemas/AuthorInfo'
+        committer:
+          $ref: '#/components/schemas/AuthorInfo'
+        force_conflict:
           type: boolean
           default: false
-          description: Force merge even with conflicts
+        dry_run:
+          type: boolean
+          default: false
+        change_request_id:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+
+    MergeResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        merge_commit:
+          $ref: '#/components/schemas/CommitInfo'
+        is_fast_forward:
+          type: boolean
+        has_conflicts:
+          type: boolean
+        conflict_count:
+          type: integer
+        strategy:
+          type: string
+        method:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        conflict_summary:
+          $ref: '#/components/schemas/MergeAnalysisResult'
+
+    MergePreviewResponse:
+      type: object
+      required:
+        - can_merge
+      properties:
+        can_merge:
+          type: boolean
+        is_fast_forward:
+          type: boolean
+        has_conflicts:
+          type: boolean
+        conflict_count:
+          type: integer
+        strategy:
+          type: string
+        recommended_actions:
+          type: array
+          items:
+            type: string
+        merge_base:
+          type: object
+        conflict_summary:
+          $ref: '#/components/schemas/MergeAnalysisResult'
+        changes_summary:
+          $ref: '#/components/schemas/ChangesSummary'
+        files_changed:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileChange'
+        performance_metrics:
+          $ref: '#/components/schemas/PreviewMetrics'
+        warnings:
+          type: array
+          items:
+            type: string
+        commits:
+          $ref: '#/components/schemas/CommitStats'
+        contributors:
+          type: array
+          items:
+            type: string
+        commits_by_date:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommitsByDate'
+        count_summary:
+          $ref: '#/components/schemas/CountSummary'
+
+    MergeAnalysisResult:
+      type: object
+      properties:
+        can_merge:
+          type: boolean
+        has_conflicts:
+          type: boolean
+        is_fast_forward:
+          type: boolean
+        conflict_count:
+          type: integer
+        file_conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileConflict'
+        merge_base:
+          $ref: '#/components/schemas/CommitInfo'
+        source_commit:
+          $ref: '#/components/schemas/CommitInfo'
+        target_commit:
+          $ref: '#/components/schemas/CommitInfo'
+        strategy:
+          type: string
+        auto_resolvable:
+          type: integer
+        severity_breakdown:
+          type: object
+          additionalProperties:
+            type: integer
+        estimated_time:
+          type: string
+          format: duration
+        recommendations:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    FileConflict:
+      type: object
+      properties:
+        file_path:
+          type: string
+        conflict_type:
+          type: string
+          enum: [content, rename, delete, add, mode, submodule, symlink]
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        our_version:
+          $ref: '#/components/schemas/FileVersion'
+        their_version:
+          $ref: '#/components/schemas/FileVersion'
+        base_version:
+          $ref: '#/components/schemas/FileVersion'
+        regions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConflictRegion'
+        auto_resolvable:
+          type: boolean
+        resolution:
+          $ref: '#/components/schemas/ConflictResolution'
+        metadata:
+          type: object
+          additionalProperties: true
+
+    FileVersion:
+      type: object
+      properties:
+        hash:
+          type: string
+        mode:
+          type: integer
+        size:
+          type: integer
+        content:
+          type: string
+        content_hash:
+          type: string
+        is_binary:
+          type: boolean
+        exists:
+          type: boolean
+
+    ConflictRegion:
+      type: object
+      properties:
+        start_line:
+          type: integer
+        end_line:
+          type: integer
+        our_content:
+          type: string
+        their_content:
+          type: string
+        base_content:
+          type: string
+        marker_style:
+          type: string
+
+    ConflictResolution:
+      type: object
+      properties:
+        strategy:
+          type: string
+        content:
+          type: string
+        confidence:
+          type: number
+          format: float
+        auto_applied:
+          type: boolean
+        reasoning:
+          type: string
+        alternatives:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ChangesSummary:
+      type: object
+      properties:
+        total_files:
+          type: integer
+        added_files:
+          type: integer
+        modified_files:
+          type: integer
+        deleted_files:
+          type: integer
+        renamed_files:
+          type: integer
+        lines_added:
+          type: integer
+        lines_deleted:
+          type: integer
+        binary_files:
+          type: integer
+
+    FileChange:
+      type: object
+      properties:
+        path:
+          type: string
+        status:
+          type: string
+          enum: [added, deleted, modified, renamed]
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineChange'
+        is_binary:
+          type: boolean
+        old_path:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        content:
+          $ref: '#/components/schemas/FileContent'
+        conflicts:
+          type: array
+          items:
+            type: string
+        content_analysis:
+          type: object
+          additionalProperties: true
+        potential_conflicts:
+          type: array
+          items:
+            type: string
+
+    FileContent:
+      type: object
+      properties:
+        source_content:
+          type: string
+        target_content:
+          type: string
+        merged_content:
+          type: string
+        encoding:
+          type: string
+        is_truncated:
+          type: boolean
+
+    PreviewMetrics:
+      type: object
+      properties:
+        analysis_time:
+          type: string
+          format: duration
+        conflict_analysis_time:
+          type: string
+          format: duration
+        tree_comparison_time:
+          type: string
+          format: duration
+        files_analyzed:
+          type: integer
+        objects_traversed:
+          type: integer
+        memory_used:
+          type: integer
+
+    CountSummary:
+      type: object
+      properties:
+        commits:
+          type: integer
+        files:
+          type: integer
+        contributors:
+          type: integer
+
+    RepositoryOverviewResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        repository:
+          type: string
+        owner:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        tree:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitTreeEntryWithCommit'
+        latest_commits:
+          $ref: '#/components/schemas/GitCommit'
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitBranch'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitTag'
+        count:
+          $ref: '#/components/schemas/RepositoryCount'
+        readme:
+          type: string
+        language_distribution:
+          $ref: '#/components/schemas/LanguageDistribution'
+
+    TreeOverviewResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        repository:
+          type: string
+        owner:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        tree:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitTreeEntryWithCommit'
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitBranch'
+        latest_commit:
+          $ref: '#/components/schemas/GitCommit'
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitCommit'
+
+    TreeWithCommitOverviewResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        repository:
+          type: string
+        owner:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        tree:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitTreeEntryWithCommit'
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitBranch'
+
+    BlobOverviewResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        content:
+          type: string
+        lines:
+          type: integer
+        size:
+          type: integer
+        tree:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitTreeEntryWithCommit'
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitBranch'
+        latest_commit:
+          $ref: '#/components/schemas/GitCommit'
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitCommit'
+
+    BranchesOverviewResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+        default:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        yours:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        active:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        stale:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        total_count:
+          type: integer
+
+    BranchListItem:
+      type: object
+      properties:
+        name:
+          type: string
+        updated:
+          type: string
+        updated_by:
+          type: string
+        commit_sha:
+          type: string
+        commit_message:
+          type: string
+        is_default:
+          type: boolean
+        behind:
+          type: integer
+        ahead:
+          type: integer
+        change_request:
+          $ref: '#/components/schemas/ChangeRequestInfo'
+        created_by:
+          type: string
+        days_since_last_commit:
+          type: integer
+
+    ChangeRequestInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        state:
+          type: string
+        url:
+          type: string
+
+    GitTreeEntryWithCommit:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [tree, blob, commit]
+        name:
+          type: string
+        path:
+          type: string
+        mode:
+          type: string
+        hash:
+          type: string
+        size:
+          type: integer
+        latest_commit:
+          $ref: '#/components/schemas/GitCommit'
+
+    GitCommit:
+      type: object
+      properties:
+        sha:
+          type: string
+        message:
+          type: string
+        author:
+          $ref: '#/components/schemas/GitAuthor'
+        committer:
+          $ref: '#/components/schemas/GitAuthor'
+        parent_hashes:
+          type: array
+          items:
+            type: string
+        tree_hash:
+          type: string
+
+    GitAuthor:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+          format: date-time
+
+    GitBranch:
+      type: object
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+        is_remote:
+          type: boolean
+        is_current:
+          type: boolean
+
+    GitTag:
+      type: object
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+        is_annotated:
+          type: boolean
+
+    RepositoryCount:
+      type: object
+      properties:
+        commits:
+          type: integer
+        branches:
+          type: integer
+        tags:
+          type: integer
+        remotes:
+          type: integer
+        total:
+          type: integer
+
+    LanguageDistribution:
+      type: object
+      properties:
+        languages:
+          type: array
+          items:
+            $ref: '#/components/schemas/LanguageStats'
+        total_bytes:
+          type: integer
+        total_files:
+          type: integer
+
+    LanguageStats:
+      type: object
+      properties:
+        language:
+          type: string
+        bytes:
+          type: integer
+        percentage:
+          type: number
+          format: float
+        files:
+          type: integer
 
     CommitAuthor:
       type: object
@@ -941,126 +2543,32 @@ components:
       properties:
         name:
           type: string
-          maxLength: 100
-          description: Author name
-          example: "John Doe"
         email:
           type: string
           format: email
-          maxLength: 100
-          description: Author email
-          example: "john@example.com"
-
-    CommitOptions:
-      type: object
-      properties:
-        allow_empty:
-          type: boolean
-          default: false
-          description: Allow commits with no changes
-        verify:
-          type: boolean
-          default: true
-          description: Run pre-commit hooks
-
-    # Response Schemas
-    FileOperationResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                commit_sha:
-                  type: string
-                  description: SHA of the created commit
-                  example: "a1b2c3d4e5f6..."
-                file_path:
-                  type: string
-                  description: Path of the affected file
-                  example: "src/main.js"
-                operation:
-                  type: string
-                  enum: [created, updated, deleted]
-                  description: Operation performed
-                tree_sha:
-                  type: string
-                  description: SHA of the updated tree
-                  example: "f6e5d4c3b2a1..."
-
-    MultiFileCommitResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                commit_sha:
-                  type: string
-                  description: SHA of the created commit
-                operations_count:
-                  type: integer
-                  description: Number of operations performed
-                tree_sha:
-                  type: string
-                  description: SHA of the updated tree
-                results:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/OperationResult'
-
-    OperationResult:
-      type: object
-      properties:
-        path:
+        date:
           type: string
-          description: File path
-        operation:
-          type: string
-          enum: [created, updated, deleted]
-        status:
-          type: string
-          enum: [success, failed]
-        error:
-          type: string
-          description: Error message if operation failed
+          format: date-time
 
-    BranchResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              $ref: '#/components/schemas/BranchInfo'
-
-    BranchInfo:
+    AuthorInfo:
       type: object
       properties:
         name:
           type: string
-          description: Branch name
-          example: "feature/new-feature"
-        commit:
-          $ref: '#/components/schemas/CommitInfo'
-        protected:
-          type: boolean
-          description: Whether the branch is protected
-        is_head:
-          type: boolean
-          description: Whether this is the current HEAD branch
+        email:
+          type: string
+          format: email
+        date:
+          type: string
+          format: date-time
 
     CommitInfo:
       type: object
       properties:
         sha:
           type: string
-          description: Commit SHA
-          example: "a1b2c3d4e5f6..."
         message:
           type: string
-          description: Commit message
         author:
           $ref: '#/components/schemas/AuthorInfo'
         committer:
@@ -1068,371 +2576,38 @@ components:
         created_at:
           type: string
           format: date-time
-          description: Commit timestamp
+        tree_sha:
+          type: string
 
-    CommitHistoryResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                commits:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/CommitInfo'
-                  description: Array of commits in reverse chronological order
-                pagination:
-                  type: object
-                  properties:
-                    limit:
-                      type: integer
-                      description: Maximum number of commits requested
-                      example: 30
-                    skip:
-                      type: integer
-                      description: Number of commits skipped
-                      example: 0
-                    count:
-                      type: integer
-                      description: Number of commits returned
-                      example: 15
-                    has_more:
-                      type: boolean
-                      description: Whether there are more commits available
-                      example: false
-
-    AuthorInfo:
+    PaginationInfo:
       type: object
       properties:
-        name:
-          type: string
-          description: Author name
-        email:
-          type: string
-          description: Author email
-        date:
-          type: string
-          format: date-time
-          description: Author date
-
-    RepositoryStateResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                metadata:
-                  $ref: '#/components/schemas/RepositoryMetadata'
-                head:
-                  $ref: '#/components/schemas/HeadInfo'
-                status:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/FileStatus'
-
-    RepositoryMetadata:
-      type: object
-      properties:
-        is_bare:
-          type: boolean
-          description: Whether repository is bare
-        is_worktree:
-          type: boolean
-          description: Whether repository is a worktree
-        default_branch:
-          type: string
-          description: Default branch name
-        object_count:
+        count:
           type: integer
-          description: Number of objects in repository
-
-    HeadInfo:
-      type: object
-      properties:
-        reference:
+        next:
           type: string
-          description: HEAD reference name
-          example: "refs/heads/main"
-        commit:
-          $ref: '#/components/schemas/CommitInfo'
-        is_detached:
-          type: boolean
-          description: Whether HEAD is detached
-
-    HeadInfoResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              $ref: '#/components/schemas/HeadInfo'
-
-    FileStatus:
-      type: object
-      properties:
-        path:
+          nullable: true
+        previous:
           type: string
-          description: File path
-        status:
-          type: string
-          enum: [modified, added, deleted, renamed, copied]
-          description: File status
-        staged:
-          type: boolean
-          description: Whether file is staged
-
-    ReferencesResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                branches:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/ReferenceInfo'
-                tags:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/ReferenceInfo'
-
-    ReferenceInfo:
-      type: object
-      properties:
-        name:
-          type: string
-          description: Reference name
-        commit_sha:
-          type: string
-          description: Commit SHA
-        commit:
-          $ref: '#/components/schemas/CommitInfo'
-
-    MergeResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                merge_commit_sha:
-                  type: string
-                  description: SHA of merge commit
-                status:
-                  type: string
-                  enum: [merged, fast-forwarded, up-to-date]
-                  description: Merge status
-
-    MergeConflictResponse:
-      allOf:
-        - $ref: '#/components/schemas/ErrorResponse'
-        - type: object
-          properties:
-            error:
-              type: object
-              properties:
-                code:
-                  type: string
-                  example: "merge_conflicts"
-                message:
-                  type: string
-                  example: "Merge conflicts detected"
-                details:
-                  type: object
-                  properties:
-                    conflicts:
-                      type: array
-                      items:
-                        $ref: '#/components/schemas/FileConflict'
-
-    FileConflict:
-      type: object
-      properties:
-        path:
-          type: string
-          description: Conflicted file path
-        type:
-          type: string
-          enum: [content, rename, delete, add, mode]
-          description: Type of conflict
-        severity:
-          type: string
-          enum: [low, medium, high, critical]
-          description: Conflict severity
-        auto_resolvable:
-          type: boolean
-          description: Whether conflict can be auto-resolved
-
-    MergePreviewResponse:
-      allOf:
-        - $ref: '#/components/schemas/SuccessResponse'
-        - type: object
-          properties:
-            data:
-              type: object
-              properties:
-                can_merge:
-                  type: boolean
-                  description: Whether merge is possible
-                has_conflicts:
-                  type: boolean
-                  description: Whether conflicts exist
-                is_fast_forward:
-                  type: boolean
-                  description: Whether merge would be fast-forward
-                changes_summary:
-                  $ref: '#/components/schemas/ChangesSummary'
-                conflicts:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/FileConflict'
-                recommendations:
-                  type: array
-                  items:
-                    type: string
-                warnings:
-                  type: array
-                  items:
-                    type: string
-                metrics:
-                  $ref: '#/components/schemas/PreviewMetrics'
-
-    ChangesSummary:
-      type: object
-      properties:
-        files_changed:
+          nullable: true
+        current_page:
           type: integer
-          description: Number of files changed
-        additions:
+        total_pages:
           type: integer
-          description: Lines added
-        deletions:
+        page_size:
           type: integer
-          description: Lines deleted
-        files:
-          type: array
-          items:
-            $ref: '#/components/schemas/FileChange'
-
-    FileChange:
-      type: object
-      properties:
-        path:
-          type: string
-          description: File path
-        status:
-          type: string
-          enum: [added, modified, deleted, renamed]
-        additions:
-          type: integer
-          description: Lines added
-        deletions:
-          type: integer
-          description: Lines deleted
-        content:
-          $ref: '#/components/schemas/FileContent'
-
-    FileContent:
-      type: object
-      properties:
-        base:
-          type: string
-          description: Base version content
-        source:
-          type: string
-          description: Source version content
-        target:
-          type: string
-          description: Target version content
-
-    PreviewMetrics:
-      type: object
-      properties:
-        analysis_time_ms:
-          type: integer
-          description: Analysis time in milliseconds
-        files_analyzed:
-          type: integer
-          description: Number of files analyzed
-        memory_usage_mb:
-          type: number
-          format: float
-          description: Memory usage in MB
-
-    # Base response schemas
-    SuccessResponse:
-      type: object
-      required:
-        - status
-        - data
-        - meta
-      properties:
-        status:
-          type: string
-          enum: [success]
-          example: success
-        data:
-          type: object
-          description: Response data
-        meta:
-          $ref: '#/components/schemas/ResponseMeta'
 
     ErrorResponse:
       type: object
       required:
-        - status
+        - success
         - error
-        - meta
       properties:
-        status:
-          type: string
-          enum: [error]
-          example: error
+        success:
+          type: boolean
+          example: false
         error:
-          type: object
-          properties:
-            code:
-              type: string
-              description: Error code
-              example: "validation_failed"
-            message:
-              type: string
-              description: Human-readable error message
-              example: "Invalid input parameters"
-            details:
-              type: object
-              description: Additional error details
-            trace_id:
-              type: string
-              description: Trace ID for debugging
-        meta:
-          $ref: '#/components/schemas/ResponseMeta'
-
-    ResponseMeta:
-      type: object
-      properties:
-        request_id:
           type: string
-          description: Unique request identifier
-          example: "req_1234567890"
-        timestamp:
-          type: string
-          format: date-time
-          description: Response timestamp
-        duration_ms:
-          type: integer
-          description: Request duration in milliseconds
-        api_version:
-          type: string
-          description: API version
-          example: "1.0.0"
 
   responses:
     BadRequest:
@@ -1442,16 +2617,8 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            status: error
-            error:
-              code: "validation_failed"
-              message: "Invalid input parameters"
-              details:
-                field: "commit_message"
-                reason: "cannot be empty"
-            meta:
-              request_id: "req_1234567890"
-              timestamp: "2023-01-01T12:00:00Z"
+            success: false
+            error: "Invalid input parameters"
 
     Unauthorized:
       description: Unauthorized - Missing or invalid authentication
@@ -1460,13 +2627,8 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            status: error
-            error:
-              code: "unauthorized"
-              message: "X-USER-ID header is required"
-            meta:
-              request_id: "req_1234567890"
-              timestamp: "2023-01-01T12:00:00Z"
+            success: false
+            error: "X-USER-ID header is required"
 
     Forbidden:
       description: Forbidden - Insufficient permissions
@@ -1475,13 +2637,8 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            status: error
-            error:
-              code: "forbidden"
-              message: "Insufficient permissions for this operation"
-            meta:
-              request_id: "req_1234567890"
-              timestamp: "2023-01-01T12:00:00Z"
+            success: false
+            error: "Insufficient permissions for this operation"
 
     NotFound:
       description: Not found - Repository or resource not found
@@ -1490,13 +2647,8 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            status: error
-            error:
-              code: "not_found"
-              message: "Repository not found"
-            meta:
-              request_id: "req_1234567890"
-              timestamp: "2023-01-01T12:00:00Z"
+            success: false
+            error: "Repository not found"
 
     InternalError:
       description: Internal server error
@@ -1505,25 +2657,27 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            status: error
-            error:
-              code: "internal_error"
-              message: "An unexpected error occurred"
-              trace_id: "trace_1234567890"
-            meta:
-              request_id: "req_1234567890"
-              timestamp: "2023-01-01T12:00:00Z"
+            success: false
+            error: "An unexpected error occurred"
 
 tags:
   - name: Repository Management
     description: Repository creation and initialization operations
-  - name: File Operations
-    description: Single file create, update, and delete operations
-  - name: Multi-file Operations
-    description: Atomic multi-file commit operations
-  - name: Branch Operations
-    description: Git branch management operations
   - name: Repository State
     description: Repository metadata and state queries
+  - name: Branch Operations
+    description: Git branch management operations
+  - name: Tree Operations
+    description: Repository directory structure operations
+  - name: Commit Operations
+    description: Commit history and creation operations
+  - name: Tag Operations
+    description: Git tag management operations
+  - name: Blob Operations
+    description: File content retrieval operations
+  - name: Diff Operations
+    description: Diff and comparison operations
   - name: Merge Operations
     description: Git merge and merge preview operations
+  - name: Overview Operations
+    description: Comprehensive repository overview operations

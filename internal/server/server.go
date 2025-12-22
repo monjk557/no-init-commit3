@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -28,43 +28,10 @@ import (
 	"github.com/collabops/git-executor/internal/tags"
 	"github.com/collabops/git-executor/internal/tree"
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 )
-
-// setupSwaggerRoutes - Swagger 문서 라우트 설정 (API 문서화용)
-func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
-	if !s.config.Server.EnableDocs {
-		return
-	}
-
-	docsPath := s.config.Server.DocsPath
-	if docsPath == "" {
-		docsPath = "/api-docs"
-	}
-
-	// Ensure docs path starts with /
-	if !strings.HasPrefix(docsPath, "/") {
-		docsPath = "/" + docsPath
-	}
-
-	// Create docs group with proper base path
-	var docsGroup *gin.RouterGroup
-	if s.config.Server.BasePath != "/" {
-		docsGroup = router.Group(s.config.Server.BasePath + docsPath)
-	} else {
-		docsGroup = router.Group(docsPath)
-	}
-
-	// Redirect from docs root to Swagger UI
-	docsGroup.GET("", func(c *gin.Context) {
-		redirectPath := path.Join(docsPath, "swagger/index.html")
-		if s.config.Server.BasePath != "/" {
-			redirectPath = s.config.Server.BasePath + redirectPath
-		}
-		c.Redirect(http.StatusFound, redirectPath)
-	})
-
-}
 
 // ginContextMiddleware - Gin 컨텍스트를 요청 컨텍스트에 저장하는 미들웨어
 func ginContextMiddleware() gin.HandlerFunc {
@@ -172,7 +139,7 @@ func (s *Server) SetupRouter() *gin.Engine {
 		router.GET(s.config.Server.HealthCheckPath, s.healthCheck)
 	}
 
-	// Setup Swagger documentation routes with proper configuration
+	// Setup Swagger documentation routes
 	s.setupSwaggerRoutes(router)
 
 	// Mount API routes under base path if configured
@@ -341,6 +308,91 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/overview/blob", overviewHandler.HandleGetBlobOverview)
 	ownerRepoGroup.GET("/overview/branches", overviewHandler.HandleGetBranchesOverview)
 
+}
+
+// setupSwaggerRoutes - Swagger 문서 라우트 설정 (API 문서화용)
+// gin-swagger 패키지를 사용하여 표준 Swagger UI 제공
+func (s *Server) setupSwaggerRoutes(router *gin.Engine) {
+	if !s.config.Server.EnableDocs {
+		return
+	}
+
+	docsPath := s.config.Server.DocsPath
+	if docsPath == "" {
+		docsPath = "/api-docs"
+	}
+
+	// Ensure docs path starts with /
+	if !strings.HasPrefix(docsPath, "/") {
+		docsPath = "/" + docsPath
+	}
+
+	// Create docs group with proper base path
+	var docsGroup *gin.RouterGroup
+	if s.config.Server.BasePath != "/" {
+		docsGroup = router.Group(s.config.Server.BasePath + docsPath)
+	} else {
+		docsGroup = router.Group(docsPath)
+	}
+
+	// Serve OpenAPI YAML spec file - MUST be registered BEFORE wildcard route
+	docsGroup.GET("/openapi.yaml", s.serveOpenAPISpec)
+	docsGroup.GET("/openapi.yml", s.serveOpenAPISpec)
+	docsGroup.GET("/swagger.yaml", s.serveOpenAPISpec)
+	docsGroup.GET("/swagger.yml", s.serveOpenAPISpec)
+
+	// Use gin-swagger to serve Swagger UI with custom URL handler
+	// This allows us to use our existing YAML file
+	// Note: Wildcard route must be registered AFTER specific routes to avoid conflicts
+	url := ginSwagger.URL(docsGroup.BasePath() + "/openapi.yaml")
+	docsGroup.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
+
+	// Redirect root docs path to Swagger UI
+	docsGroup.GET("", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, docsGroup.BasePath()+"/swagger/index.html")
+	})
+	docsGroup.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, docsGroup.BasePath()+"/swagger/index.html")
+	})
+}
+
+// serveOpenAPISpec serves the OpenAPI specification file
+func (s *Server) serveOpenAPISpec(c *gin.Context) {
+	// Try to find the spec file relative to the working directory
+	specPath := "specs/generated/collabops-git-executor.yaml"
+
+	// If not found, try absolute path from project root
+	if _, err := os.Stat(specPath); os.IsNotExist(err) {
+		// Try to find project root
+		wd, _ := os.Getwd()
+		for {
+			testPath := filepath.Join(wd, "specs/generated/collabops-git-executor.yaml")
+			if _, err := os.Stat(testPath); err == nil {
+				specPath = testPath
+				break
+			}
+			parent := filepath.Dir(wd)
+			if parent == wd {
+				break
+			}
+			wd = parent
+		}
+	}
+
+	// Try to read the spec file
+	specData, err := os.ReadFile(specPath)
+	if err != nil {
+		s.logger.Error("Failed to read OpenAPI spec file", zap.String("path", specPath), zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "OpenAPI specification not found",
+			"path":  specPath,
+		})
+		return
+	}
+
+	c.Header("Content-Type", "application/x-yaml; charset=utf-8")
+	c.Header("Content-Disposition", "inline; filename=\"openapi.yaml\"")
+	c.Data(http.StatusOK, "application/x-yaml; charset=utf-8", specData)
 }
 
 // healthCheck handles health check requests

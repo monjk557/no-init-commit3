@@ -60,23 +60,49 @@ build-it:
 		docker-compose -f config/docker/compose/build-it.yml up --build; \
 	fi
 
-# [MANUAL 4] make specs [fetch|generate|fix]
+# [MANUAL 4] make specs [fetch|generate|fix|mock|mock-stop]
 # Description: OpenAPI specs management (delegated to specs/Makefile)
 # Used: specs/Makefile
-# Options: fetch, generate, fix (core workflow steps)
-.PHONY: specs
-specs: ## 📋 OpenAPI specs management (fetch/generate/fix)
+# Options: 
+#   - fetch: Fetch external specs (not implemented)
+#   - generate: Generate OpenAPI spec from Go schemas and handlers
+#   - fix: Fix spec issues (not implemented)
+#   - mock: Start Prism mock server for API testing
+#   - mock-stop: Stop Prism mock server
+#   - help: Show help message
+# Examples:
+#   - make specs generate  # Generate OpenAPI spec from all package schemas
+#   - make specs mock      # Start Prism mock server
+#   - make specs           # Run default (generate)
+.PHONY: specs fetch generate fix mock mock-stop
+specs: ## 📋 OpenAPI specs management (fetch/generate/fix/mock)
 	@if [ "$(filter fetch,$(MAKECMDGOALS))" ]; then \
-		$(MAKE) -f specs/Makefile fetch; \
+		$(MAKE) -C specs fetch; \
 	elif [ "$(filter generate,$(MAKECMDGOALS))" ]; then \
-		$(MAKE) -f specs/Makefile generate; \
+		$(MAKE) -C specs generate; \
 	elif [ "$(filter fix,$(MAKECMDGOALS))" ]; then \
-		$(MAKE) -f specs/Makefile fix; \
+		$(MAKE) -C specs fix; \
+	elif [ "$(filter mock,$(MAKECMDGOALS))" ]; then \
+		$(MAKE) -C specs mock; \
+	elif [ "$(filter mock-stop,$(MAKECMDGOALS))" ]; then \
+		$(MAKE) -C specs mock-stop; \
 	elif [ "$(filter help,$(MAKECMDGOALS))" ]; then \
-		$(MAKE) -f specs/Makefile help; \
+		$(MAKE) -C specs help; \
 	else \
-		$(MAKE) -f specs/Makefile all; \
+		$(MAKE) -C specs all; \
 	fi
+
+# Alias for convenience: make specs-generate
+specs-generate: specs generate
+	@:
+
+# Alias for convenience: make specs-fetch
+specs-fetch: specs fetch
+	@:
+
+# Alias for convenience: make specs-fix
+specs-fix: specs fix
+	@:
 
 # [MANUAL 4] make format
 # Description: Auto-format code and check formatting (matches CI behavior)
@@ -86,7 +112,7 @@ format:
 	@find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec gofmt -w {} \;
 	@echo "📦 Organizing imports..."
 	@find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec goimports -w {} \; 2>/dev/null || echo "⚠️  goimports not found, skipping import organization"
-	@echo "🔍 Checking code formatting..."
+	@echo "🔍 Checking code formatting..."	
 	@UNFORMATTED=$$(find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec gofmt -l {} \;); \
 	if [ -n "$$UNFORMATTED" ]; then \
 		echo "❌ Code not formatted:"; \
@@ -183,8 +209,8 @@ clean:
 	@echo "✅ All cleanup complete!"
 
 # [HELPER] Dummy targets for command arguments
-.PHONY: bg all e2e base qa stage prod core config util perf
-bg all e2e base qa stage prod core config util perf:
+.PHONY: bg all e2e base qa stage prod core config util perf fetch generate fix mock mock-stop
+bg all e2e base qa stage prod core config util perf fetch generate fix mock mock-stop:
 	@:
 
 # [HELPER] Check Docker status
