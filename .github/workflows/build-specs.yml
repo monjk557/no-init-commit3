@@ -18,8 +18,8 @@ on:
 
 env:
   REGION: asia-northeast3
-  REPOSITORY: collabops-git-executor
-  IMAGE: collabops-git-executor-specs
+  REPOSITORY: git-executor
+  IMAGE: collabops-git-executor-specs  
 
 jobs:
   generate-openapi-specs:
@@ -324,17 +324,10 @@ jobs:
           if gcloud artifacts repositories describe ${{ env.REPOSITORY }} --location=${{ env.REGION }} >/dev/null 2>&1; then
             echo "✓ Repository '${{ env.REPOSITORY }}' exists and is accessible"
           else
-            echo "⚠️ Repository '${{ env.REPOSITORY }}' doesn't exist or is not accessible"
-            echo "Creating repository..."
-            if gcloud artifacts repositories create ${{ env.REPOSITORY }} \
-              --repository-format=docker \
-              --location=${{ env.REGION }} \
-              --description="Docker repository for CollabOps Git Executor"; then
-              echo "✓ Repository created successfully"
-            else
-              echo "❌ Failed to create repository - check IAM permissions"
-              exit 1
-            fi
+            echo "❌ Repository '${{ env.REPOSITORY }}' doesn't exist or is not accessible"
+            echo "Error: Required Artifact Registry repository '${{ env.REPOSITORY }}' not found in region '${{ env.REGION }}'"
+            echo "Please create the repository manually or ensure it exists before running this workflow"
+            exit 1
           fi
 
       - name: Set up Docker Buildx
