@@ -77,7 +77,7 @@ type FileDiff struct {
 	Status    FileDiffStatus         `json:"status"` // "added", "deleted", "modified", "renamed"
 	Additions int                    `json:"additions"`
 	Deletions int                    `json:"deletions"`
-	Changes   []LineChange           `json:"changes,omitempty"`
+	Changes   []LineChange           `json:"changes"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
 	IsBinary  bool                   `json:"is_binary"`
 	OldPath   string                 `json:"old_path,omitempty"` // 이름 변경시 사용
 	Metadata  map[string]interface{} `json:"metadata,omitempty"` // 파일 메타데이터 (해시, 모드)

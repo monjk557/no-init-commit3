@@ -209,7 +209,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 				Additions: 0, // 크기 제한으로 인해 정확한 라인 수를 알 수 없음
 				Deletions: 0,
 				IsBinary:  isBinaryFileByExtension(file.Name),
-				Changes:   nil,
+				Changes:   []LineChange{},
 			}
 			fileDiffs = append(fileDiffs, fileDiff)
 			stats.FilesChanged++
@@ -226,7 +226,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 				Additions: 0,
 				Deletions: 0,
 				IsBinary:  isBinaryFileByExtension(file.Name),
-				Changes:   nil,
+				Changes:   []LineChange{},
 			}
 			fileDiffs = append(fileDiffs, fileDiff)
 			stats.FilesChanged++
@@ -250,7 +250,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 				Additions: additions,
 				Deletions: 0,
 				IsBinary:  isBinary,
-				Changes:   nil,
+				Changes:   []LineChange{},
 			}
 			fileDiffs = append(fileDiffs, fileDiff)
 			stats.FilesChanged++
@@ -279,7 +279,7 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 		// 변경된 라인 수 체크 (additions만 있으므로 additions 기준)
 		if additions > MaxChangedLines {
 			// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
-			fileDiff.Changes = nil
+			fileDiff.Changes = []LineChange{}
 		} else if contextLines > 0 {
 			// validation 통과한 파일 중에서 최대 10개까지만 changes 포함
 			canIncludeChanges := filesWithChangesCount < MaxFilesWithChanges
@@ -297,11 +297,11 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 				filesWithChangesCount++
 			} else {
 				// 이미 10개를 초과한 경우 Changes를 포함하지 않음
-				fileDiff.Changes = nil
+				fileDiff.Changes = []LineChange{}
 			}
 		} else {
 			// contextLines가 0이면 Changes를 포함하지 않음
-			fileDiff.Changes = nil
+			fileDiff.Changes = []LineChange{}
 		}
 
 		fileDiffs = append(fileDiffs, fileDiff)
@@ -377,7 +377,7 @@ func (h *DiffHandler) processChanges(changes object.Changes, contextLines int) (
 			Path:     fileName,
 			Status:   h.getChangeStatus(change),
 			Metadata: GetFileMetadata(change),
-			Changes:  nil,
+			Changes:  []LineChange{},
 		}
 
 		if change.From.Name != change.To.Name && change.From.Name != "" && change.To.Name != "" {
@@ -424,7 +424,7 @@ func (h *DiffHandler) processChanges(changes object.Changes, contextLines int) (
 			fileDiffs[idx].IsBinary = fileDiff.IsBinary
 
 			// validation 통과한 파일만 changes 포함
-			if fileDiff.Changes != nil {
+			if len(fileDiff.Changes) > 0 {
 				fileDiffs[idx].Changes = fileDiff.Changes
 				filesWithChangesCount++
 			}
@@ -476,7 +476,7 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 		fileDiff.Additions = 0
 		fileDiff.Deletions = 0
 		fileDiff.IsBinary = isBinaryFileByExtension(fileName)
-		fileDiff.Changes = nil
+		fileDiff.Changes = []LineChange{}
 		return fileDiff, fmt.Errorf("failed to get patch: %w", err)
 	}
 
@@ -490,7 +490,7 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 		fileDiff.Additions = additions
 		fileDiff.Deletions = deletions
 		fileDiff.IsBinary = isBinaryFileByExtension(fileName)
-		fileDiff.Changes = nil
+		fileDiff.Changes = []LineChange{}
 		return fileDiff, &DiffTooLargeError{
 			Reason: fmt.Sprintf("patch for file %s is too large (%d bytes > %d bytes)", fileName, patchSize, MaxPatchSize),
 		}
@@ -519,7 +519,7 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 		// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
 		// 메타데이터(Additions, Deletions, Status 등)는 유지
 		// Changes는 nil로 설정하여 diff 내용을 로드하지 않음을 표시
-		fileDiff.Changes = nil
+		fileDiff.Changes = []LineChange{}
 		return fileDiff, nil
 	}
 
@@ -529,7 +529,7 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 
 		// 파일 라인 수 제한 체크 - 너무 많으면 메타데이터만 포함
 		if len(lines) > MaxFileLines {
-			fileDiff.Changes = nil
+			fileDiff.Changes = []LineChange{}
 			return fileDiff, &DiffTooLargeError{
 				Reason: fmt.Sprintf("file %s has too many lines (%d > %d)", fileName, len(lines), MaxFileLines),
 			}
@@ -1055,7 +1055,7 @@ func (h *DiffHandler) processFileAddition(file *object.File, filePath string, co
 	// 변경된 라인 수 체크 (additions만 있으므로 additions 기준)
 	if additions > MaxChangedLines {
 		// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
-		fileDiff.Changes = nil
+		fileDiff.Changes = []LineChange{}
 		return fileDiff, nil
 	}
 
@@ -1121,7 +1121,7 @@ func (h *DiffHandler) processFileDeletion(file *object.File, filePath string, co
 	// 변경된 라인 수 체크 (deletions만 있으므로 deletions 기준)
 	if deletions > MaxChangedLines {
 		// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
-		fileDiff.Changes = nil
+		fileDiff.Changes = []LineChange{}
 		return fileDiff, nil
 	}
 
@@ -1205,7 +1205,7 @@ func (h *DiffHandler) processFileModification(baseFile, headFile *object.File, f
 	changedLines := additions + deletions
 	if changedLines > MaxChangedLines {
 		// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
-		fileDiff.Changes = nil
+		fileDiff.Changes = []LineChange{}
 		return fileDiff, nil
 	}
 
