@@ -10,15 +10,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
-
-	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // MergeOperationsHandler handles REST API operations for Git merge operations
@@ -283,10 +281,8 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 
 	// Check for conflicts (unless force is specified)
 	if conflictAnalysis.HasConflicts && !req.ForceConflict {
-		apiErr := api.NewBadRequestError(fmt.Sprintf("Merge has %d conflicts. Use force_conflict=true to override", conflictAnalysis.ConflictCount))
-		_ = apiErr.WithDetails("conflict_count", conflictAnalysis.ConflictCount)
-		_ = apiErr.WithDetails("conflict_summary", conflictAnalysis)
-		c.JSON(apiErr.HTTPStatusCode(), gin.H{"success": false, "error": apiErr.Message})
+
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Merge has %d conflicts. Use force_conflict=true to override", conflictAnalysis.ConflictCount)})
 		return
 	}
 
@@ -478,10 +474,10 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 func (h *MergeOperationsHandler) validatePath(owner, repo string) error {
 	// Check for empty components
 	if owner == "" {
-		return api.NewBadRequestError("owner parameter is required")
+		return fmt.Errorf("owner parameter is required")
 	}
 	if repo == "" {
-		return api.NewBadRequestError("repo parameter is required")
+		return fmt.Errorf("repo parameter is required")
 	}
 
 	// Check path traversal and security
@@ -493,10 +489,10 @@ func (h *MergeOperationsHandler) validatePath(owner, repo string) error {
 func (h *MergePreviewHandler) validatePath(owner, repo string) error {
 	// Check for empty components
 	if owner == "" {
-		return api.NewBadRequestError("owner parameter is required")
+		return fmt.Errorf("owner parameter is required")
 	}
 	if repo == "" {
-		return api.NewBadRequestError("repo parameter is required")
+		return fmt.Errorf("repo parameter is required")
 	}
 
 	// Check path traversal and security

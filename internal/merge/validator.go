@@ -2,8 +2,6 @@ package merge
 
 import (
 	"fmt"
-
-	"github.com/collabops/git-executor/internal/api"
 )
 
 // validateMergeRequest validates the merge request parameters
@@ -54,10 +52,10 @@ func (h *MergeOperationsHandler) validateMergeRequest(req *MergeRequest) error {
 	// Validate committer info if provided
 	if req.Committer != nil {
 		if req.Committer.Name == "" {
-			return api.NewBadRequestError("Committer name cannot be empty")
+			return fmt.Errorf("Committer name cannot be empty")
 		}
 		if req.Committer.Email == "" {
-			return api.NewBadRequestError("Committer email cannot be empty")
+			return fmt.Errorf("Committer email cannot be empty")
 		}
 	}
 

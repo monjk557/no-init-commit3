@@ -144,6 +144,11 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		return
 	}
 
+	// nil 체크: 커밋 히스토리가 nil이면 빈 배열로 변환
+	if commits == nil {
+		commits = []Commit{}
+	}
+
 	// sort=date 파라미터에 따라 응답 형식 결정
 	var results interface{}
 	if params.Sort == "date" {

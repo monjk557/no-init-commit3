@@ -82,6 +82,11 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context) {
 		return
 	}
 
+	// Ensure tags is never nil - return empty array instead of null
+	if tags == nil {
+		tags = []Tag{}
+	}
+
 	// 페이지네이션 정보 계산
 	currentPage := 1
 	if limit > 0 {

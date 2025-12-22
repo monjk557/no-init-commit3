@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/gin-gonic/gin"
@@ -20,14 +19,12 @@ import (
 // RepositoryCreationHandler는 저장소 생성 작업을 처리합니다.
 // Git 저장소 초기화, 기본 브랜치 설정, 초기 파일 생성 등을 처리합니다.
 type RepositoryCreationHandler struct {
-	config             *config.Config
-	logger             *logging.Logger
-	pathConfig         PathConfig
-	pathValidator      GitAPIPathValidator
-	objectManager      *GitObjectManager
-	repoManager        *DefaultRepositoryManager
-	responseMiddleware *api.JSONResponseMiddleware
-	errorMapper        *api.GitErrorMapper
+	config        *config.Config
+	logger        *logging.Logger
+	pathConfig    PathConfig
+	pathValidator GitAPIPathValidator
+	objectManager *GitObjectManager
+	repoManager   *DefaultRepositoryManager
 }
 
 // NewRepositoryCreationHandler는 새로운 저장소 생성 핸들러를 생성합니다.
@@ -50,9 +47,6 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 		return nil, fmt.Errorf("failed to create object manager: %w", err)
 	}
 
-	responseMiddleware := api.NewJSONResponseMiddleware(logger, "v1")
-	errorMapper := api.NewGitErrorMapper()
-
 	// Create repository manager
 	repoManager, err := NewRepositoryManager(pathConfig, logger)
 	if err != nil {
@@ -60,14 +54,12 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 	}
 
 	return &RepositoryCreationHandler{
-		config:             cfg,
-		logger:             logger,
-		pathConfig:         *pathConfig,
-		pathValidator:      *pathValidator,
-		objectManager:      objectManager,
-		repoManager:        repoManager,
-		responseMiddleware: responseMiddleware,
-		errorMapper:        errorMapper,
+		config:        cfg,
+		logger:        logger,
+		pathConfig:    *pathConfig,
+		pathValidator: *pathValidator,
+		objectManager: objectManager,
+		repoManager:   repoManager,
 	}, nil
 }
 

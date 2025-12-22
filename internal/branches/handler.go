@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -21,16 +20,14 @@ import (
 // BranchOperationsHandler는 Git 브랜치 작업을 처리합니다.
 // 브랜치 생성, 업데이트, 삭제 요청을 처리하고 적절한 응답을 제공합니다.
 type BranchOperationsHandler struct {
-	config             *config.Config
-	logger             *logging.Logger
-	pathConfig         *repositories.PathConfig
-	pathValidator      *repositories.GitAPIPathValidator
-	repoManager        *repositories.DefaultRepositoryManager
-	objectManager      *repositories.GitObjectManager
-	responseMiddleware *api.JSONResponseMiddleware
-	errorMapper        *api.GitErrorMapper
-	branchNamePattern  *regexp.Regexp
-	service            *BranchService
+	config            *config.Config
+	logger            *logging.Logger
+	pathConfig        *repositories.PathConfig
+	pathValidator     *repositories.GitAPIPathValidator
+	repoManager       *repositories.DefaultRepositoryManager
+	objectManager     *repositories.GitObjectManager
+	branchNamePattern *regexp.Regexp
+	service           *BranchService
 }
 
 // NewBranchOperationsHandler는 새로운 브랜치 작업 핸들러를 생성합니다.
@@ -62,12 +59,6 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 		return nil, fmt.Errorf("failed to create object manager: %w", err)
 	}
 
-	// Create response middleware
-	responseMiddleware := api.NewJSONResponseMiddleware(logger, "v1")
-
-	// Create error mapper
-	errorMapper := api.NewGitErrorMapper()
-
 	// Compile branch name pattern
 	branchNamePattern, err := regexp.Compile(`^[a-zA-Z0-9_/-]+$`)
 	if err != nil {
@@ -78,16 +69,14 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 	service := NewBranchService(logger)
 
 	return &BranchOperationsHandler{
-		config:             cfg,
-		logger:             logger,
-		pathConfig:         pathConfig,
-		pathValidator:      pathValidator,
-		repoManager:        repoManager,
-		objectManager:      objectManager,
-		responseMiddleware: responseMiddleware,
-		errorMapper:        errorMapper,
-		branchNamePattern:  branchNamePattern,
-		service:            service,
+		config:            cfg,
+		logger:            logger,
+		pathConfig:        pathConfig,
+		pathValidator:     pathValidator,
+		repoManager:       repoManager,
+		objectManager:     objectManager,
+		branchNamePattern: branchNamePattern,
+		service:           service,
 	}, nil
 }
 

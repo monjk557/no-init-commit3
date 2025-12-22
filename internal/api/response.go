@@ -22,31 +22,11 @@ type APIResponse struct {
 	// Data는 응답 페이로드를 포함합니다 (성공 응답에만)
 	Data interface{} `json:"data,omitempty"`
 	// Error는 에러 정보를 포함합니다 (에러 응답에만)
-	Error *ErrorResponse `json:"error,omitempty"`
+	Error *logging.AppError `json:"error,omitempty"`
 	// Meta는 응답에 대한 메타데이터를 포함합니다
 	Meta *ResponseMeta `json:"meta,omitempty"`
 	// Timestamp는 응답이 생성된 시간입니다
 	Timestamp time.Time `json:"timestamp"`
-}
-
-// ErrorResponse는 API 응답에서 에러 정보를 나타냅니다
-type ErrorResponse struct {
-	// Code는 표준화된 에러 코드입니다
-	Code string `json:"code"`
-	// Message는 사람이 읽을 수 있는 에러 메시지입니다
-	Message string `json:"message"`
-	// Details는 에러에 대한 추가 컨텍스트를 제공합니다
-	Details map[string]interface{} `json:"details,omitempty"`
-	// Severity는 에러의 심각도 수준을 나타냅니다
-	Severity string `json:"severity,omitempty"`
-	// TraceID는 서비스 간 상관관계를 위한 ID입니다
-	TraceID string `json:"trace_id,omitempty"`
-	// RequestID는 특정 요청을 추적하기 위한 ID입니다
-	RequestID string `json:"request_id,omitempty"`
-	// Operation은 에러를 발생시킨 작업입니다
-	Operation string `json:"operation,omitempty"`
-	// Resource는 접근되고 있던 리소스입니다
-	Resource string `json:"resource,omitempty"`
 }
 
 // ResponseMeta는 API 응답에 대한 메타데이터를 포함합니다
@@ -138,24 +118,22 @@ func (m *JSONResponseMiddleware) ErrorHandler() gin.HandlerFunc {
 // handlePublicError handles publicly safe errors
 func (m *JSONResponseMiddleware) handlePublicError(c *gin.Context, ginErr *gin.Error, requestID string, duration int64) {
 	// Check if the error is a GitAPIError
-	if apiErr, ok := ginErr.Err.(*GitAPIError); ok {
+	if apiErr, ok := ginErr.Err.(*logging.AppError); ok {
 		m.SendErrorResponse(c, apiErr, requestID, duration)
 		return
 	}
 
 	// For other public errors, create a generic API error
-	apiErr := NewBadRequestError(ginErr.Error())
+	apiErr := logging.NewValidationError("UNKNOWN_ERROR", ginErr.Error())
 	apiErr.RequestID = requestID
 	m.SendErrorResponse(c, apiErr, requestID, duration)
 }
 
 // handleBindError handles request binding errors
 func (m *JSONResponseMiddleware) handleBindError(c *gin.Context, ginErr *gin.Error, requestID string, duration int64) {
-	apiErr := NewValidationError("Invalid request format or missing required fields")
+	apiErr := logging.NewValidationError("UNKNOWN_ERROR", "Invalid request format or missing required fields")
 	apiErr.RequestID = requestID
-	apiErr.Details = map[string]interface{}{
-		"bind_error": ginErr.Error(),
-	}
+	apiErr.WithDetails(ginErr.Error())
 	m.SendErrorResponse(c, apiErr, requestID, duration)
 }
 
@@ -170,7 +148,7 @@ func (m *JSONResponseMiddleware) handleInternalError(c *gin.Context, ginErr *gin
 	)
 
 	// Send a generic internal error response (don't expose internal details)
-	apiErr := NewInternalError("An internal server error occurred")
+	apiErr := logging.NewInternalError("UNKNOWN_ERROR", "An internal server error occurred")
 	apiErr.RequestID = requestID
 	m.SendErrorResponse(c, apiErr, requestID, duration)
 }
@@ -235,16 +213,18 @@ func (m *JSONResponseMiddleware) SendSuccessResponseWithPagination(c *gin.Contex
 }
 
 // SendErrorResponse는 표준화된 에러 응답을 전송합니다
-func (m *JSONResponseMiddleware) SendErrorResponse(c *gin.Context, apiErr *GitAPIError, requestID string, duration int64) {
-	errorResponse := &ErrorResponse{
-		Code:      string(apiErr.Code),
-		Message:   apiErr.Message,
-		Details:   apiErr.Details,
-		Severity:  string(apiErr.Severity),
-		TraceID:   apiErr.TraceID,
-		RequestID: apiErr.RequestID,
-		Operation: apiErr.Operation,
-		Resource:  apiErr.Resource,
+func (m *JSONResponseMiddleware) SendErrorResponse(c *gin.Context, apiErr *logging.AppError, requestID string, duration int64) {
+	errorResponse := &logging.AppError{
+		Type:        apiErr.Type,
+		Code:        apiErr.Code,
+		Message:     apiErr.Message,
+		Details:     apiErr.Details,
+		Cause:       apiErr.Cause,
+		Context:     apiErr.Context,
+		StatusCode:  apiErr.StatusCode,
+		RequestID:   apiErr.RequestID,
+		Retryable:   apiErr.Retryable,
+		UserMessage: apiErr.UserMessage,
 	}
 
 	// Use provided request ID if the error doesn't have one
@@ -267,14 +247,12 @@ func (m *JSONResponseMiddleware) SendErrorResponse(c *gin.Context, apiErr *GitAP
 	m.logger.Warn("API error response",
 		zap.String("code", string(apiErr.Code)),
 		zap.String("message", apiErr.Message),
-		zap.String("severity", string(apiErr.Severity)),
-		zap.String("operation", apiErr.Operation),
-		zap.String("resource", apiErr.Resource),
+		zap.String("severity", string(apiErr.Type)),
 		zap.String("request_id", requestID),
-		zap.Int("status_code", apiErr.HTTPStatusCode()),
+		zap.Int("status_code", apiErr.StatusCode),
 	)
 
-	c.JSON(apiErr.HTTPStatusCode(), response)
+	c.JSON(apiErr.StatusCode, response)
 }
 
 // RequestMetadataMiddleware adds request metadata to the context
@@ -309,7 +287,7 @@ func SendJSON(c *gin.Context, statusCode int, data interface{}) {
 }
 
 // SendError is a utility function to send error responses
-func SendError(c *gin.Context, apiErr *GitAPIError) {
+func SendError(c *gin.Context, apiErr *logging.AppError) {
 	// Create a basic response middleware for this utility
 	middleware := NewJSONResponseMiddleware(nil, "")
 
@@ -363,22 +341,4 @@ func CreatePagination(page, pageSize, total int) *PaginationMeta {
 func generateRequestID() string {
 	// In production, use UUID or a more robust ID generation
 	return fmt.Sprintf("req_%d", time.Now().UnixNano())
-}
-
-// ErrorMapper converts various error types to GitAPIError
-func ErrorMapper(err error, operation string) *GitAPIError {
-	mapper := GetDefaultMapper()
-	return mapper.MapError(err, operation)
-}
-
-// ErrorMapperWithContext converts errors with additional context
-func ErrorMapperWithContext(err error, operation, resource string) *GitAPIError {
-	mapper := GetDefaultMapper()
-	return mapper.MapErrorWithContext(err, operation, resource)
-}
-
-// ErrorMapperWithDetails converts errors with additional details
-func ErrorMapperWithDetails(err error, operation string, details map[string]interface{}) *GitAPIError {
-	mapper := GetDefaultMapper()
-	return mapper.MapErrorWithDetails(err, operation, details)
 }

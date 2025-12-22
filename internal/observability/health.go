@@ -284,13 +284,6 @@ func (h *HealthChecker) checkPermissionService(ctx context.Context) CheckResult 
 		Duration:    time.Since(start).String(),
 		LastChecked: time.Now().UTC(),
 	}
-
-	return CheckResult{
-		Status:      StatusHealthy,
-		Message:     "Permission service is reachable",
-		Duration:    time.Since(start).String(),
-		LastChecked: time.Now().UTC(),
-	}
 }
 
 // checkRepositoryAccess checks if we can access Git repositories
@@ -352,46 +345,4 @@ func (h *HealthChecker) sendHealthResponse(w http.ResponseWriter, response Healt
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = fmt.Fprintf(w, "Health check failed: %v", err)
 	}
-}
-
-// isServiceUnavailableError determines if an error indicates service unavailability
-func isServiceUnavailableError(errStr string) bool {
-	unavailableKeywords := []string{
-		"connection refused",
-		"timeout",
-		"network unreachable",
-		"service unavailable",
-		"bad gateway",
-		"gateway timeout",
-	}
-
-	for _, keyword := range unavailableKeywords {
-		if len(errStr) > 0 && contains(errStr, keyword) {
-			return true
-		}
-	}
-	return false
-}
-
-// contains checks if a string contains a substring (case-insensitive)
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) &&
-		(s == substr ||
-			(len(s) > len(substr) &&
-				(s[:len(substr)] == substr ||
-					s[len(s)-len(substr):] == substr ||
-					findSubstring(s, substr))))
-}
-
-// findSubstring performs a simple substring search
-func findSubstring(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
