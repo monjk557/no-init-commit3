@@ -61,13 +61,37 @@ func (rw *RepositoryWrapper) ResolveReference(ref string) (plumbing.Hash, error)
 	// Try to resolve as a reference first
 	refObj, err := rw.repo.Reference(plumbing.ReferenceName(ref), false)
 	if err == nil {
+		// Check if it's a tag reference
+		if strings.HasPrefix(ref, "refs/tags/") {
+			tagHash := refObj.Hash()
+			tagObj, err := rw.repo.TagObject(tagHash)
+			if err == nil {
+				// Annotated tag - return the target commit hash
+				return tagObj.Target, nil
+			}
+			// Lightweight tag - return the hash directly
+			return tagHash, nil
+		}
 		return refObj.Hash(), nil
 	}
 
-	// Try with refs/heads/ prefix
+	// Try with refs/heads/ prefix (branch)
 	refObj, err = rw.repo.Reference(plumbing.ReferenceName("refs/heads/"+ref), false)
 	if err == nil {
 		return refObj.Hash(), nil
+	}
+
+	// Try with refs/tags/ prefix (tag)
+	refObj, err = rw.repo.Reference(plumbing.ReferenceName("refs/tags/"+ref), false)
+	if err == nil {
+		tagHash := refObj.Hash()
+		tagObj, err := rw.repo.TagObject(tagHash)
+		if err == nil {
+			// Annotated tag - return the target commit hash
+			return tagObj.Target, nil
+		}
+		// Lightweight tag - return the hash directly
+		return tagHash, nil
 	}
 
 	// If not a reference, try as a hash

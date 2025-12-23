@@ -51,10 +51,12 @@ type CreateTagRequest struct {
 	Annotated bool    `json:"annotated,omitempty"`     // Annotated Tag 여부 (기본값: false = Lightweight Tag)
 }
 
-// UpdateTagRequest는 태그 업데이트를 위한 요청 구조체입니다.
-type UpdateTagRequest struct {
-	Hash      string  `json:"hash" binding:"required"` // 새로운 커밋 해시 (필수)
-	Message   string  `json:"message,omitempty"`       // 태그 메시지 (Annotated Tag로 변경 시)
-	Tagger    *Tagger `json:"tagger,omitempty"`        // 태그 작성자 정보 (Annotated Tag로 변경 시)
-	Annotated bool    `json:"annotated,omitempty"`     // Annotated Tag 여부
+type CreateTagResponse struct {
+	Success bool `json:"success"`
+	Tag     *Tag `json:"tag"`
+}
+
+type DeleteTagResponse struct {
+	Success bool `json:"success"`
+	Tag     *Tag `json:"tag"`
 }

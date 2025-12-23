@@ -140,7 +140,11 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "tag": tag})
+	response := CreateTagResponse{
+		Success: true,
+		Tag:     tag,
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *TagsHandler) HandleDeleteTag(c *gin.Context) {

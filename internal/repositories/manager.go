@@ -173,24 +173,54 @@ func (gom *GitObjectManager) ResolveReference(repo *gogit.Repository, ref string
 	}
 
 	// Try to resolve as a reference name
-	// If ref doesn't start with refs/, assume it's a branch name and add refs/heads/ prefix
-	refName := ref
+	// If ref doesn't start with refs/, try branch first, then tag
 	if !strings.HasPrefix(ref, "refs/") {
-		refName = "refs/heads/" + ref
+		// Try as branch name first
+		branchRef := "refs/heads/" + ref
+		reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true)
+		if err == nil {
+			return reference.Hash(), nil
+		}
+
+		// Try as tag name
+		tagRef := "refs/tags/" + ref
+		reference, err = repo.Reference(plumbing.ReferenceName(tagRef), true)
+		if err == nil {
+			// Tag can point to a commit directly (lightweight tag) or a tag object (annotated tag)
+			// For annotated tags, we need to resolve the target
+			tagHash := reference.Hash()
+			tagObj, err := repo.TagObject(tagHash)
+			if err == nil {
+				// Annotated tag - return the target commit hash
+				return tagObj.Target, nil
+			}
+			// Lightweight tag - return the hash directly
+			return tagHash, nil
+		}
 	}
 
-	reference, err := repo.Reference(plumbing.ReferenceName(refName), true)
+	// Full ref path provided
+	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
 	if err != nil {
 		gom.logger.Error("Failed to resolve reference",
 			zap.String("ref", ref),
-			zap.String("ref_name", refName),
 			zap.Error(err))
 		return plumbing.ZeroHash, fmt.Errorf("failed to resolve reference %s: %w", ref, err)
 	}
 
-	hash := reference.Hash()
+	// Check if it's a tag reference
+	if strings.HasPrefix(ref, "refs/tags/") {
+		tagHash := reference.Hash()
+		tagObj, err := repo.TagObject(tagHash)
+		if err == nil {
+			// Annotated tag - return the target commit hash
+			return tagObj.Target, nil
+		}
+		// Lightweight tag - return the hash directly
+		return tagHash, nil
+	}
 
-	return hash, nil
+	return reference.Hash(), nil
 }
 
 // ValidateFileChanges validates a list of file changes

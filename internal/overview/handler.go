@@ -16,10 +16,7 @@ import (
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/tags"
 	"github.com/gin-gonic/gin"
-	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
@@ -216,7 +213,7 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	}
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 경로 관련 오류인지 확인
 		errMsg := strings.ToLower(err.Error())
@@ -325,7 +322,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
@@ -418,7 +415,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		parentPath = path[:idx]
 	}
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, parentPath)
+	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, parentPath)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -604,12 +601,12 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 						if mErr == nil && len(mergeBases) > 0 {
 							mergeBase := mergeBases[0]
 							// 앞선 커밋 수 계산(브랜치→기본)
-							aheadCount, aErr := countCommitsBetween(gitRepo, mergeBase, commit)
+							aheadCount, aErr := h.service.CountCommitsBetween(gitRepo, mergeBase, commit)
 							if aErr == nil {
 								branchItem.Ahead = aheadCount
 							}
 							// 뒤처진 커밋 수 계산(기본→브랜치)
-							behindCount, bErr := countCommitsBetween(gitRepo, mergeBase, defaultCommit)
+							behindCount, bErr := h.service.CountCommitsBetween(gitRepo, mergeBase, defaultCommit)
 							if bErr == nil {
 								branchItem.Behind = behindCount
 							}
@@ -724,7 +721,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	gitRepo := repoCtx.repoWrapper.GetRepo()
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
-	treeEntriesWithCommit, err := h.getTreeWithCommit(ctx, gitRepo, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
+	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 경로 관련 오류인지 확인
 		errMsg := strings.ToLower(err.Error())
@@ -751,196 +748,4 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	}
 
 	c.JSON(http.StatusOK, response)
-}
-
-// getTreeWithCommit는 트리 항목과 각 항목의 최근 커밋 정보를 함께 가져옵니다.
-func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, repoPath, ref, path string) ([]GitTreeEntryWithCommit, error) {
-	// ref를 커밋 해시로 해석
-	refObj, err := gitRepo.ResolveRevision(plumbing.Revision(ref))
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve reference: %w", err)
-	}
-
-	// Get commit
-	commit, err := gitRepo.CommitObject(*refObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commit: %w", err)
-	}
-
-	// Get tree
-	treeObj, err := commit.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tree: %w", err)
-	}
-
-	// Navigate to the specified path
-	var targetTree *object.Tree = treeObj
-	if path != "" {
-		treeEntry, err := treeObj.FindEntry(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find path: %w", err)
-		}
-		if treeEntry.Mode != filemode.Dir {
-			return nil, fmt.Errorf("path is not a tree: %s", path)
-		}
-		targetTree, err = gitRepo.TreeObject(treeEntry.Hash)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get target tree: %w", err)
-		}
-	}
-
-	// Normalize base path (remove leading/trailing slashes)
-	basePath := strings.Trim(path, "/")
-
-	entries := make([]entryInfo, len(targetTree.Entries))
-	for i, entry := range targetTree.Entries {
-		// Path는 full path from repository root
-		fullPath := entry.Name
-		if basePath != "" {
-			fullPath = basePath + "/" + entry.Name
-		}
-
-		// Entry type 결정
-		entryType := "blob"
-		if entry.Mode == filemode.Dir {
-			entryType = "tree"
-		} else if entry.Mode == filemode.Submodule {
-			entryType = "commit"
-		}
-
-		// Mode를 문자열로 변환 (Unix permissions)
-		modeStr := fmt.Sprintf("%o", entry.Mode)
-		// Hash를 문자열로 변환
-		hashStr := entry.Hash.String()
-
-		// Size 계산 (blob인 경우만)
-		var size *int64
-		if entryType == "blob" {
-			// Blob 객체 가져오기
-			blobObj, err := gitRepo.BlobObject(entry.Hash)
-			if err == nil {
-				blobSize := blobObj.Size
-				size = &blobSize
-			}
-		}
-
-		entries[i] = entryInfo{
-			index:     i,
-			entryType: entryType,
-			name:      entry.Name,
-			fullPath:  fullPath,
-			modeStr:   modeStr,
-			hashStr:   hashStr,
-			size:      size,
-		}
-	}
-
-	// 커밋 정보를 병렬로 조회 (service 레이어에서 처리)
-	pathInfos := make([]CommitPathInfo, 0, len(entries))
-	pathToIndex := make(map[string]int, len(entries))
-
-	for i := range entries {
-		if entries[i].entryType == "blob" || entries[i].entryType == "tree" {
-			isTree := entries[i].entryType == "tree"
-			pathInfos = append(pathInfos, CommitPathInfo{
-				Path:   entries[i].fullPath,
-				IsTree: isTree,
-			})
-			pathToIndex[entries[i].fullPath] = i
-		}
-	}
-
-	// service에서 병렬로 커밋 정보 조회
-	commitMap := h.service.GetLatestCommitsForPaths(ctx, gitRepo, ref, pathInfos)
-
-	// 결과를 entries에 매핑
-	for path, commit := range commitMap {
-		if idx, ok := pathToIndex[path]; ok {
-			entries[idx].commitInfo = commit
-		}
-	}
-
-	// 정렬: 트리(디렉토리)가 먼저 오고, 그 다음 blob(파일), 같은 타입 내에서는 파일명 아스키 정렬
-	sort.Slice(entries, func(i, j int) bool {
-		// 타입별 우선순위 결정
-		var typeI, typeJ int
-		switch entries[i].entryType {
-		case "tree":
-			typeI = 0
-		case "blob":
-			typeI = 1
-		case "commit":
-			typeI = 2
-		default:
-			typeI = 3
-		}
-
-		switch entries[j].entryType {
-		case "tree":
-			typeJ = 0
-		case "blob":
-			typeJ = 1
-		case "commit":
-			typeJ = 2
-		default:
-			typeJ = 3
-		}
-
-		// 타입이 다르면 타입 우선순위로 정렬 (작은 값이 먼저)
-		if typeI != typeJ {
-			return typeI < typeJ
-		}
-
-		// 같은 타입이면 파일명으로 아스키 정렬
-		return entries[i].name < entries[j].name
-	})
-
-	// 결과를 정렬된 순서대로 변환
-	treeEntriesWithCommit := make([]GitTreeEntryWithCommit, len(entries))
-	for i, e := range entries {
-		treeEntriesWithCommit[i] = GitTreeEntryWithCommit{
-			Type:         e.entryType,
-			Name:         e.name,
-			Path:         e.fullPath,
-			Mode:         &e.modeStr,
-			Hash:         &e.hashStr,
-			Size:         e.size,
-			LatestCommit: e.commitInfo,
-		}
-	}
-
-	return treeEntriesWithCommit, nil
-}
-
-// countCommitsBetween counts commits between two commits (from excluded, to included)
-// Iterates from 'to' backwards until 'from' hash is found
-func countCommitsBetween(repo *gogit.Repository, from, to *object.Commit) (int, error) {
-	if from.Hash == to.Hash {
-		return 0, nil
-	}
-
-	iter, err := repo.Log(&gogit.LogOptions{From: to.Hash})
-	if err != nil {
-		return 0, fmt.Errorf("failed to get commit log: %w", err)
-	}
-	defer iter.Close()
-
-	count := 0
-	fromHash := from.Hash.String()
-
-	walkErr := iter.ForEach(func(c *object.Commit) error {
-		if c.Hash.String() == fromHash {
-			return fmt.Errorf("stop iteration")
-		}
-		count++
-		return nil
-	})
-
-	if walkErr != nil && walkErr.Error() == "stop iteration" {
-		return count, nil
-	}
-	if walkErr == nil {
-		return count, nil
-	}
-	return 0, fmt.Errorf("failed to iterate commits: %w", walkErr)
 }
