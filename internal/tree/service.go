@@ -2,6 +2,7 @@ package tree
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/collabops/git-executor/internal/logging"
@@ -78,6 +79,41 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 		})
 	}
 
+	// 정렬: 트리(디렉토리)가 먼저 오고, 그 다음 blob(파일), 같은 타입 내에서는 파일명 아스키 정렬
+	sort.Slice(result, func(i, j int) bool {
+		// 타입별 우선순위 결정
+		var typeI, typeJ int
+		switch result[i].Type {
+		case "tree":
+			typeI = 0
+		case "blob":
+			typeI = 1
+		case "commit":
+			typeI = 2
+		default:
+			typeI = 3
+		}
+
+		switch result[j].Type {
+		case "tree":
+			typeJ = 0
+		case "blob":
+			typeJ = 1
+		case "commit":
+			typeJ = 2
+		default:
+			typeJ = 3
+		}
+
+		// 타입이 다르면 타입 우선순위로 정렬 (작은 값이 먼저)
+		if typeI != typeJ {
+			return typeI < typeJ
+		}
+
+		// 같은 타입이면 파일명으로 아스키 정렬
+		return result[i].Name < result[j].Name
+	})
+
 	return result, nil
 }
 
@@ -113,6 +149,41 @@ func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntries
 			Path: fullPath,
 		})
 	}
+
+	// 정렬: 트리(디렉토리)가 먼저 오고, 그 다음 blob(파일), 같은 타입 내에서는 파일명 아스키 정렬
+	sort.Slice(responseEntries, func(i, j int) bool {
+		// 타입별 우선순위 결정
+		var typeI, typeJ int
+		switch responseEntries[i].Type {
+		case "tree":
+			typeI = 0
+		case "blob":
+			typeI = 1
+		case "commit":
+			typeI = 2
+		default:
+			typeI = 3
+		}
+
+		switch responseEntries[j].Type {
+		case "tree":
+			typeJ = 0
+		case "blob":
+			typeJ = 1
+		case "commit":
+			typeJ = 2
+		default:
+			typeJ = 3
+		}
+
+		// 타입이 다르면 타입 우선순위로 정렬 (작은 값이 먼저)
+		if typeI != typeJ {
+			return typeI < typeJ
+		}
+
+		// 같은 타입이면 파일명으로 아스키 정렬
+		return responseEntries[i].Name < responseEntries[j].Name
+	})
 
 	return &TreeEntriesResponse{
 		Success: true,
@@ -186,6 +257,41 @@ func (h *TreeHandler) getTreeStructureRecursive(repoPath, ref, targetPath string
 				Path: fullPath,
 			})
 		}
+
+		// 정렬: 트리(디렉토리)가 먼저 오고, 그 다음 blob(파일), 같은 타입 내에서는 파일명 아스키 정렬
+		sort.Slice(responseEntries, func(i, j int) bool {
+			// 타입별 우선순위 결정
+			var typeI, typeJ int
+			switch responseEntries[i].Type {
+			case "tree":
+				typeI = 0
+			case "blob":
+				typeI = 1
+			case "commit":
+				typeI = 2
+			default:
+				typeI = 3
+			}
+
+			switch responseEntries[j].Type {
+			case "tree":
+				typeJ = 0
+			case "blob":
+				typeJ = 1
+			case "commit":
+				typeJ = 2
+			default:
+				typeJ = 3
+			}
+
+			// 타입이 다르면 타입 우선순위로 정렬 (작은 값이 먼저)
+			if typeI != typeJ {
+				return typeI < typeJ
+			}
+
+			// 같은 타입이면 파일명으로 아스키 정렬
+			return responseEntries[i].Name < responseEntries[j].Name
+		})
 
 		mapKey := path
 		if mapKey == "" {

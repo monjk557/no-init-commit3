@@ -860,7 +860,42 @@ func (h *RepositoryOverviewHandler) getTreeWithCommit(ctx context.Context, gitRe
 		}
 	}
 
-	// 결과를 원래 순서대로 변환
+	// 정렬: 트리(디렉토리)가 먼저 오고, 그 다음 blob(파일), 같은 타입 내에서는 파일명 아스키 정렬
+	sort.Slice(entries, func(i, j int) bool {
+		// 타입별 우선순위 결정
+		var typeI, typeJ int
+		switch entries[i].entryType {
+		case "tree":
+			typeI = 0
+		case "blob":
+			typeI = 1
+		case "commit":
+			typeI = 2
+		default:
+			typeI = 3
+		}
+
+		switch entries[j].entryType {
+		case "tree":
+			typeJ = 0
+		case "blob":
+			typeJ = 1
+		case "commit":
+			typeJ = 2
+		default:
+			typeJ = 3
+		}
+
+		// 타입이 다르면 타입 우선순위로 정렬 (작은 값이 먼저)
+		if typeI != typeJ {
+			return typeI < typeJ
+		}
+
+		// 같은 타입이면 파일명으로 아스키 정렬
+		return entries[i].name < entries[j].name
+	})
+
+	// 결과를 정렬된 순서대로 변환
 	treeEntriesWithCommit := make([]GitTreeEntryWithCommit, len(entries))
 	for i, e := range entries {
 		treeEntriesWithCommit[i] = GitTreeEntryWithCommit{
