@@ -426,19 +426,22 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	{
 		// Fetch operations (git clone, git fetch)
 		// GET /repos/{owner}/{repo}/info/refs?service=git-upload-pack
+		// v2에서는 receive-pack의 info/refs는 사용하지 않음 (POST /git-receive-pack에서 command=ls-refs 처리)
 		ownerRepoGroup.GET("/info/refs", func(c *gin.Context) {
-			fmt.Printf("[HTTP server] info/refs 요청: owner=%s, repo=%s, service=%s\n", c.Param("owner"), c.Param("repo"), c.Query("service"))
 			service := c.Query("service")
 			switch service {
 			case "git-upload-pack":
 				uploadPackHandler.HandleInfoRefs(c.Writer, c.Request)
 			case "git-receive-pack":
-				if receivePackHandler != nil {
-					receivePackHandler.HandleInfoRefs(c.Writer, c.Request)
-				} else {
+				// NOTE:
+				// Git 클라이언트(특히 Apple Git)의 send-pack은 HTTP push에서 protocol v2를 지원하지 않는 경우가 있어
+				// 여기서 v2 advertisement(push)를 반환하면 "support for protocol v2 not implemented yet"로 실패할 수 있습니다.
+				// 따라서 receive-pack은 v1 smart-http advertisement로 응답합니다.
+				if receivePackHandler == nil {
 					c.Status(http.StatusServiceUnavailable)
-					_, _ = c.Writer.Write([]byte("Receive-pack service not available"))
+					return
 				}
+				receivePackHandler.HandleInfoRefs(c.Writer, c.Request)
 			default:
 				c.Status(http.StatusBadRequest)
 				_, _ = c.Writer.Write([]byte("Invalid service parameter"))
@@ -447,7 +450,6 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 
 		// POST /repos/{owner}/{repo}/git-upload-pack
 		ownerRepoGroup.POST("/git-upload-pack", func(c *gin.Context) {
-			fmt.Printf("[HTTP server] git-upload-pack POST 요청: owner=%s, repo=%s, path=%s\n", c.Param("owner"), c.Param("repo"), c.Request.URL.Path)
 			uploadPackHandler.HandleUploadPack(c.Writer, c.Request)
 		})
 

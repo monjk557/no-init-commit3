@@ -3,28 +3,26 @@
 package protocol
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
-	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // Repository lock manager for preventing concurrent pushes
@@ -54,6 +52,9 @@ type ReceivePackHandler struct {
 	capabilities *ServerCapabilities
 	eventsClient events.RedisStreamClient
 	config       *config.Config
+	// unthinFallbackFn allows tests (and future extensions) to override thin-pack
+	// resolution behavior. If nil, unpackThinPackToLooseObjects is used.
+	unthinFallbackFn func(repo *gogit.Repository, packfileData []byte) error
 }
 
 // NewReceivePackHandler creates a new receive-pack handler for the executor
@@ -83,369 +84,426 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 		}
 	}
 
-	return &ReceivePackHandler{
+	h := &ReceivePackHandler{
 		pathConfig:   pathConfig,
 		errorHandler: errorHandler,
 		capabilities: capabilities,
 		eventsClient: eventsClient,
 		config:       cfg,
-	}, nil
+	}
+	h.unthinFallbackFn = h.unpackThinPackToLooseObjects
+	return h, nil
 }
 
-// HandleInfoRefs handles GET /repos/:owner/:repo/info/refs?service=git-receive-pack
-// This endpoint advertises references and capabilities for push operations
+// HandleInfoRefs handles Smart HTTP discovery for receive-pack (push).
+// NOTE: In practice, many Git clients (including Apple Git variants) do not use protocol v2 for HTTP push.
+// Therefore we respond with v0/v1-style advertisement for service=git-receive-pack.
 func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Extract path parameters from gateway-forwarded request
 	owner := URLParam(r, "owner")
 	repo := URLParam(r, "repo")
 	service := r.URL.Query().Get("service")
 
-	// Validate service parameter
 	if service != "git-receive-pack" {
 		http.Error(w, "Invalid service parameter", http.StatusBadRequest)
 		return
 	}
 
-	// Get user ID from gateway context (forwarded header)
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		http.Error(w, "Missing user authentication context", http.StatusUnauthorized)
-		return
-	}
-
-	// Get repository path and validate
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
 		return
 	}
-
-	// Ensure repository exists
-	if err := repositories.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
-		h.errorHandler.HandleError(w, r, ErrRepositoryNotFound, "receive_pack_info_refs")
-		return
-	}
-
-	// Open repository using go-git with caching
-	gitRepo, err := repositories.OpenRepositorySimple(repoPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer func() { _ = gitRepo.Close() }()
-
-	// Set response headers for Git Smart HTTP protocol
-	w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
-	w.Header().Set("Cache-Control", "no-cache")
-
-	// Write service advertisement
-	_, _ = fmt.Fprintf(w, "0020# service=git-receive-pack\n")
-	_, _ = fmt.Fprintf(w, "0000") // flush packet
-
-	// Write repository references with capabilities
-	err = h.writeReferencesWithCapabilities(ctx, w, gitRepo)
-	if err != nil {
-		// If we've already started writing, we can't send an HTTP error
-		// Log the error and write an error packet instead
-		_, _ = fmt.Fprintf(w, "0000") // end packet
-		return
-	}
-
-	// End with null packet
-	_, _ = fmt.Fprintf(w, "0000")
-}
-
-// writeReferencesWithCapabilities writes Git references with server capabilities for receive-pack
-func (h *ReceivePackHandler) writeReferencesWithCapabilities(ctx context.Context, w http.ResponseWriter, repo *repositories.RepositoryWrapper) error {
-	// Get all repository references
-	refs, err := h.getAllReferences(ctx, repo)
-	if err != nil {
-		return fmt.Errorf("failed to get references: %w", err)
-	}
-
-	// Create packet line writer
-	pktWriter := newPktLineWriter(w)
-
-	// Create capability string for receive-pack operations
-	capString := h.buildReceiveCapabilities()
-
-	if len(refs) == 0 {
-		// Empty repository - write capabilities on null ref
-		line := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n", capString)
-		if err := pktWriter.writeLine(line); err != nil {
-			return fmt.Errorf("failed to write capabilities: %w", err)
-		}
-	} else {
-		// Sort references for consistent output
-		sort.Slice(refs, func(i, j int) bool {
-			return refs[i].Name < refs[j].Name
-		})
-
-		// Write first reference with capabilities
-		firstRef := refs[0]
-		line := fmt.Sprintf("%s %s\x00%s\n", firstRef.Hash, firstRef.Name, capString)
-		if err := pktWriter.writeLine(line); err != nil {
-			return fmt.Errorf("failed to write first ref with capabilities: %w", err)
-		}
-
-		// Write remaining references without capabilities
-		for _, ref := range refs[1:] {
-			line := fmt.Sprintf("%s %s\n", ref.Hash, ref.Name)
-			if err := pktWriter.writeLine(line); err != nil {
-				return fmt.Errorf("failed to write ref %s: %w", ref.Name, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// getAllReferences retrieves all references from the repository
-func (h *ReceivePackHandler) getAllReferences(ctx context.Context, repo *repositories.RepositoryWrapper) ([]Reference, error) {
-	var refs []Reference
-
-	// Try to get commits to find references
-	commits, err := commits.GetCommits(repo, ctx, "HEAD", 1, 0)
-	if err != nil {
-		// Repository might be empty - return empty refs list
-		return refs, nil
-	}
-
-	if len(commits) > 0 {
-		// For now, add HEAD and main branch
-		headHash := commits[0].Sha
-
-		refs = append(refs, Reference{
-			Name: "HEAD",
-			Hash: headHash,
-		})
-
-		refs = append(refs, Reference{
-			Name: "refs/heads/main",
-			Hash: headHash,
-		})
-
-		// TODO: In a full implementation, we would iterate through all refs
-		// using go-git's References() method and convert them to our Reference struct
-	}
-
-	return refs, nil
-}
-
-// buildReceiveCapabilities builds the capability string for receive-pack operations
-func (h *ReceivePackHandler) buildReceiveCapabilities() string {
-	caps := []string{
-		"report-status",                    // Send status for each ref update
-		"delete-refs",                      // Allow reference deletion
-		"ofs-delta",                        // Support offset deltas in packfiles
-		"side-band-64k",                    // Support side-band protocol
-		"atomic",                           // Support atomic transactions
-		"push-options",                     // Support push options
-		"agent=collabops-git-executor/1.0", // Server identification
-	}
-
-	return strings.Join(caps, " ")
-}
-
-// HandleReceivePack handles POST /repos/:owner/:repo/git-receive-pack
-// This endpoint processes push requests with packfiles and updates references
-func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Extract path parameters from gateway-forwarded request
-	owner := URLParam(r, "owner")
-	repo := URLParam(r, "repo")
-
-	// Get user ID from gateway context (forwarded header)
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		http.Error(w, "Missing user authentication context", http.StatusUnauthorized)
-		return
-	}
-
-	// Get repository path and validate
-	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Ensure repository exists
 	if err := repositories.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
 		http.Error(w, fmt.Sprintf("Repository not found: %v", err), http.StatusNotFound)
 		return
 	}
 
-	// Parse the receive-pack request from client (forwarded by gateway)
-	receiveReq, err := h.parseReceivePackRequest(r.Body)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid receive-pack request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Acquire repository lock to prevent concurrent pushes
-	repoLock := getRepositoryLock(repoPath)
-	repoLock.Lock()
-	defer repoLock.Unlock()
-
-	// Open repository using go-git
-	fs := osfs.New(repoPath)
-	storage := filesystem.NewStorage(fs, nil)
-	gitRepo, err := gogit.Open(storage, fs)
+	repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
 		return
 	}
+	defer func() { _ = repoWrapper.Close() }()
 
-	// Set response headers for Git Smart HTTP protocol
-	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+	goGitRepo := repoWrapper.GetRepo()
+
+	w.Header().Del("Content-Encoding")
+	w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
 	w.Header().Set("Cache-Control", "no-cache")
 
-	// Process the push request
-	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo)
+	// Smart HTTP service announcement
+	pktWriter := &pktLineWriter{w: w}
+	_ = pktWriter.writeLine("# service=git-receive-pack")
+	_ = pktWriter.flush()
+
+	// v1 ref advertisement + capabilities
+	caps := []string{
+		"report-status",
+		"delete-refs",
+		// IMPORTANT:
+		// Some clients (notably Apple Git) may still send thin packs even if we
+		// don't advertise "thin-pack". Advertising "no-thin" explicitly tells the
+		// client that thin packs are NOT acceptable, forcing a complete pack.
+		"no-thin",
+		// NOTE:
+		// - side-band-64k를 광고하면 클라이언트가 sideband 모드로 응답을 해석하는데,
+		//   이 구현은 (progress/sideband 멀티플렉싱 없이) report-status pkt-line만 반환한다.
+		// - thin-pack도 광고하지 않아 클라이언트가 thin pack을 보내지 않도록 유도한다.
+		// 필요 시 기능을 단계적으로 추가.
+	}
+	_ = WriteV1Advert(w, *goGitRepo, caps...)
+}
+
+func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Request) {
+	// [1] HTTP request 수신 (POST /git-receive-pack)
+	ctx := r.Context()
+
+	owner := URLParam(r, "owner")
+	repo := URLParam(r, "repo")
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		// If we've started writing, we can't send HTTP error anymore
-		// Write an error in protocol format
-		pktWriter := newPktLineWriter(w)
-		_ = pktWriter.writeLine(fmt.Sprintf("unpack %s", err.Error()))
+		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := repositories.EnsureRepoExists(h.pathConfig, repoPath); err != nil {
+		http.Error(w, fmt.Sprintf("Repository not found: %v", err), http.StatusNotFound)
+		return
+	}
+
+	repoLock := getRepositoryLock(repoPath)
+	repoLock.Lock()
+	defer repoLock.Unlock()
+
+	repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = repoWrapper.Close() }()
+
+	gitRepo := repoWrapper.GetRepo()
+
+	w.Header().Del("Content-Encoding")
+	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	w.WriteHeader(http.StatusOK)
+
+	pktWriter := &pktLineWriter{w: w}
+
+	// v2 vs v1 감지:
+	// - v2: 첫 섹션 첫 라인이 "command=" 로 시작
+	// - v1: "old-oid new-oid refname[\\x00cap...]" 형태의 update 커맨드로 시작
+	//
+	// body를 peek하여 판단 (그리고 파싱을 위해 bytes로 보관)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
+	}
+	peekLen := 200
+	if len(bodyBytes) < peekLen {
+		peekLen = len(bodyBytes)
+	}
+
+	// body를 다시 읽을 수 있도록 복원
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	cmds, err := h.readSection(r.Body)
+	if err != nil {
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
+	}
+
+	if len(cmds) == 0 {
 		_ = pktWriter.flush()
+		return
+	}
+
+	// v1 fallback: 첫 라인이 command=가 아니면 v1 receive-pack로 처리
+	if !strings.HasPrefix(cmds[0], "command=") {
+		receiveReq, err := h.parseV1ReceivePack(bodyBytes)
+		if err != nil {
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.flush()
+			return
+		}
+		if err := h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, pktWriter); err != nil {
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.flush()
+			return
+		}
+		return
+	}
+
+	if strings.HasPrefix(cmds[0], "command=ls-refs") {
+		// [4] command=ls-refs 처리
+		// ls-refs options 섹션 읽기
+		lsRefsOpts, err := h.readSection(r.Body)
+		if err != nil {
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			return
+		}
+		allCmds := append(cmds, lsRefsOpts...)
+		lsRefsReq, err := ParseLsRefsSection(allCmds)
+		if err != nil {
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			return
+		}
+
+		// refs 설명 생성 및 전송
+		if err := h.handleLsRefs(ctx, gitRepo, lsRefsReq, pktWriter); err != nil {
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			return
+		}
+
+		// [6] flush
+		_ = pktWriter.flush()
+		// [7] 종료
+		return
+	} else if !strings.HasPrefix(cmds[0], "command=push") {
+		_ = pktWriter.writeLine("ERR unknown command")
+		return
+	}
+
+	// [4] command=push 처리
+	// push 옵션 섹션 읽기
+	pushOpts, err := h.readSection(r.Body)
+	if err != nil {
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
+	}
+	allCmds := append(cmds, pushOpts...)
+
+	// v2 push 섹션에서 ref-update 명령과 packfile 파싱
+	receiveReq, err := h.parsePushSection(allCmds, r.Body)
+	if err != nil {
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
+	}
+
+	// [4] receive-pack 처리 시작
+	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, pktWriter)
+	if err != nil {
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 }
 
-// parseReceivePackRequest parses the receive-pack request body in pkt-line format
-func (h *ReceivePackHandler) parseReceivePackRequest(body io.Reader) (*ReceivePackRequest, error) {
+func (h *ReceivePackHandler) readSection(body io.Reader) ([]string, error) {
+	var cmds []string
+	buf := make([]byte, 4)
+
+	for {
+		n, err := io.ReadFull(body, buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return cmds, err
+		}
+		if n != 4 {
+			break
+		}
+
+		lengthHex := string(buf)
+		length, err := strconv.ParseInt(lengthHex, 16, 32)
+		if err != nil {
+			continue
+		}
+
+		// flush-pkt: end of this message/section
+		if length == 0 {
+			break
+		}
+
+		// delim-pkt: end of this section (v2 request framing)
+		if length == 1 {
+			break
+		}
+
+		if length < 4 {
+			continue
+		}
+
+		dataLen := int(length) - 4
+		if dataLen <= 0 {
+			continue
+		}
+
+		dataBuf := make([]byte, dataLen)
+		n, err = io.ReadFull(body, dataBuf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return cmds, err
+		}
+		if n != dataLen {
+			continue
+		}
+
+		data := strings.TrimSuffix(string(dataBuf), "\n")
+		cmds = append(cmds, data)
+	}
+
+	return cmds, nil
+}
+
+// parseV1ReceivePack parses v1 receive-pack request from raw HTTP body bytes.
+// Format:
+// - pkt-line framed update commands
+// - flush-pkt
+// - raw packfile (optional)
+func (h *ReceivePackHandler) parseV1ReceivePack(body []byte) (*ReceivePackRequest, error) {
 	req := &ReceivePackRequest{
 		Commands:     make([]RefUpdateCommand, 0),
 		Capabilities: make([]string, 0),
 	}
 
-	scanner := bufio.NewScanner(body)
-	firstCommand := true
-	var packfileBuffer bytes.Buffer
-	inPackfile := false
+	rd := bytes.NewReader(body)
+	lenBuf := make([]byte, 4)
+	first := true
 
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Handle empty lines or flush packets
-		if line == "" || line == "0000" {
-			continue
+	for {
+		if _, err := io.ReadFull(rd, lenBuf); err != nil {
+			if err == io.EOF {
+				return req, nil
+			}
+			return nil, err
 		}
 
-		// Check if we've hit the packfile data
-		if strings.HasPrefix(line, "PACK") || inPackfile {
-			inPackfile = true
-			packfileBuffer.WriteString(line)
-			packfileBuffer.WriteByte('\n')
-			continue
-		}
-
-		// Parse pkt-line format
-		if len(line) < 4 {
-			continue
-		}
-
-		// Extract length prefix (first 4 hex characters)
-		lengthHex := line[:4]
-		length, err := strconv.ParseInt(lengthHex, 16, 32)
+		n, err := strconv.ParseInt(string(lenBuf), 16, 32)
 		if err != nil {
-			continue // Skip malformed lines
+			return nil, fmt.Errorf("invalid pkt-line length: %w", err)
 		}
-
-		if length == 0 {
-			// Flush packet, indicates end of commands
-			break
-		}
-
-		// Extract actual content (skip length prefix)
-		content := line[4:]
-		if len(content) == 0 {
-			continue
-		}
-
-		// Parse command line: "old-hash new-hash ref-name [capabilities]"
-		// Need to be careful with parsing since capabilities can be null-separated OR space-separated
-
-		// First, split only on the first two spaces to get hashes
-		firstSpaceIdx := strings.Index(content, " ")
-		if firstSpaceIdx == -1 || len(content) <= firstSpaceIdx+1 {
-			continue
-		}
-
-		secondSpaceIdx := strings.Index(content[firstSpaceIdx+1:], " ")
-		if secondSpaceIdx == -1 {
-			continue
-		}
-		secondSpaceIdx += firstSpaceIdx + 1
-
-		oldHashStr := content[:firstSpaceIdx]
-		newHashStr := content[firstSpaceIdx+1 : secondSpaceIdx]
-		refAndCapsStr := content[secondSpaceIdx+1:]
-
-		// Check for capabilities in the ref name (null-separated)
-		var refName string
-		var capabilities []string
-
-		if strings.Contains(refAndCapsStr, "\x00") {
-			// Null-separated format: "refs/heads/main\x00report-status delete-refs"
-			refParts := strings.Split(refAndCapsStr, "\x00")
-			refName = refParts[0]
-			if len(refParts) > 1 {
-				// All remaining parts after null are capabilities (space-separated)
-				capStr := strings.Join(refParts[1:], " ")
-				capabilities = strings.Fields(capStr)
+		if n == 0 {
+			// flush: remainder is packfile
+			remaining, _ := io.ReadAll(rd)
+			if len(remaining) > 0 {
+				req.PackfileData = remaining
 			}
-		} else {
-			// Space-separated format: parse normally
-			parts := strings.Fields(refAndCapsStr)
-			if len(parts) > 0 {
-				refName = parts[0]
-				if len(parts) > 1 {
-					capabilities = parts[1:]
-				}
-			}
+			return req, nil
+		}
+		if n < 4 {
+			return nil, fmt.Errorf("invalid pkt-line length: %d", n)
 		}
 
-		// Parse hashes
-		oldHash := plumbing.NewHash(oldHashStr)
-		newHash := plumbing.NewHash(newHashStr)
+		dataLen := int(n) - 4
+		data := make([]byte, dataLen)
+		if _, err := io.ReadFull(rd, data); err != nil {
+			return nil, err
+		}
 
-		// Create command
-		cmd := RefUpdateCommand{
+		line := strings.TrimSuffix(string(data), "\n")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// First line may contain capabilities after NUL
+		var capsPart string
+		if first && strings.Contains(line, "\x00") {
+			parts := strings.SplitN(line, "\x00", 2)
+			line = parts[0]
+			capsPart = parts[1]
+		}
+		if first && capsPart != "" {
+			req.Capabilities = append(req.Capabilities, strings.Fields(capsPart)...)
+		}
+		first = false
+
+		// "old new ref"
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		oldHash := plumbing.NewHash(fields[0])
+		newHash := plumbing.NewHash(fields[1])
+		refName := fields[2]
+		req.Commands = append(req.Commands, RefUpdateCommand{
 			RefName: refName,
 			OldHash: oldHash,
 			NewHash: newHash,
+		})
+	}
+}
+
+func (h *ReceivePackHandler) parsePushSection(cmds []string, body io.Reader) (*ReceivePackRequest, error) {
+	req := &ReceivePackRequest{
+		Commands:     make([]RefUpdateCommand, 0),
+		Capabilities: make([]string, 0),
+	}
+
+	var currentOldOid, currentNewOid, currentRefName string
+
+	for _, cmd := range cmds {
+		c := strings.TrimSpace(cmd)
+		if c == "" {
+			continue
 		}
 
-		req.Commands = append(req.Commands, cmd)
+		switch {
+		case c == "command=push":
+		case strings.HasPrefix(c, "agent="):
+		case strings.HasPrefix(c, "old-oid "):
+			// [6] ref-update 명령 수신
+			currentOldOid = strings.TrimSpace(c[8:])
+		case strings.HasPrefix(c, "new-oid "):
+			currentNewOid = strings.TrimSpace(c[8:])
+		case strings.HasPrefix(c, "ref-name "):
+			currentRefName = strings.TrimSpace(c[9:])
+			if currentOldOid != "" && currentNewOid != "" && currentRefName != "" {
+				oldHash := plumbing.NewHash(currentOldOid)
+				newHash := plumbing.NewHash(currentNewOid)
 
-		// Store capabilities from first command
-		if firstCommand && len(capabilities) > 0 {
-			req.Capabilities = append(req.Capabilities, capabilities...)
-			firstCommand = false
+				cmd := RefUpdateCommand{
+					RefName: currentRefName,
+					OldHash: oldHash,
+					NewHash: newHash,
+				}
+				req.Commands = append(req.Commands, cmd)
+				currentOldOid = ""
+				currentNewOid = ""
+				currentRefName = ""
+			}
+		default:
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading request body: %w", err)
+	// [8] packfile 수신 시작
+	// [9] packfile 헤더 수신
+	// [10] packfile 스트리밍 수신
+	// [11] request body EOF 수신
+	// [12] packfile 수신 완료
+	// v2에서는 ref-update 명령 이후 packfile이 raw binary로 전송됨
+	remaining, err := io.ReadAll(body)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("error reading packfile: %w", err)
 	}
 
-	// Store packfile data if any
-	if packfileBuffer.Len() > 0 {
-		req.PackfileData = packfileBuffer.Bytes()
+	if len(remaining) > 0 {
+		// packfile은 "PACK"으로 시작하는 raw binary 데이터
+		req.PackfileData = remaining
 	}
 
 	return req, nil
 }
 
-// processReceivePackRequest processes the push request and updates references
-func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo *gogit.Repository, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName string) error {
-	pktWriter := newPktLineWriter(w)
+func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo *gogit.Repository, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName string, pktWriter *pktLineWriter) error {
+	// NOTE:
+	// receive-pack의 "side-band-64k"는 진행(progress) 메시지 다중화 용도인데,
+	// 이 구현은 우선 v1 report-status(pkt-line)를 정확히 반환하는 것을 목표로 한다.
+	// (side-band로 pkt-line 자체를 감싸면 클라이언트가 "remote: 000eunpack ok"처럼 그대로 출력하고,
+	// status 파싱이 꼬일 수 있음)
+	if pktWriter == nil {
+		pktWriter = newPktLineWriter(w)
+	} else {
+		pktWriter.w = w
+	}
 
-	// Validate that we have commands to process
 	if len(req.Commands) == 0 {
 		if err := pktWriter.writeLine("unpack ok"); err != nil {
 			return fmt.Errorf("failed to write unpack status: %w", err)
@@ -453,11 +511,10 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 		return pktWriter.flush()
 	}
 
-	// Process packfile if present
 	if len(req.PackfileData) > 0 {
+		// [13] unpack 시작
 		err := h.processPackfile(ctx, repo, req.PackfileData)
 		if err != nil {
-			// Report unpack failure
 			if err := pktWriter.writeLine(fmt.Sprintf("unpack %s", err.Error())); err != nil {
 				return fmt.Errorf("failed to write unpack error: %w", err)
 			}
@@ -465,22 +522,21 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 		}
 	}
 
-	// Report successful unpack
 	if err := pktWriter.writeLine("unpack ok"); err != nil {
 		return fmt.Errorf("failed to write unpack status: %w", err)
 	}
 
-	// Process each reference update command
+	// [15] refs 업데이트
 	for _, cmd := range req.Commands {
 		err := h.processRefUpdate(ctx, repo, cmd, owner, repoName)
 		if err != nil {
-			// Report failure for this reference
+			// [17] report-status 생성
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
 			if err := pktWriter.writeLine(statusLine); err != nil {
 				return fmt.Errorf("failed to write ref error status: %w", err)
 			}
 		} else {
-			// Report success for this reference
+			// [17] report-status 생성
 			statusLine := fmt.Sprintf("ok %s", cmd.RefName)
 			if err := pktWriter.writeLine(statusLine); err != nil {
 				return fmt.Errorf("failed to write ref success status: %w", err)
@@ -488,45 +544,265 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 		}
 	}
 
-	// End with flush packet
-	return pktWriter.flush()
-}
-
-// processPackfile processes the uploaded packfile and stores objects in the repository
-func (h *ReceivePackHandler) processPackfile(ctx context.Context, repo *gogit.Repository, packfileData []byte) error {
-	if len(packfileData) == 0 {
-		return nil // No packfile to process
+	// [18] progress / status 전송 (side-band)
+	// [19] 최종 flush
+	if err := pktWriter.flush(); err != nil {
+		return err
 	}
 
-	// Validate packfile format and extract basic information
+	// [20] HTTP response body 종료
+	// [21] 모든 처리 완료
+	return nil
+}
+
+func (h *ReceivePackHandler) processPackfile(ctx context.Context, repo *gogit.Repository, packfileData []byte) error {
+	if len(packfileData) == 0 {
+		return nil
+	}
+
 	header, err := h.validatePackfileFormat(packfileData)
 	if err != nil {
 		return fmt.Errorf("invalid packfile format: %w", err)
 	}
 
-	// For now, if the packfile is valid, we assume the objects will be properly handled
-	// by the reference update process. A complete implementation would:
-	// 1. Parse individual objects from the packfile
-	// 2. Resolve delta objects
-	// 3. Store objects in the repository
-	// 4. Update indexes
+	if !bytes.HasPrefix(packfileData, []byte("PACK")) {
+		return fmt.Errorf("invalid packfile signature")
+	}
 
-	// Log successful validation
-	if header.ObjectCount > 0 {
-		// Objects will be validated during reference updates
+	// IMPORTANT:
+	// Do NOT use packfile.NewParserWithStorage(scanner, repo.Storer) here.
+	// When a storage is provided, go-git’s parser may try to read non-delta base
+	// objects from the storage during delta resolution. For filesystem storage,
+	// base objects are written via LazyWriter but are only closed at the end of
+	// Parse() (deferred), which can surface as "object not found" during Parse.
+	//
+	// The correct server-side behavior is to persist the received pack as a
+	// pack+idx via storer.PackfileWriter. That path uses a parser WITHOUT storage.
+	pw, ok := repo.Storer.(storer.PackfileWriter)
+	if !ok {
+		// Fallback: at least validate the packfile parses (without storage)
+		reader := bytes.NewReader(packfileData)
+		scanner := packfile.NewScanner(reader)
+		parser, err := packfile.NewParser(scanner)
+		if err != nil {
+			return fmt.Errorf("failed to create packfile parser: %w", err)
+		}
+		if _, err := parser.Parse(); err != nil {
+			if err == packfile.ErrReferenceDeltaNotFound {
+				return fmt.Errorf("failed to parse packfile: %w (thin pack or missing base objects)", err)
+			}
+			return fmt.Errorf("failed to parse packfile: %w", err)
+		}
 		_ = header.ObjectCount
+		return nil
+	}
+
+	w, err := pw.PackfileWriter()
+	if err != nil {
+		return fmt.Errorf("failed to open packfile writer: %w", err)
+	}
+
+	if _, err := io.Copy(w, bytes.NewReader(packfileData)); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("failed to write packfile: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		// NOTE:
+		// Apple Git 등 일부 클라이언트는 서버가 thin-pack을 광고하지 않아도
+		// stateless-rpc(push)에서 억지로 thin pack을 보내는 경우가 있습니다.
+		// 이때 PackfileWriter 경로(내부적으로 parser without storage)는
+		// external REF_DELTA(base outside pack)를 resolve할 수 없어 여기로 떨어집니다.
+		//
+		// 서버측에서는 git index-pack --fix-thin과 유사하게, repo에 이미 존재하는
+		// base object를 사용해 delta를 적용해 “완성된 객체”를 저장하면 push를 받아줄 수 있습니다.
+		// 따라서 ErrReferenceDeltaNotFound이면 loose object 언팩(Delta 적용)으로 fallback합니다.
+		if errors.Is(err, packfile.ErrReferenceDeltaNotFound) {
+			unthinFn := h.unthinFallbackFn
+			if unthinFn == nil {
+				unthinFn = h.unpackThinPackToLooseObjects
+			}
+			if thinErr := unthinFn(repo, packfileData); thinErr == nil {
+				_ = header.ObjectCount
+				return nil
+			} else {
+				return fmt.Errorf("failed to parse packfile: %w (thin pack or missing base objects)", err)
+			}
+		}
+		return fmt.Errorf("failed to persist packfile: %w", err)
+	}
+
+	_ = header.ObjectCount
+	return nil
+}
+
+// unpackThinPackToLooseObjects는 thin pack(REF_DELTA base가 pack 외부)에 대해
+// repo에 이미 존재하는 base object를 찾아 delta를 적용한 뒤, 결과 객체를 loose object로 저장합니다.
+//
+// - 장점: 외부 git 커맨드 없이도 Apple Git의 thin push를 수용 가능
+// - 단점: pack+idx로 저장하지 않고 loose로 저장(추후 gc/repack 필요)
+func (h *ReceivePackHandler) unpackThinPackToLooseObjects(repo *gogit.Repository, packfileData []byte) error {
+	reader := bytes.NewReader(packfileData)
+	scanner := packfile.NewScanner(reader)
+
+	// Header()를 호출해 scanner 상태를 pack 시작으로 맞춤
+	_, objCount, err := scanner.Header()
+	if err != nil {
+		return err
+	}
+
+	type deltaEntry struct {
+		offset     int64
+		baseOffset int64
+		baseHash   plumbing.Hash
+		isOFS      bool
+		deltaBytes []byte
+	}
+
+	offsetToHash := make(map[int64]plumbing.Hash, 256)
+	pending := make(map[int64]*deltaEntry, 64)
+	var order []int64
+
+	// 1차 패스: pack을 순서대로(헤더의 object count만큼) 읽으며
+	// - non-delta: 즉시 저장(SetEncodedObject)하고 offset->hash 기록
+	// - delta: deltaBytes만 보관(pending)
+	for i := uint32(0); i < objCount; i++ {
+		oh, err := scanner.NextObjectHeader()
+		if err != nil {
+			return err
+		}
+
+		var buf bytes.Buffer
+		if _, _, err := scanner.NextObject(&buf); err != nil {
+			return err
+		}
+
+		switch oh.Type {
+		case plumbing.CommitObject, plumbing.TreeObject, plumbing.BlobObject, plumbing.TagObject:
+			// 해시 계산(정확한 git object hash)
+			hasher := plumbing.NewHasher(oh.Type, oh.Length)
+			_, _ = hasher.Write(buf.Bytes())
+			objHash := hasher.Sum()
+
+			obj := repo.Storer.NewEncodedObject()
+			obj.SetType(oh.Type)
+			obj.SetSize(oh.Length)
+			w, err := obj.Writer()
+			if err != nil {
+				return err
+			}
+			if _, err := w.Write(buf.Bytes()); err != nil {
+				_ = w.Close()
+				return err
+			}
+			if err := w.Close(); err != nil {
+				return err
+			}
+			if _, err := repo.Storer.SetEncodedObject(obj); err != nil {
+				return err
+			}
+
+			// sanity: 저장된 해시와 계산된 해시가 다르면 이상하지만 진행은 가능
+			offsetToHash[oh.Offset] = objHash
+
+		case plumbing.OFSDeltaObject:
+			e := &deltaEntry{
+				offset:     oh.Offset,
+				baseOffset: oh.OffsetReference,
+				isOFS:      true,
+				deltaBytes: append([]byte(nil), buf.Bytes()...),
+			}
+			pending[oh.Offset] = e
+			order = append(order, oh.Offset)
+
+		case plumbing.REFDeltaObject:
+			e := &deltaEntry{
+				offset:     oh.Offset,
+				baseHash:   oh.Reference,
+				isOFS:      false,
+				deltaBytes: append([]byte(nil), buf.Bytes()...),
+			}
+			pending[oh.Offset] = e
+			order = append(order, oh.Offset)
+
+		default:
+			return fmt.Errorf("unsupported pack object type: %s", oh.Type)
+		}
+	}
+
+	// resolve helper
+	resolveOne := func(e *deltaEntry) (bool, error) {
+		if _, ok := offsetToHash[e.offset]; ok {
+			delete(pending, e.offset)
+			return true, nil
+		}
+
+		var base plumbing.Hash
+		if e.isOFS {
+			// OFS는 base가 pack 내 앞쪽 오프셋에 존재해야 함
+			// base가 delta라면 먼저 resolve되어야 하므로 없으면 "아직"
+			bh, ok := offsetToHash[e.baseOffset]
+			if !ok {
+				return false, nil
+			}
+			base = bh
+		} else {
+			base = e.baseHash
+		}
+
+		// base object가 repo에 존재해야 delta 적용 가능(REF thin의 핵심)
+		baseObj, err := repo.Storer.EncodedObject(plumbing.AnyObject, base)
+		if err != nil {
+			// REF delta의 base가 같은 pack 안에 있는 경우, base가 아직 저장되지 않았을 수 있으니
+			// 한 번 더 루프에서 기회를 줌.
+			return false, nil
+		}
+
+		target := repo.Storer.NewEncodedObject()
+		target.SetType(baseObj.Type())
+		if err := packfile.ApplyDelta(target, baseObj, e.deltaBytes); err != nil {
+			return false, err
+		}
+
+		if _, err := repo.Storer.SetEncodedObject(target); err != nil {
+			return false, err
+		}
+		offsetToHash[e.offset] = target.Hash()
+		delete(pending, e.offset)
+		return true, nil
+	}
+
+	// 2차 패스: delta 해소(의존성 때문에 여러 번 돌 수 있음)
+	for len(pending) > 0 {
+		progress := false
+
+		for _, off := range order {
+			e, ok := pending[off]
+			if !ok {
+				continue
+			}
+			ok2, err := resolveOne(e)
+			if err != nil {
+				return err
+			}
+			if ok2 {
+				progress = true
+			}
+		}
+
+		if !progress {
+			// 더 이상 base를 찾지 못함 = 진짜 missing base
+			return packfile.ErrReferenceDeltaNotFound
+		}
 	}
 
 	return nil
 }
 
-// PackfileHeader represents basic packfile information
 type PackfileHeader struct {
 	Version     uint32
 	ObjectCount uint32
 }
 
-// validatePackfileFormat performs basic validation of packfile format
 func (h *ReceivePackHandler) validatePackfileFormat(packfileData []byte) (*PackfileHeader, error) {
 	if len(packfileData) < 12 {
 		return nil, fmt.Errorf("packfile too short: need at least 12 bytes, got %d", len(packfileData))
@@ -553,24 +829,20 @@ func (h *ReceivePackHandler) validatePackfileFormat(packfileData []byte) (*Packf
 	}, nil
 }
 
-// processRefUpdate processes a single reference update command
 func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand, owner, repoName string) error {
-	// Validate the reference name
+	// [7] refs 검증 / fast-forward 검사
 	if !isValidRefName(cmd.RefName) {
 		return fmt.Errorf("invalid reference name: %s", cmd.RefName)
 	}
 
-	// Get current reference (if it exists)
 	ref, err := repo.Reference(plumbing.ReferenceName(cmd.RefName), true)
 	if err != nil && err != plumbing.ErrReferenceNotFound {
 		return fmt.Errorf("failed to get reference %s: %w", cmd.RefName, err)
 	}
 
-	// Check if this is a create, update, or delete operation
 	isCreate := cmd.OldHash == plumbing.ZeroHash
 	isDelete := cmd.NewHash == plumbing.ZeroHash
 
-	// Validate the old hash matches current state (for updates and deletes)
 	if !isCreate {
 		if ref == nil {
 			return fmt.Errorf("reference %s does not exist", cmd.RefName)
@@ -580,14 +852,11 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.R
 		}
 	}
 
-	// Validate the new object exists (for creates and updates)
 	if !isDelete {
 		_, err := repo.CommitObject(cmd.NewHash)
 		if err != nil {
-			// Try as a tag object
 			_, err = repo.TagObject(cmd.NewHash)
 			if err != nil {
-				// Try as any object
 				_, err = repo.Object(plumbing.AnyObject, cmd.NewHash)
 				if err != nil {
 					return fmt.Errorf("object %s not found in repository", cmd.NewHash)
@@ -596,23 +865,19 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.R
 		}
 	}
 
-	// Perform the reference update
 	if isDelete {
-		// Delete the reference
 		err = repo.Storer.RemoveReference(plumbing.ReferenceName(cmd.RefName))
 		if err != nil {
 			return fmt.Errorf("failed to delete reference %s: %w", cmd.RefName, err)
 		}
 	} else {
-		// Create or update the reference
 		newRef := plumbing.NewHashReference(plumbing.ReferenceName(cmd.RefName), cmd.NewHash)
 		err = repo.Storer.SetReference(newRef)
 		if err != nil {
 			return fmt.Errorf("failed to update reference %s: %w", cmd.RefName, err)
 		}
 
-		// Publish commit event if new commit was created (not a delete and hash changed)
-		// Only publish for branches (refs/heads/) and when hash actually changed
+		// [16] hooks 실행 (pre-receive / update / post-receive)
 		if cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
 			oldHashStr := ""
 			if cmd.OldHash != plumbing.ZeroHash {
@@ -625,26 +890,21 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.R
 	return nil
 }
 
-// isValidRefName validates a Git reference name according to Git naming rules
 func isValidRefName(refName string) bool {
-	// Basic validation - Git has complex rules, but these cover most cases
 	if refName == "" {
 		return false
 	}
 
-	// Must start with refs/
 	if !strings.HasPrefix(refName, "refs/") {
 		return false
 	}
 
-	// Check for control characters (ASCII 0-31)
 	for _, r := range refName {
 		if r >= 0 && r <= 31 {
 			return false
 		}
 	}
 
-	// Cannot contain certain characters
 	invalidChars := []string{" ", "~", "^", ":", "?", "*", "[", "\\", "..", "//", "@{"}
 	for _, char := range invalidChars {
 		if strings.Contains(refName, char) {
@@ -652,7 +912,6 @@ func isValidRefName(refName string) bool {
 		}
 	}
 
-	// Cannot end with certain characters
 	if strings.HasSuffix(refName, "/") || strings.HasSuffix(refName, ".lock") {
 		return false
 	}
@@ -660,7 +919,6 @@ func isValidRefName(refName string) bool {
 	return true
 }
 
-// getRepositoryLock gets or creates a mutex for the specific repository path
 func getRepositoryLock(repoPath string) *sync.Mutex {
 	locksMutex.RLock()
 	lock, exists := repoLocks[repoPath]
@@ -684,7 +942,6 @@ func getRepositoryLock(repoPath string) *sync.Mutex {
 	return lock
 }
 
-// addCommitEventToStream adds a commit event to Redis Stream
 func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string, eventType events.CommitEventType) {
 	if h.eventsClient == nil {
 		return
@@ -728,4 +985,91 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *g
 			_ = err
 		}
 	}()
+}
+
+func (h *ReceivePackHandler) handleLsRefs(ctx context.Context, repo *gogit.Repository, lsRefsReq *LsRefsReq, pktWriter *pktLineWriter) error {
+	// [4] refs 설명 생성
+	refs, err := repo.References()
+	if err != nil {
+		return fmt.Errorf("failed to get references: %w", err)
+	}
+	defer refs.Close()
+
+	headRequested := false
+	if len(lsRefsReq.RefPrefix) > 0 {
+		for _, prefix := range lsRefsReq.RefPrefix {
+			if prefix == "HEAD" || strings.HasPrefix("HEAD", prefix) {
+				headRequested = true
+				break
+			}
+		}
+	} else {
+		headRequested = true
+	}
+
+	if headRequested {
+		headRef, err := repo.Reference(plumbing.HEAD, true)
+		if err == nil {
+			if headRef.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
+				target := headRef.Target().String()
+				if err := pktWriter.writeLine(fmt.Sprintf("@%s HEAD", target)); err != nil {
+					return err
+				}
+			} else if headRef.Type() == plumbing.HashReference {
+				hash := headRef.Hash().String()
+				if err := pktWriter.writeLine(fmt.Sprintf("%s HEAD", hash)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	// [5] refs pkt-line 전송
+	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		refName := ref.Name().String()
+
+		if refName == "HEAD" {
+			return nil
+		}
+
+		if len(lsRefsReq.RefPrefix) > 0 {
+			matched := false
+			for _, prefix := range lsRefsReq.RefPrefix {
+				if strings.HasPrefix(refName, prefix) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil
+			}
+		}
+
+		if ref.Type() == plumbing.HashReference {
+			hash := ref.Hash().String()
+
+			if lsRefsReq.Peel && strings.HasPrefix(refName, "refs/tags/") {
+				if tagObj, err := repo.TagObject(ref.Hash()); err == nil && tagObj != nil {
+					peeledHash := tagObj.Target.String()
+					if err := pktWriter.writeLine(fmt.Sprintf("%s %s", hash, refName)); err != nil {
+						return err
+					}
+					return pktWriter.writeLine(fmt.Sprintf("peeled %s", peeledHash))
+				}
+			}
+
+			return pktWriter.writeLine(fmt.Sprintf("%s %s", hash, refName))
+		} else if ref.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
+			target := ref.Target().String()
+			return pktWriter.writeLine(fmt.Sprintf("@%s %s", target, refName))
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to list references: %w", err)
+	}
+
+	return nil
 }

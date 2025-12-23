@@ -89,7 +89,8 @@ func (p *PktWriter) Err(msg string) error {
 // 프로토콜 광고란, 클라이언트가 지원하는 기능을 알려주는 메시지
 
 func WriteV2Advert(w io.Writer, agent string, caps ...string) error {
-	pw := &PktWriter{W: w, WithLF: false} // 광고는 사람 읽기 편하게 LF 포함으로 통일해도 OK
+	// v2 advertisement 포맷: 각 라인은 \n으로 끝나고, 마지막에 0000 flush
+	pw := &PktWriter{W: w, WithLF: true}
 	if err := pw.WriteLine("version 2"); err != nil {
 		return err
 	}
