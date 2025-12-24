@@ -414,18 +414,34 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 	})
 
 	for _, op := range req.Operations {
-		if op.Operation == "create" {
+		switch op.Operation {
+		case "create":
 			// 파일이 이미 존재하는지 확인
 			if existingFiles[op.Path] {
-				// 파일이 존재하면 충돌 에러 반환
 				return nil, fmt.Errorf("file already exists: %s", op.Path)
 			}
-		} else if op.Operation == "delete" {
+			existingFiles[op.Path] = true
+
+		case "delete":
 			// 파일이 존재하는지 확인 - delete 작업에는 파일이 존재해야 함
 			if !existingFiles[op.Path] {
-				// 파일이 없으면 not found 에러 반환
 				return nil, fmt.Errorf("file '%s' not found in repository", op.Path)
 			}
+			delete(existingFiles, op.Path)
+
+		case "move":
+			// 원본 파일 존재 확인 + 대상 경로 충돌 확인
+			if op.OriginalPath == "" {
+				return nil, fmt.Errorf("original_path is required for move operations")
+			}
+			if !existingFiles[op.OriginalPath] {
+				return nil, fmt.Errorf("file '%s' not found in repository", op.OriginalPath)
+			}
+			if existingFiles[op.Path] {
+				return nil, fmt.Errorf("file already exists: %s", op.Path)
+			}
+			delete(existingFiles, op.OriginalPath)
+			existingFiles[op.Path] = true
 		}
 	}
 

@@ -47,6 +47,8 @@ const (
 	FileOperationUpdate FileOperation = "update"
 	// FileOperationDelete - 파일 삭제
 	FileOperationDelete FileOperation = "delete"
+	// FileOperationMove - 파일 이동/이름 변경
+	FileOperationMove FileOperation = "move"
 )
 
 // TransactionOptions는 트랜잭션 동작을 설정합니다
@@ -320,6 +322,19 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 				}
 			}
 		}
+
+		// move의 경우 original_path가 존재해야 함
+		if op.Type == FileOperationMove {
+			_, err := txn.BaseTree.File(op.FileChange.OriginalPath)
+			if err != nil {
+				op.State = TransactionStateFailed
+				op.Error = fmt.Errorf("file not found for move operation: %s", op.FileChange.OriginalPath)
+				if !txn.Options.AllowPartialCommit {
+					txn.State = TransactionStateFailed
+					return op.Error
+				}
+			}
+		}
 	}
 
 	// 여기까지 왔다면 검증 통과
@@ -538,6 +553,45 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 			// 파일 제거
 			delete(files, change.Path)
 			deletedFiles = append(deletedFiles, change.Path)
+
+		case FileOperationMove:
+			// move/rename: original을 삭제하고, 새 path로 추가
+			if strings.TrimSpace(change.OriginalPath) == "" {
+				return nil, fmt.Errorf("original_path is required for move operation")
+			}
+
+			srcInfo, ok := files[change.OriginalPath]
+			if !ok {
+				return nil, fmt.Errorf("file '%s' not found in repository", change.OriginalPath)
+			}
+			// 대상이 이미 존재하면 충돌
+			if _, exists := files[change.Path]; exists {
+				return nil, fmt.Errorf("file already exists: %s", change.Path)
+			}
+
+			// content가 있으면 새 blob 생성, 없으면 기존 blob 유지
+			newHash := srcInfo.Hash
+			if len(change.Content) > 0 {
+				blobHash, err := createBlob(gitRepo, change.Content)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
+				}
+				newHash = blobHash
+			}
+
+			mode := srcInfo.Mode
+			if change.Mode != nil {
+				mode = *change.Mode
+			}
+
+			delete(files, change.OriginalPath)
+			files[change.Path] = TreeFileInfo{
+				Hash: newHash,
+				Mode: mode,
+			}
+
+			deletedFiles = append(deletedFiles, change.OriginalPath)
+			createdFiles = append(createdFiles, change.Path)
 		}
 	}
 
