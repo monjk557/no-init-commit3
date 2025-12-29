@@ -211,18 +211,18 @@ func (h *MergePreviewHandler) compareRepositoryTrees(ctx context.Context, repo *
 
 	switch strategy {
 	case "tree":
-		return h.compareTreesBasic(repo, sourceTree, targetTree, req, metrics)
+		return h.compareTreesBasic(ctx, repo, sourceTree, targetTree, req, metrics)
 	case "diff":
-		return h.compareTreesWithDiff(repo, sourceTree, targetTree, req, metrics)
+		return h.compareTreesWithDiff(ctx, repo, sourceTree, targetTree, req, metrics)
 	case "full":
-		return h.compareTreesFull(repo, sourceTree, targetTree, req, metrics)
+		return h.compareTreesFull(ctx, repo, sourceTree, targetTree, req, metrics)
 	default:
-		return h.compareTreesWithDiff(repo, sourceTree, targetTree, req, metrics)
+		return h.compareTreesWithDiff(ctx, repo, sourceTree, targetTree, req, metrics)
 	}
 }
 
 // compareTreesBasic performs basic tree comparison without detailed diffs
-func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
+func (h *MergePreviewHandler) compareTreesBasic(ctx context.Context, repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
 	// Use go-git's DiffTree to get actual diff between trees
 	changes, err := object.DiffTree(targetTree, sourceTree)
 	if err != nil {
@@ -241,16 +241,46 @@ func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTr
 		BinaryFiles:   0,
 	}
 
-	var fileChanges []*FileChange
+	maxFiles := req.MaxFiles
+	if maxFiles == 0 {
+		maxFiles = 10000 // Default limit - process all files for metadata
+	}
 
-	// Process each change using diff.go's logic
-	for _, change := range changes {
-		// Use diff.go's processChange function to get FileDiff with line changes
-		fileDiff, err := h.processChangeFromDiff(change, 3) // Default context lines
-		if err != nil {
-			// Log error but continue with other files
-			fmt.Printf("Error processing change for %s: %v\n", diffs.GetFileName(change), err)
-			continue
+	// 1단계: 먼저 모든 파일의 메타데이터를 빠르게 수집 (patch 생성 없이)
+	fileChanges := make([]*FileChange, 0, len(changes))
+	changeIndices := make([]int, 0, diffs.MaxFilesWithChanges) // changes가 필요한 파일 인덱스
+
+	for i, change := range changes {
+		// Apply MaxFiles limit - stop processing if limit reached (for metadata only)
+		if i >= maxFiles {
+			break
+		}
+
+		// Check context cancellation (client may have disconnected)
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
+
+		fileName := diffs.GetFileName(change)
+		fileDiff := diffs.FileDiff{
+			Path:     fileName,
+			Status:   h.getChangeStatus(change),
+			Metadata: diffs.GetFileMetadata(change),
+			Changes:  []diffs.LineChange{},
+		}
+
+		if change.From.Name != change.To.Name && change.From.Name != "" && change.To.Name != "" {
+			fileDiff.OldPath = change.From.Name
+		}
+
+		// 바이너리 파일 체크 (확장자만으로 빠르게)
+		fileDiff.IsBinary = h.isBinaryFile(change)
+
+		// changes가 필요한 파일 후보로 추가 (바이너리가 아니고 contextLines > 0인 경우)
+		if !fileDiff.IsBinary && 3 > 0 && len(changeIndices) < diffs.MaxFilesWithChanges {
+			changeIndices = append(changeIndices, i)
 		}
 
 		// Create FileChange with embedded FileDiff
@@ -258,8 +288,8 @@ func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTr
 			FileDiff: fileDiff,
 		}
 
-		// Add merge-specific content
-		if repo != nil {
+		// Add merge-specific content only if IncludeContent is true
+		if repo != nil && req.IncludeContent {
 			fileChange.Content = h.getFileContent(repo, change)
 		}
 
@@ -275,10 +305,6 @@ func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTr
 			summary.ModifiedFiles++
 		}
 
-		// Update line counts
-		summary.LinesAdded += fileDiff.Additions
-		summary.LinesDeleted += fileDiff.Deletions
-
 		if fileDiff.IsBinary {
 			summary.BinaryFiles++
 		}
@@ -287,14 +313,80 @@ func (h *MergePreviewHandler) compareTreesBasic(repo *gogit.Repository, sourceTr
 		metrics.FilesAnalyzed++
 	}
 
+	// 2단계: changes가 필요한 파일만 patch 생성하여 처리
+	filesWithChangesCount := 0
+	for _, idx := range changeIndices {
+		if filesWithChangesCount >= diffs.MaxFilesWithChanges {
+			break
+		}
+
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
+
+		change := changes[idx]
+		fileDiff, err := h.processChangeFromDiff(change, 3) // Default context lines
+		if err != nil {
+			// 에러 발생 시 메타데이터는 유지하고 통계만 업데이트
+			if diffErr, ok := err.(*diffs.DiffTooLargeError); ok {
+				h.logger.Debug("File too large for detailed diff",
+					zap.String("file", fileChanges[idx].Path),
+					zap.String("reason", diffErr.Reason))
+			} else {
+				h.logger.Warn("Error processing change",
+					zap.String("file", fileChanges[idx].Path),
+					zap.Error(err))
+			}
+			// 통계 정보가 있으면 업데이트
+			if fileDiff.Additions > 0 || fileDiff.Deletions > 0 {
+				fileChanges[idx].Additions = fileDiff.Additions
+				fileChanges[idx].Deletions = fileDiff.Deletions
+				fileChanges[idx].IsBinary = fileDiff.IsBinary
+				summary.LinesAdded += fileDiff.Additions
+				summary.LinesDeleted += fileDiff.Deletions
+			}
+			continue
+		}
+
+		// 통계 정보 업데이트
+		fileChanges[idx].Additions = fileDiff.Additions
+		fileChanges[idx].Deletions = fileDiff.Deletions
+		fileChanges[idx].IsBinary = fileDiff.IsBinary
+		summary.LinesAdded += fileDiff.Additions
+		summary.LinesDeleted += fileDiff.Deletions
+
+		// validation 통과한 파일만 changes 포함
+		if len(fileDiff.Changes) > 0 {
+			fileChanges[idx].Changes = fileDiff.Changes
+			filesWithChangesCount++
+		}
+	}
+
 	summary.TotalFiles = len(fileChanges)
 	metrics.ObjectsTraversed = len(changes)
 
 	return summary, fileChanges, nil
 }
 
+// getChangeStatus returns the file change status from a change object
+func (h *MergePreviewHandler) getChangeStatus(change *object.Change) diffs.FileDiffStatus {
+	switch {
+	case change.From.Name == "" && change.To.Name != "":
+		return diffs.FileDiffStatusAdded
+	case change.From.Name != "" && change.To.Name == "":
+		return diffs.FileDiffStatusDeleted
+	case change.From.Name != change.To.Name:
+		return diffs.FileDiffStatusRenamed
+	default:
+		return diffs.FileDiffStatusModified
+	}
+}
+
 // compareTreesWithDiff performs tree comparison with diff analysis
-func (h *MergePreviewHandler) compareTreesWithDiff(repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
+func (h *MergePreviewHandler) compareTreesWithDiff(ctx context.Context, repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
 	// Use go-git's DiffTree to get actual diff between trees
 	changes, err := object.DiffTree(targetTree, sourceTree)
 	if err != nil {
@@ -313,16 +405,46 @@ func (h *MergePreviewHandler) compareTreesWithDiff(repo *gogit.Repository, sourc
 		BinaryFiles:   0,
 	}
 
-	var fileChanges []*FileChange
+	maxFiles := req.MaxFiles
+	if maxFiles == 0 {
+		maxFiles = 10000 // Default limit - process all files for metadata
+	}
 
-	// Process each change using diff.go's logic
-	for _, change := range changes {
-		// Use diff.go's processChange function to get FileDiff with line changes
-		fileDiff, err := h.processChangeFromDiff(change, 3) // Default context lines
-		if err != nil {
-			// Log error but continue with other files
-			fmt.Printf("Error processing change for %s: %v\n", diffs.GetFileName(change), err)
-			continue
+	// 1단계: 먼저 모든 파일의 메타데이터를 빠르게 수집 (patch 생성 없이)
+	fileChanges := make([]*FileChange, 0, len(changes))
+	changeIndices := make([]int, 0, diffs.MaxFilesWithChanges) // changes가 필요한 파일 인덱스
+
+	for i, change := range changes {
+		// Apply MaxFiles limit - stop processing if limit reached (for metadata only)
+		if i >= maxFiles {
+			break
+		}
+
+		// Check context cancellation (client may have disconnected)
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
+
+		fileName := diffs.GetFileName(change)
+		fileDiff := diffs.FileDiff{
+			Path:     fileName,
+			Status:   h.getChangeStatus(change),
+			Metadata: diffs.GetFileMetadata(change),
+			Changes:  []diffs.LineChange{},
+		}
+
+		if change.From.Name != change.To.Name && change.From.Name != "" && change.To.Name != "" {
+			fileDiff.OldPath = change.From.Name
+		}
+
+		// 바이너리 파일 체크 (확장자만으로 빠르게)
+		fileDiff.IsBinary = h.isBinaryFile(change)
+
+		// changes가 필요한 파일 후보로 추가 (바이너리가 아니고 contextLines > 0인 경우)
+		if !fileDiff.IsBinary && 3 > 0 && len(changeIndices) < diffs.MaxFilesWithChanges {
+			changeIndices = append(changeIndices, i)
 		}
 
 		// Create FileChange with embedded FileDiff
@@ -330,8 +452,10 @@ func (h *MergePreviewHandler) compareTreesWithDiff(repo *gogit.Repository, sourc
 			FileDiff: fileDiff,
 		}
 
-		// Add merge-specific content
-		fileChange.Content = h.getFileContent(repo, change)
+		// Add merge-specific content only if IncludeContent is true
+		if req.IncludeContent {
+			fileChange.Content = h.getFileContent(repo, change)
+		}
 
 		// Update summary based on file status
 		switch fileDiff.Status {
@@ -345,16 +469,64 @@ func (h *MergePreviewHandler) compareTreesWithDiff(repo *gogit.Repository, sourc
 			summary.ModifiedFiles++
 		}
 
-		// Update line counts
-		summary.LinesAdded += fileDiff.Additions
-		summary.LinesDeleted += fileDiff.Deletions
-
 		if fileDiff.IsBinary {
 			summary.BinaryFiles++
 		}
 
 		fileChanges = append(fileChanges, fileChange)
 		metrics.FilesAnalyzed++
+	}
+
+	// 2단계: changes가 필요한 파일만 patch 생성하여 처리
+	filesWithChangesCount := 0
+	for _, idx := range changeIndices {
+		if filesWithChangesCount >= diffs.MaxFilesWithChanges {
+			break
+		}
+
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
+
+		change := changes[idx]
+		fileDiff, err := h.processChangeFromDiff(change, 3) // Default context lines
+		if err != nil {
+			// 에러 발생 시 메타데이터는 유지하고 통계만 업데이트
+			if diffErr, ok := err.(*diffs.DiffTooLargeError); ok {
+				h.logger.Debug("File too large for detailed diff",
+					zap.String("file", fileChanges[idx].Path),
+					zap.String("reason", diffErr.Reason))
+			} else {
+				h.logger.Warn("Error processing change",
+					zap.String("file", fileChanges[idx].Path),
+					zap.Error(err))
+			}
+			// 통계 정보가 있으면 업데이트
+			if fileDiff.Additions > 0 || fileDiff.Deletions > 0 {
+				fileChanges[idx].Additions = fileDiff.Additions
+				fileChanges[idx].Deletions = fileDiff.Deletions
+				fileChanges[idx].IsBinary = fileDiff.IsBinary
+				summary.LinesAdded += fileDiff.Additions
+				summary.LinesDeleted += fileDiff.Deletions
+			}
+			continue
+		}
+
+		// 통계 정보 업데이트
+		fileChanges[idx].Additions = fileDiff.Additions
+		fileChanges[idx].Deletions = fileDiff.Deletions
+		fileChanges[idx].IsBinary = fileDiff.IsBinary
+		summary.LinesAdded += fileDiff.Additions
+		summary.LinesDeleted += fileDiff.Deletions
+
+		// validation 통과한 파일만 changes 포함
+		if len(fileDiff.Changes) > 0 {
+			fileChanges[idx].Changes = fileDiff.Changes
+			filesWithChangesCount++
+		}
 	}
 
 	summary.TotalFiles = len(fileChanges)
@@ -520,9 +692,9 @@ func (h *MergePreviewHandler) analyzeCodeMetrics(fileChange *FileChange) map[str
 }
 
 // compareTreesFull performs comprehensive tree comparison with content analysis
-func (h *MergePreviewHandler) compareTreesFull(repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
+func (h *MergePreviewHandler) compareTreesFull(ctx context.Context, repo *gogit.Repository, sourceTree, targetTree *object.Tree, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
 	// Use the diff-based comparison as the foundation
-	summary, fileChanges, err := h.compareTreesWithDiff(repo, sourceTree, targetTree, req, metrics)
+	summary, fileChanges, err := h.compareTreesWithDiff(ctx, repo, sourceTree, targetTree, req, metrics)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -627,7 +799,7 @@ func (h *MergePreviewHandler) generateWarnings(conflictAnalysis *MergeAnalysisRe
 // processChangeFromDiff wraps diff.go's processChange function for reuse
 func (h *MergePreviewHandler) processChangeFromDiff(change *object.Change, contextLines int) (diffs.FileDiff, error) {
 	// Use the same logic as diff.go's processChange
-	fileName := change.To.Name
+	fileName := diffs.GetFileName(change)
 	fileDiff := diffs.FileDiff{
 		Path:     fileName,
 		Metadata: diffs.GetFileMetadata(change),
@@ -647,9 +819,27 @@ func (h *MergePreviewHandler) processChangeFromDiff(change *object.Change, conte
 	}
 
 	// 라인 레벨 변경을 위한 patch 정보 가져오기
+	// 참고: blob 크기 사전 체크는 오버헤드가 크므로 patch 생성 후 MaxPatchSize 체크로 대체
 	patch, err := change.Patch()
 	if err != nil {
 		return fileDiff, fmt.Errorf("failed to get patch: %w", err)
+	}
+
+	// patch 크기 체크 (diff.go의 processChangeWithPatch와 동일한 패턴)
+	patchText := patch.String()
+	patchSize := len([]byte(patchText))
+	if patchSize > diffs.MaxPatchSize {
+		// patch가 너무 커도 메타데이터는 포함
+		// patch에서 최소한의 통계 정보는 추출 시도
+		additions, deletions := h.countPatchLines(patch)
+		fileDiff.Additions = additions
+		fileDiff.Deletions = deletions
+		// 바이너리 파일 체크는 확장자만으로
+		fileDiff.IsBinary = h.isBinaryFile(change)
+		fileDiff.Changes = []diffs.LineChange{}
+		return fileDiff, &diffs.DiffTooLargeError{
+			Reason: fmt.Sprintf("patch for file %s is too large (%d bytes > %d bytes)", fileName, patchSize, diffs.MaxPatchSize),
+		}
 	}
 
 	// patch에서 실제 추가/삭제된 라인 수를 정확히 계산 (FilePatches 사용)
@@ -657,15 +847,43 @@ func (h *MergePreviewHandler) processChangeFromDiff(change *object.Change, conte
 	fileDiff.Additions = additions
 	fileDiff.Deletions = deletions
 
-	// patch 콘텐츠와 파일명을 모두 사용한 향상된 바이너리 파일 감지
-	patchText := patch.String()
-	fileDiff.IsBinary = diffs.IsBinaryFile(patchText)
+	// 바이너리 파일 감지 (파일 확장자와 콘텐츠 모두 확인)
+	isBinaryByExt := h.isBinaryFile(change)
+	isBinaryByContent := diffs.IsBinaryFile(patchText)
+	fileDiff.IsBinary = isBinaryByExt || isBinaryByContent
+	fileDiff.Changes = nil // 기본값은 nil
 
-	// 바이너리가 아니고 contextLines > 0이면 라인 레벨 변경 생성
-	if !fileDiff.IsBinary && contextLines > 0 {
+	// 바이너리 파일의 경우 changes를 생성하지 않음
+	if fileDiff.IsBinary {
+		fileDiff.Changes = []diffs.LineChange{}
+		return fileDiff, nil
+	}
+
+	// 변경된 라인 수 체크 (additions + deletions)
+	changedLines := additions + deletions
+	if changedLines > diffs.MaxChangedLines {
+		// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
+		fileDiff.Changes = []diffs.LineChange{}
+		return fileDiff, nil
+	}
+
+	// contextLines > 0이면 라인 레벨 변경 생성
+	if contextLines > 0 {
 		lines := diffs.SplitLines(patchText)
+
+		// 파일 라인 수 제한 체크 - 너무 많으면 메타데이터만 포함
+		if len(lines) > diffs.MaxFileLines {
+			fileDiff.Changes = []diffs.LineChange{}
+			return fileDiff, &diffs.DiffTooLargeError{
+				Reason: fmt.Sprintf("file %s has too many lines (%d > %d)", fileName, len(lines), diffs.MaxFileLines),
+			}
+		}
+
 		lineChanges := diffs.GenerateLineChanges(lines, contextLines)
 		fileDiff.Changes = lineChanges
+	} else {
+		// contextLines가 0이면 Changes를 포함하지 않음
+		fileDiff.Changes = []diffs.LineChange{}
 	}
 
 	return fileDiff, nil

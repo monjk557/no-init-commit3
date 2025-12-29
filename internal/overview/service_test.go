@@ -292,3 +292,244 @@ func TestConvertCommit(t *testing.T) {
 	assert.Equal(t, commitObj.TreeHash.String(), gitCommit.TreeHash)
 	assert.Equal(t, len(commitObj.ParentHashes), len(gitCommit.ParentHashes))
 }
+
+func createTestRepositoryWithMultipleLanguages(t *testing.T, tempDir string) *git.Repository {
+	repoPath := filepath.Join(tempDir, "multilang.git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	// 작업 디렉토리에서 일반 저장소 생성
+	tempWorkDir, err := os.MkdirTemp("", "overview-test-work-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempWorkDir)
+
+	workRepo, err := git.PlainInit(tempWorkDir, false)
+	require.NoError(t, err)
+
+	worktree, err := workRepo.Worktree()
+	require.NoError(t, err)
+
+	// Go 파일
+	goPath := filepath.Join(tempWorkDir, "main.go")
+	goContent := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Hello, World!")
+}
+`
+	require.NoError(t, os.WriteFile(goPath, []byte(goContent), 0644))
+	_, err = worktree.Add("main.go")
+	require.NoError(t, err)
+
+	// JavaScript 파일
+	jsPath := filepath.Join(tempWorkDir, "app.js")
+	jsContent := `function greet(name) {
+	console.log("Hello, " + name + "!");
+}
+
+greet("World");
+`
+	require.NoError(t, os.WriteFile(jsPath, []byte(jsContent), 0644))
+	_, err = worktree.Add("app.js")
+	require.NoError(t, err)
+
+	// Python 파일
+	pyPath := filepath.Join(tempWorkDir, "script.py")
+	pyContent := `def greet(name):
+	print(f"Hello, {name}!")
+
+if __name__ == "__main__":
+	greet("World")
+`
+	require.NoError(t, os.WriteFile(pyPath, []byte(pyContent), 0644))
+	_, err = worktree.Add("script.py")
+	require.NoError(t, err)
+
+	// TypeScript 파일
+	tsPath := filepath.Join(tempWorkDir, "utils.ts")
+	tsContent := `interface User {
+	name: string;
+	age: number;
+}
+
+function getUser(): User {
+	return { name: "John", age: 30 };
+}
+`
+	require.NoError(t, os.WriteFile(tsPath, []byte(tsContent), 0644))
+	_, err = worktree.Add("utils.ts")
+	require.NoError(t, err)
+
+	// README.md (Markdown)
+	readmePath := filepath.Join(tempWorkDir, "README.md")
+	readmeContent := `# Multi-language Repository
+
+This repository contains code in multiple languages.
+`
+	require.NoError(t, os.WriteFile(readmePath, []byte(readmeContent), 0644))
+	_, err = worktree.Add("README.md")
+	require.NoError(t, err)
+
+	commit, err := worktree.Commit("Add multiple language files", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	// 베어 저장소 생성 및 객체 복사
+	gitRepo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	commitObj, err := workRepo.CommitObject(commit)
+	require.NoError(t, err)
+
+	// 커밋 객체 복사
+	commitObjEncoded, err := workRepo.Storer.EncodedObject(plumbing.CommitObject, commit)
+	require.NoError(t, err)
+	_, err = gitRepo.Storer.SetEncodedObject(commitObjEncoded)
+	require.NoError(t, err)
+
+	// 트리 객체 복사
+	err = copyTreeRecursiveForTest(workRepo, gitRepo, commitObj.TreeHash)
+	require.NoError(t, err)
+
+	// HEAD를 최신 커밋으로 설정
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commit)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+
+	return gitRepo
+}
+
+func TestGetLanguageDistribution_MultipleLanguages(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gitRepo := createTestRepositoryWithMultipleLanguages(t, tempDir)
+
+	// 언어 분포 가져오기
+	distribution := service.GetLanguageDistribution(ctx, gitRepo, "HEAD")
+
+	// 기본 검증
+	assert.Greater(t, distribution.TotalFiles, 0, "TotalFiles should be greater than 0")
+	assert.Greater(t, distribution.TotalBytes, int64(0), "TotalBytes should be greater than 0")
+	assert.NotEmpty(t, distribution.Languages, "Languages should not be empty")
+
+	// 언어별 검증
+	languageMap := make(map[string]LanguageStats)
+	for _, lang := range distribution.Languages {
+		languageMap[lang.Language] = lang
+		assert.Greater(t, lang.Bytes, int64(0), "Language bytes should be greater than 0")
+		assert.Greater(t, lang.Files, 0, "Language files should be greater than 0")
+		assert.GreaterOrEqual(t, lang.Percentage, 0.0, "Percentage should be >= 0")
+		assert.LessOrEqual(t, lang.Percentage, 100.0, "Percentage should be <= 100")
+	}
+
+	// Go 언어 확인
+	goLang, exists := languageMap["Go"]
+	assert.True(t, exists, "Go language should be detected")
+	if exists {
+		assert.Greater(t, goLang.Files, 0, "Go files count should be greater than 0")
+	}
+
+	// JavaScript 언어 확인
+	jsLang, exists := languageMap["JavaScript"]
+	assert.True(t, exists, "JavaScript language should be detected")
+	if exists {
+		assert.Greater(t, jsLang.Files, 0, "JavaScript files count should be greater than 0")
+	}
+
+	// Python 언어 확인
+	pyLang, exists := languageMap["Python"]
+	assert.True(t, exists, "Python language should be detected")
+	if exists {
+		assert.Greater(t, pyLang.Files, 0, "Python files count should be greater than 0")
+	}
+
+	// 정렬 검증: 바이트 수로 내림차순 정렬되어야 함
+	for i := 1; i < len(distribution.Languages); i++ {
+		assert.GreaterOrEqual(t, distribution.Languages[i-1].Bytes, distribution.Languages[i].Bytes,
+			"Languages should be sorted by bytes in descending order")
+	}
+
+	// Percentage 합계 검증 (100%에 가까워야 함, 부동소수점 오차 고려)
+	totalPercentage := 0.0
+	for _, lang := range distribution.Languages {
+		totalPercentage += lang.Percentage
+	}
+	assert.InDelta(t, 100.0, totalPercentage, 0.01, "Total percentage should be approximately 100%%")
+}
+
+func TestGetLanguageDistribution_EmptyRepository(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 빈 저장소 생성
+	repoPath := filepath.Join(tempDir, "empty.git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	gitRepo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	// 빈 커밋 생성
+	emptyTree := &object.Tree{}
+	treeObj := gitRepo.Storer.NewEncodedObject()
+	err = emptyTree.Encode(treeObj)
+	require.NoError(t, err)
+
+	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
+	require.NoError(t, err)
+
+	commit := &object.Commit{
+		Message:   "Initial empty commit",
+		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+		TreeHash:  treeHash,
+	}
+
+	commitObj := gitRepo.Storer.NewEncodedObject()
+	err = commit.Encode(commitObj)
+	require.NoError(t, err)
+
+	commitHash, err := gitRepo.Storer.SetEncodedObject(commitObj)
+	require.NoError(t, err)
+
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+
+	// 언어 분포 가져오기
+	distribution := service.GetLanguageDistribution(ctx, gitRepo, "HEAD")
+
+	// 빈 저장소는 빈 결과 반환
+	assert.Equal(t, 0, distribution.TotalFiles, "TotalFiles should be 0 for empty repository")
+	assert.Equal(t, int64(0), distribution.TotalBytes, "TotalBytes should be 0 for empty repository")
+	assert.Empty(t, distribution.Languages, "Languages should be empty for empty repository")
+}
+
+func TestGetLanguageDistribution_InvalidRef(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gitRepo := createTestRepositoryWithMultipleLanguages(t, tempDir)
+
+	// 존재하지 않는 ref로 언어 분포 가져오기
+	distribution := service.GetLanguageDistribution(ctx, gitRepo, "nonexistent-ref")
+
+	// 에러 시 빈 결과 반환
+	assert.Equal(t, 0, distribution.TotalFiles, "TotalFiles should be 0 for invalid ref")
+	assert.Equal(t, int64(0), distribution.TotalBytes, "TotalBytes should be 0 for invalid ref")
+	assert.Empty(t, distribution.Languages, "Languages should be empty for invalid ref")
+}

@@ -264,18 +264,8 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		}
 	}
 
-	// 언어 분포 가져오기 (성능 최적화: 선택적으로 처리)
-	// include_languages 파라미터가 true일 때만 계산
-	var languageDistribution LanguageDistribution
-	if c.Query("include_languages") == "true" {
-		languageDistribution = h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
-	} else {
-		languageDistribution = LanguageDistribution{
-			Languages:  []LanguageStats{},
-			TotalBytes: 0,
-			TotalFiles: 0,
-		}
-	}
+	// 언어 분포 가져오기
+	languageDistribution := h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
 
 	// 응답 구성
 	response := RepositoryOverviewResponse{
