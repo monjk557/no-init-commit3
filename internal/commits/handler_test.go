@@ -13,6 +13,8 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,8 +26,10 @@ func setupTestHandler(t *testing.T) *CommitsHandler {
 	err := os.MkdirAll(filepath.Dir(repoPath), 0755)
 	require.NoError(t, err)
 
-	_, err = git.PlainInit(repoPath, true)
+	repo, err := git.PlainInit(repoPath, true)
 	require.NoError(t, err)
+
+	_ = ensureInitialCommit(t, repo, "main")
 
 	cfg := &config.Config{
 		Git: config.GitConfig{
@@ -41,6 +45,36 @@ func setupTestHandler(t *testing.T) *CommitsHandler {
 	require.NoError(t, err)
 
 	return handler
+}
+
+func setupTestHandlerWithInitialCommit(t *testing.T) (*CommitsHandler, string) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
+
+	err := os.MkdirAll(filepath.Dir(repoPath), 0755)
+	require.NoError(t, err)
+
+	repo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	_ = ensureInitialCommit(t, repo, "main")
+
+	cfg := &config.Config{
+		Git: config.GitConfig{
+			RepoRoot: tempDir,
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+		},
+	}
+
+	handler, err := NewCommitsHandler(cfg)
+	require.NoError(t, err)
+
+	return handler, repoPath
 }
 
 func createGinContext(method, url string, body interface{}) (*gin.Context, *httptest.ResponseRecorder) {
@@ -60,6 +94,62 @@ func createGinContext(method, url string, body interface{}) (*gin.Context, *http
 	}
 
 	return c, w
+}
+
+func ensureInitialCommit(t *testing.T, repo *git.Repository, defaultBranch string) plumbing.Hash {
+	t.Helper()
+
+	storer := repo.Storer
+
+	// Create an empty tree
+	tree := &object.Tree{Entries: []object.TreeEntry{}}
+	treeObj := storer.NewEncodedObject()
+	require.NoError(t, tree.Encode(treeObj))
+	treeHash, err := storer.SetEncodedObject(treeObj)
+	require.NoError(t, err)
+
+	// Create an initial commit
+	commit := &object.Commit{
+		Message:  "Initial commit",
+		TreeHash: treeHash,
+		Author: object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+		},
+		Committer: object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+		},
+	}
+
+	commitObj := storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(commitObj))
+	commitHash, err := storer.SetEncodedObject(commitObj)
+	require.NoError(t, err)
+
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/"+defaultBranch), commitHash)
+	require.NoError(t, storer.SetReference(branchRef))
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, branchRef.Name())
+	require.NoError(t, storer.SetReference(headRef))
+
+	return commitHash
+}
+
+func getBranchHash(t *testing.T, repo *git.Repository, branch string) (plumbing.Hash, error) {
+	t.Helper()
+	ref, err := repo.Reference(plumbing.ReferenceName("refs/heads/"+branch), false)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return ref.Hash(), nil
+}
+
+func getHEADRefTarget(t *testing.T, repo *git.Repository) plumbing.ReferenceName {
+	t.Helper()
+	headRef, err := repo.Reference(plumbing.HEAD, false)
+	require.NoError(t, err)
+	require.Equal(t, plumbing.SymbolicReference, headRef.Type())
+	return headRef.Target()
 }
 
 // TestMultiFileCommit_Handler는 다중 파일 커밋을 테스트합니다
@@ -236,6 +326,106 @@ func TestSingleFileCommit_Handler(t *testing.T) {
 		assert.True(t, response.Success)
 		assert.NotEmpty(t, response.CommitSHA)
 	})
+}
+
+func TestMultiFileCommit_CreateBranchName_Success(t *testing.T) {
+	handler, repoPath := setupTestHandlerWithInitialCommit(t)
+
+	req := MultiFileCommitRequest{
+		Message:          "init",
+		Branch:           "main",
+		CreateBranchName: "feature/test",
+		SourceBranchName: "main",
+		Author:           &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+		Operations: []MultiFileOperation{
+			{Path: "README.md", Operation: "create", Content: "hello"},
+		},
+	}
+
+	c, w := createGinContext("POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{
+		{Key: "owner", Value: "testowner"},
+		{Key: "repo", Value: "testrepo"},
+	}
+
+	handler.HandleMultiFileCommit(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp MultiFileCommitResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+	require.NotEmpty(t, resp.CommitSHA)
+
+	repo, err := git.PlainOpen(repoPath)
+	require.NoError(t, err)
+
+	branchHash, err := getBranchHash(t, repo, "feature/test")
+	require.NoError(t, err)
+	assert.Equal(t, plumbing.NewHash(resp.CommitSHA), branchHash)
+}
+
+func TestMultiFileCommit_CreateBranchName_BranchAlreadyExists_409(t *testing.T) {
+	handler, _ := setupTestHandlerWithInitialCommit(t)
+
+	req := MultiFileCommitRequest{
+		Message:          "init",
+		Branch:           "main",
+		CreateBranchName: "feature/dup",
+		SourceBranchName: "main",
+		Author:           &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+		Operations: []MultiFileOperation{
+			{Path: "README.md", Operation: "create", Content: "hello"},
+		},
+	}
+
+	c1, w1 := createGinContext("POST", "/repos/testowner/testrepo/commits", req)
+	c1.Params = gin.Params{
+		{Key: "owner", Value: "testowner"},
+		{Key: "repo", Value: "testrepo"},
+	}
+	handler.HandleMultiFileCommit(c1)
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	c2, w2 := createGinContext("POST", "/repos/testowner/testrepo/commits", req)
+	c2.Params = gin.Params{
+		{Key: "owner", Value: "testowner"},
+		{Key: "repo", Value: "testrepo"},
+	}
+	handler.HandleMultiFileCommit(c2)
+	assert.Equal(t, http.StatusConflict, w2.Code)
+}
+
+func TestMultiFileCommit_CreateBranchName_CommitFailure_RollbackNewBranchAndHEAD(t *testing.T) {
+	handler, repoPath := setupTestHandlerWithInitialCommit(t)
+
+	req := MultiFileCommitRequest{
+		Message:          "should-fail",
+		Branch:           "main",
+		CreateBranchName: "newbranch3",
+		SourceBranchName: "main",
+		Author:           &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+		Operations: []MultiFileOperation{
+			{Path: "missing.txt", Operation: "delete"},
+		},
+	}
+
+	c, w := createGinContext("POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{
+		{Key: "owner", Value: "testowner"},
+		{Key: "repo", Value: "testrepo"},
+	}
+
+	handler.HandleMultiFileCommit(c)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	repo, err := git.PlainOpen(repoPath)
+	require.NoError(t, err)
+
+	_, err = getBranchHash(t, repo, "newbranch3")
+	assert.Error(t, err)
+
+	assert.Equal(t, plumbing.ReferenceName("refs/heads/main"), getHEADRefTarget(t, repo))
 }
 
 // TestFileOperations_Handler는 파일 생성/업데이트/삭제를 테스트합니다

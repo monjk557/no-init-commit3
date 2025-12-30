@@ -88,13 +88,17 @@ type CommitAuthor struct {
 }
 
 type MultiFileCommitRequest struct {
-	Message    string               `json:"message" binding:"required"`
-	Branch     string               `json:"branch,omitempty"`
-	Author     *CommitAuthor        `json:"author,omitempty"`
-	Committer  *CommitAuthor        `json:"committer,omitempty"`
-	Operations []MultiFileOperation `json:"operations" binding:"required,min=1"`
-	Options    *CommitOptions       `json:"options,omitempty"`
-	Metadata   map[string]string    `json:"metadata,omitempty"`
+	Message string `json:"message" binding:"required"`
+	Branch  string `json:"branch,omitempty"`
+	// create_branch_name이 있으면 source_branch_name(또는 branch/HEAD) 기준으로 새 브랜치를 만든 뒤,
+	// 그 브랜치에 커밋을 생성합니다.
+	CreateBranchName string               `json:"create_branch_name,omitempty"`
+	SourceBranchName string               `json:"source_branch_name,omitempty"`
+	Author           *CommitAuthor        `json:"author,omitempty"`
+	Committer        *CommitAuthor        `json:"committer,omitempty"`
+	Operations       []MultiFileOperation `json:"operations" binding:"required,min=1"`
+	Options          *CommitOptions       `json:"options,omitempty"`
+	Metadata         map[string]string    `json:"metadata,omitempty"`
 }
 
 // MultiFileOperation represents a single file operation in a multi-file commit

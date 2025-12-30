@@ -1650,6 +1650,10 @@ components:
           type: string
         branch:
           type: string
+        create_branch_name:
+          type: string
+        source_branch_name:
+          type: string
         author:
           $ref: '#/components/schemas/CommitAuthor'
         committer:
@@ -2609,6 +2613,202 @@ components:
         error:
           type: string
 
+    BlobErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: string
+      required:
+        - error
+
+    BlobRequestParams:
+      type: object
+
+    BranchesListResponse:
+      type: object
+      properties:
+        default:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        yours:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        active:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        stale:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchListItem'
+        total_count:
+          type: integer
+      required:
+        - active
+        - default
+        - stale
+        - total_count
+        - yours
+
+    CommitsErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: string
+      required:
+        - error
+        - success
+
+    CommitsRequestParams:
+      type: object
+
+    CreateRepositoryOptions:
+      type: object
+
+    CreateTagResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        tag:
+          $ref: '#/components/schemas/Tag'
+      required:
+        - success
+        - tag
+
+    DeleteTagResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        tag:
+          $ref: '#/components/schemas/Tag'
+      required:
+        - success
+        - tag
+
+    DiffTooLargeError:
+      type: object
+
+    GitTreeEntry:
+      type: object
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+      required:
+        - name
+        - path
+        - type
+
+    MergeAnalysisRequest:
+      type: object
+      properties:
+        owner:
+          type: string
+        repo:
+          type: string
+        source_ref:
+          type: string
+        target_ref:
+          type: string
+        strategy:
+          type: object
+        auto_resolve:
+          type: boolean
+        include_content:
+          type: boolean
+        max_file_size:
+          type: integer
+      required:
+        - auto_resolve
+        - include_content
+        - max_file_size
+        - owner
+        - repo
+        - source_ref
+        - strategy
+        - target_ref
+
+    MergePreviewRequest:
+      type: object
+
+    MergeResult:
+      type: object
+
+    PaginatedDiffResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        pagination:
+          $ref: '#/components/schemas/PaginationParams'
+      required:
+        - success
+
+    PaginationParams:
+      type: object
+      properties:
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+        has_more:
+          type: boolean
+      required:
+        - has_more
+        - page
+        - page_size
+        - total
+
+    RemoteInfo:
+      type: object
+
+    RenameBranchRequest:
+      type: object
+      properties:
+        old_name:
+          type: string
+        new_name:
+          type: string
+        force:
+          type: boolean
+      required:
+        - new_name
+        - old_name
+
+    RequestParams:
+      type: object
+
+    TreeEntriesResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreeEntry'
+      required:
+        - data
+        - success
   responses:
     BadRequest:
       description: Bad request - Invalid input parameters

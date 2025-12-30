@@ -227,10 +227,14 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
 	repository := repoCtx.repoWrapper
 
 	// 서비스를 통해 비즈니스 로직 실행
-	response, err := h.service.ExecuteMultiFileCommit(ctx, repository, &req, branch, owner, repo)
+	response, err := h.service.ExecuteMultiFileCommitOrCreateBranch(ctx, repository, &req, owner, repo)
 	if err != nil {
 		// 에러 타입에 따라 적절한 HTTP 상태 코드 반환
 		errMsg := err.Error()
+		if strings.Contains(errMsg, "failed to resolve") {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": errMsg})
+			return
+		}
 		if strings.Contains(errMsg, "not found") {
 			if strings.Contains(errMsg, "Branch") {
 				c.JSON(http.StatusNotFound, gin.H{"success": false, "error": errMsg})

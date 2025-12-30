@@ -614,6 +614,212 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 	return &response, nil
 }
 
+// ExecuteMultiFileCommitOrCreateBranch는 create_branch_name이 있으면 (source_branch_name/branch/HEAD 기준) 브랜치를 만든 후 커밋을 생성합니다.
+// 커밋 생성이 실패하면 브랜치 참조 및 HEAD를 best-effort로 롤백합니다.
+func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
+	ctx context.Context,
+	repository *repositories.RepositoryWrapper,
+	req *MultiFileCommitRequest,
+	owner, repo string,
+) (*MultiFileCommitResponse, error) {
+	if repository == nil {
+		return nil, fmt.Errorf("repository is closed")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+
+	// 기존 동작 유지: branch 미지정이면 main
+	targetBranch := req.Branch
+	if targetBranch == "" {
+		targetBranch = "main"
+	}
+
+	// create_branch_name이 없으면 기존 branch에 커밋 생성
+	if req.CreateBranchName == "" {
+		return s.ExecuteMultiFileCommit(ctx, repository, req, targetBranch, owner, repo)
+	}
+
+	// create_branch_name이 있으면 source를 결정하고 브랜치 생성 후 그 브랜치로 커밋
+	sourceRef := req.SourceBranchName
+	if sourceRef == "" {
+		// source_branch_name 미지정 시: branch가 있으면 그 branch를 source로, 아니면 HEAD
+		if req.Branch != "" {
+			sourceRef = req.Branch
+		} else {
+			sourceRef = "HEAD"
+		}
+	}
+
+	gitRepo := repository.GetRepo()
+	if gitRepo == nil {
+		return nil, fmt.Errorf("repository is closed")
+	}
+
+	// Capture rollback info (branch ref + HEAD) before mutating refs.
+	branchRefName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.CreateBranchName))
+
+	var existedBefore bool
+	var previousBranchHash plumbing.Hash
+	ref, refErr := gitRepo.Reference(branchRefName, false)
+	if refErr == nil {
+		existedBefore = true
+		previousBranchHash = ref.Hash()
+	} else if refErr == plumbing.ErrReferenceNotFound {
+		existedBefore = false
+	} else {
+		return nil, fmt.Errorf("failed to read branch reference: %w", refErr)
+	}
+
+	// match BranchService.CreateBranch default behavior: existing branch without force -> conflict
+	if existedBefore {
+		return nil, fmt.Errorf("branch '%s' already exists.", req.CreateBranchName)
+	}
+
+	// HEAD rollback info (best-effort)
+	// IMPORTANT: repo.Head() resolves symbolic refs, so use Reference(HEAD, false) to capture the actual HEAD ref state.
+	var previousHEADType plumbing.ReferenceType
+	var previousHEADTarget plumbing.ReferenceName
+	var previousHEADHash plumbing.Hash
+	if headRef, err := gitRepo.Reference(plumbing.HEAD, false); err == nil && headRef != nil {
+		previousHEADType = headRef.Type()
+		if previousHEADType == plumbing.SymbolicReference {
+			previousHEADTarget = headRef.Target()
+		} else {
+			previousHEADHash = headRef.Hash()
+		}
+	}
+
+	err := createBranchFromSource(gitRepo, req.CreateBranchName, sourceRef)
+	if err != nil {
+		return nil, err
+	}
+
+	commitReq := *req
+	commitReq.Branch = req.CreateBranchName
+	resp, err := s.ExecuteMultiFileCommit(ctx, repository, &commitReq, commitReq.Branch, owner, repo)
+	if err != nil {
+		// Rollback branch + HEAD if commit creation fails.
+		rbErr := s.rollbackBranchAndHEAD(gitRepo, branchRefName, existedBefore, previousBranchHash, previousHEADType, previousHEADTarget, previousHEADHash)
+		if rbErr != nil {
+			s.logger.Warn("Rollback failed after commit error",
+				zap.String("branch", req.CreateBranchName),
+				zap.Bool("branch_existed_before", existedBefore),
+				zap.Error(rbErr),
+			)
+			return nil, fmt.Errorf("commit failed: %w; rollback failed: %v", err, rbErr)
+		}
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+func resolveSourceReference(repo *git.Repository, source string) (plumbing.Hash, error) {
+	// Try as commit hash first
+	if len(source) >= 7 && len(source) <= 40 {
+		if hash := plumbing.NewHash(source); hash != plumbing.ZeroHash {
+			if _, err := repo.CommitObject(hash); err == nil {
+				return hash, nil
+			}
+		}
+	}
+
+	// Try as branch reference
+	branchRef := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", source))
+	if ref, err := repo.Reference(branchRef, false); err == nil {
+		return ref.Hash(), nil
+	}
+
+	// Try as tag reference
+	tagRef := plumbing.ReferenceName(fmt.Sprintf("refs/tags/%s", source))
+	if ref, err := repo.Reference(tagRef, false); err == nil {
+		tagHash := ref.Hash()
+		tagObj, err := repo.TagObject(tagHash)
+		if err == nil {
+			// Annotated tag - return the target commit hash
+			return tagObj.Target, nil
+		}
+		// Lightweight tag - return the hash directly
+		return tagHash, nil
+	}
+
+	// Try HEAD
+	if source == "HEAD" {
+		if headRef, err := repo.Head(); err == nil {
+			return headRef.Hash(), nil
+		}
+	}
+
+	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference '%s'", source)
+}
+
+func createBranchFromSource(repo *git.Repository, branchName, source string) error {
+	if branchName == "" {
+		return fmt.Errorf("branch name is required")
+	}
+	if source == "" {
+		source = "HEAD"
+	}
+
+	sourceCommit, err := resolveSourceReference(repo, source)
+	if err != nil {
+		return fmt.Errorf("failed to resolve source reference '%s': %w", source, err)
+	}
+
+	refPath := fmt.Sprintf("refs/heads/%s", branchName)
+	ref := plumbing.NewHashReference(plumbing.ReferenceName(refPath), sourceCommit)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return fmt.Errorf("failed to create branch: %w", err)
+	}
+
+	return nil
+}
+
+func (s *CommitsService) rollbackBranchAndHEAD(
+	repo *git.Repository,
+	branchRefName plumbing.ReferenceName,
+	existedBefore bool,
+	previousBranchHash plumbing.Hash,
+	previousHEADType plumbing.ReferenceType,
+	previousHEADTarget plumbing.ReferenceName,
+	previousHEADHash plumbing.Hash,
+) error {
+	// Branch rollback
+	if existedBefore {
+		if previousBranchHash == plumbing.ZeroHash {
+			return fmt.Errorf("previous branch hash is zero")
+		}
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRefName, previousBranchHash)); err != nil {
+			return fmt.Errorf("failed to restore branch ref: %w", err)
+		}
+	} else {
+		if err := repo.Storer.RemoveReference(branchRefName); err != nil {
+			return fmt.Errorf("failed to remove branch ref: %w", err)
+		}
+	}
+
+	// HEAD rollback (best-effort: only if we captured a previous value)
+	switch previousHEADType {
+	case plumbing.SymbolicReference:
+		if previousHEADTarget != "" {
+			if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, previousHEADTarget)); err != nil {
+				return fmt.Errorf("failed to restore HEAD symbolic ref: %w", err)
+			}
+		}
+	case plumbing.HashReference:
+		if previousHEADHash != plumbing.ZeroHash {
+			if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.HEAD, previousHEADHash)); err != nil {
+				return fmt.Errorf("failed to restore HEAD hash ref: %w", err)
+			}
+		}
+	default:
+		// Unknown/zero: skip
+	}
+
+	return nil
+}
+
 // addCommitEventToStream adds a commit event to Redis Stream
 func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repositories.RepositoryWrapper, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string) {
 	if s.eventsClient == nil {
