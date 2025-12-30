@@ -48,6 +48,22 @@ type DuplexConnection struct {
 	protoV2  bool
 }
 
+// deadlineRefreshingReader refreshes TCP read deadlines before each read.
+// This makes large packfile pushes resilient by timing out on idle periods,
+// not total transfer duration.
+type deadlineRefreshingReader struct {
+	r    io.Reader
+	conn *net.TCPConn
+	idle time.Duration
+}
+
+func (d *deadlineRefreshingReader) Read(p []byte) (int, error) {
+	if d.conn != nil && d.idle > 0 {
+		_ = d.conn.SetReadDeadline(time.Now().Add(d.idle))
+	}
+	return d.r.Read(p)
+}
+
 type sidebandWriter struct {
 	w          io.Writer
 	channel    byte // 1=pack, 2=progress, 3=fatal
@@ -547,7 +563,22 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 
 	if hasPackfile {
 		s.logger.Info("Starting packfile read")
-		scanner := packfile.NewScanner(conn.reader) // 중요: pkt-line 리더 말고, 원본 io.Reader
+
+		// Idle 기반(silding) read deadline:
+		// - 총 처리 시간이 아니라 "마지막으로 데이터를 받은 시점"부터의 유휴 시간 기준으로 타임아웃
+		// - 대용량(1GB/2GB+)이라도 전송이 계속되면 타임아웃되지 않음
+		idleTimeout := 30 * time.Second
+		var packReader io.Reader = conn.reader // 중요: pkt-line 리더 말고, 원본 io.Reader
+		if tcpConn, ok := conn.conn.(*net.TCPConn); ok {
+			packReader = &deadlineRefreshingReader{
+				r:    conn.reader,
+				conn: tcpConn,
+				idle: idleTimeout,
+			}
+			s.logger.Debug("Using idle-based read deadline for packfile parsing", zap.Duration("idle_timeout", idleTimeout))
+		}
+
+		scanner := packfile.NewScanner(packReader)
 		parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
 		if err != nil {
 			return fmt.Errorf("failed to create packfile parser: %w", err)
