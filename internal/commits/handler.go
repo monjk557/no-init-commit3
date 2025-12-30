@@ -153,9 +153,14 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	var results interface{}
 	if params.Sort == "date" {
 		// 날짜별로 커밋 그룹화
-		results = h.groupCommitsByDate(commits)
+		grouped := h.groupCommitsByDate(commits)
+		// nil 체크: 빈 배열 보장
+		if grouped == nil {
+			grouped = []CommitsByDate{}
+		}
+		results = grouped
 	} else {
-		// 기본형: 커밋 목록을 그대로 반환
+		// 기본형: 커밋 목록을 그대로 반환 (이미 빈 배열로 보장됨)
 		results = commits
 	}
 

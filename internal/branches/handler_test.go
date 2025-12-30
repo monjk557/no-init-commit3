@@ -650,3 +650,87 @@ func TestHandleValidateBranchName_RepositoryNotFound(t *testing.T) {
 	assert.False(t, response["success"].(bool))
 	assert.Contains(t, response["error"].(string), "repository not found")
 }
+
+// TestHandleGetBranches_PaginationOutOfRange는 pagination 범위를 벗어나는 경우 빈 배열을 반환하는지 테스트합니다
+func TestHandleGetBranches_PaginationOutOfRange(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// 테스트 저장소 생성
+	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
+
+	// 여러 브랜치 생성
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	require.NoError(t, err)
+
+	head, err := gitRepo.Head()
+	require.NoError(t, err)
+
+	// 5개의 브랜치 생성
+	branchNames := []string{"branch1", "branch2", "branch3", "branch4", "branch5"}
+	for _, branchName := range branchNames {
+		branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/"+branchName), head.Hash())
+		err = gitRepo.Storer.SetReference(branchRef)
+		require.NoError(t, err)
+	}
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+
+	// 범위를 벗어나는 skip 값으로 요청 (총 6개 브랜치 - master 포함, skip=10)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches?limit=10&skip=10", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response GetBranchesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+
+	assert.True(t, response.Success)
+
+	// branches가 빈 배열인지 확인 (null이 아님)
+	branchesBytes, err := json.Marshal(response.Branches)
+	require.NoError(t, err)
+
+	// null이 아닌 빈 배열([])인지 확인
+	assert.Equal(t, "[]", string(branchesBytes), "branches should be empty array, not null")
+
+	// 길이 확인
+	assert.Equal(t, 0, len(response.Branches), "branches should be empty array")
+
+	// Pagination 정보 확인 (master + 5개 브랜치 = 6개)
+	assert.Equal(t, 6, response.Pagination.Count)
+	assert.Equal(t, 10, response.Pagination.PageSize)
+}
+
+// TestHandleGetBranches_EmptyRepository는 빈 저장소에서도 빈 배열을 반환하는지 테스트합니다
+func TestHandleGetBranches_EmptyRepository(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// 테스트 저장소 생성 (브랜치 없이)
+	createTestRepository(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response GetBranchesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+
+	assert.True(t, response.Success)
+
+	// branches가 빈 배열인지 확인 (null이 아님)
+	branchesBytes, err := json.Marshal(response.Branches)
+	require.NoError(t, err)
+
+	// null이 아닌 빈 배열([])인지 확인
+	assert.Equal(t, "[]", string(branchesBytes), "branches should be empty array, not null")
+	assert.Equal(t, 0, len(response.Branches), "branches should be empty array")
+}

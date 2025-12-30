@@ -212,6 +212,11 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		return
 	}
 
+	// nil 체크: 빈 배열 보장
+	if allBranches == nil {
+		allBranches = []BranchInfo{}
+	}
+
 	totalCount := len(allBranches)
 
 	// 페이지네이션 적용
