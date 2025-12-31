@@ -216,11 +216,19 @@ func TestHandleGetRepositoryOverview_LanguageDistribution(t *testing.T) {
 	}
 	assert.True(t, hasJS, "JavaScript language should be detected")
 
-	// 정렬 검증: 바이트 수로 내림차순 정렬
-	for i := 1; i < len(response.LanguageDistribution.Languages); i++ {
-		assert.GreaterOrEqual(t, response.LanguageDistribution.Languages[i-1].Bytes,
-			response.LanguageDistribution.Languages[i].Bytes,
-			"Languages should be sorted by bytes in descending order")
+	// Others는 존재한다면 마지막에 있어야 함
+	for i := 0; i < len(response.LanguageDistribution.Languages)-1; i++ {
+		assert.NotEqual(t, "Others", response.LanguageDistribution.Languages[i].Language, "Others should be the last entry when present")
+	}
+
+	// 정렬 검증: Others를 제외한 항목은 바이트 수로 내림차순 정렬
+	lastBytes := int64(1<<63 - 1)
+	for _, lang := range response.LanguageDistribution.Languages {
+		if lang.Language == "Others" {
+			continue
+		}
+		assert.GreaterOrEqual(t, lastBytes, lang.Bytes, "Visible languages should be sorted by bytes in descending order")
+		lastBytes = lang.Bytes
 	}
 }
 
@@ -284,4 +292,3 @@ func TestHandleGetRepositoryOverview_LanguageDistribution_EmptyRepository(t *tes
 	assert.Equal(t, int64(0), response.LanguageDistribution.TotalBytes, "TotalBytes should be 0 for empty repository")
 	assert.Empty(t, response.LanguageDistribution.Languages, "Languages should be empty for empty repository")
 }
-

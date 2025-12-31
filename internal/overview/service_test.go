@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -432,6 +433,22 @@ func TestGetLanguageDistribution_MultipleLanguages(t *testing.T) {
 		assert.LessOrEqual(t, lang.Percentage, 100.0, "Percentage should be <= 100")
 	}
 
+	// 출력 규칙 검증: top 5 + 1% 이상 + Others 합산
+	visibleCount := 0
+	for _, lang := range distribution.Languages {
+		if lang.Language == "Others" {
+			continue
+		}
+		visibleCount++
+		assert.GreaterOrEqual(t, lang.Percentage, 1.0, "Visible languages should be >= 1%%")
+	}
+	assert.LessOrEqual(t, visibleCount, 5, "Visible languages should be at most 5")
+
+	// Others는 존재한다면 마지막에 있어야 함
+	for i := 0; i < len(distribution.Languages)-1; i++ {
+		assert.NotEqual(t, "Others", distribution.Languages[i].Language, "Others should be the last entry when present")
+	}
+
 	// Go 언어 확인
 	goLang, exists := languageMap["Go"]
 	assert.True(t, exists, "Go language should be detected")
@@ -453,10 +470,14 @@ func TestGetLanguageDistribution_MultipleLanguages(t *testing.T) {
 		assert.Greater(t, pyLang.Files, 0, "Python files count should be greater than 0")
 	}
 
-	// 정렬 검증: 바이트 수로 내림차순 정렬되어야 함
-	for i := 1; i < len(distribution.Languages); i++ {
-		assert.GreaterOrEqual(t, distribution.Languages[i-1].Bytes, distribution.Languages[i].Bytes,
-			"Languages should be sorted by bytes in descending order")
+	// 정렬 검증: Others를 제외한 항목은 바이트 수 내림차순이어야 함
+	lastBytes := int64(1<<63 - 1)
+	for _, lang := range distribution.Languages {
+		if lang.Language == "Others" {
+			continue
+		}
+		assert.GreaterOrEqual(t, lastBytes, lang.Bytes, "Visible languages should be sorted by bytes in descending order")
+		lastBytes = lang.Bytes
 	}
 
 	// Percentage 합계 검증 (100%에 가까워야 함, 부동소수점 오차 고려)
@@ -465,6 +486,278 @@ func TestGetLanguageDistribution_MultipleLanguages(t *testing.T) {
 		totalPercentage += lang.Percentage
 	}
 	assert.InDelta(t, 100.0, totalPercentage, 0.01, "Total percentage should be approximately 100%%")
+}
+
+func createTestRepositoryForLanguageDistributionFiltering(t *testing.T, tempDir string) *git.Repository {
+	repoPath := filepath.Join(tempDir, "filtering.git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	tempWorkDir, err := os.MkdirTemp("", "overview-filtering-work-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempWorkDir)
+
+	workRepo, err := git.PlainInit(tempWorkDir, false)
+	require.NoError(t, err)
+
+	worktree, err := workRepo.Worktree()
+	require.NoError(t, err)
+
+	// 3개 언어는 1% 이상이 되도록 크게 만들고, 나머지는 매우 작게 만들어 Others로 합산되게 함
+	goPath := filepath.Join(tempWorkDir, "main.go")
+	goContent := "package main\n\nfunc main() {}\n" + strings.Repeat("a", 200000)
+	require.NoError(t, os.WriteFile(goPath, []byte(goContent), 0644))
+	_, err = worktree.Add("main.go")
+	require.NoError(t, err)
+
+	jsPath := filepath.Join(tempWorkDir, "app.js")
+	jsContent := "function main() { return 1; }\n" + strings.Repeat("b", 15000)
+	require.NoError(t, os.WriteFile(jsPath, []byte(jsContent), 0644))
+	_, err = worktree.Add("app.js")
+	require.NoError(t, err)
+
+	pyPath := filepath.Join(tempWorkDir, "script.py")
+	pyContent := "def main():\n    return 1\n" + strings.Repeat("c", 5000)
+	require.NoError(t, os.WriteFile(pyPath, []byte(pyContent), 0644))
+	_, err = worktree.Add("script.py")
+	require.NoError(t, err)
+
+	// Tiny languages (<1% each)
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "tiny.rb"), []byte("puts 'x'\n"+strings.Repeat("d", 50)), 0644))
+	_, err = worktree.Add("tiny.rb")
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "tiny.rs"), []byte("fn main() {}\n"+strings.Repeat("e", 50)), 0644))
+	_, err = worktree.Add("tiny.rs")
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "tiny.java"), []byte("class A { public static void main(String[] args){} }\n"+strings.Repeat("f", 50)), 0644))
+	_, err = worktree.Add("tiny.java")
+	require.NoError(t, err)
+
+	commit, err := worktree.Commit("Add language files for filtering test", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	// 베어 저장소 생성 및 객체 복사
+	gitRepo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	commitObj, err := workRepo.CommitObject(commit)
+	require.NoError(t, err)
+
+	commitObjEncoded, err := workRepo.Storer.EncodedObject(plumbing.CommitObject, commit)
+	require.NoError(t, err)
+	_, err = gitRepo.Storer.SetEncodedObject(commitObjEncoded)
+	require.NoError(t, err)
+
+	err = copyTreeRecursiveForTest(workRepo, gitRepo, commitObj.TreeHash)
+	require.NoError(t, err)
+
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commit)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+
+	return gitRepo
+}
+
+func TestGetLanguageDistribution_FilteringAndOthers(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gitRepo := createTestRepositoryForLanguageDistributionFiltering(t, tempDir)
+
+	distribution := service.GetLanguageDistribution(ctx, gitRepo, "HEAD")
+
+	assert.Greater(t, distribution.TotalBytes, int64(0))
+	assert.Greater(t, distribution.TotalFiles, 0)
+	assert.NotEmpty(t, distribution.Languages)
+
+	visibleCount := 0
+	hasOthers := false
+	sumPct := 0.0
+	for i, lang := range distribution.Languages {
+		sumPct += lang.Percentage
+		if lang.Language == "Others" {
+			hasOthers = true
+			assert.Equal(t, len(distribution.Languages)-1, i, "Others should be last")
+			continue
+		}
+		visibleCount++
+		assert.GreaterOrEqual(t, lang.Percentage, 1.0)
+	}
+
+	assert.True(t, hasOthers, "Others should exist when there are hidden languages")
+	assert.LessOrEqual(t, visibleCount, 5)
+	assert.InDelta(t, 100.0, sumPct, 0.01)
+}
+
+func createTestRepositoryForLanguageDebugLargeFile(t *testing.T, tempDir string) *git.Repository {
+	repoPath := filepath.Join(tempDir, "debug-large.git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	tempWorkDir, err := os.MkdirTemp("", "overview-debug-large-work-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempWorkDir)
+
+	workRepo, err := git.PlainInit(tempWorkDir, false)
+	require.NoError(t, err)
+
+	worktree, err := workRepo.Worktree()
+	require.NoError(t, err)
+
+	// 1MB 초과 파일은 집계에서 제외되어야 함 (skip too_large_over_1mb)
+	pyPath := filepath.Join(tempWorkDir, "big.py")
+	pyContent := "print('x')\n" + strings.Repeat("a", 1024*1024+10)
+	require.NoError(t, os.WriteFile(pyPath, []byte(pyContent), 0644))
+	_, err = worktree.Add("big.py")
+	require.NoError(t, err)
+
+	goPath := filepath.Join(tempWorkDir, "main.go")
+	goContent := "package main\n\nfunc main() {}\n"
+	require.NoError(t, os.WriteFile(goPath, []byte(goContent), 0644))
+	_, err = worktree.Add("main.go")
+	require.NoError(t, err)
+
+	commit, err := worktree.Commit("Add big file for debug test", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	gitRepo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	commitObj, err := workRepo.CommitObject(commit)
+	require.NoError(t, err)
+
+	commitObjEncoded, err := workRepo.Storer.EncodedObject(plumbing.CommitObject, commit)
+	require.NoError(t, err)
+	_, err = gitRepo.Storer.SetEncodedObject(commitObjEncoded)
+	require.NoError(t, err)
+
+	err = copyTreeRecursiveForTest(workRepo, gitRepo, commitObj.TreeHash)
+	require.NoError(t, err)
+
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commit)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+
+	return gitRepo
+}
+
+func TestGetLanguageDistribution_LargeFileSkipped(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gitRepo := createTestRepositoryForLanguageDebugLargeFile(t, tempDir)
+
+	distribution := service.GetLanguageDistribution(ctx, gitRepo, "HEAD")
+
+	// big.py는 1MB 초과라 제외되어야 함
+	assert.Equal(t, 1, distribution.TotalFiles)
+	assert.NotEmpty(t, distribution.Languages)
+	assert.Equal(t, "Go", distribution.Languages[0].Language)
+}
+
+func createTestRepositoryForLinguistStyleExclusions(t *testing.T, tempDir string) *git.Repository {
+	repoPath := filepath.Join(tempDir, "linguist-exclusions.git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	tempWorkDir, err := os.MkdirTemp("", "overview-linguist-exclusions-work-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempWorkDir)
+
+	workRepo, err := git.PlainInit(tempWorkDir, false)
+	require.NoError(t, err)
+
+	worktree, err := workRepo.Worktree()
+	require.NoError(t, err)
+
+	// Included (real code)
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "main.py"), []byte("print('ok')\n"), 0644))
+	_, err = worktree.Add("main.py")
+	require.NoError(t, err)
+
+	// Vendored
+	require.NoError(t, os.MkdirAll(filepath.Join(tempWorkDir, "vendor"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "vendor", "vendored.py"), []byte("print('vendored')\n"), 0644))
+	_, err = worktree.Add("vendor/vendored.py")
+	require.NoError(t, err)
+
+	// Documentation
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "README.md"), []byte("# Docs\n"), 0644))
+	_, err = worktree.Add("README.md")
+	require.NoError(t, err)
+
+	// Dotfile
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, ".env"), []byte("KEY=value\n"), 0644))
+	_, err = worktree.Add(".env")
+	require.NoError(t, err)
+
+	// Generated (linguist-style marker)
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "generated.go"), []byte("// Code generated by tool DO NOT EDIT.\npackage main\n"), 0644))
+	_, err = worktree.Add("generated.go")
+	require.NoError(t, err)
+
+	commit, err := worktree.Commit("Add files for linguist-style exclusions test", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	gitRepo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	commitObj, err := workRepo.CommitObject(commit)
+	require.NoError(t, err)
+
+	commitObjEncoded, err := workRepo.Storer.EncodedObject(plumbing.CommitObject, commit)
+	require.NoError(t, err)
+	_, err = gitRepo.Storer.SetEncodedObject(commitObjEncoded)
+	require.NoError(t, err)
+
+	err = copyTreeRecursiveForTest(workRepo, gitRepo, commitObj.TreeHash)
+	require.NoError(t, err)
+
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commit)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+
+	return gitRepo
+}
+
+func TestGetLanguageDistribution_LinguistStyleExclusions(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gitRepo := createTestRepositoryForLinguistStyleExclusions(t, tempDir)
+
+	distribution := service.GetLanguageDistribution(ctx, gitRepo, "HEAD")
+
+	// Included bytes/files should reflect only non-excluded files (main.py)
+	assert.Equal(t, 1, distribution.TotalFiles)
+	assert.NotEmpty(t, distribution.Languages)
+	assert.Equal(t, "Python", distribution.Languages[0].Language)
 }
 
 func TestGetLanguageDistribution_EmptyRepository(t *testing.T) {

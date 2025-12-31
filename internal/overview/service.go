@@ -63,6 +63,8 @@ func (s *RepositoryOverviewService) GetRemotes(ctx context.Context, repo *gogit.
 
 // GetLanguageDistribution는 저장소의 언어 분포를 계산합니다.
 func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context, repo *gogit.Repository, ref string) LanguageDistribution {
+	// NOTE: GitHub/GitLab(linguist) 기준과 최대한 유사하게 맞추기 위해
+	// vendored/dotfile/documentation/configuration/generated 파일은 기본 제외합니다.
 	// 컨텍스트 취소 확인
 	select {
 	case <-ctx.Done():
@@ -125,6 +127,22 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 		default:
 		}
 
+		// GitHub/GitLab(linguist) 기준에 맞춰 기본 제외 대상 필터링
+		// - vendored / dotfile / documentation / configuration / generated
+		// (generated는 content 기반이므로 아래에서 처리)
+		if enry.IsVendor(file.Name) {
+			return nil
+		}
+		if enry.IsDotFile(file.Name) {
+			return nil
+		}
+		if enry.IsDocumentation(file.Name) {
+			return nil
+		}
+		if enry.IsConfiguration(file.Name) {
+			return nil
+		}
+
 		// 바이너리 파일과 매우 큰 파일(1MB 이상) 건너뛰기
 		if file.Size > 1024*1024 {
 			return nil
@@ -146,6 +164,11 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 
 		// 파일이 바이너리인지 확인
 		if enry.IsBinary(content) {
+			return nil
+		}
+
+		// generated 파일 제외 (content 기반)
+		if enry.IsGenerated(file.Name, content) {
 			return nil
 		}
 
@@ -211,8 +234,51 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 		return languages[i].Bytes > languages[j].Bytes
 	})
 
+	// 출력 규칙:
+	// - 최대 top 5만 노출
+	// - 노출되는 개별 언어는 1% 이상
+	// - 나머지는 Others로 묶어서 합이 100%가 되도록 구성
+	const (
+		minLanguagePercentage = 1.0
+		maxLanguagesToShow    = 5
+	)
+
+	filtered := make([]LanguageStats, 0, maxLanguagesToShow+1)
+	var othersBytes int64
+	var othersFiles int
+	sumVisiblePercentage := 0.0
+
+	for _, lang := range languages {
+		if lang.Percentage >= minLanguagePercentage && len(filtered) < maxLanguagesToShow {
+			filtered = append(filtered, lang)
+			sumVisiblePercentage += lang.Percentage
+			continue
+		}
+
+		othersBytes += lang.Bytes
+		othersFiles += lang.Files
+	}
+
+	othersPercentage := 0.0
+	if othersBytes > 0 {
+		othersPercentage = 100.0 - sumVisiblePercentage
+		// 부동소수점 오차 방어 (합이 100%를 넘거나 음수가 되는 케이스 방지)
+		if othersPercentage < 0 {
+			othersPercentage = 0
+		} else if othersPercentage > 100 {
+			othersPercentage = 100
+		}
+
+		filtered = append(filtered, LanguageStats{
+			Language:   "Others",
+			Bytes:      othersBytes,
+			Percentage: othersPercentage,
+			Files:      othersFiles,
+		})
+	}
+
 	return LanguageDistribution{
-		Languages:  languages,
+		Languages:  filtered,
 		TotalBytes: totalBytes,
 		TotalFiles: totalFiles,
 	}
