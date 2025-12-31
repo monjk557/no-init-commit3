@@ -330,6 +330,9 @@ jobs:
             COMMIT_TITLE=$(echo '${{ github.event.head_commit.message }}' | sed 's/"/\\"/g' | head -1)
           fi
 
+          GITHUB_ACTOR="${{ github.actor }}"
+          KST_TIME=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')
+
           curl -X POST -H 'Content-type: application/json' \
-           --data "{\"text\": \"🚀 **${{ env.IMAGE }}** image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\"}" \
+           --data "{\"text\": \"🚀 **${{ env.IMAGE }}** image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\n👤 Contributor: ${GITHUB_ACTOR} | 🕐 Time: ${KST_TIME}\"}" \
            "${{ secrets.SLACK_ARTIFACT_REGISTRY_QA1 }}"
