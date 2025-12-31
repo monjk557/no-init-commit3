@@ -28,7 +28,6 @@ type RepositoryOverviewHandler struct {
 	repoManager   *repositories.DefaultRepositoryManager
 	blobService   *blob.BlobService
 	service       *RepositoryOverviewService
-	overviewCache *OverviewCache
 }
 
 func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandler, error) {
@@ -63,7 +62,6 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 		repoManager:   repoManager,
 		blobService:   blobService,
 		service:       service,
-		overviewCache: NewOverviewCache(cfg.Git.MaxCacheSize, cfg.Git.CacheTTL),
 	}, nil
 }
 
@@ -171,13 +169,6 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	// path 설정 (tree overview와 동일한 방식)
 	repoCtx.path = path
 
-	// ref를 안정적인 commit hash로 resolve하여 캐시 키로 사용
-	resolvedHash, resolveErr := repoCtx.repoWrapper.ResolveReference(repoCtx.ref)
-	resolvedRefHash := ""
-	if resolveErr == nil {
-		resolvedRefHash = resolvedHash.String()
-	}
-
 	// 최신 커밋 1개만 가져오기 (성능 최적화)
 	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
 	if err != nil || len(commitsList) == 0 {
@@ -214,83 +205,27 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	latestCommit := commitsList[0]
 
 	// 커밋 개수만 세기 (성능 최적화: 커밋 객체를 메모리에 로드하지 않고 카운트만)
-	commitsCount := 1
-	if resolvedRefHash != "" {
-		if cachedCount, ok := h.overviewCache.GetCommitCount(repoPath, resolvedRefHash); ok {
-			commitsCount = cachedCount
-		} else {
-			key := cacheKey("commit_count_sf", repoPath, resolvedRefHash, "")
-			v, err := h.overviewCache.Do(key, func() (any, error) {
-				count, err := commits.CountCommits(repoCtx.repoWrapper, ctx, repoCtx.ref)
-				if err != nil {
-					return nil, err
-				}
-				h.overviewCache.SetCommitCount(repoPath, resolvedRefHash, count)
-				return count, nil
-			})
-			if err != nil {
-				h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
-				commitsCount = 1
-			} else {
-				commitsCount = v.(int)
-			}
-		}
-	} else {
-		count, err := commits.CountCommits(repoCtx.repoWrapper, ctx, repoCtx.ref)
-		if err != nil {
-			h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
-			commitsCount = 1
-		} else {
-			commitsCount = count
-		}
+	commitsCount, err := commits.CountCommits(repoCtx.repoWrapper, ctx, repoCtx.ref)
+	if err != nil {
+		h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
+		// 폴백: 최소한 1개는 있다는 것을 알 수 있음
+		commitsCount = 1
 	}
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
-	var treeEntriesWithCommit []GitTreeEntryWithCommit
-	if resolvedRefHash != "" {
-		if cachedTree, ok := h.overviewCache.GetTreeEntries(repoPath, resolvedRefHash, repoCtx.path); ok {
-			treeEntriesWithCommit = cachedTree
-		} else {
-			key := cacheKey("tree_entries_sf", repoPath, resolvedRefHash, repoCtx.path)
-			v, err := h.overviewCache.Do(key, func() (any, error) {
-				entries, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
-				if err != nil {
-					return nil, err
-				}
-				h.overviewCache.SetTreeEntries(repoPath, resolvedRefHash, repoCtx.path, entries)
-				return entries, nil
-			})
-			if err != nil {
-				// 경로 관련 오류인지 확인
-				errMsg := strings.ToLower(err.Error())
-				if strings.Contains(errMsg, "failed to find path") ||
-					strings.Contains(errMsg, "path not found") ||
-					strings.Contains(errMsg, "path is not a tree") {
-					c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
-					return
-				}
-				// 실제 저장소 손상 오류인 경우
-				c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-				return
-			}
-			treeEntriesWithCommit = v.([]GitTreeEntryWithCommit)
-		}
-	} else {
-		var err error
-		treeEntriesWithCommit, err = h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
-		if err != nil {
-			// 경로 관련 오류인지 확인
-			errMsg := strings.ToLower(err.Error())
-			if strings.Contains(errMsg, "failed to find path") ||
-				strings.Contains(errMsg, "path not found") ||
-				strings.Contains(errMsg, "path is not a tree") {
-				c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
-				return
-			}
-			// 실제 저장소 손상 오류인 경우
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+	if err != nil {
+		// 경로 관련 오류인지 확인
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "failed to find path") ||
+			strings.Contains(errMsg, "path not found") ||
+			strings.Contains(errMsg, "path is not a tree") {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
 			return
 		}
+		// 실제 저장소 손상 오류인 경우
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
 	}
 
 	// 태그 가져오기
@@ -329,26 +264,13 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		}
 	}
 
-	// 언어 분포 가져오기
-	var languageDistribution LanguageDistribution
-	if resolvedRefHash != "" {
-		if cachedLang, ok := h.overviewCache.GetLanguages(repoPath, resolvedRefHash); ok {
-			languageDistribution = cachedLang
-		} else {
-			key := cacheKey("languages_sf", repoPath, resolvedRefHash, "")
-			v, err := h.overviewCache.Do(key, func() (any, error) {
-				dist := h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
-				h.overviewCache.SetLanguages(repoPath, resolvedRefHash, dist)
-				return dist, nil
-			})
-			if err != nil {
-				languageDistribution = h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
-			} else {
-				languageDistribution = v.(LanguageDistribution)
-			}
-		}
-	} else {
-		languageDistribution = h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
+	// 언어 분포 가져오기 (너무 비쌈)
+	// NOTE: 당분간 overview 응답에서는 언어 분포를 제공하지 않습니다.
+	// languageDistribution := h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
+	languageDistribution := LanguageDistribution{
+		Languages:  []LanguageStats{},
+		TotalBytes: 0,
+		TotalFiles: 0,
 	}
 
 	// 응답 구성
@@ -396,39 +318,11 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 
 	// 트리 항목 가져오기 (커밋 정보 포함)
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	resolvedHash, resolveErr := repoCtx.repoWrapper.ResolveReference(repoCtx.ref)
-	resolvedRefHash := ""
-	if resolveErr == nil {
-		resolvedRefHash = resolvedHash.String()
-	}
-
-	var treeEntriesWithCommit []GitTreeEntryWithCommit
-	if resolvedRefHash != "" {
-		if cachedTree, ok := h.overviewCache.GetTreeEntries(repoCtx.repoPath, resolvedRefHash, repoCtx.path); ok {
-			treeEntriesWithCommit = cachedTree
-		} else {
-			key := cacheKey("tree_entries_sf", repoCtx.repoPath, resolvedRefHash, repoCtx.path)
-			v, err := h.overviewCache.Do(key, func() (any, error) {
-				entries, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
-				if err != nil {
-					return nil, err
-				}
-				h.overviewCache.SetTreeEntries(repoCtx.repoPath, resolvedRefHash, repoCtx.path, entries)
-				return entries, nil
-			})
-			if err != nil {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-				return
-			}
-			treeEntriesWithCommit = v.([]GitTreeEntryWithCommit)
-		}
-	} else {
-		var err error
-		treeEntriesWithCommit, err = h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
-		if err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-			return
-		}
+	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+	if err != nil {
+		// 실제 저장소 손상 오류인 경우
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
 	}
 
 	// 최신 커밋 1개만 가져오기 (성능 최적화)
@@ -517,39 +411,10 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		parentPath = path[:idx]
 	}
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	resolvedHash, resolveErr := repoCtx.repoWrapper.ResolveReference(repoCtx.ref)
-	resolvedRefHash := ""
-	if resolveErr == nil {
-		resolvedRefHash = resolvedHash.String()
-	}
-
-	var treeEntriesWithCommit []GitTreeEntryWithCommit
-	if resolvedRefHash != "" {
-		if cachedTree, ok := h.overviewCache.GetTreeEntries(repoCtx.repoPath, resolvedRefHash, parentPath); ok {
-			treeEntriesWithCommit = cachedTree
-		} else {
-			key := cacheKey("tree_entries_sf", repoCtx.repoPath, resolvedRefHash, parentPath)
-			v, err := h.overviewCache.Do(key, func() (any, error) {
-				entries, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, parentPath)
-				if err != nil {
-					return nil, err
-				}
-				h.overviewCache.SetTreeEntries(repoCtx.repoPath, resolvedRefHash, parentPath, entries)
-				return entries, nil
-			})
-			if err != nil {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-				return
-			}
-			treeEntriesWithCommit = v.([]GitTreeEntryWithCommit)
-		}
-	} else {
-		var err error
-		treeEntriesWithCommit, err = h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, parentPath)
-		if err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-			return
-		}
+	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, parentPath)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
 	}
 
 	// 최신 커밋 1개만 가져오기 (성능 최적화)

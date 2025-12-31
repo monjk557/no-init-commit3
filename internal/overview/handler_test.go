@@ -175,7 +175,7 @@ func TestHandleGetRepositoryOverview_LanguageDistribution(t *testing.T) {
 	router := gin.New()
 	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
 
-	// 언어 분포가 항상 포함되는지 확인 (파라미터 없이)
+	// 당분간 overview에서는 언어 분포를 제공하지 않음
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
 	w := httptest.NewRecorder()
 
@@ -188,48 +188,9 @@ func TestHandleGetRepositoryOverview_LanguageDistribution(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, response.Success)
-	assert.NotNil(t, response.LanguageDistribution, "LanguageDistribution should always be included")
-	assert.Greater(t, response.LanguageDistribution.TotalFiles, 0, "TotalFiles should be greater than 0")
-	assert.Greater(t, response.LanguageDistribution.TotalBytes, int64(0), "TotalBytes should be greater than 0")
-	assert.NotEmpty(t, response.LanguageDistribution.Languages, "Languages should not be empty")
-
-	// Go 언어가 포함되어 있는지 확인
-	hasGo := false
-	for _, lang := range response.LanguageDistribution.Languages {
-		if lang.Language == "Go" {
-			hasGo = true
-			assert.Greater(t, lang.Files, 0, "Go files count should be greater than 0")
-			assert.Greater(t, lang.Bytes, int64(0), "Go bytes should be greater than 0")
-			break
-		}
-	}
-	assert.True(t, hasGo, "Go language should be detected")
-
-	// JavaScript 언어가 포함되어 있는지 확인
-	hasJS := false
-	for _, lang := range response.LanguageDistribution.Languages {
-		if lang.Language == "JavaScript" {
-			hasJS = true
-			assert.Greater(t, lang.Files, 0, "JavaScript files count should be greater than 0")
-			break
-		}
-	}
-	assert.True(t, hasJS, "JavaScript language should be detected")
-
-	// Others는 존재한다면 마지막에 있어야 함
-	for i := 0; i < len(response.LanguageDistribution.Languages)-1; i++ {
-		assert.NotEqual(t, "Others", response.LanguageDistribution.Languages[i].Language, "Others should be the last entry when present")
-	}
-
-	// 정렬 검증: Others를 제외한 항목은 바이트 수로 내림차순 정렬
-	lastBytes := int64(1<<63 - 1)
-	for _, lang := range response.LanguageDistribution.Languages {
-		if lang.Language == "Others" {
-			continue
-		}
-		assert.GreaterOrEqual(t, lastBytes, lang.Bytes, "Visible languages should be sorted by bytes in descending order")
-		lastBytes = lang.Bytes
-	}
+	assert.Equal(t, 0, response.LanguageDistribution.TotalFiles, "TotalFiles should be 0 while language distribution is disabled")
+	assert.Equal(t, int64(0), response.LanguageDistribution.TotalBytes, "TotalBytes should be 0 while language distribution is disabled")
+	assert.Empty(t, response.LanguageDistribution.Languages, "Languages should be empty while language distribution is disabled")
 }
 
 func TestHandleGetRepositoryOverview_LanguageDistribution_EmptyRepository(t *testing.T) {
