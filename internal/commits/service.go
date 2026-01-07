@@ -47,6 +47,11 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoWrapper *repo
 		return nil, 0, fmt.Errorf("failed to get commits: %w", err)
 	}
 
+	// 날짜 기준으로 정렬 (내림차순: 최신이 먼저)
+	sort.Slice(commits, func(i, j int) bool {
+		return commits[i].Author.Date.After(commits[j].Author.Date)
+	})
+
 	// 더 많은 커밋이 있는지 확인 (페이지네이션)
 	totalCount := len(commits)
 
@@ -75,7 +80,6 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 	ref := c.Query("ref")
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
-	sort := c.Query("sort")
 
 	// 필수 파라미터 검증
 	if owner == "" || repo == "" {
@@ -119,7 +123,6 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 		Ref:   ref,
 		Limit: limit,
 		Skip:  skip,
-		Sort:  sort,
 	}, nil
 }
 

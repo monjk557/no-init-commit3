@@ -120,6 +120,7 @@ func (h *CommitsHandler) validateAndOpenRepository(ctx context.Context, c *gin.C
 }
 
 // HandleCommitsAPI는 GET /repos/:owner/:repo/commits?ref=:ref&limit=:limit&skip=:skip 요청을 처리합니다.
+// 커밋은 항상 날짜 기준 내림차순으로 정렬되어 반환됩니다.
 func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -149,25 +150,10 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		commits = []Commit{}
 	}
 
-	// sort=date 파라미터에 따라 응답 형식 결정
-	var results interface{}
-	if params.Sort == "date" {
-		// 날짜별로 커밋 그룹화
-		grouped := h.groupCommitsByDate(commits)
-		// nil 체크: 빈 배열 보장
-		if grouped == nil {
-			grouped = []CommitsByDate{}
-		}
-		results = grouped
-	} else {
-		// 기본형: 커밋 목록을 그대로 반환 (이미 빈 배열로 보장됨)
-		results = commits
-	}
-
 	// 페이지네이션 정보와 함께 응답 생성
 	response := CommitsResponse{
 		Success: true,
-		Results: results,
+		Results: commits,
 		Message: "Commits fetched successfully",
 		Pagination: PaginationInfo{
 			Count:      totalCount,

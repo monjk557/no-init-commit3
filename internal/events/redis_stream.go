@@ -110,10 +110,6 @@ func newSingleRedisStreamClient(redisURL string, logger *zap.Logger) (RedisStrea
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	logger.Debug("Redis (single) events client initialized",
-		zap.String("address", opt.Addr),
-		zap.Int("db", opt.DB))
-
 	return &redisStreamClient{
 		client: client,
 		logger: logger,
@@ -185,9 +181,6 @@ func newClusterRedisStreamClient(redisURLs string, logger *zap.Logger) (RedisStr
 		return nil, fmt.Errorf("failed to connect to Redis Cluster: %w", err)
 	}
 
-	logger.Debug("Redis Cluster events client initialized",
-		zap.Strings("addrs", addrs))
-
 	return &redisStreamClient{
 		client: client,
 		logger: logger,
@@ -219,64 +212,14 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 		values["old_rev"] = event.OldRev
 	}
 
-	// Debug: Log event data before publishing
-	r.logger.Debug("Publishing commit event to Redis Stream",
-		zap.String("stream_key", streamKey),
-		zap.String("event_type", string(event.EventType)),
-		zap.String("repo_path", event.RepoPath),
-		zap.String("commit_hash", event.CommitHash),
-		zap.String("ref_name", event.RefName),
-		zap.String("pusher", event.Pusher),
-		zap.Time("timestamp", event.Timestamp),
-		zap.Int64("unix_timestamp", timestamp),
-		zap.Any("values", values))
-
-	// Add to Redis Stream using XADD
-	// Use * for auto-generated ID
-	r.logger.Debug("Executing XADD command",
-		zap.String("stream_key", streamKey),
-		zap.String("id", "*"))
-
-	streamID, err := r.client.XAdd(ctx, &redis.XAddArgs{
+	_, err := r.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		ID:     "*", // Auto-generate ID
 		Values: values,
 	}).Result()
 
 	if err != nil {
-		r.logger.Error("Failed to publish commit event to Redis Stream",
-			zap.String("stream_key", streamKey),
-			zap.String("event_type", string(event.EventType)),
-			zap.String("commit_hash", event.CommitHash),
-			zap.String("ref_name", event.RefName),
-			zap.String("repo_path", event.RepoPath),
-			zap.Any("values", values),
-			zap.Error(err))
 		return fmt.Errorf("failed to add to Redis Stream: %w", err)
-	}
-
-	r.logger.Info("Successfully published commit event to Redis Stream",
-		zap.String("stream_key", streamKey),
-		zap.String("stream_id", streamID),
-		zap.String("repo_path", event.RepoPath),
-		zap.String("event_type", string(event.EventType)),
-		zap.String("commit_hash", event.CommitHash),
-		zap.String("ref_name", event.RefName),
-		zap.String("pusher", event.Pusher),
-		zap.Int64("timestamp", timestamp),
-		zap.Time("timestamp_time", event.Timestamp))
-
-	// Debug: Verify the event was added by checking stream length
-	streamLen, err := r.client.XLen(ctx, streamKey).Result()
-	if err != nil {
-		r.logger.Warn("Failed to get stream length after publishing",
-			zap.String("stream_key", streamKey),
-			zap.Error(err))
-	} else {
-		r.logger.Debug("Redis Stream length after publishing",
-			zap.String("stream_key", streamKey),
-			zap.Int64("length", streamLen),
-			zap.String("new_stream_id", streamID))
 	}
 
 	return nil

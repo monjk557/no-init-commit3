@@ -9,16 +9,14 @@ type CommitsRequestParams struct {
 	Ref   string
 	Limit int
 	Skip  int
-	Sort  string // 정렬 옵션: "date" (날짜별 그룹화) 또는 빈 문자열 (기본형)
 }
 
 // CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.
-// sort=date일 때는 날짜별로 그룹화된 커밋 목록, 그렇지 않으면 기본 커밋 목록을 반환합니다.
-// CommitsByDate 타입은 diff.go에서 정의된 타입을 재사용합니다.
+// 모든 커밋은 날짜 기준 내림차순으로 정렬됩니다.
 type CommitsResponse struct {
 	Success    bool           `json:"success"`
 	Message    string         `json:"message"`
-	Results    interface{}    `json:"results"` // sort=date일 때는 []CommitsByDate, 그렇지 않으면 []git.Commit
+	Results    []Commit       `json:"results"` // 날짜 기준 내림차순으로 정렬된 커밋 목록
 	Pagination PaginationInfo `json:"pagination"`
 }
 
