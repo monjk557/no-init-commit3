@@ -47,11 +47,6 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoWrapper *repo
 		return nil, 0, fmt.Errorf("failed to get commits: %w", err)
 	}
 
-	// 날짜 기준으로 정렬 (내림차순: 최신이 먼저)
-	sort.Slice(commits, func(i, j int) bool {
-		return commits[i].Author.Date.After(commits[j].Author.Date)
-	})
-
 	// 더 많은 커밋이 있는지 확인 (페이지네이션)
 	totalCount := len(commits)
 

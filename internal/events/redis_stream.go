@@ -212,15 +212,36 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 		values["old_rev"] = event.OldRev
 	}
 
-	_, err := r.client.XAdd(ctx, &redis.XAddArgs{
+	// Add to Redis Stream using XADD
+	// Use * for auto-generated ID
+	streamID, err := r.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		ID:     "*", // Auto-generate ID
 		Values: values,
 	}).Result()
 
 	if err != nil {
+		r.logger.Error("Failed to publish commit event to Redis Stream",
+			zap.String("stream_key", streamKey),
+			zap.String("event_type", string(event.EventType)),
+			zap.String("commit_hash", event.CommitHash),
+			zap.String("ref_name", event.RefName),
+			zap.String("repo_path", event.RepoPath),
+			zap.Any("values", values),
+			zap.Error(err))
 		return fmt.Errorf("failed to add to Redis Stream: %w", err)
 	}
+
+	r.logger.Info("Successfully published commit event to Redis Stream",
+		zap.String("stream_key", streamKey),
+		zap.String("stream_id", streamID),
+		zap.String("repo_path", event.RepoPath),
+		zap.String("event_type", string(event.EventType)),
+		zap.String("commit_hash", event.CommitHash),
+		zap.String("ref_name", event.RefName),
+		zap.String("pusher", event.Pusher),
+		zap.Int64("timestamp", timestamp),
+		zap.Time("timestamp_time", event.Timestamp))
 
 	return nil
 }

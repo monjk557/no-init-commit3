@@ -12,12 +12,12 @@ type CommitsRequestParams struct {
 }
 
 // CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.
-// 모든 커밋은 날짜 기준 내림차순으로 정렬됩니다.
+// 모든 커밋은 날짜별로 그룹화되어 날짜 기준 내림차순으로 정렬됩니다.
 type CommitsResponse struct {
-	Success    bool           `json:"success"`
-	Message    string         `json:"message"`
-	Results    []Commit       `json:"results"` // 날짜 기준 내림차순으로 정렬된 커밋 목록
-	Pagination PaginationInfo `json:"pagination"`
+	Success    bool            `json:"success"`
+	Message    string          `json:"message"`
+	Results    []CommitsByDate `json:"results"` // 날짜별로 그룹화된 커밋 목록 (날짜 기준 내림차순)
+	Pagination PaginationInfo  `json:"pagination"`
 }
 
 // PaginationInfo는 커밋 응답의 페이지네이션 정보를 나타냅니다.
