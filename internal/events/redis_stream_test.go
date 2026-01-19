@@ -2,8 +2,8 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -55,12 +55,14 @@ func TestAddCommitEventToStream(t *testing.T) {
 	// Create test event
 	now := time.Now()
 	event := &CommitEvent{
-		RepoPath:   "/test/repo.git",
-		EventType:  EventTypeCommit,
-		CommitHash: "abc123def456",
-		RefName:    "refs/heads/main",
-		Pusher:     "test-user",
-		Timestamp:  now,
+		RepoPath:      "/test/repo.git",
+		EventType:     EventTypeCommit,
+		CommitHash:    "abc123def456",
+		RefName:       "refs/heads/main",
+		Pusher:        "test-user",
+		UserID:        "test-user-id-123",
+		CommitMessage: "Test commit message",
+		Timestamp:     now,
 	}
 
 	// Publish event
@@ -77,7 +79,7 @@ func TestAddCommitEventToStream(t *testing.T) {
 	redisClient := redis.NewClient(opt)
 	defer redisClient.Close()
 
-	streamKey := "git:events:commit"
+	streamKey := "git:events"
 
 	// Read the last message from the stream
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -87,30 +89,178 @@ func TestAddCommitEventToStream(t *testing.T) {
 	// Find our message (check the most recent ones)
 	found := false
 	for _, msg := range messages {
-		if msg.Values["repo_path"] == event.RepoPath &&
-			msg.Values["new_rev"] == event.CommitHash &&
-			msg.Values["ref"] == event.RefName {
+		// Check if data field exists and contains JSON
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		// Parse JSON data
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		// Check if this is our event
+		if eventData["repo_path"] == event.RepoPath &&
+			eventData["new_rev"] == event.CommitHash &&
+			eventData["ref"] == event.RefName {
 			found = true
 
 			// Verify all fields
-			assert.Equal(t, event.RepoPath, msg.Values["repo_path"])
-			assert.Equal(t, event.CommitHash, msg.Values["new_rev"])
-			assert.Equal(t, event.RefName, msg.Values["ref"])
-			assert.Equal(t, event.Pusher, msg.Values["pusher"])
+			assert.Equal(t, event.RepoPath, eventData["repo_path"])
+			assert.Equal(t, event.CommitHash, eventData["new_rev"])
+			assert.Equal(t, event.RefName, eventData["ref"])
+			assert.Equal(t, string(event.EventType), eventData["event_type"])
+			assert.Equal(t, event.UserID, eventData["user_id"])
+			assert.Equal(t, event.CommitMessage, eventData["commit_message"])
 
-			// Verify timestamp (allow small difference due to conversion)
-			timestampStr, ok := msg.Values["timestamp"].(string)
+			// Verify event_id exists
+			_, hasEventID := eventData["event_id"]
+			assert.True(t, hasEventID, "Event ID should be present")
+
+			// Verify timestamp format (RFC3339)
+			timestampStr, ok := eventData["timestamp"].(string)
 			require.True(t, ok, "Timestamp should be string")
-			timestamp, err := strconv.ParseInt(timestampStr, 10, 64)
-			require.NoError(t, err)
-			expectedTimestamp := event.Timestamp.Unix()
-			assert.Equal(t, expectedTimestamp, timestamp, "Timestamp should match")
+			_, err = time.Parse(time.RFC3339, timestampStr)
+			require.NoError(t, err, "Timestamp should be in RFC3339 format")
 
 			break
 		}
 	}
 
 	assert.True(t, found, "Should find the published event in stream")
+}
+
+func TestAddCommitEventToStream_WithUserID(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Logf("Failed to close client: %v", err)
+		}
+	}()
+
+	// Test event with user ID
+	event := &CommitEvent{
+		RepoPath:      "/test/repo.git",
+		EventType:     EventTypeCommit,
+		CommitHash:    "user-test-hash",
+		RefName:       "refs/heads/main",
+		Pusher:        "git",
+		UserID:        "user-12345",
+		CommitMessage: "Test commit with user",
+		Timestamp:     time.Now(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+
+	// Verify user_id is in the stream
+	opt, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+
+	redisClient := redis.NewClient(opt)
+	defer redisClient.Close()
+
+	streamKey := "git:events"
+	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
+	require.NoError(t, err)
+
+	found := false
+	for _, msg := range messages {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if eventData["new_rev"] == event.CommitHash {
+			found = true
+			assert.Equal(t, event.UserID, eventData["user_id"], "User ID should be present in stream")
+			break
+		}
+	}
+
+	assert.True(t, found, "Should find event with user_id in stream")
+}
+
+func TestAddCommitEventToStream_WithoutUserID(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Logf("Failed to close client: %v", err)
+		}
+	}()
+
+	// Test event without user ID (empty string)
+	event := &CommitEvent{
+		RepoPath:      "/test/repo.git",
+		EventType:     EventTypeCommit,
+		CommitHash:    "no-user-hash",
+		RefName:       "refs/heads/main",
+		Pusher:        "git",
+		UserID:        "", // Empty user ID
+		CommitMessage: "Test commit without user",
+		Timestamp:     time.Now(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+
+	// Verify user_id is not in the stream (empty string means field is not added)
+	opt, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+
+	redisClient := redis.NewClient(opt)
+	defer redisClient.Close()
+
+	streamKey := "git:events"
+	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
+	require.NoError(t, err)
+
+	found := false
+	for _, msg := range messages {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if eventData["new_rev"] == event.CommitHash {
+			found = true
+			// user_id should not be present if empty
+			_, exists := eventData["user_id"]
+			assert.False(t, exists, "user_id should not be present when empty")
+			break
+		}
+	}
+
+	assert.True(t, found, "Should find event in stream")
 }
 
 func TestAddPushEventToStream(t *testing.T) {
@@ -126,12 +276,14 @@ func TestAddPushEventToStream(t *testing.T) {
 	}()
 
 	event := &CommitEvent{
-		RepoPath:   "/test/repo.git",
-		EventType:  EventTypePush,
-		CommitHash: "push123hash",
-		RefName:    "refs/heads/feature",
-		Pusher:     "git",
-		Timestamp:  time.Now(),
+		RepoPath:      "/test/repo.git",
+		EventType:     EventTypePush,
+		CommitHash:    "push123hash",
+		RefName:       "refs/heads/feature",
+		Pusher:        "git",
+		UserID:        "test-user-id-push",
+		CommitMessage: "Test push commit",
+		Timestamp:     time.Now(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -147,22 +299,35 @@ func TestAddPushEventToStream(t *testing.T) {
 	redisClient := redis.NewClient(opt)
 	defer redisClient.Close()
 
-	streamKey := "git:events:push"
+	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
 	require.NoError(t, err)
 	require.NotEmpty(t, messages)
 
 	found := false
 	for _, msg := range messages {
-		if msg.Values["new_rev"] == event.CommitHash {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if eventData["new_rev"] == event.CommitHash {
 			found = true
-			assert.Equal(t, event.EventType, EventTypePush)
-			assert.Equal(t, event.CommitHash, msg.Values["new_rev"])
+			assert.Equal(t, string(event.EventType), eventData["event_type"])
+			assert.Equal(t, event.CommitHash, eventData["new_rev"])
+			assert.Equal(t, event.UserID, eventData["user_id"])
+			assert.Equal(t, event.CommitMessage, eventData["commit_message"])
 			break
 		}
 	}
 
-	assert.True(t, found, "Should find push event in push stream")
+	assert.True(t, found, "Should find push event in stream")
 }
 
 func TestAddMergeEventToStream(t *testing.T) {
@@ -178,12 +343,14 @@ func TestAddMergeEventToStream(t *testing.T) {
 	}()
 
 	event := &CommitEvent{
-		RepoPath:   "/test/repo.git",
-		EventType:  EventTypeMerge,
-		CommitHash: "merge456hash",
-		RefName:    "refs/heads/main",
-		Pusher:     "git",
-		Timestamp:  time.Now(),
+		RepoPath:      "/test/repo.git",
+		EventType:     EventTypeMerge,
+		CommitHash:    "merge456hash",
+		RefName:       "refs/heads/main",
+		Pusher:        "git",
+		UserID:        "test-user-id-merge",
+		CommitMessage: "Test merge commit",
+		Timestamp:     time.Now(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -199,22 +366,35 @@ func TestAddMergeEventToStream(t *testing.T) {
 	redisClient := redis.NewClient(opt)
 	defer redisClient.Close()
 
-	streamKey := "git:events:merge"
+	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
 	require.NoError(t, err)
 	require.NotEmpty(t, messages)
 
 	found := false
 	for _, msg := range messages {
-		if msg.Values["new_rev"] == event.CommitHash {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if eventData["new_rev"] == event.CommitHash {
 			found = true
-			assert.Equal(t, event.EventType, EventTypeMerge)
-			assert.Equal(t, event.CommitHash, msg.Values["new_rev"])
+			assert.Equal(t, string(event.EventType), eventData["event_type"])
+			assert.Equal(t, event.CommitHash, eventData["new_rev"])
+			assert.Equal(t, event.UserID, eventData["user_id"])
+			assert.Equal(t, event.CommitMessage, eventData["commit_message"])
 			break
 		}
 	}
 
-	assert.True(t, found, "Should find merge event in merge stream")
+	assert.True(t, found, "Should find merge event in stream")
 }
 
 func TestAddCommitEventToStream_StreamLength(t *testing.T) {
@@ -235,7 +415,7 @@ func TestAddCommitEventToStream_StreamLength(t *testing.T) {
 	redisClient := redis.NewClient(opt)
 	defer redisClient.Close()
 
-	streamKey := "git:events:commit"
+	streamKey := "git:events"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -245,12 +425,14 @@ func TestAddCommitEventToStream_StreamLength(t *testing.T) {
 
 	// Publish event
 	event := &CommitEvent{
-		RepoPath:   "/test/repo.git",
-		EventType:  EventTypeCommit,
-		CommitHash: "length-test-hash",
-		RefName:    "refs/heads/test",
-		Pusher:     "test",
-		Timestamp:  time.Now(),
+		RepoPath:      "/test/repo.git",
+		EventType:     EventTypeCommit,
+		CommitHash:    "length-test-hash",
+		RefName:       "refs/heads/test",
+		Pusher:        "test",
+		UserID:        "test-user-id-length",
+		CommitMessage: "Test length commit",
+		Timestamp:     time.Now(),
 	}
 
 	err = client.AddCommitEventToStream(ctx, event)
@@ -283,28 +465,34 @@ func TestAddCommitEventToStream_MultipleEvents(t *testing.T) {
 	// Publish multiple events
 	events := []*CommitEvent{
 		{
-			RepoPath:   "/test/repo1.git",
-			EventType:  EventTypeCommit,
-			CommitHash: "hash1",
-			RefName:    "refs/heads/branch1",
-			Pusher:     "user1",
-			Timestamp:  time.Now(),
+			RepoPath:      "/test/repo1.git",
+			EventType:     EventTypeCommit,
+			CommitHash:    "hash1",
+			RefName:       "refs/heads/branch1",
+			Pusher:        "user1",
+			UserID:        "test-user-id-1",
+			CommitMessage: "Commit 1",
+			Timestamp:     time.Now(),
 		},
 		{
-			RepoPath:   "/test/repo2.git",
-			EventType:  EventTypeCommit,
-			CommitHash: "hash2",
-			RefName:    "refs/heads/branch2",
-			Pusher:     "user2",
-			Timestamp:  time.Now(),
+			RepoPath:      "/test/repo2.git",
+			EventType:     EventTypeCommit,
+			CommitHash:    "hash2",
+			RefName:       "refs/heads/branch2",
+			Pusher:        "user2",
+			UserID:        "test-user-id-2",
+			CommitMessage: "Commit 2",
+			Timestamp:     time.Now(),
 		},
 		{
-			RepoPath:   "/test/repo3.git",
-			EventType:  EventTypeCommit,
-			CommitHash: "hash3",
-			RefName:    "refs/heads/branch3",
-			Pusher:     "user3",
-			Timestamp:  time.Now(),
+			RepoPath:      "/test/repo3.git",
+			EventType:     EventTypeCommit,
+			CommitHash:    "hash3",
+			RefName:       "refs/heads/branch3",
+			Pusher:        "user3",
+			UserID:        "test-user-id-3",
+			CommitMessage: "Commit 3",
+			Timestamp:     time.Now(),
 		},
 	}
 
@@ -320,14 +508,25 @@ func TestAddCommitEventToStream_MultipleEvents(t *testing.T) {
 	redisClient := redis.NewClient(opt)
 	defer redisClient.Close()
 
-	streamKey := "git:events:commit"
+	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
 	require.NoError(t, err)
 
 	// Check that all events are in the stream
 	foundHashes := make(map[string]bool)
 	for _, msg := range messages {
-		if hash, ok := msg.Values["new_rev"].(string); ok {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if hash, ok := eventData["new_rev"].(string); ok {
 			foundHashes[hash] = true
 		}
 	}

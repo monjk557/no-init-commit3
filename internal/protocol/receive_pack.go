@@ -161,6 +161,12 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	owner := URLParam(r, "owner")
 	repo := URLParam(r, "repo")
 
+	// Extract user ID from X-USER-ID header (used for both v1 and v2 protocol)
+	userID := r.Header.Get("X-USER-ID")
+	if userID == "" {
+		userID = "" // Empty string if not provided
+	}
+
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid repository path: %v", err), http.StatusBadRequest)
@@ -231,7 +237,8 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 			_ = pktWriter.flush()
 			return
 		}
-		if err := h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, pktWriter); err != nil {
+
+		if err := h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, userID, pktWriter); err != nil {
 			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 			_ = pktWriter.flush()
 			return
@@ -286,7 +293,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	}
 
 	// [4] receive-pack 처리 시작
-	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, pktWriter)
+	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, userID, pktWriter)
 	if err != nil {
 		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
@@ -492,7 +499,7 @@ func (h *ReceivePackHandler) parsePushSection(cmds []string, body io.Reader) (*R
 	return req, nil
 }
 
-func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo *gogit.Repository, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName string, pktWriter *pktLineWriter) error {
+func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo *gogit.Repository, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, pktWriter *pktLineWriter) error {
 	// NOTE:
 	// receive-pack의 "side-band-64k"는 진행(progress) 메시지 다중화 용도인데,
 	// 이 구현은 우선 v1 report-status(pkt-line)를 정확히 반환하는 것을 목표로 한다.
@@ -528,7 +535,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 
 	// [15] refs 업데이트
 	for _, cmd := range req.Commands {
-		err := h.processRefUpdate(ctx, repo, cmd, owner, repoName)
+		err := h.processRefUpdate(ctx, repo, cmd, owner, repoName, userID)
 		if err != nil {
 			// [17] report-status 생성
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
@@ -829,7 +836,7 @@ func (h *ReceivePackHandler) validatePackfileFormat(packfileData []byte) (*Packf
 	}, nil
 }
 
-func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand, owner, repoName string) error {
+func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand, owner, repoName, userID string) error {
 	// [7] refs 검증 / fast-forward 검사
 	if !isValidRefName(cmd.RefName) {
 		return fmt.Errorf("invalid reference name: %s", cmd.RefName)
@@ -883,7 +890,7 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repo *gogit.R
 			if cmd.OldHash != plumbing.ZeroHash {
 				oldHashStr = cmd.OldHash.String()
 			}
-			h.addCommitEventToStream(ctx, repo, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, events.EventTypePush)
+			h.addCommitEventToStream(ctx, repo, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID, events.EventTypePush)
 		}
 	}
 
@@ -942,16 +949,25 @@ func getRepositoryLock(repoPath string) *sync.Mutex {
 	return lock
 }
 
-func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string, eventType events.CommitEventType) {
+func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
 	if h.eventsClient == nil {
 		return
 	}
 
 	// Get commit object to verify it exists
+	// Note: commitHash should be available after packfile processing
 	commit, err := repo.CommitObject(commitHash)
 	if err != nil {
-		// Not a commit, skip
+		// Not a commit or commit not yet available, skip
+		// This can happen if packfile processing hasn't fully completed
 		return
+	}
+
+	// Extract commit message - ensure it's properly extracted
+	commitMessage := commit.Message
+	if commitMessage == "" {
+		// Commit message is empty, but we still want to include it in the event
+		commitMessage = ""
 	}
 
 	// Get full filesystem path for the repository
@@ -966,14 +982,20 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *g
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   relativePath,
-		EventType:  eventType,
-		CommitHash: commitHash.String(),
-		OldRev:     oldHash,
-		RefName:    refName,
-		Pusher:     "git", // Default pusher identifier
-		Timestamp:  commit.Committer.When,
+		RepoPath:      relativePath,
+		EventType:     eventType,
+		CommitHash:    commitHash.String(),
+		OldRev:        oldHash,
+		RefName:       refName,
+		Pusher:        "git", // Default pusher identifier
+		UserID:        userID,
+		CommitMessage: commitMessage,
+		Timestamp:     commit.Committer.When,
 	}
+
+	// Debug log for push event creation
+	// Note: logger is not directly available, but we can use a simple approach
+	// For now, we'll rely on the events client logger
 
 	// Publish asynchronously to avoid blocking
 	go func() {

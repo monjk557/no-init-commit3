@@ -376,7 +376,7 @@ func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 
 // ExecuteMultiFileCommit는 다중 파일 커밋 작업을 실행합니다.
 // 이 메서드는 비즈니스 로직의 핵심을 담당하며, 트랜잭션을 통해 원자적으로 처리합니다.
-func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository *repositories.RepositoryWrapper, req *MultiFileCommitRequest, branch string, owner, repo string) (*MultiFileCommitResponse, error) {
+func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository *repositories.RepositoryWrapper, req *MultiFileCommitRequest, branch string, owner, repo, userID string) (*MultiFileCommitResponse, error) {
 	// 기본 커밋 해시 가져오기
 	baseHash, err := repository.ResolveReference(branch)
 	if err != nil {
@@ -580,7 +580,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		// Publish commit event if enabled
 		if s.eventsClient != nil && owner != "" && repo != "" {
 			oldHashStr := baseHash.String()
-			s.addCommitEventToStream(ctx, repository, oldHashStr, result.CommitResult.Hash, branch, owner, repo)
+			s.addCommitEventToStream(ctx, repository, oldHashStr, result.CommitResult.Hash, branch, owner, repo, userID)
 		}
 	}
 
@@ -618,7 +618,7 @@ func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
 	ctx context.Context,
 	repository *repositories.RepositoryWrapper,
 	req *MultiFileCommitRequest,
-	owner, repo string,
+	owner, repo, userID string,
 ) (*MultiFileCommitResponse, error) {
 	if repository == nil {
 		return nil, fmt.Errorf("repository is closed")
@@ -635,7 +635,7 @@ func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
 
 	// create_branch_name이 없으면 기존 branch에 커밋 생성
 	if req.CreateBranchName == "" {
-		return s.ExecuteMultiFileCommit(ctx, repository, req, targetBranch, owner, repo)
+		return s.ExecuteMultiFileCommit(ctx, repository, req, targetBranch, owner, repo, userID)
 	}
 
 	// create_branch_name이 있으면 source를 결정하고 브랜치 생성 후 그 브랜치로 커밋
@@ -695,7 +695,7 @@ func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
 
 	commitReq := *req
 	commitReq.Branch = req.CreateBranchName
-	resp, err := s.ExecuteMultiFileCommit(ctx, repository, &commitReq, commitReq.Branch, owner, repo)
+	resp, err := s.ExecuteMultiFileCommit(ctx, repository, &commitReq, commitReq.Branch, owner, repo, userID)
 	if err != nil {
 		// Rollback branch + HEAD if commit creation fails.
 		rbErr := s.rollbackBranchAndHEAD(gitRepo, branchRefName, existedBefore, previousBranchHash, previousHEADType, previousHEADTarget, previousHEADHash)
@@ -819,7 +819,7 @@ func (s *CommitsService) rollbackBranchAndHEAD(
 }
 
 // addCommitEventToStream adds a commit event to Redis Stream
-func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repositories.RepositoryWrapper, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string) {
+func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repositories.RepositoryWrapper, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string) {
 	if s.eventsClient == nil {
 		return
 	}
@@ -850,14 +850,24 @@ func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repos
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   relativePath,
-		EventType:  events.EventTypeCommit,
-		CommitHash: commitHash.String(),
-		OldRev:     oldHash,
-		RefName:    refName,
-		Pusher:     "git", // Default pusher identifier
-		Timestamp:  commit.Committer.When,
+		RepoPath:      relativePath,
+		EventType:     events.EventTypeCommit,
+		CommitHash:    commitHash.String(),
+		OldRev:        oldHash,
+		RefName:       refName,
+		Pusher:        "git", // Default pusher identifier
+		UserID:        userID,
+		CommitMessage: commit.Message,
+		Timestamp:     commit.Committer.When,
 	}
+
+	// Debug log for commit event creation
+	s.logger.Debug("Creating commit event with user context",
+		zap.String("user_id", userID),
+		zap.String("commit_hash", commitHash.String()),
+		zap.String("ref_name", refName),
+		zap.String("owner", owner),
+		zap.String("repo", repoName))
 
 	// Publish asynchronously to avoid blocking
 	go func() {

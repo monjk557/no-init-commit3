@@ -217,8 +217,17 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
 
 	repository := repoCtx.repoWrapper
 
+	// Extract user ID from X-USER-ID header
+	userID := c.GetHeader("X-USER-ID")
+	if userID == "" {
+		userID = "" // Empty string if not provided
+	}
+
+	// Debug log for user ID extraction
+	h.logger.LogDebug(ctx, fmt.Sprintf("Extracting user ID from header for commit creation: user_id=%s, owner=%s, repo=%s", userID, owner, repo))
+
 	// 서비스를 통해 비즈니스 로직 실행
-	response, err := h.service.ExecuteMultiFileCommitOrCreateBranch(ctx, repository, &req, owner, repo)
+	response, err := h.service.ExecuteMultiFileCommitOrCreateBranch(ctx, repository, &req, owner, repo, userID)
 	if err != nil {
 		// 에러 타입에 따라 적절한 HTTP 상태 코드 반환
 		errMsg := err.Error()

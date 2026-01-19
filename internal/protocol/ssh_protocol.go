@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/orchestrator"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
@@ -75,12 +77,6 @@ func NewSSHProtocolHandler(cfg *config.Config) (*SSHProtocolHandler, error) {
 
 // ValidateSSHRequest validates and extracts context from SSH-forwarded request
 func (h *SSHProtocolHandler) ValidateSSHRequest(r *http.Request, operation string) (*SSHRequest, error) {
-	// Extract user ID from gateway authentication header
-	userID := r.Header.Get("X-USER-ID")
-	if userID == "" {
-		return nil, NewGitProtocolError("authentication_required", "Missing user authentication context from SSH gateway", http.StatusUnauthorized, true)
-	}
-
 	// Extract correlation ID for tracing (optional, generate if not present)
 	correlationID := r.Header.Get("X-Correlation-ID")
 	if correlationID == "" {
@@ -115,6 +111,17 @@ func (h *SSHProtocolHandler) ValidateSSHRequest(r *http.Request, operation strin
 		return nil, NewGitProtocolError("invalid_operation", fmt.Sprintf("Invalid Git operation: %s", operation), http.StatusBadRequest, true)
 	}
 
+	// Resolve user ID:
+	// - Primary: X-USER-ID header from ssh-gateway
+	// - Fallback (Option B): call orchestrator ssh-key validation API and parse response body user_id
+	userID := r.Header.Get("X-USER-ID")
+	if strings.TrimSpace(userID) == "" {
+		userID = h.resolveUserIDViaOrchestrator(r.Context(), r, fmt.Sprintf("%s/%s", owner, repo))
+	}
+	if strings.TrimSpace(userID) == "" {
+		return nil, NewGitProtocolError("authentication_required", "Missing user authentication context for SSH request", http.StatusUnauthorized, true)
+	}
+
 	return &SSHRequest{
 		UserID:          userID,
 		CorrelationID:   correlationID,
@@ -124,6 +131,49 @@ func (h *SSHProtocolHandler) ValidateSSHRequest(r *http.Request, operation strin
 		Operation:       operation,
 		ProtocolVersion: protocolVersion,
 	}, nil
+}
+
+func (h *SSHProtocolHandler) resolveUserIDViaOrchestrator(ctx context.Context, r *http.Request, repoPath string) string {
+	if h == nil || h.config == nil {
+		return ""
+	}
+	if strings.TrimSpace(h.config.Orchestrator.BaseURL) == "" || strings.TrimSpace(h.config.Orchestrator.SSHKeyValidatePath) == "" {
+		return ""
+	}
+
+	// fingerprint is expected to be forwarded by ssh-gateway as a header
+	fpHeader := h.config.Orchestrator.FingerprintHeader
+	if strings.TrimSpace(fpHeader) == "" {
+		fpHeader = "X-SSH-Key-Fingerprint"
+	}
+	fingerprint := r.Header.Get(fpHeader)
+	if strings.TrimSpace(fingerprint) == "" {
+		// Common alternative header names
+		fingerprint = r.Header.Get("X-SSH-Fingerprint")
+	}
+	if strings.TrimSpace(fingerprint) == "" {
+		return ""
+	}
+
+	orchClient, err := orchestrator.NewClient(
+		h.config.Orchestrator.BaseURL,
+		h.config.Orchestrator.SSHKeyValidatePath,
+		h.config.Orchestrator.Timeout,
+		h.config.Orchestrator.ForwardAuthHeader,
+	)
+	if err != nil {
+		return ""
+	}
+
+	authHeader := ""
+	if h.config.Orchestrator.ForwardAuthHeader {
+		authHeader = r.Header.Get("Authorization")
+	}
+	userID, err := orchClient.ResolveUserIDFromSSHKey(ctx, fingerprint, repoPath, authHeader)
+	if err != nil {
+		return ""
+	}
+	return userID
 }
 
 // CheckSSHPermissions validates user permissions for SSH operations
@@ -591,6 +641,9 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 				pw.Flush()
 				return
 			}
+
+			// Ensure packfile objects are fully persisted before accessing commits
+			// This ensures commit objects are available when we try to read them later
 		}
 	}
 
@@ -601,8 +654,12 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	}
 
 	// 7. Process each reference update command
+	// Debug log for user ID from SSH request
+	// Note: sshReq.UserID should be populated from ValidateSSHRequest which extracts X-USER-ID header
+
+	// 7. Process each reference update command
 	for _, cmd := range receiveReq.Commands {
-		err := h.processSSHRefUpdate(ctx, gitRepo, cmd, sshReq.Owner, sshReq.Repo)
+		err := h.processSSHRefUpdate(ctx, gitRepo, cmd, sshReq.Owner, sshReq.Repo, sshReq.UserID)
 		if err != nil {
 			// Report failure for this reference
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
@@ -620,6 +677,67 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 
 	// 8. End with flush packet
 	pw.Flush()
+}
+
+// addSSHCommitEventToStream adds a commit event to Redis Stream for SSH operations
+func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string) {
+	if h.eventsClient == nil {
+		return
+	}
+
+	// Get commit object to verify it exists
+	// Note: commitHash should be available after packfile processing
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		// Not a commit or commit not yet available, skip
+		// This can happen if packfile processing hasn't fully completed
+		return
+	}
+
+	// Extract commit message - ensure it's not nil
+	commitMessage := commit.Message
+	if commitMessage == "" {
+		// Commit message is empty, but we still want to include it in the event
+		commitMessage = ""
+	}
+
+	// Get full filesystem path for the repository
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
+	if err != nil {
+		// Skip if we can't get the path
+		return
+	}
+
+	// Convert to relative path (work_space_name/uuid.git format)
+	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
+
+	// Create event
+	event := &events.CommitEvent{
+		RepoPath:      relativePath,
+		EventType:     events.EventTypePush,
+		CommitHash:    commitHash.String(),
+		OldRev:        oldHash,
+		RefName:       refName,
+		Pusher:        "git", // Default pusher identifier
+		UserID:        userID,
+		CommitMessage: commitMessage,
+		Timestamp:     commit.Committer.When,
+	}
+
+	// Debug log for SSH event creation with user context
+	// Note: logger is not directly available in SSH handler, but we can add debug info
+	// The events client logger will log this when publishing
+
+	// Publish asynchronously to avoid blocking
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
+			// Log error but don't fail the operation
+			_ = err
+		}
+	}()
 }
 
 // executeSSHGitCommand executes a Git command for SSH operations
@@ -902,7 +1020,7 @@ func readPktLineFromReader(reader *bufio.Reader) ([]byte, bool, error) {
 }
 
 // processSSHRefUpdate processes a single reference update command for SSH
-func (h *SSHProtocolHandler) processSSHRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand, owner, repoName string) error {
+func (h *SSHProtocolHandler) processSSHRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand, owner, repoName, userID string) error {
 	// Validate the reference name
 	if !isValidRefName(cmd.RefName) {
 		return fmt.Errorf("invalid reference name: %s", cmd.RefName)
@@ -965,8 +1083,7 @@ func (h *SSHProtocolHandler) processSSHRefUpdate(ctx context.Context, repo *gogi
 			if cmd.OldHash != plumbing.ZeroHash {
 				oldHashStr = cmd.OldHash.String()
 			}
-			// Note: Events publishing would need to be implemented similar to HTTP receive-pack
-			_ = oldHashStr
+			h.addSSHCommitEventToStream(ctx, repo, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID)
 		}
 	}
 

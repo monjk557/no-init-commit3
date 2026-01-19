@@ -18,6 +18,7 @@ type Config struct {
 	Permissions   PermissionsConfig
 	Performance   PerformanceConfig
 	Events        EventsConfig
+	Orchestrator  OrchestratorConfig
 }
 
 // ServerConfig는 HTTP 서버 설정을 저장합니다
@@ -117,6 +118,15 @@ type EventsConfig struct {
 	Enabled  bool   `json:"enabled"`   // Whether to enable event publishing
 }
 
+// OrchestratorConfig holds API orchestrator integration configuration
+type OrchestratorConfig struct {
+	BaseURL             string        `json:"base_url"`
+	SSHKeyValidatePath  string        `json:"ssh_key_validate_path"`
+	Timeout             time.Duration `json:"timeout"`
+	FingerprintHeader   string        `json:"fingerprint_header"`
+	ForwardAuthHeader   bool          `json:"forward_auth_header"`
+}
+
 // Load는 환경변수에서 설정을 로드합니다
 func Load() (*Config, error) {
 
@@ -138,6 +148,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse events config: %w", err)
 	}
+	orchestratorConfig := parseOrchestratorConfig()
 
 	config := &Config{
 		Server:        serverConfig,
@@ -145,6 +156,7 @@ func Load() (*Config, error) {
 		Logging:       loggingConfig,
 		Observability: observabilityConfig,
 		Events:        eventsConfig,
+		Orchestrator:  orchestratorConfig,
 	}
 
 	// 설정 유효성 검사
@@ -299,6 +311,47 @@ func parseEventsConfig() (EventsConfig, error) {
 		RedisURL: redisURL,
 		Enabled:  enabled,
 	}, nil
+}
+
+// ------------------------------------------------------------
+// OrchestratorConfig 파싱 (환경변수 + 하드코딩)
+// ------------------------------------------------------------
+func parseOrchestratorConfig() OrchestratorConfig {
+	// Optional: if not set, orchestrator fallback is disabled
+	baseURL := os.Getenv("ORCHESTRATOR_BASE_URL")
+	sshKeyValidatePath := os.Getenv("ORCHESTRATOR_SSH_KEY_VALIDATE_PATH")
+	if sshKeyValidatePath == "" {
+		// Keep empty by default to avoid guessing endpoint
+		sshKeyValidatePath = ""
+	}
+
+	timeout := 1500 * time.Millisecond
+	if v := os.Getenv("ORCHESTRATOR_TIMEOUT_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	// Which header carries SSH key fingerprint from ssh-gateway to executor (optional)
+	fingerprintHeader := os.Getenv("ORCHESTRATOR_SSH_FINGERPRINT_HEADER")
+	if fingerprintHeader == "" {
+		fingerprintHeader = "X-SSH-Key-Fingerprint"
+	}
+
+	forwardAuthHeader := true
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("ORCHESTRATOR_FORWARD_AUTH_HEADER"))); v != "" {
+		if v == "false" || v == "0" || v == "no" {
+			forwardAuthHeader = false
+		}
+	}
+
+	return OrchestratorConfig{
+		BaseURL:            baseURL,
+		SSHKeyValidatePath: sshKeyValidatePath,
+		Timeout:            timeout,
+		FingerprintHeader:  fingerprintHeader,
+		ForwardAuthHeader:  forwardAuthHeader,
+	}
 }
 
 // validate는 설정 유효성 검사를 수행합니다

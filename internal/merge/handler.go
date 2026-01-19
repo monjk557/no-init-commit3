@@ -342,15 +342,29 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		zap.Bool("had_conflicts", mergeResult.HasConflicts),
 		zap.String("strategy", string(req.Strategy)))
 
+	// Extract user ID from X-USER-ID header
+	userID := c.GetHeader("X-USER-ID")
+	if userID == "" {
+		userID = "" // Empty string if not provided
+	}
+
+	// Debug log for user ID extraction
+	h.logger.Debug("Extracting user ID from header for merge operation",
+		zap.String("user_id", userID),
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("source_ref", req.SourceRef),
+		zap.String("target_ref", req.TargetRef))
+
 	// Publish commit event for merge operations
 	if h.eventsClient != nil {
 		targetHashStr := targetCommit.String()
 		if mergeResult.MergeCommit != nil {
 			// Merge commit was created (non-fast-forward merge)
-			h.publishMergeCommitEvent(ctx, repository, targetHashStr, mergeResult.MergeCommit, req.TargetRef, owner, repo)
+			h.publishMergeCommitEvent(ctx, repository, targetHashStr, mergeResult.MergeCommit, req.TargetRef, owner, repo, userID)
 		} else if mergeResult.IsFastForward {
 			// Fast-forward merge: target ref was updated to source commit
-			h.publishFastForwardMergeEvent(ctx, repository, targetHashStr, sourceCommit, req.TargetRef, owner, repo)
+			h.publishFastForwardMergeEvent(ctx, repository, targetHashStr, sourceCommit, req.TargetRef, owner, repo, userID)
 		}
 	}
 
@@ -573,7 +587,7 @@ func (h *MergePreviewHandler) resolveReference(repo *gogit.Repository, ref strin
 }
 
 // publishMergeCommitEvent publishes a merge commit event to Redis Stream
-func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commit *object.Commit, refName, owner, repoName string) {
+func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commit *object.Commit, refName, owner, repoName, userID string) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -596,14 +610,24 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   relativePath,
-		EventType:  events.EventTypeMerge,
-		CommitHash: commit.Hash.String(),
-		OldRev:     oldHash,
-		RefName:    refName,
-		Pusher:     "git", // Default pusher identifier
-		Timestamp:  commit.Committer.When,
+		RepoPath:      relativePath,
+		EventType:     events.EventTypeMerge,
+		CommitHash:    commit.Hash.String(),
+		OldRev:        oldHash,
+		RefName:       refName,
+		Pusher:        "git", // Default pusher identifier
+		UserID:        userID,
+		CommitMessage: commit.Message,
+		Timestamp:     commit.Committer.When,
 	}
+
+	// Debug log for merge event creation
+	h.logger.Debug("Creating merge commit event with user context",
+		zap.String("user_id", userID),
+		zap.String("commit_hash", commit.Hash.String()),
+		zap.String("ref_name", refName),
+		zap.String("owner", owner),
+		zap.String("repo", repoName))
 
 	// Publish asynchronously to avoid blocking
 	go func() {
@@ -621,7 +645,7 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 }
 
 // publishFastForwardMergeEvent publishes a fast-forward merge event to Redis Stream
-func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName string) {
+func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -653,14 +677,24 @@ func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Contex
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   relativePath,
-		EventType:  events.EventTypeMerge,
-		CommitHash: commitHash.String(),
-		OldRev:     oldHash,
-		RefName:    refName,
-		Pusher:     "git", // Default pusher identifier
-		Timestamp:  commit.Committer.When,
+		RepoPath:      relativePath,
+		EventType:     events.EventTypeMerge,
+		CommitHash:    commitHash.String(),
+		OldRev:        oldHash,
+		RefName:       refName,
+		Pusher:        "git", // Default pusher identifier
+		UserID:        userID,
+		CommitMessage: commit.Message,
+		Timestamp:     commit.Committer.When,
 	}
+
+	// Debug log for fast-forward merge event creation
+	h.logger.Debug("Creating fast-forward merge event with user context",
+		zap.String("user_id", userID),
+		zap.String("commit_hash", commitHash.String()),
+		zap.String("ref_name", refName),
+		zap.String("owner", owner),
+		zap.String("repo", repoName))
 
 	// Publish asynchronously to avoid blocking
 	go func() {

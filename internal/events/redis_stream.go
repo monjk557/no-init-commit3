@@ -2,9 +2,9 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,13 +23,29 @@ const (
 
 // CommitEvent represents a commit creation event
 type CommitEvent struct {
-	RepoPath   string          // Relative path (e.g., work_space_name/uuid.git)
-	EventType  CommitEventType // push, merge, commit
-	CommitHash string          // Commit hash (e.g., 51f2da8...)
-	OldRev     string          // Old commit hash (e.g., e2d382...) - empty for new refs
-	RefName    string          // Branch or ref name (e.g., refs/heads/main)
-	Pusher     string          // Pusher identifier (e.g., "git")
-	Timestamp  time.Time       // Event timestamp
+	EventID       string          // Unique event ID (e.g., evt-git-1768797509975-0)
+	RepoPath      string          // Relative path (e.g., work_space_name/uuid.git)
+	EventType     CommitEventType // push, merge, commit
+	CommitHash    string          // Commit hash (e.g., 51f2da8...)
+	OldRev        string          // Old commit hash (e.g., e2d382...) - empty for new refs
+	RefName       string          // Branch or ref name (e.g., refs/heads/main)
+	Pusher        string          // Pusher identifier (e.g., "git")
+	UserID        string          // User ID from X-USER-ID header
+	CommitMessage string          // Commit message
+	Timestamp     time.Time       // Event timestamp
+}
+
+// eventData represents the JSON structure for Redis Stream data field
+type eventData struct {
+	EventID       string `json:"event_id"`
+	Timestamp     string `json:"timestamp"`
+	RepoPath      string `json:"repo_path"`
+	NewRev        string `json:"new_rev"`
+	Ref           string `json:"ref"`
+	EventType     string `json:"event_type"`
+	CommitMessage string `json:"commit_message"` // Always include, even if empty
+	OldRev        string `json:"old_rev,omitempty"`
+	UserID        string `json:"user_id,omitempty"`
 }
 
 // RedisStreamClient provides an interface for publishing commit events to Redis Stream
@@ -187,29 +203,63 @@ func newClusterRedisStreamClient(redisURLs string, logger *zap.Logger) (RedisStr
 	}, nil
 }
 
+// generateEventID generates a unique event ID
+func generateEventID() string {
+	// Format: evt-git-{timestamp}-{random}
+	now := time.Now()
+	timestamp := now.UnixNano() / int64(time.Millisecond)
+	// Simple random suffix (in production, use crypto/rand)
+	randomSuffix := now.Nanosecond() % 1000
+	return fmt.Sprintf("evt-git-%d-%d", timestamp, randomSuffix)
+}
+
 // AddCommitEventToStream adds a commit event to Redis Stream
 // Stream key format: git:events
-// Message format: field-value pairs (event_type, repo_path, ref, old_rev, new_rev, pusher, timestamp)
+// Message format: JSON string in data field
 func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *CommitEvent) error {
 	// Build stream key: git:events (unified stream for all event types)
 	streamKey := "git:events"
 
-	// Convert timestamp to Unix timestamp
-	timestamp := event.Timestamp.Unix()
-
-	// Prepare message fields as key-value pairs
-	values := map[string]interface{}{
-		"event_type": string(event.EventType),
-		"repo_path":  event.RepoPath,
-		"ref":        event.RefName,
-		"new_rev":    event.CommitHash,
-		"pusher":     event.Pusher,
-		"timestamp":  strconv.FormatInt(timestamp, 10),
+	// Generate event ID if not provided
+	eventID := event.EventID
+	if eventID == "" {
+		eventID = generateEventID()
 	}
 
-	// Add old_rev only if it's not empty
+	// Convert timestamp to RFC3339 format
+	timestamp := event.Timestamp.Format(time.RFC3339)
+
+	// Build event data structure
+	data := eventData{
+		EventID:       eventID,
+		Timestamp:     timestamp,
+		RepoPath:      event.RepoPath,
+		NewRev:        event.CommitHash,
+		Ref:           event.RefName,
+		EventType:     string(event.EventType),
+		CommitMessage: event.CommitMessage,
+	}
+
+	// Add optional fields
 	if event.OldRev != "" {
-		values["old_rev"] = event.OldRev
+		data.OldRev = event.OldRev
+	}
+	if event.UserID != "" {
+		data.UserID = event.UserID
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		r.logger.Error("Failed to marshal event data to JSON",
+			zap.String("event_id", eventID),
+			zap.Error(err))
+		return fmt.Errorf("failed to marshal event data: %w", err)
+	}
+
+	// Prepare message with data field as JSON string
+	values := map[string]interface{}{
+		"data": string(jsonData),
 	}
 
 	// Add to Redis Stream using XADD
@@ -223,11 +273,11 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 	if err != nil {
 		r.logger.Error("Failed to publish commit event to Redis Stream",
 			zap.String("stream_key", streamKey),
+			zap.String("event_id", eventID),
 			zap.String("event_type", string(event.EventType)),
 			zap.String("commit_hash", event.CommitHash),
 			zap.String("ref_name", event.RefName),
 			zap.String("repo_path", event.RepoPath),
-			zap.Any("values", values),
 			zap.Error(err))
 		return fmt.Errorf("failed to add to Redis Stream: %w", err)
 	}
@@ -235,13 +285,22 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 	r.logger.Info("Successfully published commit event to Redis Stream",
 		zap.String("stream_key", streamKey),
 		zap.String("stream_id", streamID),
+		zap.String("event_id", eventID),
 		zap.String("repo_path", event.RepoPath),
 		zap.String("event_type", string(event.EventType)),
 		zap.String("commit_hash", event.CommitHash),
 		zap.String("ref_name", event.RefName),
-		zap.String("pusher", event.Pusher),
-		zap.Int64("timestamp", timestamp),
-		zap.Time("timestamp_time", event.Timestamp))
+		zap.String("user_id", event.UserID),
+		zap.String("timestamp", timestamp))
+
+	// Debug log for user_id tracking
+	r.logger.Debug("Commit event published with user context",
+		zap.String("event_id", eventID),
+		zap.String("user_id", event.UserID),
+		zap.String("event_type", string(event.EventType)),
+		zap.String("commit_hash", event.CommitHash),
+		zap.String("ref_name", event.RefName),
+		zap.String("commit_message", event.CommitMessage))
 
 	return nil
 }
