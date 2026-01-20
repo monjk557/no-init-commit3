@@ -3,6 +3,7 @@ package commits
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -38,19 +39,36 @@ func NewCommitsService(logger *logging.Logger, transactionManager *TransactionMa
 }
 
 // getCommitHistory는 Git 저장소 인터페이스를 사용하여 커밋 히스토리를 조회합니다.
-func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoWrapper *repositories.RepositoryWrapper, params *CommitsRequestParams) ([]Commit, int, error) {
+// compare mode일 경우 mergeBase SHA를 함께 반환합니다.
+func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoWrapper *repositories.RepositoryWrapper, params *CommitsRequestParams) ([]Commit, int, string, error) {
 	// Git 저장소 인터페이스에서 커밋 조회
 	// 더 많은 페이지가 있는지 확인하기 위해 하나 더 요청
 	requestLimit := params.Limit + 1
+
+	// Compare mode: source_ref/target_ref가 모두 제공된 경우 merge-base부터 source까지의 history 반환
+	if params.SourceRef != "" || params.TargetRef != "" {
+		if params.SourceRef == "" || params.TargetRef == "" {
+			return nil, 0, "", fmt.Errorf("both source_ref and target_ref must be provided together")
+		}
+
+		commits, mergeBase, err := GetCommitsFromMergeBase(repoWrapper, ctx, params.SourceRef, params.TargetRef, requestLimit, params.Skip)
+		if err != nil {
+			return nil, 0, "", fmt.Errorf("failed to get commits (merge-base): %w", err)
+		}
+
+		totalCount := len(commits)
+		return commits, totalCount, mergeBase, nil
+	}
+
 	commits, err := GetCommits(repoWrapper, ctx, params.Ref, requestLimit, params.Skip)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get commits: %w", err)
+		return nil, 0, "", fmt.Errorf("failed to get commits: %w", err)
 	}
 
 	// 더 많은 커밋이 있는지 확인 (페이지네이션)
 	totalCount := len(commits)
 
-	return commits, totalCount, nil
+	return commits, totalCount, "", nil
 }
 
 // convertGitCommitToMetadata는 git.Commit을 CommitMetadata로 변환합니다.
@@ -73,6 +91,8 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 
 	// 쿼리 파라미터 추출
 	ref := c.Query("ref")
+	sourceRef := c.Query("source_ref")
+	targetRef := c.Query("target_ref")
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
 
@@ -84,6 +104,11 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 	// ref가 제공되지 않은 경우 기본값으로 "HEAD" 설정
 	if ref == "" {
 		ref = "HEAD"
+	}
+
+	// Compare mode 파라미터 검증: 둘 중 하나만 오면 에러
+	if (sourceRef != "" && targetRef == "") || (sourceRef == "" && targetRef != "") {
+		return nil, fmt.Errorf("both source_ref and target_ref must be provided together")
 	}
 
 	// limit 파라미터 파싱 및 검증
@@ -113,12 +138,119 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 	}
 
 	return &CommitsRequestParams{
-		Owner: owner,
-		Repo:  repo,
-		Ref:   ref,
-		Limit: limit,
-		Skip:  skip,
+		Owner:     owner,
+		Repo:      repo,
+		Ref:       ref,
+		SourceRef: sourceRef,
+		TargetRef: targetRef,
+		Limit:     limit,
+		Skip:      skip,
 	}, nil
+}
+
+var errStopIteration = errors.New("stop iteration")
+
+// GetCommitsFromMergeBase returns commits after merge-base up to source_ref (merge base exclusive).
+// Commits are returned in the same order as go-git Log iterator (typically newest -> oldest).
+func GetCommitsFromMergeBase(
+	rw *repositories.RepositoryWrapper,
+	ctx context.Context,
+	sourceRef string,
+	targetRef string,
+	limit int,
+	skip int,
+) ([]Commit, string, error) {
+	// 컨텍스트 취소 확인
+	select {
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	default:
+	}
+
+	if rw == nil {
+		return nil, "", fmt.Errorf("repository is closed")
+	}
+	if sourceRef == "" || targetRef == "" {
+		return nil, "", fmt.Errorf("source_ref and target_ref are required")
+	}
+
+	sourceHash, err := rw.ResolveReference(sourceRef)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to resolve source_ref '%s': %w", sourceRef, err)
+	}
+	targetHash, err := rw.ResolveReference(targetRef)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to resolve target_ref '%s': %w", targetRef, err)
+	}
+
+	sourceCommit, err := rw.CommitObject(sourceHash)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get source commit: %w", err)
+	}
+	targetCommit, err := rw.CommitObject(targetHash)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get target commit: %w", err)
+	}
+
+	mergeBases, err := sourceCommit.MergeBase(targetCommit)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to find merge base: %w", err)
+	}
+	if len(mergeBases) == 0 {
+		return nil, "", fmt.Errorf("no common ancestor found between commits")
+	}
+	mergeBaseHash := mergeBases[0].Hash
+
+	gitRepo := rw.GetRepo()
+	if gitRepo == nil {
+		return nil, "", fmt.Errorf("repository is closed")
+	}
+
+	commitIter, err := gitRepo.Log(&git.LogOptions{
+		From: sourceHash,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get commit log: %w", err)
+	}
+	defer commitIter.Close()
+
+	var commits []Commit
+	current := 0
+
+	err = commitIter.ForEach(func(c *object.Commit) error {
+		// 반복 중 컨텍스트 취소 확인
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// 범위가 끝났는지 확인 (merge base 제외)
+		if c.Hash == mergeBaseHash {
+			return errStopIteration
+		}
+
+		// pagination: skip 적용
+		if current < skip {
+			current++
+			return nil
+		}
+
+		// limit 적용
+		if limit > 0 && len(commits) >= limit {
+			return io.EOF
+		}
+
+		commits = append(commits, convertCommit(c))
+		current++
+		return nil
+	})
+
+	if err != nil && err != io.EOF && !errors.Is(err, errStopIteration) {
+		return nil, "", fmt.Errorf("failed to iterate commits: %w", err)
+	}
+
+	return commits, mergeBaseHash.String(), nil
 }
 
 // groupCommitsByDate는 커밋을 날짜별로 그룹화합니다 (YYYY-MM-DD 형식).

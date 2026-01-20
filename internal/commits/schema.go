@@ -7,8 +7,11 @@ type CommitsRequestParams struct {
 	Owner string
 	Repo  string
 	Ref   string
-	Limit int
-	Skip  int
+	// Compare mode (optional): if both are set, commits are returned after merge-base up to source_ref
+	SourceRef string
+	TargetRef string
+	Limit     int
+	Skip      int
 }
 
 // CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.
@@ -17,6 +20,7 @@ type CommitsResponse struct {
 	Success    bool            `json:"success"`
 	Message    string          `json:"message"`
 	Results    []CommitsByDate `json:"results"` // 날짜별로 그룹화된 커밋 목록 (날짜 기준 내림차순)
+	MergeBase  string          `json:"merge_base,omitempty"`
 	Pagination PaginationInfo  `json:"pagination"`
 }
 

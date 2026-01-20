@@ -138,7 +138,7 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
 	// 커밋 히스토리 조회
-	commits, totalCount, err := h.getCommitHistory(ctx, repoCtx.repoWrapper, params)
+	commits, totalCount, mergeBase, err := h.getCommitHistory(ctx, repoCtx.repoWrapper, params)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -157,9 +157,10 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 
 	// 페이지네이션 정보와 함께 응답 생성
 	response := CommitsResponse{
-		Success: true,
-		Results: grouped,
-		Message: "Commits fetched successfully",
+		Success:   true,
+		Results:   grouped,
+		Message:   "Commits fetched successfully",
+		MergeBase: mergeBase,
 		Pagination: PaginationInfo{
 			Count:      totalCount,
 			Next:       buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String()).Next,

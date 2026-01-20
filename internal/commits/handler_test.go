@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/gin-gonic/gin"
@@ -133,6 +134,39 @@ func ensureInitialCommit(t *testing.T, repo *git.Repository, defaultBranch strin
 	require.NoError(t, storer.SetReference(headRef))
 
 	return commitHash
+}
+
+func createTestCommit(t *testing.T, repo *git.Repository, treeHash plumbing.Hash, message string, parents []plumbing.Hash) plumbing.Hash {
+	t.Helper()
+
+	now := time.Now()
+	commit := &object.Commit{
+		Message:      message,
+		TreeHash:     treeHash,
+		ParentHashes: parents,
+		Author: object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  now,
+		},
+		Committer: object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  now,
+		},
+	}
+
+	obj := repo.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(obj))
+	hash, err := repo.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	return hash
+}
+
+func setBranchRef(t *testing.T, repo *git.Repository, branch string, hash plumbing.Hash) {
+	t.Helper()
+	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/"+branch), hash)
+	require.NoError(t, repo.Storer.SetReference(ref))
 }
 
 func getBranchHash(t *testing.T, repo *git.Repository, branch string) (plumbing.Hash, error) {
@@ -661,4 +695,61 @@ func TestHandleCommitsAPI_PaginationOutOfRangeWithDateSort(t *testing.T) {
 		// null이 아닌 빈 배열([])인지 확인
 		assert.Equal(t, "[]", string(resultsBytes), "results should be empty array, not null")
 	}
+}
+
+func TestHandleCommitsAPI_CompareMode_ReturnsOnlyAheadCommits(t *testing.T) {
+	handler, repoPath := setupTestHandlerWithInitialCommit(t)
+
+	repo, err := git.PlainOpen(repoPath)
+	require.NoError(t, err)
+
+	// Base commit A on main
+	baseHash, err := getBranchHash(t, repo, "main")
+	require.NoError(t, err)
+	baseCommit, err := repo.CommitObject(baseHash)
+	require.NoError(t, err)
+	treeHash := baseCommit.TreeHash
+
+	// Create newbranch commit B from A
+	newBranchHash := createTestCommit(t, repo, treeHash, "Commit on newbranch", []plumbing.Hash{baseHash})
+	setBranchRef(t, repo, "newbranch", newBranchHash)
+
+	// Create merge commit M on main: parents A + B
+	mergeHash := createTestCommit(t, repo, treeHash, "Merge newbranch into main", []plumbing.Hash{baseHash, newBranchHash})
+	setBranchRef(t, repo, "main", mergeHash)
+
+	// Create an extra commit on main (so main tip != merge base)
+	mainTipHash := createTestCommit(t, repo, treeHash, "Main continues", []plumbing.Hash{mergeHash})
+	setBranchRef(t, repo, "main", mainTipHash)
+
+	// Branch feat from merge commit M and add one commit F1
+	setBranchRef(t, repo, "feat", mergeHash)
+	featHash := createTestCommit(t, repo, treeHash, "Feat commit", []plumbing.Hash{mergeHash})
+	setBranchRef(t, repo, "feat", featHash)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/commits", handler.HandleCommitsAPI)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/commits?source_ref=feat&target_ref=main&limit=30&skip=0", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp CommitsResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	assert.True(t, resp.Success)
+	assert.Equal(t, mergeHash.String(), resp.MergeBase)
+
+	// Flatten shas
+	var shas []string
+	for _, day := range resp.Results {
+		for _, c := range day.Commits {
+			shas = append(shas, c.SHA)
+		}
+	}
+
+	assert.Contains(t, shas, featHash.String(), "should include only the feat commit after merge base")
+	assert.NotContains(t, shas, mergeHash.String(), "should NOT include merge-base commit itself")
 }
