@@ -44,6 +44,7 @@ type DuplexConnection struct {
 	writer   *bufio.Writer
 	owner    string
 	repo     string
+	userID   string
 	lastUsed time.Time
 	protoV2  bool
 }
@@ -212,12 +213,34 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 		}
 	}
 
-	// 3) service line 파싱: "<service> /owner/repo.git\0host=..\0"
+	// 3) service line 파싱: "<service> /owner/repo.git\0host=..\0user-id=xxx\0"
 	// NUL(\x00) 기준으로 쪼갬
 	parts0 := bytes.Split(line, []byte{0x00})
 	if len(parts0) == 0 || len(parts0[0]) == 0 {
 		return fmt.Errorf("invalid service line (empty)")
 	}
+
+	// Parse optional key=value tokens (e.g., host=..., user-id=...)
+	for _, raw := range parts0[1:] {
+		tok := strings.TrimSpace(string(raw))
+		if tok == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(tok, "=")
+		if !ok {
+			continue
+		}
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		switch k {
+		case "user-id", "user_id", "userid", "uid":
+			conn.userID = v
+		}
+	}
+
 	// 첫 토큰: "<service> /owner/repo.git"
 	svcAndPath := parts0[0]
 	sp := bytes.IndexByte(svcAndPath, ' ')
@@ -653,7 +676,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 				zap.String("ref_name", refName))
 
 			// ref 업데이트 수행
-			if err := s.updateRef(gitRepo, oldHash, newHash, refName, owner, repo); err != nil {
+			if err := s.updateRef(gitRepo, oldHash, newHash, refName, owner, repo, conn.userID); err != nil {
 				s.logger.Error("Failed to update ref",
 					zap.String("ref_name", refName),
 					zap.Error(err))
@@ -687,7 +710,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 }
 
 // updateRef updates a Git reference
-func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, refName, owner, repoName string) error {
+func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, refName, owner, repoName, userID string) error {
 	// Parse hashes
 	oldHashObj := plumbing.NewHash(oldHash)
 	newHashObj := plumbing.NewHash(newHash)
@@ -726,7 +749,7 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 
 		// Publish commit event if enabled (only for branches, not tags)
 		if s.eventsClient != nil && strings.HasPrefix(refName, "refs/heads/") {
-			s.addCommitEventToStream(repo, "", newHash, refName, owner, repoName, events.EventTypePush)
+			s.addCommitEventToStream(repo, "", newHash, refName, owner, repoName, userID, events.EventTypePush)
 		}
 		return nil
 	}
@@ -766,7 +789,7 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 
 	// Publish commit event if enabled (only for branches, not tags, and only if hash changed)
 	if s.eventsClient != nil && oldHash != newHash && strings.HasPrefix(refName, "refs/heads/") {
-		s.addCommitEventToStream(repo, oldHash, newHash, refName, owner, repoName, events.EventTypePush)
+		s.addCommitEventToStream(repo, oldHash, newHash, refName, owner, repoName, userID, events.EventTypePush)
 	}
 
 	return nil
@@ -1211,7 +1234,7 @@ func (s *DuplexTCPServer) cleanupConnections() {
 }
 
 // addCommitEventToStream adds a commit event to Redis Stream
-func (s *DuplexTCPServer) addCommitEventToStream(repo *gogit.Repository, oldHash, commitHash, refName, owner, repoName string, eventType events.CommitEventType) {
+func (s *DuplexTCPServer) addCommitEventToStream(repo *gogit.Repository, oldHash, commitHash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
 	if s.eventsClient == nil {
 		return
 	}
@@ -1245,13 +1268,15 @@ func (s *DuplexTCPServer) addCommitEventToStream(repo *gogit.Repository, oldHash
 
 	// Create event
 	event := &events.CommitEvent{
-		RepoPath:   relativePath,
-		EventType:  eventType,
-		CommitHash: commitHash,
-		OldRev:     oldHash,
-		RefName:    refName,
-		Pusher:     "git", // Default pusher identifier
-		Timestamp:  commit.Committer.When,
+		RepoPath:      relativePath,
+		EventType:     eventType,
+		CommitHash:    commitHash,
+		OldRev:        oldHash,
+		RefName:       refName,
+		Pusher:        "git", // Default pusher identifier
+		UserID:        userID,
+		CommitMessage: commit.Message,
+		Timestamp:     commit.Committer.When,
 	}
 
 	// Publish asynchronously to avoid blocking

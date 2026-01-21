@@ -993,10 +993,6 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *g
 		Timestamp:     commit.Committer.When,
 	}
 
-	// Debug log for push event creation
-	// Note: logger is not directly available, but we can use a simple approach
-	// For now, we'll rely on the events client logger
-
 	// Publish asynchronously to avoid blocking
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

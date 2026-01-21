@@ -654,10 +654,6 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	}
 
 	// 7. Process each reference update command
-	// Debug log for user ID from SSH request
-	// Note: sshReq.UserID should be populated from ValidateSSHRequest which extracts X-USER-ID header
-
-	// 7. Process each reference update command
 	for _, cmd := range receiveReq.Commands {
 		err := h.processSSHRefUpdate(ctx, gitRepo, cmd, sshReq.Owner, sshReq.Repo, sshReq.UserID)
 		if err != nil {
@@ -723,10 +719,6 @@ func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo
 		CommitMessage: commitMessage,
 		Timestamp:     commit.Committer.When,
 	}
-
-	// Debug log for SSH event creation with user context
-	// Note: logger is not directly available in SSH handler, but we can add debug info
-	// The events client logger will log this when publishing
 
 	// Publish asynchronously to avoid blocking
 	go func() {
