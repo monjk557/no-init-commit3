@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/collabops/git-executor/internal/config"
@@ -18,12 +17,460 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-func setupTestHandler(t *testing.T) (*BranchOperationsHandler, string, func()) {
+func init() {
 	gin.SetMode(gin.TestMode)
+}
 
-	// Create temporary directory for test repositories
-	tempDir, err := os.MkdirTemp("", "branches-test-*")
+// =============================================================================
+// 테스트: CreateBranch
+// 회귀 방지: "브랜치 생성 API가 올바른 상태 코드와 응답을 반환해야 함"
+// =============================================================================
+
+// Test_CreateBranch_ValidRequest_ReturnsSuccess
+// 회귀: 유효한 브랜치 생성 요청은 200 OK를 반환해야 함
+func Test_CreateBranch_ValidRequest_ReturnsSuccess(t *testing.T) {
+	t.Parallel()
+
+	// Given: 테스트 레포지토리
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	// When: 유효한 브랜치 생성 요청
+	body := `{"name": "feature/new-feature", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Then: 200 OK
+	requireStatus(t, w, http.StatusOK)
+
+	var resp CreateBranchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Equal(t, "feature/new-feature", resp.Data.BranchName)
+	require.Equal(t, "refs/heads/feature/new-feature", resp.Data.RefPath)
+	require.True(t, resp.Data.IsNewBranch)
+}
+
+// Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue
+// 회귀: checkout=true 옵션이 응답에 반영되어야 함
+func Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "feature/checkout-test", "source": "master", "checkout": true}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp CreateBranchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.True(t, resp.Data.Details.Checkout)
+}
+
+// Test_CreateBranch_DuplicateName_Returns409
+// 회귀: 이미 존재하는 브랜치 이름으로 생성 시 409 Conflict 반환
+func Test_CreateBranch_DuplicateName_Returns409(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	// 브랜치 미리 생성
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
 	require.NoError(t, err)
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/existing"), head.Hash())
+	require.NoError(t, repo.Storer.SetReference(branchRef))
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	// When: 같은 이름의 브랜치 생성 시도
+	body := `{"name": "feature/existing", "source": "master", "force": false}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Then: 409 Conflict
+	requireStatus(t, w, http.StatusConflict)
+	requireBodyContains(t, w, "already exists")
+}
+
+// Test_CreateBranch_WithForce_OverwritesExisting
+// 회귀: force=true 시 기존 브랜치를 덮어써야 함
+func Test_CreateBranch_WithForce_OverwritesExisting(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	// 브랜치 미리 생성
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/force-test"), head.Hash())
+	require.NoError(t, repo.Storer.SetReference(branchRef))
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "feature/force-test", "source": "master", "force": true}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp CreateBranchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.True(t, resp.Data.Details.ForceUsed)
+}
+
+// Test_CreateBranch_InvalidBranchName_Returns400
+// 회귀: 유효하지 않은 브랜치 이름은 400 Bad Request 반환
+func Test_CreateBranch_InvalidBranchName_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "invalid/branch/name", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+	requireBodyContains(t, w, "branch name")
+}
+
+// Test_CreateBranch_InvalidJSON_Returns400
+// 회귀: 잘못된 JSON은 400 Bad Request 반환
+func Test_CreateBranch_InvalidJSON_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader("{invalid json}"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+}
+
+// =============================================================================
+// 테스트: UpdateBranch
+// 회귀 방지: "브랜치 업데이트/이름 변경 API가 올바르게 동작해야 함"
+// =============================================================================
+
+// Test_UpdateBranch_Rename_ReturnsSuccess
+// 회귀: 브랜치 이름 변경은 200 OK를 반환해야 함
+func Test_UpdateBranch_Rename_ReturnsSuccess(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	// 이름 변경할 브랜치 생성
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	oldRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/old-branch"), head.Hash())
+	require.NoError(t, repo.Storer.SetReference(oldRef))
+
+	router := gin.New()
+	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+
+	body := `{"new_name": "new-branch", "force": false}`
+	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/old-branch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["success"].(bool))
+	data := resp["data"].(map[string]interface{})
+	require.Equal(t, "rename", data["operation"])
+	require.Equal(t, "new-branch", data["new_branch_name"])
+}
+
+// Test_UpdateBranch_NonExistent_Returns404
+// 회귀: 존재하지 않는 브랜치 업데이트 시 404 반환
+func Test_UpdateBranch_NonExistent_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+
+	body := `{"target": "master", "force": false}`
+	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/nonexistent", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusNotFound)
+	requireBodyContains(t, w, "does not exist")
+}
+
+// =============================================================================
+// 테스트: DeleteBranch
+// 회귀 방지: "브랜치 삭제 API가 올바르게 동작해야 함"
+// =============================================================================
+
+// Test_DeleteBranch_Existing_ReturnsSuccess
+// 회귀: 존재하는 브랜치 삭제 시 200 OK 반환
+func Test_DeleteBranch_Existing_ReturnsSuccess(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	// 삭제할 브랜치 생성
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/to-delete"), head.Hash())
+	require.NoError(t, repo.Storer.SetReference(branchRef))
+
+	router := gin.New()
+	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+
+	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/feature/to-delete", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["success"].(bool))
+	data := resp["data"].(map[string]interface{})
+	require.Equal(t, "feature/to-delete", data["branch_name"])
+	require.Equal(t, "delete", data["operation"])
+}
+
+// Test_DeleteBranch_NonExistent_Returns404
+// 회귀: 존재하지 않는 브랜치 삭제 시 404 반환
+func Test_DeleteBranch_NonExistent_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+
+	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/nonexistent", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusNotFound)
+	requireBodyContains(t, w, "does not exist")
+}
+
+// Test_DeleteBranch_InvalidName_Returns400
+// 회귀: 유효하지 않은 브랜치 이름으로 삭제 시 400 반환
+func Test_DeleteBranch_InvalidName_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+
+	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/invalid/branch/name", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+	requireBodyContains(t, w, "branch name")
+}
+
+// =============================================================================
+// 테스트: ValidateBranchName
+// 회귀 방지: "브랜치 이름 검증 API가 올바르게 동작해야 함"
+// =============================================================================
+
+// Test_ValidateBranchName_Available_ReturnsTrue
+// 회귀: 사용 가능한 브랜치 이름은 is_available=true 반환
+func Test_ValidateBranchName_Available_ReturnsTrue(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/new-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["success"].(bool))
+	require.True(t, resp["is_available"].(bool), "new branch name should be available")
+}
+
+// Test_ValidateBranchName_AlreadyExists_ReturnsFalse
+// 회귀: 이미 존재하는 브랜치 이름은 is_available=false 반환
+func Test_ValidateBranchName_AlreadyExists_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	// 브랜치 미리 생성
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/existing-branch"), head.Hash())
+	require.NoError(t, repo.Storer.SetReference(branchRef))
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/existing-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["success"].(bool))
+	require.False(t, resp["is_available"].(bool), "existing branch name should not be available")
+}
+
+// Test_ValidateBranchName_RepoNotFound_Returns404
+// 회귀: 존재하지 않는 레포지토리는 404 반환
+func Test_ValidateBranchName_RepoNotFound_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newHandler(t)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/nonexistent/branches/validate/some-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusNotFound)
+	requireBodyContains(t, w, "repository not found")
+}
+
+// =============================================================================
+// 테스트: GetBranches
+// 회귀 방지: "브랜치 목록 API가 올바르게 동작해야 함"
+// =============================================================================
+
+// Test_GetBranches_PaginationOutOfRange_ReturnsEmptyArray
+// 회귀: pagination 범위를 벗어나면 빈 배열(null 아님)을 반환해야 함
+func Test_GetBranches_PaginationOutOfRange_ReturnsEmptyArray(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	// 5개의 브랜치 생성
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	for _, name := range []string{"branch1", "branch2", "branch3", "branch4", "branch5"} {
+		branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/"+name), head.Hash())
+		require.NoError(t, repo.Storer.SetReference(branchRef))
+	}
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+
+	// skip=10으로 범위를 벗어나는 요청
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches?limit=10&skip=10", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp GetBranchesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+
+	// null이 아닌 빈 배열인지 확인
+	branchesBytes, err := json.Marshal(resp.Branches)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(branchesBytes), "branches should be empty array, not null")
+}
+
+// Test_GetBranches_DefaultRepo_ReturnsArrayNotNull
+// 회귀: 브랜치 목록은 null이 아닌 배열을 반환해야 함
+func Test_GetBranches_DefaultRepo_ReturnsArrayNotNull(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp GetBranchesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+
+	// 배열이 null이 아닌지 확인 (master 브랜치가 있으므로 최소 1개)
+	require.NotNil(t, resp.Branches, "branches should not be nil")
+	require.GreaterOrEqual(t, len(resp.Branches), 1, "should have at least master branch")
+}
+
+// =============================================================================
+// Helper functions
+// 원칙: boilerplate만 추상화, 핵심 로직은 테스트 본문에
+// =============================================================================
+
+func newHandler(t *testing.T) (*BranchOperationsHandler, string) {
+	t.Helper()
+	tempDir := t.TempDir()
 
 	cfg := &config.Config{
 		Logging: config.LoggingConfig{
@@ -36,701 +483,59 @@ func setupTestHandler(t *testing.T) (*BranchOperationsHandler, string, func()) {
 	}
 
 	handler, err := NewBranchOperationsHandler(cfg)
-	require.NoError(t, err)
+	require.NoError(t, err, "handler creation failed")
 
-	cleanup := func() {
-		os.RemoveAll(tempDir)
-	}
-
-	return handler, tempDir, cleanup
+	return handler, tempDir
 }
 
-func createTestRepository(t *testing.T, tempDir, owner, repo string) string {
-	repoPath := filepath.Join(tempDir, owner, repo+".git")
-	err := os.MkdirAll(filepath.Dir(repoPath), 0755)
-	require.NoError(t, err)
+func initBareRepo(t *testing.T, baseDir, owner, repo string) string {
+	t.Helper()
+	repoPath := filepath.Join(baseDir, owner, repo+".git")
+
+	err := makeDir(repoPath)
+	require.NoError(t, err, "mkdir failed")
 
 	gitRepo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
+	require.NoError(t, err, "repo init failed")
 
-	// Set HEAD to master branch
+	// HEAD -> master
 	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/master"))
-	err = gitRepo.Storer.SetReference(headRef)
-	require.NoError(t, err)
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
 
-	// Create master branch reference with a dummy hash
-	// For testing purposes, we use a zero hash since we don't need actual commits
+	// master 브랜치 생성 (zero hash로)
 	emptyHash := plumbing.NewHash("0000000000000000000000000000000000000000")
 	masterRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), emptyHash)
-	err = gitRepo.Storer.SetReference(masterRef)
-	require.NoError(t, err)
+	require.NoError(t, gitRepo.Storer.SetReference(masterRef))
 
 	return repoPath
 }
 
-func TestHandleCreateBranch_Success(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
+func openRepo(t *testing.T, path string) *gogit.Repository {
+	t.Helper()
+	repo, err := gogit.PlainOpen(path)
+	require.NoError(t, err, "repo open failed")
+	return repo
+}
 
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
+func makeDir(path string) error {
+	return os.MkdirAll(filepath.Dir(path), 0755)
+}
 
-	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+// =============================================================================
+// Assertion helpers
+// 원칙: 실패 메시지에 body 포함, 정답 강제
+// =============================================================================
 
-	requestBody := CreateBranchRequest{
-		Name:   "feature/new-feature",
-		Source: "master",
+func requireStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	if w.Code != want {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, want, w.Body.String())
 	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response CreateBranchResponse
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response.Success)
-	assert.Equal(t, "feature/new-feature", response.Data.BranchName)
-	assert.Equal(t, "master", response.Data.Source)
-	assert.Equal(t, "refs/heads/feature/new-feature", response.Data.RefPath)
-	assert.True(t, response.Data.IsNewBranch)
-	assert.NotEmpty(t, response.Data.CommitSHA)
-	assert.NotEmpty(t, response.Data.CreatedAt)
-	// Details may be empty if no checkout or force was used
 }
 
-func TestHandleCreateBranch_WithCheckout(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
-
-	requestBody := CreateBranchRequest{
-		Name:     "feature/checkout-test",
-		Source:   "master",
-		Checkout: true,
+func requireBodyContains(t *testing.T, w *httptest.ResponseRecorder, substr string) {
+	t.Helper()
+	if !strings.Contains(w.Body.String(), substr) {
+		t.Errorf("body does not contain %q: %s", substr, w.Body.String())
 	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response CreateBranchResponse
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response.Success)
-	assert.True(t, response.Data.Details.Checkout)
-}
-
-func TestHandleCreateBranch_AlreadyExists(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// Create branch manually first
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	head, err := gitRepo.Head()
-	require.NoError(t, err)
-
-	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/existing"), head.Hash())
-	err = gitRepo.Storer.SetReference(branchRef)
-	require.NoError(t, err)
-
-	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
-
-	requestBody := CreateBranchRequest{
-		Name:   "feature/existing",
-		Source: "master",
-		Force:  false,
-	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	// Should return 409 Conflict when branch already exists
-	assert.Equal(t, http.StatusConflict, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.False(t, response["success"].(bool))
-	assert.Contains(t, response["error"].(string), "already exists")
-}
-
-func TestHandleCreateBranch_WithForce(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// Create branch manually first
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	head, err := gitRepo.Head()
-	require.NoError(t, err)
-
-	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/force-test"), head.Hash())
-	err = gitRepo.Storer.SetReference(branchRef)
-	require.NoError(t, err)
-
-	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
-
-	requestBody := CreateBranchRequest{
-		Name:   "feature/force-test",
-		Source: "master",
-		Force:  true,
-	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response CreateBranchResponse
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response.Success)
-	assert.True(t, response.Data.Details.ForceUsed)
-}
-
-func TestHandleCreateBranch_InvalidBranchName(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
-
-	requestBody := CreateBranchRequest{
-		Name:   "invalid/branch/name", // More than one slash level
-		Source: "master",
-	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.False(t, response["success"].(bool))
-	assert.Contains(t, response["error"].(string), "branch name")
-}
-
-func TestHandleCreateBranch_InvalidJSON(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
-
-	// Send invalid JSON
-	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader("{invalid json}"))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestHandleUpdateBranch_Success(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// Create a feature branch
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	head, err := gitRepo.Head()
-	require.NoError(t, err)
-
-	featureRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/test"), head.Hash())
-	err = gitRepo.Storer.SetReference(featureRef)
-	require.NoError(t, err)
-
-	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
-
-	requestBody := UpdateBranchRequest{
-		Target: "feature/test",
-		Force:  false,
-	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/master", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	// May succeed or fail depending on fast-forward status
-	assert.True(t, w.Code == http.StatusOK || w.Code == http.StatusBadRequest)
-}
-
-func TestHandleUpdateBranch_Rename(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// Create a branch to rename
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	head, err := gitRepo.Head()
-	require.NoError(t, err)
-
-	oldBranchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/old-branch"), head.Hash())
-	err = gitRepo.Storer.SetReference(oldBranchRef)
-	require.NoError(t, err)
-
-	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
-
-	requestBody := UpdateBranchRequest{
-		NewName: "new-branch",
-		Force:   false,
-	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/old-branch", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response["success"].(bool))
-	data := response["data"].(map[string]interface{})
-	assert.Equal(t, "rename", data["operation"])
-	assert.Equal(t, "new-branch", data["new_branch_name"])
-}
-
-func TestHandleUpdateBranch_BranchNotFound(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
-
-	requestBody := UpdateBranchRequest{
-		Target: "master",
-		Force:  false,
-	}
-
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/nonexistent", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.False(t, response["success"].(bool))
-	assert.Contains(t, response["error"].(string), "does not exist")
-}
-
-func TestHandleDeleteBranch_Success(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// Create a branch to delete
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	head, err := gitRepo.Head()
-	require.NoError(t, err)
-
-	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/to-delete"), head.Hash())
-	err = gitRepo.Storer.SetReference(branchRef)
-	require.NoError(t, err)
-
-	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
-
-	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/feature/to-delete", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response["success"].(bool))
-	data := response["data"].(map[string]interface{})
-	assert.Equal(t, "feature/to-delete", data["branch_name"])
-	assert.Equal(t, "delete", data["operation"])
-}
-
-func TestHandleDeleteBranch_NotFound(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
-
-	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/nonexistent", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-
-	var response map[string]interface{}
-	err := json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.False(t, response["success"].(bool))
-	assert.Contains(t, response["error"].(string), "does not exist")
-}
-
-func TestHandleDeleteBranch_InvalidBranchName(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
-
-	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/invalid/branch/name", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-
-	var response map[string]interface{}
-	err := json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.False(t, response["success"].(bool))
-	assert.Contains(t, response["error"].(string), "branch name")
-}
-
-// TestHandleCreateBranch_DuplicateBranchName_409 tests that creating a branch with the same name returns 409 Conflict
-func TestHandleCreateBranch_DuplicateBranchName_409(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// Create a branch first using the API
-	router := gin.New()
-	router.POST("/repos/:owner/:repo/branches", handler.HandleCreateBranch)
-
-	firstRequest := CreateBranchRequest{
-		Name:   "feature/test-branch",
-		Source: "master",
-	}
-
-	body, err := json.Marshal(firstRequest)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest("POST", "/repos/testowner/testrepo/branches", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	// First creation should succeed
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Try to create the same branch again
-	duplicateRequest := CreateBranchRequest{
-		Name:   "feature/test-branch",
-		Source: "master",
-		Force:  false,
-	}
-
-	body, err = json.Marshal(duplicateRequest)
-	require.NoError(t, err)
-
-	req = httptest.NewRequest("POST", "/repos/testowner/testrepo/branches", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	// Should return 409 Conflict
-	assert.Equal(t, http.StatusConflict, w.Code, "Duplicate branch creation should return 409 Conflict")
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.False(t, response["success"].(bool))
-	assert.Contains(t, response["error"].(string), "already exists")
-}
-
-// TestHandleValidateBranchName_Available tests validation API when branch name is available
-func TestHandleValidateBranchName_Available(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
-
-	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/new-branch", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response map[string]interface{}
-	err := json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response["success"].(bool))
-	assert.True(t, response["is_available"].(bool), "New branch name should be available")
-}
-
-// TestHandleValidateBranchName_NotAvailable tests validation API when branch name already exists
-func TestHandleValidateBranchName_NotAvailable(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// Create branch manually first
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	head, err := gitRepo.Head()
-	require.NoError(t, err)
-
-	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/existing-branch"), head.Hash())
-	err = gitRepo.Storer.SetReference(branchRef)
-	require.NoError(t, err)
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
-
-	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/existing-branch", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response["success"].(bool))
-	assert.False(t, response["is_available"].(bool), "Existing branch name should not be available")
-}
-
-// TestHandleValidateBranchName_WithSlash tests validation API with branch names containing slashes
-func TestHandleValidateBranchName_WithSlash(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Create test repository
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
-
-	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/feature/new-feature", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response map[string]interface{}
-	err := json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response["success"].(bool))
-	// Branch with one slash should be valid and available
-	assert.True(t, response["is_available"].(bool))
-}
-
-// TestHandleValidateBranchName_RepositoryNotFound tests validation API when repository doesn't exist
-func TestHandleValidateBranchName_RepositoryNotFound(t *testing.T) {
-	handler, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// Don't create repository
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
-
-	req := httptest.NewRequest("GET", "/repos/testowner/nonexistent/branches/validate/some-branch", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-
-	var response map[string]interface{}
-	err := json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.False(t, response["success"].(bool))
-	assert.Contains(t, response["error"].(string), "repository not found")
-}
-
-// TestHandleGetBranches_PaginationOutOfRange는 pagination 범위를 벗어나는 경우 빈 배열을 반환하는지 테스트합니다
-func TestHandleGetBranches_PaginationOutOfRange(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// 테스트 저장소 생성
-	repoPath := createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	// 여러 브랜치 생성
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	head, err := gitRepo.Head()
-	require.NoError(t, err)
-
-	// 5개의 브랜치 생성
-	branchNames := []string{"branch1", "branch2", "branch3", "branch4", "branch5"}
-	for _, branchName := range branchNames {
-		branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/"+branchName), head.Hash())
-		err = gitRepo.Storer.SetReference(branchRef)
-		require.NoError(t, err)
-	}
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
-
-	// 범위를 벗어나는 skip 값으로 요청 (총 6개 브랜치 - master 포함, skip=10)
-	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches?limit=10&skip=10", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response GetBranchesResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-
-	assert.True(t, response.Success)
-
-	// branches가 빈 배열인지 확인 (null이 아님)
-	branchesBytes, err := json.Marshal(response.Branches)
-	require.NoError(t, err)
-
-	// null이 아닌 빈 배열([])인지 확인
-	assert.Equal(t, "[]", string(branchesBytes), "branches should be empty array, not null")
-
-	// 길이 확인
-	assert.Equal(t, 0, len(response.Branches), "branches should be empty array")
-
-	// Pagination 정보 확인 (master + 5개 브랜치 = 6개)
-	assert.Equal(t, 6, response.Pagination.Count)
-	assert.Equal(t, 10, response.Pagination.PageSize)
-}
-
-// TestHandleGetBranches_EmptyRepository는 빈 저장소에서도 빈 배열을 반환하는지 테스트합니다
-func TestHandleGetBranches_EmptyRepository(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// 테스트 저장소 생성 (브랜치 없이)
-	createTestRepository(t, tempDir, "testowner", "testrepo")
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
-
-	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response GetBranchesResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-
-	assert.True(t, response.Success)
-
-	// branches가 빈 배열인지 확인 (null이 아님)
-	branchesBytes, err := json.Marshal(response.Branches)
-	require.NoError(t, err)
-
-	// null이 아닌 빈 배열([])인지 확인
-	assert.Equal(t, "[]", string(branchesBytes), "branches should be empty array, not null")
-	assert.Equal(t, 0, len(response.Branches), "branches should be empty array")
 }

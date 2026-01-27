@@ -1,27 +1,27 @@
 # Go 테스트 작성 가이드
 
-> **핵심 원칙**: 테스트는 "실행 가능한 스펙"이다. 읽는 사람이 3초 안에 "무엇을, 어떤 상황에서, 어떻게 검증하는지" 파악할 수 있어야 한다.
+> **Go 철학**: 테스트도 코드다. **코드 자체가 읽혀야 한다.** 주석이나 형식이 아니라, **이름과 구조로 의도를 전달**한다.
+
+참고: [GopherCon 세션 정리](../gophercon/notes.md) - Go의 최소 추상 철학, mock보다 real test
 
 ---
 
-## 0. 10-Line Standard (PR에서 바로 참고)
+## 0. Go-스러운 테스트 원칙 (10줄)
 
 ```
-1. 이름은 정답 스펙           Test_<Unit>_<Scenario>_<Expect>
-2. Given/When/Then           3섹션 고정
-3. When은 1개                 단일 행위만
-4. 정답 강제                  requireStatus(t, resp, 404)
-5. 에러 무시 금지             _, _ := 금지
-6. t.TempDir()               전역/상대경로 금지
-7. 시간 고정                  time.Date(...) 사용
-8. helper는 boilerplate만    setup* 금지, t.Helper() 필수
-9. 실패 메시지에 body         status=%d want=%d body=%s
-10. L0/L1/L2 표시            테스트 레벨 명확히
+1. real test 우선            mock은 외부 의존/비결정성에서만
+2. t.Parallel() 권장         없으면 이유 주석 필수
+3. 이름이 스펙                Test_<Unit>_<Scenario>_<Expect>
+4. 코드가 문서                주석 없이도 읽혀야 함 (검증도 코드로)
+5. 정답 강제                  requireStatus(t, resp, 404)
+6. 에러 무시 금지             _, _ := 금지
+7. t.TempDir()               격리된 환경
+8. 시간 고정                  비결정성 제거
+9. 의도를 숨기지 말라         helper는 boilerplate만
+10. 실패 메시지에 context     status=%d want=%d body=%s
 ```
 
-**추가 금지**:
-- `if got == 409` → 부분 조건 금지
-- `requireNotStatus` 단독 사용 → 반드시 `requireStatus`와 함께
+**핵심**: mock 대신 **실제 서버/repo로 테스트**, 추상화보다 **inline 우선**
 
 ---
 
@@ -60,7 +60,7 @@ TestMergePreview   // 뭘 검증?
 func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
     // ...
     requireStatus(t, resp, http.StatusNotFound)           // 정답 강제
-    requireNotStatus(t, resp, http.StatusConflict)        // 보조: 옛날 버그 가드
+    assertNotStatus(t, resp, http.StatusConflict)        // 보조: 옛날 버그 가드
 }
 
 // ❌ 나쁨 - 이름에 부정 기대
@@ -69,14 +69,36 @@ func Test_MergePreview_DeletedSourceRef_Returns404_Not409(t *testing.T) { ... }
 
 ---
 
-## 2. Given/When/Then 섹션 규칙
+## 2. 테스트 구조: 코드가 문서다
 
-### 규칙
+### Go 원칙: 주석이 아니라 **코드 자체가 읽혀야 한다**
 
-- 섹션은 **반드시 3개만**: `Given` / `When` / `Then`
-- 복잡하면 `Given` 안에 `And:` 추가
-- 섹션 간에는 **빈 줄 1줄**로 시각적 구분
-- **When은 1개**: 단일 행위만 (아래 예외 참고)
+```go
+// ✅ Go-스러움: 코드만 봐도 의도가 명확 (검증까지 코드로)
+func Test_CreateBranch_DuplicateName_Returns409(t *testing.T) {
+    t.Parallel()
+
+    repo := newRepo(t)
+    createBranch(t, repo, "feature")          // helper가 내부에서 성공 보장
+    resp := createBranch(t, repo, "feature")  // 같은 이름으로 또 생성
+
+    requireStatus(t, resp, http.StatusConflict)  // 검증도 코드
+}
+
+// ❌ 주석만 있고 검증이 없음
+func Test_CreateBranch_DuplicateName_Returns409(t *testing.T) {
+    repo := newRepo(t)
+    createBranch(t, repo, "feature")
+    createBranch(t, repo, "feature")
+    // → 409 기대  ← 검증이 주석? 안 됨
+}
+```
+
+### 주석은 **선택적**
+
+- 코드가 읽히면 주석 생략 가능
+- 복잡한 시나리오에서만 Given/When/Then 사용
+- **빈 줄**로 구조 구분 (주석 대신)
 
 ### When 1개 규칙의 예외
 
@@ -133,7 +155,7 @@ func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
 
     // Then: 404 반환 (ref not found)
     requireStatus(t, resp, http.StatusNotFound)           // 핵심: 정답 강제
-    requireNotStatus(t, resp, http.StatusConflict)        // 보조: 옛날 버그 가드
+    assertNotStatus(t, resp, http.StatusConflict)        // 보조: 옛날 버그 가드
 }
 ```
 
@@ -141,41 +163,82 @@ func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
 
 ## 3. Helper(추상화) 정책
 
-> **디폴트는 inline, 예외적으로만 helper**
+> **Go 철학**: 추상화는 최소로. **inline이 기본**, helper는 **boilerplate 제거용**만.
 
-### 3.1 Helper 허용 기준 (1개라도 충족해야 함)
-
-| 기준 | 예시 |
-|------|------|
-| 의도가 아닌 **순수 boilerplate** | `httptest.NewRecorder()`, `gin.New()`, `t.TempDir()` |
-| **재사용 5회 이상** 확실하고, 이름이 스펙처럼 읽힘 | `newRepo(t)`, `commitFile(t, ...)` |
-| 테스트를 **더 읽기 쉽게** 만듦 (핵심 상태 변화가 숨지 않음) | - |
-
-### 3.2 Helper 네이밍 규칙
-
-`setup*` **금지**. "무엇을 만든다/무슨 상태로 만든다"를 말로 써.
+### 3.1 Go-스러운 테스트: 추상화 피하기
 
 ```go
-// ✅ 좋음 - 의미가 명확
-newRepo(t)
-commitFile(t, repo, "a.txt", "content", "commit message")
-createBranchAt(t, repo, "feature/foo", hash)
-callMergePreview(t, router, source, target)
-removeBranch(t, repo, "feature/foo")
+// ✅ Go-스러움: 테스트 본문에서 모든 것이 보임
+func Test_DeleteBranch_NotFound_Returns404(t *testing.T) {
+    t.Parallel()
+    
+    tempDir := t.TempDir()
+    repo, err := git.PlainInit(tempDir, false)
+    require.NoError(t, err)
+    
+    // 존재하지 않는 브랜치 삭제 시도
+    err = repo.Storer.RemoveReference(plumbing.NewBranchReferenceName("ghost"))
+    
+    require.Error(t, err)
+}
 
-// ❌ 나쁨 - 무슨 의미인지 모름
-setupTestRepository(t)
-setupTestHandler(t)
-createCommit(t, ...)        // 무슨 파일? 무슨 의미의 커밋?
-setup(t)
+// ❌ 과도한 추상화: 무슨 일이 일어나는지 안 보임
+func Test_DeleteBranch_NotFound_Returns404(t *testing.T) {
+    repo := setupTestRepoWithBranches(t, "main", "feature")
+    err := deleteBranchHelper(t, repo, "ghost")
+    assertBranchNotFoundError(t, err)
+}
 ```
 
-### 3.3 Helper 필수 규칙
+### 3.2 Helper 허용 기준
 
-| 규칙 | 설명 |
-|------|------|
-| **`t.Helper()` 필수** | 모든 helper 함수는 **첫 줄에 `t.Helper()`** |
-| **파일 분리 권장** | `testutil/git.go` (arrange), `testutil/assert.go` (assert) |
+| 기준 | 허용 | 금지 |
+|------|------|------|
+| **순수 boilerplate** | `t.TempDir()`, `httptest.NewRecorder()` | - |
+| **의도를 숨기지 않음** | `newRepo(t)`, `createBranchAt(t, repo, name, hash)` | `setupTestRepoWithBranches(t, ...)` |
+| **목적어가 구체적** | `createUser(t, store, User{...})` | `create(t)`, `createCommit(t)` (뭘 만드는지 불명확) |
+
+> **핵심**: 줄 수가 아니라 **"의도를 숨기는가"**가 기준. 핵심 전제/상태변화/검증은 숨기면 안 됨.
+
+### 3.3 Helper 네이밍 규칙
+
+`setup*` **금지**. `create*`/`new*`는 **목적어가 구체적이면 허용**.
+
+```go
+// ✅ 좋음 - 목적어가 구체적
+newRepo(t)
+createBranchAt(t, repo, "feature", hash)
+createUser(t, store, User{Name: "test"})
+commitFile(t, repo, "a.txt", "content", "msg")
+
+// ❌ 나쁨 - 뭘 만드는지/하는지 불명확
+setupTestRepository(t)      // setup이 뭘 하는지 모름
+create(t)                   // 뭘 만드는지 모름
+createCommit(t)             // 무슨 파일? 무슨 의미?
+```
+
+### 3.4 t.Helper() 필수
+
+```go
+func newRepo(t *testing.T) *git.Repository {
+    t.Helper()  // ← 첫 줄에 필수
+    // ...
+}
+```
+
+### 3.5 파일 분리: 선택적 (inline 우선)
+
+> **Go 철학**: 패키지 분리보다 **inline 우선**. helper가 테스트 파일에 같이 있어도 됨.
+
+```go
+// ✅ 권장: 같은 파일에 helper 정의
+func Test_Something(t *testing.T) { ... }
+
+func newRepo(t *testing.T) *git.Repository { ... }  // 같은 파일
+
+// ⚠️ 선택적: 공유 helper가 많을 때만 분리
+// testutil/git.go - 여러 패키지에서 공유할 때만
+```
 
 ```go
 // ✅ 모든 helper는 t.Helper() 필수
@@ -219,7 +282,7 @@ removeBranch(t, repo, "feature/foo")  // ← 상태 변화 지점
 // Then
 resp := callMergePreview(t, router, "feature/foo", "main")
 requireStatus(t, resp, 404)
-requireNotStatus(t, resp, 409)
+assertNotStatus(t, resp, 409)
 ```
 
 ### 흐름이 "눈으로" 보여야 함
@@ -256,23 +319,23 @@ if status >= 200 && status < 300 {
 
 // ✅ 좋음 - 정답을 고정
 requireStatus(t, resp, http.StatusNotFound)           // 핵심: "404여야 함"
-requireNotStatus(t, resp, http.StatusConflict)        // 보조: 옛날 버그 가드 (optional)
+assertNotStatus(t, resp, http.StatusConflict)        // 보조: 옛날 버그 가드 (optional)
 ```
 
-### 5.2 requireNotStatus는 "보조 가드 전용"
+### 5.2 assertNotStatus는 "보조 가드 전용"
 
-> **단독 사용 금지**: `requireNotStatus`는 반드시 `requireStatus`와 함께 쓴다.
+> **단독 사용 금지**: `assertNotStatus`는 반드시 `requireStatus`와 함께 쓴다.
 
 ```go
-// ❌ 금지 - requireNotStatus 단독 사용
-requireNotStatus(t, resp, http.StatusConflict)  // 409 아니면 뭐든 통과
+// ❌ 금지 - assertNotStatus 단독 사용
+assertNotStatus(t, resp, http.StatusConflict)  // 409 아니면 뭐든 통과
 
-// ✅ 좋음 - requireStatus가 핵심, requireNotStatus는 보조
+// ✅ 좋음 - requireStatus가 핵심, assertNotStatus는 보조
 requireStatus(t, resp, http.StatusNotFound)           // 핵심: 정답 강제
-requireNotStatus(t, resp, http.StatusConflict)        // 보조: 과거 회귀 방지
+assertNotStatus(t, resp, http.StatusConflict)        // 보조: 과거 회귀 방지
 ```
 
-> `requireNotStatus`는 `t.Errorf`(non-fatal)이므로, `requireStatus`가 이미 fail이면 의미가 없다. 메시지 강화/문서화 용도로만 사용.
+> `assertNotStatus`는 `t.Errorf`(non-fatal)이므로, `requireStatus`가 이미 fail이면 의미가 없다. 메시지 강화/문서화 용도로만 사용.
 
 ### 5.3 한 테스트는 "핵심 assertion 1개 + 보조 assertion 몇 개"
 
@@ -281,38 +344,106 @@ requireNotStatus(t, resp, http.StatusConflict)        // 보조: 과거 회귀 �
 requireStatus(t, resp, http.StatusNotFound)
 
 // 보조: 옛날 버그 가드 (optional)
-requireNotStatus(t, resp, http.StatusConflict)
+assertNotStatus(t, resp, http.StatusConflict)
 
 // 보조: error body shape
 requireBodyContains(t, resp, "unable to resolve reference")
 ```
 
-### 5.3 requireStatus 구현 (팀 표준)
+### 5.3 TestResponse: HTTP 테스트의 표준 타입
+
+> **규칙**: HTTP 레벨은 **무조건 TestResponse**. `*httptest.ResponseRecorder`는 raw로만.
 
 ```go
-func requireStatus(t *testing.T, resp *httptest.ResponseRecorder, want int) {
-    t.Helper()
-    if resp.Code != want {
-        t.Fatalf("status=%d want=%d body=%s", resp.Code, want, resp.Body.String())
-    }
+// 표준 타입 정의
+type TestResponse struct {
+    Status int
+    Body   string
+    Header http.Header
 }
 
-func requireNotStatus(t *testing.T, resp *httptest.ResponseRecorder, notWant int) {
-    t.Helper()
-    if resp.Code == notWant {
-        t.Errorf("status=%d (should not be %d) body=%s", resp.Code, notWant, resp.Body.String())
+func asResp(w *httptest.ResponseRecorder) TestResponse {
+    return TestResponse{
+        Status: w.Code,
+        Body:   w.Body.String(),
+        Header: w.Header(),
     }
 }
 ```
 
-### 5.4 require vs assert
+### 5.4 Assertion 구현 (팀 표준)
+
+> **네이밍 규칙**: 정답은 `require*` (fatal), 회귀 가드는 `assert*` (non-fatal)
+
+```go
+// 정답 강제 (fatal)
+func requireStatus(t *testing.T, resp TestResponse, want int) {
+    t.Helper()
+    if resp.Status != want {
+        t.Fatalf("status=%d want=%d body=%s", resp.Status, want, resp.Body)
+    }
+}
+
+// 회귀 가드 (non-fatal, 단독 사용 금지)
+func assertNotStatus(t *testing.T, resp TestResponse, notWant int) {
+    t.Helper()
+    if resp.Status == notWant {
+        t.Errorf("status=%d (should not be %d) body=%s", resp.Status, notWant, resp.Body)
+    }
+}
+
+// 확장
+func requireHeader(t *testing.T, resp TestResponse, key, want string) { ... }
+func requireBodyContains(t *testing.T, resp TestResponse, substr string) { ... }
+```
+
+### 5.5 사용 패턴
+
+```go
+// ✅ 표준 패턴: raw → TestResponse → assert
+w := httptest.NewRecorder()
+router.ServeHTTP(w, req)
+resp := asResp(w)
+
+requireStatus(t, resp, http.StatusNotFound)      // 정답 강제
+assertNotStatus(t, resp, http.StatusConflict)    // 회귀 가드 (선택)
+```
+
+### 5.6 (선택) 단독 사용 컴파일 레벨 금지
+
+> assertNotStatus 단독 사용을 **컴파일 타임에 막고 싶으면**:
+
+```go
+type MustExpect struct{}
+
+func requireStatus(t *testing.T, resp TestResponse, want int) MustExpect {
+    t.Helper()
+    if resp.Status != want {
+        t.Fatalf("status=%d want=%d body=%s", resp.Status, want, resp.Body)
+    }
+    return MustExpect{}
+}
+
+func assertNotStatus(t *testing.T, _ MustExpect, resp TestResponse, notWant int) {
+    t.Helper()
+    if resp.Status == notWant {
+        t.Errorf("status=%d (should not be %d) body=%s", resp.Status, notWant, resp.Body)
+    }
+}
+
+// 사용: 반드시 requireStatus 먼저 호출해야 컴파일됨
+exp := requireStatus(t, resp, http.StatusNotFound)
+assertNotStatus(t, exp, resp, http.StatusConflict)
+```
+
+### 5.7 require vs assert
 
 | 사용 | 조건 |
 |------|------|
 | `require.*` / `t.Fatalf` | 조건이 깨지면 테스트 진행 의미 없음 |
 | `assert.*` / `t.Errorf` | 계속 진행해도 됨 |
 
-### 5.5 에러 메시지 템플릿
+### 5.8 에러 메시지 템플릿
 
 ```go
 // ✅ 좋음 - 디버깅에 필요한 정보 포함
@@ -328,25 +459,70 @@ t.Fatal("wrong status")
 
 ## 6. Real Test 우선 원칙
 
-> **"mock 금지"가 아니라 mock의 사용 위치를 고정**
+> **Go 철학**: mock보다 **실제 서버/repo로 테스트**한다. mock은 **외부 의존/비결정성에서만**.
 
-### 6.1 테스트 레벨 정의 (팀 공통 언어)
+### 6.1 핵심: Real Test가 기본
 
-| 레벨 | 설명 | mock 사용 |
-|------|------|-----------|
-| **L0** | Pure function/unit | 거의 없음 |
-| **L1** | Component test (실제 repo/handler, 외부 네트워크 없음) | 최소 |
-| **L2** | End-to-end (실제 서버, 별도 suite) | 외부만 |
+```go
+// ✅ Go-스러움: 실제 repo로 테스트
+func Test_CreateBranch_Success(t *testing.T) {
+    t.Parallel()
+    repo := newRepo(t)                    // 실제 git repo
+    createBranch(t, repo, "feature")
+    // 실제 동작 검증
+}
 
-### 6.2 mock 허용 구역
+// ❌ 안티패턴: mock으로 시작
+func Test_CreateBranch_Success(t *testing.T) {
+    mockRepo := &MockRepo{}
+    mockRepo.On("CreateBranch", ...).Return(nil)
+    // mock이 실제 동작을 보장하지 않음
+}
+```
 
-| 허용 | 예시 |
+### 6.2 TestMain 패턴: L2에서만 신중하게
+
+> **⚠️ 주의**: TestMain 서버 공유는 **L2 (E2E) suite에서만**. L1은 테스트마다 router 인스턴스가 기본.
+
+```go
+// ✅ L1 기본: 테스트마다 격리된 router
+func Test_CreateBranch_Success(t *testing.T) {
+    t.Parallel()
+    router := newRouter()  // 테스트마다 새 인스턴스
+    w := httptest.NewRecorder()
+    router.ServeHTTP(w, req)
+}
+
+// ⚠️ L2에서만: 무겁고 느린 E2E suite
+var testServer *httptest.Server
+
+func TestMain(m *testing.M) {
+    // L2: 완전 무상태(stateless) 서버만 공유
+    testServer = httptest.NewServer(newRouter())
+    code := m.Run()
+    testServer.Close()
+    os.Exit(code)
+}
+```
+
+**TestMain 공유 위험**:
+- 테스트 간 상태 누수 (미들웨어, in-memory store)
+- 순서 의존 flakiness
+- 병렬성/독립성 깨짐
+
+### 6.3 mock 허용 구역 (이것만)
+
+| 허용 | 이유 |
 |------|------|
-| 시간/랜덤/UUID 같은 **비결정성** | `time.Now()`, `uuid.New()` |
-| **외부 네트워크/외부 SaaS** | HTTP client to external API |
-| **느린 것** 대신 in-memory 대체 | 진짜 DB → in-memory |
+| `time.Now()` | 비결정성 |
+| `uuid.New()` | 비결정성 |
+| `rand` / `crypto/rand` | 비결정성 (seed 고정 필요) |
+| 외부 SaaS API | 네트워크 의존 |
+| 외부 프로세스/시스템 자원 (exec, 포트, 권한) | 환경 의존/비결정성 |
 
-**그 외는 기본 real.**
+> **랜덤이 필요하면** `rand.New(rand.NewSource(1))`로 seed 고정
+
+**그 외는 real.**
 
 ---
 
@@ -388,7 +564,28 @@ t.Cleanup(func() {
 })
 ```
 
-### 7.4 전역 상태/환경 변수
+### 7.4 map 순서 의존 금지
+
+> **flaky 1순위**: Go map은 iteration 순서가 비결정적.
+
+```go
+// ❌ 나쁨 - map 순서에 의존
+keys := []string{}
+for k := range m {
+    keys = append(keys, k)
+}
+assert.Equal(t, []string{"a", "b"}, keys)  // 순서 보장 안 됨
+
+// ✅ 좋음 - 정렬 후 비교
+sort.Strings(keys)
+assert.Equal(t, []string{"a", "b"}, keys)
+
+// ✅ 또는 - 길이/존재만 검증
+assert.Len(t, m, 2)
+assert.Contains(t, m, "a")
+```
+
+### 7.5 전역 상태/환경 변수
 
 > **flaky 만드는 1순위**: 전역 상태가 병렬 테스트에서 공유됨
 
@@ -409,30 +606,45 @@ func Test_Something(t *testing.T) {
     // ...
 }
 
-// ✅ gin mode는 테스트 시작 시 고정
+// ✅ gin mode는 init()에서 고정 (테스트 본문에서 하지 말 것)
 func init() {
     gin.SetMode(gin.TestMode)
 }
+
+// ❌ 나쁨 - 테스트 본문에서 전역 상태 변경
+func Test_Something(t *testing.T) {
+    t.Parallel()  // ← 충돌 위험!
+    gin.SetMode(gin.TestMode)  // 여기서 하면 안 됨
+}
 ```
 
-### 7.5 t.Parallel() 허용 조건
+### 7.6 t.Parallel(): 권장 기본값
 
-> **"공유 전역이 없는 테스트"에서만 `t.Parallel()` 허용**
+> **Go 철학**: `t.Parallel()`은 **권장 기본값**. 단, 전역 상태를 만지면 **금지하고 이유를 남긴다**.
 
 ```go
-// ✅ 허용 - 공유 상태 없음
-func Test_PureLogic(t *testing.T) {
+// ✅ 기본: 전역 상태 없으면 t.Parallel()
+func Test_ResolveReference_ValidSHA_ReturnsHash(t *testing.T) {
     t.Parallel()
-    // 전역 상태 접근 없음
+    // ...
 }
 
-// ❌ 금지 - 전역 상태 변경
-func Test_GlobalState(t *testing.T) {
-    // t.Parallel()  ← 금지
-    os.Setenv("KEY", "value")
+// ⚠️ 금지 시 이유를 주석으로 남긴다
+func Test_ConfigFromEnv_ReadsEnvVar(t *testing.T) {
+    // no t.Parallel: mutates process env
+    original := os.Getenv("MY_VAR")
+    t.Cleanup(func() { os.Setenv("MY_VAR", original) })
+    os.Setenv("MY_VAR", "test")
     // ...
 }
 ```
+
+**금지해야 하는 경우** (주석 필수):
+- 환경 변수 수정
+- package-level 전역/싱글톤
+- timezone/locale 변경
+- 공유 tmp 파일 (파일명 충돌)
+- 라이브러리 내부 전역 캐시 (go-git 등)
 
 ---
 
@@ -461,8 +673,13 @@ func Test_<Unit>_<Scenario>_<Expect>(t *testing.T) {
     t.Parallel()
 
     // Given: ...
+    router := newRouter()
 
     // When: ...
+    req := httptest.NewRequest(http.MethodGet, "/path", nil)
+    w := httptest.NewRecorder()
+    router.ServeHTTP(w, req)
+    resp := asResp(w)  // raw → TestResponse
 
     // Then: ...
     requireStatus(t, resp, http.StatusNotFound)
@@ -485,7 +702,7 @@ func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
     resp := callMergePreview(t, repo, "feature/foo", "main")
 
     requireStatus(t, resp, http.StatusNotFound)
-    requireNotStatus(t, resp, http.StatusConflict) // optional: guards old bug
+    assertNotStatus(t, resp, http.StatusConflict) // optional: guards old bug
 }
 ```
 
@@ -613,7 +830,7 @@ func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
     removeBranch(t, repo, "feature/foo")
 
     // When: 삭제된 브랜치로 MergePreview 호출
-    gin.SetMode(gin.TestMode)
+    // gin.SetMode는 init()에서 설정됨
     router := gin.New()
     // handler 등록 (실제 코드에 맞게 수정)
     // router.GET("/merges/preview", handler.HandleMergePreview)
@@ -625,10 +842,11 @@ func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
     )
     w := httptest.NewRecorder()
     router.ServeHTTP(w, req)
+    resp := asResp(w)  // raw → TestResponse
 
     // Then: 404 반환 (ref not found)
-    requireStatus(t, w, http.StatusNotFound)              // 핵심: 정답 강제
-    requireNotStatus(t, w, http.StatusConflict)           // 보조: 옛날 버그 가드
+    requireStatus(t, resp, http.StatusNotFound)          // 핵심: 정답 강제
+    assertNotStatus(t, resp, http.StatusConflict)        // 보조: 옛날 버그 가드
 }
 
 // --- Helper functions ---
@@ -693,27 +911,43 @@ func removeBranch(t *testing.T, repo *gogit.Repository, name string) {
     }
 }
 
+// --- TestResponse 타입 및 변환 ---
+
+type TestResponse struct {
+    Status int
+    Body   string
+    Header http.Header
+}
+
+func asResp(w *httptest.ResponseRecorder) TestResponse {
+    return TestResponse{
+        Status: w.Code,
+        Body:   w.Body.String(),
+        Header: w.Header(),
+    }
+}
+
 // --- Assertion helpers ---
 // 핵심: "정답을 강제"하고, 실패 메시지에 body 포함
 
-func requireStatus(t *testing.T, resp *httptest.ResponseRecorder, want int) {
+func requireStatus(t *testing.T, resp TestResponse, want int) {
     t.Helper()
-    if resp.Code != want {
-        t.Fatalf("status=%d want=%d body=%s", resp.Code, want, resp.Body.String())
+    if resp.Status != want {
+        t.Fatalf("status=%d want=%d body=%s", resp.Status, want, resp.Body)
     }
 }
 
-func requireNotStatus(t *testing.T, resp *httptest.ResponseRecorder, notWant int) {
+func assertNotStatus(t *testing.T, resp TestResponse, notWant int) {
     t.Helper()
-    if resp.Code == notWant {
-        t.Errorf("status=%d (should not be %d) body=%s", resp.Code, notWant, resp.Body.String())
+    if resp.Status == notWant {
+        t.Errorf("status=%d (should not be %d) body=%s", resp.Status, notWant, resp.Body)
     }
 }
 
-func requireBodyContains(t *testing.T, resp *httptest.ResponseRecorder, substr string) {
+func requireBodyContains(t *testing.T, resp TestResponse, substr string) {
     t.Helper()
-    if !strings.Contains(resp.Body.String(), substr) {
-        t.Errorf("body does not contain %q: %s", substr, resp.Body.String())
+    if !strings.Contains(resp.Body, substr) {
+        t.Errorf("body does not contain %q: %s", substr, resp.Body)
     }
 }
 ```
@@ -722,24 +956,25 @@ func requireBodyContains(t *testing.T, resp *httptest.ResponseRecorder, substr s
 
 ## 12. PR 리뷰 체크리스트
 
-PR 리뷰에서 **아래 14개** 확인:
+PR 리뷰에서 **아래 13개** 확인:
 
-| # | 체크 항목 |
-|---|-----------|
-| 1 | 테스트 이름이 `Unit + Scenario + Expect` (정답 기준) 인가? |
-| 2 | 테스트 이름에 `_Not409` 같은 **부정 기대**가 없는가? |
-| 3 | `Given/When/Then` 3섹션인가? |
-| 4 | **When이 1개**인가? (예외: 인프라 준비만 허용) |
-| 5 | 핵심 상태 변화가 helper에 숨지 않았는가? |
-| 6 | 에러를 무시(`_, _ :=`)하지 않았는가? |
-| 7 | **assertion이 "정답을 강제"**하는가? (`if got == 409` 금지) |
-| 8 | **`requireNotStatus` 단독 사용** 없는가? (반드시 `requireStatus`와 함께) |
-| 9 | assertion 실패 메시지에 status/body가 포함되는가? |
-| 10 | `time.Now`/랜덤이 고정되어 있는가? |
-| 11 | I/O는 `t.TempDir()` 기반인가? |
-| 12 | **helper에 `t.Helper()` 첫 줄**에 있는가? |
-| 13 | 이 테스트가 L0/L1/L2 중 어디인지 명확한가? |
-| 14 | helper 이름이 `setup*`가 아니고 **의미를 말하는가**? |
+| # | 체크 항목 | Go 원칙 |
+|---|-----------|---------|
+| 1 | **real test**인가? (mock 대신 실제 repo/server) | mock은 외부 의존만 |
+| 2 | **`t.Parallel()`** 있거나, 없으면 **이유 주석**이 있는가? | 권장 기본값 |
+| 3 | 테스트 이름이 `Unit + Scenario + Expect` 인가? | 이름이 스펙 |
+| 4 | **코드만 봐도 읽히는가**? (주석 없이도) | 코드가 문서 |
+| 5 | **핵심 로직이 inline**인가? (helper에 숨지 않음) | 추상화 최소 |
+| 6 | 에러 무시(`_, _ :=`)하지 않았는가? | 명시적 에러 처리 |
+| 7 | **정답 강제**인가? (`requireStatus`, `if got==409` 금지) | 정확한 검증 |
+| 8 | 실패 메시지에 body 포함되는가? | 디버깅 용이 |
+| 9 | `t.TempDir()` 사용하는가? | 격리된 환경 |
+| 10 | 시간 고정되어 있는가? | 비결정성 제거 |
+| 11 | helper에 `t.Helper()` 있는가? | 스택트레이스 |
+| 12 | `setup*` helper가 없는가? | 의미 있는 이름 |
+| 13 | **이 테스트가 막는 회귀를 1문장**으로 말할 수 있는가? | 의미 있는 테스트 |
+
+> **#13 예시**: "삭제된 브랜치로 merge preview를 호출하면 404를 반환해야 하며, 409로 새면 안 된다."
 
 ### 특히 주의: Assertion 금지 패턴
 
@@ -747,41 +982,39 @@ PR 리뷰에서 **아래 14개** 확인:
 // ❌ PR에서 발견하면 반드시 수정 요청
 if got == 409 { t.Error(...) }                    // "특정 값만 나쁘다"
 if status >= 500 { t.Error(...) }                 // "범위로 뭉뚱그림"
-requireNotStatus(t, resp, http.StatusConflict)    // 단독 사용 (정답 없음)
+assertNotStatus(t, resp, http.StatusConflict)    // 단독 사용 (정답 없음)
 
 // ✅ 이렇게 수정
 requireStatus(t, resp, http.StatusNotFound)       // 정답 강제 (핵심)
-requireNotStatus(t, resp, http.StatusConflict)    // 보조 가드 (optional)
+assertNotStatus(t, resp, http.StatusConflict)    // 보조 가드 (optional)
 ```
 
 ---
 
-## 13. 요약: 읽히는 테스트의 4가지 핵심
+## 13. 요약: Go-스러운 테스트의 4가지 핵심
 
-1. **이름은 "정답 스펙"**: `Test_<Unit>_<Scenario>_<Expect>` (부정 기대 금지)
-2. **상태 변화가 눈에 보임**: Given → When → Then이 한 줄씩
-3. **helper는 boilerplate만**: 핵심 로직은 inline
-4. **assertion은 정답 강제**: `requireStatus(...)` 필수, `if got == 409` 금지
+1. **real test 우선**: mock 대신 **실제 서버/repo로** 테스트
+2. **t.Parallel() 기본**: 순수 로직은 **병렬**로 돌려라
+3. **코드가 문서**: 주석 없이도 **테스트 이름과 구조로** 의도 전달
+4. **추상화 최소**: helper는 **boilerplate만**, 핵심 로직은 **inline**
 
-> **"짧게 쓰는 건 OK, 약하게 쓰는 건 NO"**
+> **Go 철학**: 불필요한 추상을 제거하고, **필요한 것만 최소 크기로** 유지한다.
 
-> **"테스트가 스펙처럼 읽히면, 버그도 스펙처럼 보인다."**
+> **"테스트도 코드다. 코드 자체가 읽혀야 한다."**
 
 ---
 
 ## 14. 절대 금지 목록 (Quick Reference)
 
-| 금지 | 대신 |
-|------|------|
-| `if got == 409` | `requireStatus(t, resp, 404)` |
-| `if status >= 500` | `requireStatus(t, resp, 404)` |
-| `requireNotStatus` 단독 사용 | `requireStatus` + `requireNotStatus` |
-| `Test_...Gets409_ShouldBe404` | `Test_...Returns404` |
-| `setup*` helper 이름 | `newRepo(t)`, `commitFile(t, ...)` |
-| helper에서 `t.Helper()` 누락 | 첫 줄에 `t.Helper()` |
-| `_, _ :=` 에러 무시 | `if err != nil { t.Fatal(...) }` |
-| assert 메시지에 body 없음 | `t.Fatalf("status=%d want=%d body=%s", ...)` |
-| `time.Now()` 직접 사용 | `now := time.Date(...)` 고정 |
-| 전역/상대 경로 | `t.TempDir()` |
-| 전역 상태 변경 후 원복 없음 | `t.Cleanup(...)` |
-| 전역 상태 있는데 `t.Parallel()` | `t.Parallel()` 제거 또는 상태 격리 |
+| 금지 | 대신 | Go 원칙 |
+|------|------|---------|
+| **mock 먼저** | 실제 repo/server로 테스트 | real test 우선 |
+| `t.Parallel()` 없는데 이유 주석도 없음 | 주석으로 이유 명시 | 권장 기본값 |
+| **의도를 숨기는 helper** (setupTestRepo) | inline 또는 단순 helper | 추상화 최소 |
+| `if got == 409` | `requireStatus(t, resp, 404)` | 정답 강제 |
+| `setup*` helper 이름 | `newRepo(t)`, `commitFile(t, ...)` | 명확한 이름 |
+| `_, _ :=` 에러 무시 | `if err != nil { t.Fatal(...) }` | 명시적 에러 |
+| assert 메시지에 body 없음 | `t.Fatalf("...body=%s", ...)` | 디버깅 정보 |
+| `time.Now()` 직접 사용 | `now := time.Date(...)` 고정 | 비결정성 제거 |
+| 전역/상대 경로 | `t.TempDir()` | 격리 |
+| `t.Helper()` 누락 | 첫 줄에 `t.Helper()` | 스택트레이스 |

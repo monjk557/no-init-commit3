@@ -13,7 +13,6 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -21,51 +20,343 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// setupTestHandler는 임시 저장소를 사용하여 테스트 핸들러를 생성합니다
-func setupTestHandler(t *testing.T) (*DiffHandler, string, func()) {
-	// Gin을 테스트 모드로 설정
+func init() {
 	gin.SetMode(gin.TestMode)
+}
 
-	// 테스트 저장소를 위한 임시 디렉토리 생성
-	tempDir, err := os.MkdirTemp("", "diffs-test-*")
+// =============================================================================
+// 테스트: DiffHandler 생성
+// 회귀 방지: "DiffHandler 생성이 올바르게 동작해야 함"
+// =============================================================================
+
+// Test_NewDiffHandler_ValidConfig_ReturnsHandler
+// 회귀: 유효한 설정으로 핸들러 생성이 성공해야 함
+func Test_NewDiffHandler_ValidConfig_ReturnsHandler(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Logging: config.LoggingConfig{Level: "info", Format: "json"},
+		Git:     config.GitConfig{RepoRoot: "/tmp/test"},
+	}
+
+	handler, err := NewDiffHandler(cfg)
+
+	require.NoError(t, err)
+	require.NotNil(t, handler)
+}
+
+// Test_NewDiffHandler_NilConfig_ReturnsError
+// 회귀: nil 설정으로 핸들러 생성 시 에러 반환
+func Test_NewDiffHandler_NilConfig_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	handler, err := NewDiffHandler(nil)
+
+	require.Error(t, err)
+	require.Nil(t, handler)
+}
+
+// =============================================================================
+// 테스트: CommitDiff API
+// 회귀 방지: "커밋 간 diff가 정확하게 계산되어야 함"
+// =============================================================================
+
+// Test_CommitDiff_SingleLineAddition_ReturnsCorrectCounts
+// 회귀: 단일 줄 추가 시 additions=1, deletions=0이어야 함
+func Test_CommitDiff_SingleLineAddition_ReturnsCorrectCounts(t *testing.T) {
+	t.Parallel()
+
+	handler, initialSHA, secondSHA := newDiffHandlerWithCommits(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// 전체 SHA 사용
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialSHA, secondSHA)
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	// single-line.txt 찾기
+	var singleLineFile *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "single-line.txt" {
+			singleLineFile = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, singleLineFile, "single-line.txt should be in diff")
+	require.Equal(t, FileDiffStatusAdded, singleLineFile.Status)
+	require.Equal(t, 1, singleLineFile.Additions)
+	require.Equal(t, 0, singleLineFile.Deletions)
+}
+
+// Test_CommitDiff_FileModification_ReturnsCorrectDelta
+// 회귀: 파일 수정 시 additions-deletions가 정확해야 함
+func Test_CommitDiff_FileModification_ReturnsCorrectDelta(t *testing.T) {
+	t.Parallel()
+
+	// Given: 기존 파일에 한 줄 추가
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
 	require.NoError(t, err)
 
-	// 테스트 저장소 경로 설정
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// 첫 커밋: "First line\n"
+	initialBlobHash := makeBlob(t, repo, []byte("First line\n"))
+	initialTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "existing.txt", Mode: 0100644, Hash: initialBlobHash},
+	})
+	initialCommitHash := makeCommit(t, repo, "Initial commit", initialTreeHash, nil, now)
+
+	// 두 번째 커밋: "First line\nSecond line\n"
+	secondBlobHash := makeBlob(t, repo, []byte("First line\nSecond line\n"))
+	secondTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "existing.txt", Mode: 0100644, Hash: secondBlobHash},
+	})
+	secondCommitHash := makeCommit(t, repo, "Add second line", secondTreeHash, []plumbing.Hash{initialCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// When: diff 조회 (전체 SHA 사용)
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
+		initialCommitHash.String(), secondCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Then: 수정된 파일의 delta가 정확해야 함
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	var modifiedFile *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "existing.txt" {
+			modifiedFile = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, modifiedFile)
+	require.Equal(t, FileDiffStatusModified, modifiedFile.Status)
+	require.Equal(t, 1, modifiedFile.Additions-modifiedFile.Deletions, "net change should be +1 line")
+}
+
+// Test_CommitDiff_InvalidBase_Returns400
+// 회귀: 잘못된 base 매개변수 시 400 반환
+func Test_CommitDiff_InvalidBase_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/commits//abc123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+}
+
+// Test_CommitDiff_WithContextLines_ReturnsSuccess
+// 회귀: context 매개변수가 올바르게 처리되어야 함
+func Test_CommitDiff_WithContextLines_ReturnsSuccess(t *testing.T) {
+	t.Parallel()
+
+	handler, initialSHA, secondSHA := newDiffHandlerWithCommits(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// 전체 SHA 사용
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=5",
+		initialSHA, secondSHA)
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+}
+
+// =============================================================================
+// 테스트: BranchDiff API
+// 회귀 방지: "브랜치 간 diff가 올바르게 동작해야 함"
+// =============================================================================
+
+// Test_BranchDiff_NonExistentHead_ReturnsError
+// 회귀: 존재하지 않는 head 브랜치 시 에러 반환
+func Test_BranchDiff_NonExistentHead_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+
+	// 존재하지 않는 브랜치로 요청
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/nonexistent", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 또는 404 중 하나 (브랜치가 존재하지 않으므로)
+	require.True(t, w.Code == http.StatusBadRequest || w.Code == http.StatusNotFound || w.Code == http.StatusInternalServerError,
+		"status=%d want=400/404/500 body=%s", w.Code, w.Body.String())
+}
+
+// =============================================================================
+// 테스트: FileDiff / SingleCommitDiff / Patch API
+// 회귀 방지: "기타 diff API가 올바르게 동작해야 함"
+// =============================================================================
+
+// Test_FileDiff_MissingPath_Returns400
+// 회귀: path 누락 시 400 반환
+func Test_FileDiff_MissingPath_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/file?base=abc&head=def", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+}
+
+// Test_SingleCommitDiff_MissingSHA_Returns400
+// 회귀: SHA 누락 시 400 반환
+func Test_SingleCommitDiff_MissingSHA_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/commits/:sha/diff", handler.HandleSingleCommitDiff)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/commits//diff", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+}
+
+// Test_Patch_MissingBase_Returns400
+// 회귀: base 누락 시 400 반환
+func Test_Patch_MissingBase_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/patch/:base/:head", handler.HandlePatch)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/patch//abc123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+}
+
+// =============================================================================
+// Helper functions
+// 원칙: boilerplate만 추상화, 핵심 로직은 테스트 본문에
+// =============================================================================
+
+func newDiffHandler(t *testing.T, repoRoot string) *DiffHandler {
+	t.Helper()
+	cfg := &config.Config{
+		Logging: config.LoggingConfig{Level: "info", Format: "json"},
+		Git:     config.GitConfig{RepoRoot: repoRoot},
+	}
+	handler, err := NewDiffHandler(cfg)
+	require.NoError(t, err)
+	return handler
+}
+
+func newDiffHandlerWithRepo(t *testing.T) (*DiffHandler, string) {
+	t.Helper()
+
+	tempDir := t.TempDir()
 	testRepoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
-	err = os.MkdirAll(filepath.Dir(testRepoPath), 0755)
-	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(testRepoPath), 0755))
 
-	// 베어 저장소 초기화
 	repo, err := gogit.PlainInit(testRepoPath, true)
 	require.NoError(t, err)
 
-	// 초기 커밋 생성
-	createTestInitialCommit(t, repo)
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	blobHash := makeBlob(t, repo, []byte("initial"))
+	treeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: blobHash},
+	})
+	commitHash := makeCommit(t, repo, "Initial commit", treeHash, nil, now)
+	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), commitHash)
+	require.NoError(t, repo.Storer.SetReference(ref))
 
-	// 설정 구성
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{
-			Level:  "info",
-			Format: "json",
-		},
-		Git: config.GitConfig{
-			RepoRoot: tempDir,
-		},
-	}
-
-	// 핸들러 생성
-	handler, err := NewDiffHandler(cfg)
-	require.NoError(t, err)
-
-	cleanup := func() {
-		os.RemoveAll(tempDir)
-	}
-
-	return handler, testRepoPath, cleanup
+	handler := newDiffHandler(t, tempDir)
+	return handler, testRepoPath
 }
 
-// createBlob는 저장소에 blob 객체를 생성하고 해시를 반환합니다
-func createBlob(t *testing.T, repo *gogit.Repository, content []byte) plumbing.Hash {
+func newDiffHandlerWithCommits(t *testing.T) (*DiffHandler, string, string) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Initial commit
+	initialBlobHash := makeBlob(t, repo, []byte("initial"))
+	initialTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: initialBlobHash},
+	})
+	initialCommitHash := makeCommit(t, repo, "Initial commit", initialTreeHash, nil, now)
+
+	// master ref 설정
+	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), initialCommitHash)
+	require.NoError(t, repo.Storer.SetReference(ref))
+
+	// Second commit: add single-line.txt
+	singleLineBlobHash := makeBlob(t, repo, []byte("Hello"))
+	secondTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: initialBlobHash},
+		{Name: "single-line.txt", Mode: 0100644, Hash: singleLineBlobHash},
+	})
+	secondCommitHash := makeCommit(t, repo, "Add single line file", secondTreeHash, []plumbing.Hash{initialCommitHash}, now)
+
+	// master ref 업데이트
+	ref2 := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), secondCommitHash)
+	require.NoError(t, repo.Storer.SetReference(ref2))
+
+	handler := newDiffHandler(t, tempDir)
+	return handler, initialCommitHash.String(), secondCommitHash.String()
+}
+
+func makeBlob(t *testing.T, repo *gogit.Repository, content []byte) plumbing.Hash {
+	t.Helper()
 	blob := repo.Storer.NewEncodedObject()
 	blob.SetType(plumbing.BlobObject)
 	blob.SetSize(int64(len(content)))
@@ -79,8 +370,8 @@ func createBlob(t *testing.T, repo *gogit.Repository, content []byte) plumbing.H
 	return hash
 }
 
-// createTree는 저장소에 tree 객체를 생성하고 해시를 반환합니다
-func createTree(t *testing.T, repo *gogit.Repository, entries []object.TreeEntry) plumbing.Hash {
+func makeTree(t *testing.T, repo *gogit.Repository, entries []object.TreeEntry) plumbing.Hash {
+	t.Helper()
 	tree := &object.Tree{Entries: entries}
 	treeObj := repo.Storer.NewEncodedObject()
 	require.NoError(t, tree.Encode(treeObj))
@@ -89,14 +380,14 @@ func createTree(t *testing.T, repo *gogit.Repository, entries []object.TreeEntry
 	return hash
 }
 
-// createCommit는 저장소에 커밋 객체를 생성하고 해시를 반환합니다
-func createCommit(t *testing.T, repo *gogit.Repository, message string, treeHash plumbing.Hash, parentHashes ...plumbing.Hash) plumbing.Hash {
+func makeCommit(t *testing.T, repo *gogit.Repository, message string, treeHash plumbing.Hash, parents []plumbing.Hash, when time.Time) plumbing.Hash {
+	t.Helper()
 	commit := &object.Commit{
 		Message:      message,
-		Author:       object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
-		Committer:    object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+		Author:       object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		Committer:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
 		TreeHash:     treeHash,
-		ParentHashes: parentHashes,
+		ParentHashes: parents,
 	}
 	commitObj := repo.Storer.NewEncodedObject()
 	require.NoError(t, commit.Encode(commitObj))
@@ -105,448 +396,21 @@ func createCommit(t *testing.T, repo *gogit.Repository, message string, treeHash
 	return hash
 }
 
-// createTestInitialCommit는 테스트 저장소에 초기 커밋을 생성합니다
-func createTestInitialCommit(t *testing.T, repo *gogit.Repository) {
-	blobHash := createBlob(t, repo, []byte("initial"))
-	treeHash := createTree(t, repo, []object.TreeEntry{
-		{Name: "initial.txt", Mode: 0100644, Hash: blobHash},
-	})
-	commitHash := createCommit(t, repo, "Initial commit", treeHash)
-	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), commitHash)
-	require.NoError(t, repo.Storer.SetReference(ref))
-}
+// =============================================================================
+// Assertion helpers
+// 원칙: 실패 메시지에 body 포함, 정답 강제
+// =============================================================================
 
-// setupTestRepositoryWithCommits는 여러 커밋이 있는 테스트 저장소를 생성합니다
-func setupTestRepositoryWithCommits(t *testing.T) (string, string, string, func()) {
-	tempDir, err := os.MkdirTemp("", "diffs-test-*")
-	require.NoError(t, err)
-	ownerDir := filepath.Join(tempDir, "testowner")
-	require.NoError(t, os.MkdirAll(ownerDir, 0755))
-
-	repoPath := filepath.Join(ownerDir, "testrepo.git")
-	repo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
-
-	initialBlobHash := createBlob(t, repo, []byte("initial"))
-	initialTreeHash := createTree(t, repo, []object.TreeEntry{
-		{Name: "initial.txt", Mode: 0100644, Hash: initialBlobHash},
-	})
-	initialCommitHash := createCommit(t, repo, "Initial commit", initialTreeHash)
-
-	singleLineBlobHash := createBlob(t, repo, []byte("Hello"))
-	secondTreeHash := createTree(t, repo, []object.TreeEntry{
-		{Name: "initial.txt", Mode: 0100644, Hash: initialBlobHash},
-		{Name: "single-line.txt", Mode: 0100644, Hash: singleLineBlobHash},
-	})
-	secondCommitHash := createCommit(t, repo, "Add single line file", secondTreeHash, initialCommitHash)
-
-	return repoPath, initialCommitHash.String(), secondCommitHash.String(), func() { os.RemoveAll(tempDir) }
-}
-
-// TestDiffLineCount_SingleLineAddition는 단일 줄 파일을 추가할 때 정확히 1줄이 추가되는지 테스트합니다
-func TestDiffLineCount_SingleLineAddition(t *testing.T) {
-	_, repoPath, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	// 테스트 브랜치 및 커밋 생성
-	repo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	// master 브랜치 가져오기
-	headRef, err := repo.Head()
-	require.NoError(t, err)
-	masterCommit, err := repo.CommitObject(headRef.Hash())
-	require.NoError(t, err)
-
-	// 변경사항을 만들기 위한 worktree 생성
-	worktreePath := strings.TrimSuffix(repoPath, ".git")
-	worktreeRepo, err := gogit.PlainOpen(worktreePath)
-	if err != nil {
-		// worktree가 존재하지 않으면 생성
-		worktreeRepo, err = gogit.PlainInit(worktreePath, false)
-		require.NoError(t, err)
+func requireStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	if w.Code != want {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, want, w.Body.String())
 	}
+}
 
-	wt, err := worktreeRepo.Worktree()
-	require.NoError(t, err)
-
-	// 단일 줄 파일 추가
-	singleLineFile, err := wt.Filesystem.Create("single-line.txt")
-	require.NoError(t, err)
-	_, err = singleLineFile.Write([]byte("Hello"))
-	require.NoError(t, err)
-	require.NoError(t, singleLineFile.Close())
-
-	_, err = wt.Add("single-line.txt")
-	require.NoError(t, err)
-
-	newCommit, err := wt.Commit("Add single line file", &gogit.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Test",
-			Email: "test@example.com",
-			When:  time.Now(),
-		},
-	})
-	require.NoError(t, err)
-
-	// 커밋 가져오기
-	initialCommitObj, err := repo.CommitObject(masterCommit.Hash)
-	require.NoError(t, err)
-
-	newCommitObj, err := worktreeRepo.CommitObject(newCommit)
-	require.NoError(t, err)
-
-	_ = repoPath // 사용하지 않는 변수 경고 방지
-
-	// tree 가져오기
-	initialTree, err := initialCommitObj.Tree()
-	require.NoError(t, err)
-
-	newTree, err := newCommitObj.Tree()
-	require.NoError(t, err)
-
-	// go-git을 직접 사용하여 diff 계산 (단위 테스트 스타일)
-	changes, err := object.DiffTree(initialTree, newTree)
-	require.NoError(t, err)
-
-	// single-line.txt 변경사항 찾기
-	var singleLineChange *object.Change
-	for _, change := range changes {
-		if change.To.Name == "single-line.txt" {
-			singleLineChange = change
-			break
-		}
+func requireBodyContains(t *testing.T, w *httptest.ResponseRecorder, substr string) {
+	t.Helper()
+	if !strings.Contains(w.Body.String(), substr) {
+		t.Errorf("body does not contain %q: %s", substr, w.Body.String())
 	}
-
-	require.NotNil(t, singleLineChange, "single-line.txt should be in the diff")
-
-	// 패치 가져오기 및 줄 수 계산
-	patch, err := singleLineChange.Patch()
-	require.NoError(t, err)
-
-	additions, deletions := countPatchLines(patch)
-
-	assert.Equal(t, 1, additions, "정확히 1줄만 추가되어야 합니다")
-	assert.Equal(t, 0, deletions, "삭제된 줄이 없어야 합니다")
-}
-
-// TestDiffLineCount_SingleLineAddedToExistingFile는 기존 파일에 단일 줄을 추가하는 것을 테스트합니다
-func TestDiffLineCount_SingleLineAddedToExistingFile(t *testing.T) {
-	repoPath, initialCommitSHA, secondCommitSHA, cleanup := setupTestRepositoryWithCommits(t)
-	defer cleanup()
-
-	// 저장소 열기
-	repo, err := gogit.PlainOpen(repoPath)
-	require.NoError(t, err)
-
-	// 커밋 가져오기
-	initialCommitObj, err := repo.CommitObject(plumbing.NewHash(initialCommitSHA))
-	require.NoError(t, err)
-
-	secondCommitObj, err := repo.CommitObject(plumbing.NewHash(secondCommitSHA))
-	require.NoError(t, err)
-
-	// tree 가져오기
-	initialTree, err := initialCommitObj.Tree()
-	require.NoError(t, err)
-
-	secondTree, err := secondCommitObj.Tree()
-	require.NoError(t, err)
-
-	// diff 계산
-	changes, err := object.DiffTree(initialTree, secondTree)
-	require.NoError(t, err)
-
-	// single-line.txt 변경사항 찾기
-	var singleLineChange *object.Change
-	for _, change := range changes {
-		if change.To.Name == "single-line.txt" {
-			singleLineChange = change
-			break
-		}
-	}
-
-	require.NotNil(t, singleLineChange, "single-line.txt should be in the diff")
-
-	// 패치 가져오기 및 줄 수 계산
-	patch, err := singleLineChange.Patch()
-	require.NoError(t, err)
-
-	additions, deletions := countPatchLines(patch)
-
-	assert.Equal(t, 1, additions, "정확히 1줄만 추가되어야 합니다")
-	assert.Equal(t, 0, deletions, "삭제된 줄이 없어야 합니다")
-}
-
-// TestHandleBranchDiff_SingleLineAddition는 단일 줄 추가가 있는 브랜치 diff 핸들러를 테스트합니다
-func TestHandleBranchDiff_SingleLineAddition(t *testing.T) {
-	handler, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
-
-	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/feature", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.True(t, w.Code == http.StatusOK || w.Code == http.StatusBadRequest)
-}
-
-// TestHandleCommitDiff_SingleLineAddition는 커밋 diff 핸들러를 테스트합니다
-func TestHandleCommitDiff_SingleLineAddition(t *testing.T) {
-	repoPath, initialCommitSHA, secondCommitSHA, cleanup := setupTestRepositoryWithCommits(t)
-	defer cleanup()
-
-	tempDir := filepath.Dir(filepath.Dir(repoPath))
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{Level: "info", Format: "json"},
-		Git:     config.GitConfig{RepoRoot: tempDir},
-	}
-	handler, err := NewDiffHandler(cfg)
-	require.NoError(t, err)
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
-
-	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitSHA[:7], secondCommitSHA[:7])
-	req, _ := http.NewRequest("GET", url, nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var diffResponse DiffResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&diffResponse))
-	assert.True(t, diffResponse.Success)
-
-	var singleLineFile *FileDiff
-	for i := range diffResponse.Files {
-		if diffResponse.Files[i].Path == "single-line.txt" {
-			singleLineFile = &diffResponse.Files[i]
-			break
-		}
-	}
-	require.NotNil(t, singleLineFile)
-	assert.Equal(t, FileDiffStatusAdded, singleLineFile.Status)
-	assert.Greater(t, len(singleLineFile.Changes), 0)
-	assert.Equal(t, 1, singleLineFile.Additions)
-	assert.Equal(t, 0, singleLineFile.Deletions)
-}
-
-// TestHandleCommitDiff_SingleLineAddedToExistingFile는 파일 수정이 있는 커밋 diff를 테스트합니다
-func TestHandleCommitDiff_SingleLineAddedToExistingFile(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "diffs-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	ownerDir := filepath.Join(tempDir, "testowner")
-	require.NoError(t, os.MkdirAll(ownerDir, 0755))
-	repoPath := filepath.Join(ownerDir, "testrepo.git")
-	repo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
-
-	initialBlobHash := createBlob(t, repo, []byte("First line\n"))
-	initialTreeHash := createTree(t, repo, []object.TreeEntry{
-		{Name: "existing.txt", Mode: 0100644, Hash: initialBlobHash},
-	})
-	initialCommitHash := createCommit(t, repo, "Initial commit", initialTreeHash)
-
-	secondBlobHash := createBlob(t, repo, []byte("First line\nSecond line\n"))
-	secondTreeHash := createTree(t, repo, []object.TreeEntry{
-		{Name: "existing.txt", Mode: 0100644, Hash: secondBlobHash},
-	})
-	secondCommitHash := createCommit(t, repo, "Add second line", secondTreeHash, initialCommitHash)
-
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{Level: "info", Format: "json"},
-		Git:     config.GitConfig{RepoRoot: tempDir},
-	}
-	handler, err := NewDiffHandler(cfg)
-	require.NoError(t, err)
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
-
-	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitHash.String()[:7], secondCommitHash.String()[:7])
-	req, _ := http.NewRequest("GET", url, nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var diffResponse DiffResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&diffResponse))
-	assert.True(t, diffResponse.Success)
-
-	var modifiedFile *FileDiff
-	for i := range diffResponse.Files {
-		if diffResponse.Files[i].Path == "existing.txt" {
-			modifiedFile = &diffResponse.Files[i]
-			break
-		}
-	}
-	require.NotNil(t, modifiedFile)
-	assert.Equal(t, FileDiffStatusModified, modifiedFile.Status)
-	assert.Greater(t, len(modifiedFile.Changes), 0)
-	assert.Equal(t, 1, modifiedFile.Additions-modifiedFile.Deletions)
-}
-
-// countPatchLines는 패치에서 추가 및 삭제된 줄 수를 계산하는 헬퍼 함수입니다
-func countPatchLines(patch *object.Patch) (additions, deletions int) {
-	for _, filePatch := range patch.FilePatches() {
-		for _, chunk := range filePatch.Chunks() {
-			switch chunk.Type() {
-			case 1: // 추가 - 추가된 줄
-				content := chunk.Content()
-				lines := strings.Split(content, "\n")
-				// 내용이 개행으로 끝나면 빈 문자열 제거
-				if len(lines) > 0 && lines[len(lines)-1] == "" {
-					lines = lines[:len(lines)-1]
-				}
-				additions += len(lines)
-			case 2: // 삭제 - 삭제된 줄
-				content := chunk.Content()
-				lines := strings.Split(content, "\n")
-				if len(lines) > 0 && lines[len(lines)-1] == "" {
-					lines = lines[:len(lines)-1]
-				}
-				deletions += len(lines)
-			}
-		}
-	}
-	return additions, deletions
-}
-
-// TestDiffHandler_NewDiffHandler는 핸들러 생성을 테스트합니다
-func TestDiffHandler_NewDiffHandler(t *testing.T) {
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{
-			Level:  "info",
-			Format: "json",
-		},
-		Git: config.GitConfig{
-			RepoRoot: "/tmp/test",
-		},
-	}
-
-	handler, err := NewDiffHandler(cfg)
-	require.NoError(t, err)
-	assert.NotNil(t, handler)
-}
-
-// TestDiffHandler_NewDiffHandler_NilConfig는 nil 설정으로 핸들러 생성을 테스트합니다
-func TestDiffHandler_NewDiffHandler_NilConfig(t *testing.T) {
-	handler, err := NewDiffHandler(nil)
-	assert.Error(t, err)
-	assert.Nil(t, handler)
-}
-
-// TestDiffHandler_HandleCommitDiff_InvalidParams는 잘못된 매개변수로 커밋 diff를 테스트합니다
-func TestDiffHandler_HandleCommitDiff_InvalidParams(t *testing.T) {
-	handler, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
-
-	// base가 누락된 경우 테스트
-	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/commits//abc123", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestDiffHandler_HandleBranchDiff_InvalidParams는 잘못된 매개변수로 브랜치 diff를 테스트합니다
-func TestDiffHandler_HandleBranchDiff_InvalidParams(t *testing.T) {
-	handler, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
-
-	// head가 누락된 경우 테스트
-	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.True(t, w.Code == http.StatusBadRequest || w.Code == http.StatusNotFound)
-}
-
-// TestDiffHandler_HandleFileDiff_InvalidParams는 잘못된 매개변수로 파일 diff를 테스트합니다
-func TestDiffHandler_HandleFileDiff_InvalidParams(t *testing.T) {
-	handler, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
-
-	// path가 누락된 경우 테스트
-	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/file?base=abc&head=def", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestDiffHandler_HandleSingleCommitDiff_InvalidParams는 잘못된 매개변수로 단일 커밋 diff를 테스트합니다
-func TestDiffHandler_HandleSingleCommitDiff_InvalidParams(t *testing.T) {
-	handler, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/commits/:sha/diff", handler.HandleSingleCommitDiff)
-
-	// SHA가 누락된 경우 테스트
-	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/commits//diff", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestDiffHandler_HandlePatch_InvalidParams는 잘못된 매개변수로 패치 생성을 테스트합니다
-func TestDiffHandler_HandlePatch_InvalidParams(t *testing.T) {
-	handler, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/patch/:base/:head", handler.HandlePatch)
-
-	// base가 누락된 경우 테스트
-	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/patch//abc123", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestDiffHandler_ContextLines는 컨텍스트 줄 매개변수를 테스트합니다
-func TestDiffHandler_ContextLines(t *testing.T) {
-	repoPath, initialCommitSHA, secondCommitSHA, cleanup := setupTestRepositoryWithCommits(t)
-	defer cleanup()
-
-	tempDir := filepath.Dir(filepath.Dir(repoPath))
-	cfg := &config.Config{
-		Logging: config.LoggingConfig{Level: "info", Format: "json"},
-		Git:     config.GitConfig{RepoRoot: tempDir},
-	}
-	handler, err := NewDiffHandler(cfg)
-	require.NoError(t, err)
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
-
-	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=5", initialCommitSHA[:7], secondCommitSHA[:7])
-	req, _ := http.NewRequest("GET", url, nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var diffResponse DiffResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&diffResponse))
-	assert.True(t, diffResponse.Success)
 }
