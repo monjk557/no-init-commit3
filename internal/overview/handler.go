@@ -325,17 +325,10 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		return
 	}
 
-	// 최신 커밋 1개만 가져오기 (성능 최적화)
-	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
+	// path 기준으로 최신 커밋 조회 (path가 없으면 루트("")의 최신 커밋)
+	latestCommitGitCommit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, repoCtx.ref, repoCtx.path, true)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
-	}
-
-	// 최신 커밋
-	var latestCommit commits.Commit
-	if len(commitsList) > 0 {
-		latestCommit = commitsList[0]
+		// 에러가 있어도 계속 진행 (latestCommitGitCommit은 nil로 유지)
 	}
 
 	// 커밋 목록은 선택적으로 가져오기 (성능 최적화)
@@ -348,9 +341,16 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 			h.logger.Warn("Failed to get all commits for tree overview", zap.Error(err))
 			allCommits = []commits.Commit{}
 		}
-	} else {
+	} else if latestCommitGitCommit != nil {
 		// 기본값: 최신 커밋만 포함
-		allCommits = commitsList
+		allCommits = []commits.Commit{{
+			Sha:          latestCommitGitCommit.SHA,
+			Message:      latestCommitGitCommit.Message,
+			Author:       commits.CommitAuthor{Name: latestCommitGitCommit.Author.Name, Email: latestCommitGitCommit.Author.Email, Date: latestCommitGitCommit.Author.Date},
+			Committer:    commits.CommitAuthor{Name: latestCommitGitCommit.Committer.Name, Email: latestCommitGitCommit.Committer.Email, Date: latestCommitGitCommit.Committer.Date},
+			ParentHashes: latestCommitGitCommit.ParentHashes,
+			TreeHash:     latestCommitGitCommit.TreeHash,
+		}}
 	}
 
 	// 응답 구성
@@ -362,7 +362,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		Path:         path,
 		Tree:         treeEntriesWithCommit,
 		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
-		LatestCommit: convertCommitToGitCommit(latestCommit),
+		LatestCommit: latestCommitGitCommit,
 		Commits:      convertCommitsToGitCommits(allCommits),
 	}
 
@@ -417,17 +417,10 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		return
 	}
 
-	// 최신 커밋 1개만 가져오기 (성능 최적화)
-	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
+	// path 기준으로 최신 커밋 조회 (blob이므로 isTree=false)
+	latestCommitGitCommit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, repoCtx.ref, path, false)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
-	}
-
-	// 최신 커밋
-	var latestCommit commits.Commit
-	if len(commitsList) > 0 {
-		latestCommit = commitsList[0]
+		// 에러가 있어도 계속 진행 (latestCommitGitCommit은 nil로 유지)
 	}
 
 	// 커밋 목록은 선택적으로 가져오기 (성능 최적화)
@@ -440,9 +433,16 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 			h.logger.Warn("Failed to get all commits for blob overview", zap.Error(err))
 			allCommits = []commits.Commit{}
 		}
-	} else {
+	} else if latestCommitGitCommit != nil {
 		// 기본값: 최신 커밋만 포함
-		allCommits = commitsList
+		allCommits = []commits.Commit{{
+			Sha:          latestCommitGitCommit.SHA,
+			Message:      latestCommitGitCommit.Message,
+			Author:       commits.CommitAuthor{Name: latestCommitGitCommit.Author.Name, Email: latestCommitGitCommit.Author.Email, Date: latestCommitGitCommit.Author.Date},
+			Committer:    commits.CommitAuthor{Name: latestCommitGitCommit.Committer.Name, Email: latestCommitGitCommit.Committer.Email, Date: latestCommitGitCommit.Committer.Date},
+			ParentHashes: latestCommitGitCommit.ParentHashes,
+			TreeHash:     latestCommitGitCommit.TreeHash,
+		}}
 	}
 
 	// 응답 구성
@@ -453,7 +453,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		Size:         size,
 		Tree:         treeEntriesWithCommit,
 		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
-		LatestCommit: convertCommitToGitCommit(latestCommit),
+		LatestCommit: latestCommitGitCommit,
 		Commits:      convertCommitsToGitCommits(allCommits),
 	}
 

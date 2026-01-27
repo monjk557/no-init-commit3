@@ -171,7 +171,7 @@ type TreeOverviewResponse struct {
 	Path         string                   `json:"path"`
 	Tree         []GitTreeEntryWithCommit `json:"tree"`
 	Branches     []GitBranch              `json:"branches"`
-	LatestCommit GitCommit                `json:"latest_commit"`
+	LatestCommit *GitCommit               `json:"latest_commit"`
 	Commits      []GitCommit              `json:"commits"`
 }
 
@@ -183,7 +183,7 @@ type BlobOverviewResponse struct {
 	Size         int64                    `json:"size"`
 	Tree         []GitTreeEntryWithCommit `json:"tree"`
 	Branches     []GitBranch              `json:"branches"`
-	LatestCommit GitCommit                `json:"latest_commit"`
+	LatestCommit *GitCommit               `json:"latest_commit"`
 	Commits      []GitCommit              `json:"commits"`
 }
 
