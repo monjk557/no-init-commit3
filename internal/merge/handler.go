@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -18,6 +19,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
+
+func statusCodeForResolveReferenceError(err error) int {
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return http.StatusNotFound
+	}
+	return http.StatusInternalServerError
+}
 
 // MergeOperationsHandler handles REST API operations for Git merge operations
 type MergeOperationsHandler struct {
@@ -124,7 +132,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	// Validate path components
 	if err := h.validatePath(owner, repo); err != nil {
 
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -163,7 +171,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	// Open repository
 	repository, err := h.objectManager.OpenRepository(owner, repo)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -173,16 +181,16 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	// Resolve source and target commits
 	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
 		return
 	}
 
-	targetCommit, err := h.resolveReference(repository, req.TargetRef)
+	targetCommit, err := h.objectManager.ResolveReference(repository, req.TargetRef)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -205,7 +213,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	// Perform merge analysis first
 	conflictAnalysis, err := h.analyzeMerge(ctx, repository, sourceCommit, targetCommit, &req)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -218,7 +226,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		if req.Method == MergeMethodRebase {
 			rebaseAnalysis, err := h.analyzeRebaseDryRun(ctx, repository, sourceCommit, targetCommit, &req)
 			if err != nil {
-				c.JSON(http.StatusConflict, gin.H{
+				c.JSON(http.StatusInternalServerError, gin.H{
 					"success": false,
 					"error":   err.Error(),
 				})
@@ -282,14 +290,14 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	// Check for conflicts (unless force is specified)
 	if conflictAnalysis.HasConflicts && !req.ForceConflict {
 
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Merge has %d conflicts. Use force_conflict=true to override", conflictAnalysis.ConflictCount)})
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("Merge has %d conflicts. Use force_conflict=true to override", conflictAnalysis.ConflictCount)})
 		return
 	}
 
 	// Perform the actual merge
 	mergeResult, err := h.performMerge(ctx, repository, sourceCommit, targetCommit, &req, conflictAnalysis)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -431,7 +439,7 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	// Open repository
 	repository, err := h.objectManager.OpenRepository(owner, repo)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -439,18 +447,18 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	}
 
 	// Resolve source and target commits
-	sourceCommit, err := h.resolveReference(repository, req.SourceRef)
+	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
 		return
 	}
 
-	targetCommit, err := h.resolveReference(repository, req.TargetRef)
+	targetCommit, err := h.objectManager.ResolveReference(repository, req.TargetRef)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -473,7 +481,7 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	// Perform merge preview analysis
 	previewResult, err := h.performMergePreview(ctx, repository, sourceCommit, targetCommit, &req, startTime)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
 		})
