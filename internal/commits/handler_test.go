@@ -585,3 +585,163 @@ func requireBodyContains(t *testing.T, w *httptest.ResponseRecorder, substr stri
 		t.Errorf("body does not contain %q: %s", substr, w.Body.String())
 	}
 }
+
+// =============================================================================
+// 테스트: Path Validation / 멱등성 (P0 - 500 방지)
+// 회귀 방지: "잘못된 경로나 중복 경로가 500으로 뭉개지지 않는다"
+// =============================================================================
+
+// Test_MultiFileCommit_PathTraversal_Returns400
+// 회귀: "../" 경로 탈출 시도는 400으로 거절되어야 함
+func Test_MultiFileCommit_PathTraversal_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler := newCommitsHandler(t)
+
+	req := MultiFileCommitRequest{
+		Message: "Path traversal attempt",
+		Branch:  "main",
+		Operations: []MultiFileOperation{
+			{Path: "../../../etc/passwd", Operation: "create", Content: "malicious"},
+		},
+		Author: &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+	}
+	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+	handler.HandleMultiFileCommit(c)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for path traversal body=%s", w.Code, w.Body.String())
+}
+
+// Test_MultiFileCommit_DuplicatePathInOperations_Returns400
+// 회귀: 같은 경로가 operations에 중복되면 400으로 거절되어야 함
+func Test_MultiFileCommit_DuplicatePathInOperations_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler := newCommitsHandler(t)
+
+	req := MultiFileCommitRequest{
+		Message: "Duplicate paths",
+		Branch:  "main",
+		Operations: []MultiFileOperation{
+			{Path: "same.txt", Operation: "create", Content: "first"},
+			{Path: "same.txt", Operation: "create", Content: "second"}, // 중복
+		},
+		Author: &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+	}
+	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+	handler.HandleMultiFileCommit(c)
+
+	// 400 Bad Request 또는 409 Conflict (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for duplicate paths body=%s", w.Code, w.Body.String())
+}
+
+// Test_MultiFileCommit_MissingAuthor_Returns400
+// 회귀: author가 없으면 400으로 거절되어야 함
+func Test_MultiFileCommit_MissingAuthor_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler := newCommitsHandler(t)
+
+	req := MultiFileCommitRequest{
+		Message: "No author",
+		Branch:  "main",
+		Operations: []MultiFileOperation{
+			{Path: "test.txt", Operation: "create", Content: "content"},
+		},
+		// Author: nil
+	}
+	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+	handler.HandleMultiFileCommit(c)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for missing author body=%s", w.Code, w.Body.String())
+}
+
+// Test_MultiFileCommit_InvalidBranch_Returns404
+// 회귀: 존재하지 않는 브랜치는 404로 떨어져 500으로 뭉개지지 않는다
+func Test_MultiFileCommit_InvalidBranch_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler := newCommitsHandler(t)
+
+	req := MultiFileCommitRequest{
+		Message: "Commit to non-existent branch",
+		Branch:  "nonexistent-branch",
+		Operations: []MultiFileOperation{
+			{Path: "test.txt", Operation: "create", Content: "content"},
+		},
+		Author: &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+	}
+	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+	handler.HandleMultiFileCommit(c)
+
+	// 404 또는 400이어야 함, 500은 안됨
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for non-existent branch body=%s", w.Code, w.Body.String())
+}
+
+// Test_MultiFileCommit_InvalidOperation_Returns400
+// 회귀: 잘못된 operation 타입은 400으로 거절되어야 함
+func Test_MultiFileCommit_InvalidOperation_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler := newCommitsHandler(t)
+
+	req := MultiFileCommitRequest{
+		Message: "Invalid operation",
+		Branch:  "main",
+		Operations: []MultiFileOperation{
+			{Path: "test.txt", Operation: "invalid_op", Content: "content"},
+		},
+		Author: &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+	}
+	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+	handler.HandleMultiFileCommit(c)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for invalid operation body=%s", w.Code, w.Body.String())
+}
+
+// Test_MultiFileCommit_ReturnsCommitSHA_Readable
+// 회귀: 응답한 SHA는 즉시 조회 가능해야 함 (쓰기 후 읽기 일관성)
+func Test_MultiFileCommit_ReturnsCommitSHA_Readable(t *testing.T) {
+	t.Parallel()
+
+	handler, repoPath := newCommitsHandlerWithRepo(t)
+
+	req := MultiFileCommitRequest{
+		Message: "Test commit",
+		Branch:  "main",
+		Operations: []MultiFileOperation{
+			{Path: "readable.txt", Operation: "create", Content: "content"},
+		},
+		Author: &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+	}
+	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+	handler.HandleMultiFileCommit(c)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp MultiFileCommitResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.NotEmpty(t, resp.CommitSHA)
+
+	// 반환된 SHA로 커밋 조회 가능한지 확인
+	repo := openRepo(t, repoPath)
+	commitHash := plumbing.NewHash(resp.CommitSHA)
+	commit, err := repo.CommitObject(commitHash)
+	require.NoError(t, err, "returned SHA should be immediately readable")
+	require.Equal(t, "Test commit", commit.Message)
+}

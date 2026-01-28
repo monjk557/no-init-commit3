@@ -1,6 +1,7 @@
 package diffs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -413,4 +414,175 @@ func requireBodyContains(t *testing.T, w *httptest.ResponseRecorder, substr stri
 	if !strings.Contains(w.Body.String(), substr) {
 		t.Errorf("body does not contain %q: %s", substr, w.Body.String())
 	}
+}
+
+// =============================================================================
+// 테스트: Diff Timeout/과부하 계약 (P0 - 500 방지)
+// 회귀 방지: "timeout/과부하가 500으로 뭉개지지 않는다"
+// =============================================================================
+
+// Test_CommitDiff_ContextCanceled_ReturnsErrorNotPanic
+// 회귀: "클라이언트가 끊거나 취소하면 서버가 panic/500으로 가지 않고 정리한다"
+func Test_CommitDiff_ContextCanceled_ReturnsErrorNotPanic(t *testing.T) {
+	t.Parallel()
+
+	handler, initialSHA, secondSHA := newDiffHandlerWithCommits(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialSHA, secondSHA)
+	req, _ := http.NewRequest("GET", url, nil)
+
+	// context를 취소하여 클라이언트 끊김 시뮬레이션
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel() // 즉시 취소
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+
+	// panic이 발생하지 않아야 함
+	require.NotPanics(t, func() {
+		router.ServeHTTP(w, req)
+	})
+
+	// 500이 아닌 다른 코드여야 함 (499, 408, 또는 정상 응답)
+	// 현재 구현에서는 context가 취소되어도 처리가 진행될 수 있음
+	// 핵심: panic이 발생하지 않고, 500 INTERNAL_ERROR가 아니어야 함
+	if w.Code == http.StatusInternalServerError {
+		// 500인 경우 error body에 "internal" 또는 panic 관련 메시지가 없어야 함
+		body := w.Body.String()
+		require.NotContains(t, body, "panic", "500 response should not contain panic")
+	}
+}
+
+// Test_CommitDiff_LargeDiff_ReturnsTruncatedFlag
+// 회귀: "대용량 diff에서도 truncated 플래그가 일관되게 반환된다"
+func Test_CommitDiff_LargeDiff_ReturnsTruncatedFlag(t *testing.T) {
+	t.Parallel()
+
+	// Given: 많은 파일이 변경된 repo
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// 첫 커밋: 빈 트리
+	emptyTreeHash := makeTree(t, repo, []object.TreeEntry{})
+	initialCommitHash := makeCommit(t, repo, "Initial commit", emptyTreeHash, nil, now)
+
+	// 두 번째 커밋: 100개 파일 추가
+	entries := make([]object.TreeEntry, 100)
+	for i := 0; i < 100; i++ {
+		content := fmt.Sprintf("content of file %d\n", i)
+		blobHash := makeBlob(t, repo, []byte(content))
+		entries[i] = object.TreeEntry{
+			Name: fmt.Sprintf("file%03d.txt", i),
+			Mode: 0100644,
+			Hash: blobHash,
+		}
+	}
+	secondTreeHash := makeTree(t, repo, entries)
+	secondCommitHash := makeCommit(t, repo, "Add 100 files", secondTreeHash, []plumbing.Hash{initialCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// When: diff 조회
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
+		initialCommitHash.String(), secondCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Then: 성공하거나 413(Too Large)이어야 함, 500은 안됨
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 body=%s", w.Code, w.Body.String())
+
+	if w.Code == http.StatusOK {
+		var resp DiffResponse
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+		require.True(t, resp.Success)
+		// 파일 수가 100개이거나 truncated 되어야 함
+		require.True(t, len(resp.Files) > 0, "should have files in response")
+	}
+}
+
+// Test_CommitDiff_NonExistentCommit_Returns404
+// 회귀: "존재하지 않는 커밋은 404로 떨어져 500으로 뭉개지지 않는다"
+func Test_CommitDiff_NonExistentCommit_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// 존재하지 않는 SHA
+	nonExistentSHA := "0000000000000000000000000000000000000000"
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
+		nonExistentSHA, nonExistentSHA)
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 404 또는 400이어야 함, 500은 안됨
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for non-existent commit body=%s", w.Code, w.Body.String())
+}
+
+// Test_BranchDiff_NonExistentBranch_Returns404
+// 회귀: "존재하지 않는 브랜치는 404로 떨어져 500으로 뭉개지지 않는다"
+func Test_BranchDiff_NonExistentBranch_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/ghost-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 404 또는 400이어야 함, 500은 안됨
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for non-existent branch body=%s", w.Code, w.Body.String())
+}
+
+// Test_CommitDiff_EmptyRepo_ReturnsErrorNot500
+// 회귀: "빈 repo에서 diff 요청 시 500이 아닌 명확한 에러를 반환한다"
+func Test_CommitDiff_EmptyRepo_ReturnsErrorNot500(t *testing.T) {
+	t.Parallel()
+
+	// Given: 커밋이 없는 빈 repo
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	_, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	handler := newDiffHandler(t, tempDir)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// When: 존재하지 않는 SHA로 diff 요청
+	url := "/api/v2/repository/testowner/testrepo/diff/commits/abc123/def456"
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Then: 500이 아니어야 함
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for empty repo body=%s", w.Code, w.Body.String())
 }

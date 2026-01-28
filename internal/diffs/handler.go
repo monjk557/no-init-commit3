@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
@@ -98,6 +99,19 @@ func (h *DiffHandler) HandleCommitDiff(c *gin.Context) {
 			})
 			return
 		}
+		// object not found 에러는 404로 처리 (500 방지)
+		errStr := err.Error()
+		if strings.Contains(errStr, "object not found") ||
+			strings.Contains(errStr, "not found") ||
+			strings.Contains(errStr, "reference not found") {
+			h.logger.Warn("Reference or object not found", zap.Error(err))
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+				"code":    "OBJECT_NOT_FOUND",
+			})
+			return
+		}
 		h.logger.Error("Failed to calculate commit diff", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
@@ -179,6 +193,19 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 				"success": false,
 				"error":   "This diff is too large to display",
 				"reason":  diffErr.Reason,
+			})
+			return
+		}
+		// object/reference not found 에러는 404로 처리 (500 방지)
+		errStr := err.Error()
+		if strings.Contains(errStr, "object not found") ||
+			strings.Contains(errStr, "not found") ||
+			strings.Contains(errStr, "reference not found") {
+			h.logger.Warn("Reference or object not found", zap.Error(err))
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+				"code":    "REF_NOT_FOUND",
 			})
 			return
 		}

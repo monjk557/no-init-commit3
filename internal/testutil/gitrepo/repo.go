@@ -299,3 +299,20 @@ func (r *TestRepo) StageRemove(filename string) {
 	_, err := r.Worktree.Remove(filename)
 	require.NoError(r.T, err)
 }
+
+// FileExists checks if a file exists in the repository directory
+func (r *TestRepo) FileExists(path string) bool {
+	fullPath := filepath.Join(r.Dir, path)
+	_, err := os.Stat(fullPath)
+	return err == nil
+}
+
+// DeleteBranch is an alias for BranchDelete for test compatibility
+func (r *TestRepo) DeleteBranch(name string) {
+	r.BranchDelete(name)
+}
+
+// GetHead returns the current HEAD hash (alias for HeadHash for compatibility)
+func (r *TestRepo) GetHead() plumbing.Hash {
+	return r.HeadHash()
+}

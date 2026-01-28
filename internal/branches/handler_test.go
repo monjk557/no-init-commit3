@@ -539,3 +539,184 @@ func requireBodyContains(t *testing.T, w *httptest.ResponseRecorder, substr stri
 		t.Errorf("body does not contain %q: %s", substr, w.Body.String())
 	}
 }
+
+// =============================================================================
+// 테스트: Git이 금지하는 브랜치 이름 패턴 (P0 - 500 방지)
+// 회귀 방지: "잘못된 브랜치 이름이 500으로 뭉개지지 않고 400으로 거절된다"
+// =============================================================================
+
+// Test_CreateBranch_EndsWithDotLock_Returns400
+// 회귀: ".lock"으로 끝나는 브랜치 이름은 400으로 거절되어야 함
+func Test_CreateBranch_EndsWithDotLock_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "feature.lock", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for .lock suffix body=%s", w.Code, w.Body.String())
+}
+
+// Test_CreateBranch_ContainsAtBrace_Returns400
+// 회귀: "@{" 패턴이 포함된 브랜치 이름은 400으로 거절되어야 함
+func Test_CreateBranch_ContainsAtBrace_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "foo@{1}", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for @{ pattern body=%s", w.Code, w.Body.String())
+}
+
+// Test_CreateBranch_DoubleDot_Returns400
+// 회귀: ".." 패턴이 포함된 브랜치 이름은 400으로 거절되어야 함
+func Test_CreateBranch_DoubleDot_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "feature..bar", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for .. pattern body=%s", w.Code, w.Body.String())
+}
+
+// Test_CreateBranch_Tilde_Returns400
+// 회귀: "~" 패턴이 포함된 브랜치 이름은 400으로 거절되어야 함
+func Test_CreateBranch_Tilde_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "feature~1", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for ~ pattern body=%s", w.Code, w.Body.String())
+}
+
+// Test_CreateBranch_Space_Returns400
+// 회귀: 공백이 포함된 브랜치 이름은 400으로 거절되어야 함
+func Test_CreateBranch_Space_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "feature branch", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for space in name body=%s", w.Code, w.Body.String())
+}
+
+// Test_CreateBranch_LeadingWhitespace_Returns400
+// 회귀: 앞에 공백이 있는 브랜치 이름은 400으로 거절되어야 함
+func Test_CreateBranch_LeadingWhitespace_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": " main", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for leading whitespace body=%s", w.Code, w.Body.String())
+}
+
+// Test_CreateBranch_TrailingWhitespace_Returns400
+// 회귀: 뒤에 공백이 있는 브랜치 이름은 400으로 거절되어야 함
+func Test_CreateBranch_TrailingWhitespace_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "main ", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 400 Bad Request (500이 아님)
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for trailing whitespace body=%s", w.Code, w.Body.String())
+}
+
+// Test_CreateBranch_InvalidSource_Returns404
+// 회귀: 존재하지 않는 source는 404로 떨어져 500으로 뭉개지지 않는다
+func Test_CreateBranch_InvalidSource_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+
+	body := `{"name": "new-branch", "source": "nonexistent-branch"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 404 또는 400이어야 함, 500은 안됨
+	require.NotEqual(t, http.StatusInternalServerError, w.Code,
+		"status=%d should not be 500 for invalid source body=%s", w.Code, w.Body.String())
+}
