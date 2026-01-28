@@ -165,9 +165,8 @@ func (gom *GitObjectManager) ResolveReference(repo *gogit.Repository, ref string
 		return plumbing.ZeroHash, err
 	}
 
-	// Handle HEAD specially - it resolves to the current branch
-	// validateRefFormat에서 이미 ""와 "HEAD"를 허용하므로 여기서는 "HEAD"만 체크
-	if ref == "HEAD" || ref == "" {
+	// Handle empty ref - it resolves to HEAD (current branch)
+	if ref == "" {
 		headRef, err := repo.Head()
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to get HEAD reference: %w", err)
@@ -220,8 +219,28 @@ func (gom *GitObjectManager) ResolveReference(repo *gogit.Repository, ref string
 // 반환: ErrInvalidRef (공백, 특수문자 등), ErrUnsupportedRef (지원하지 않는 형식)
 func (gom *GitObjectManager) validateRefFormat(ref string) error {
 	// Empty ref는 HEAD로 처리되므로 허용
-	if ref == "" || ref == "HEAD" {
+	if ref == "" {
 		return nil
+	}
+
+	// HEAD는 지원하지 않음 (명시적 ref 입력으로 사용 금지)
+	if ref == "HEAD" {
+		return fmt.Errorf("HEAD ref not supported, use branch/tag name directly: %w", ErrUnsupportedRef)
+	}
+
+	// Remote style ref 금지 (origin/main, upstream/feature 등)
+	if strings.Contains(ref, "/") && !strings.HasPrefix(ref, "refs/") {
+		// origin/main, upstream/feature 같은 형식 체크
+		parts := strings.Split(ref, "/")
+		if len(parts) >= 2 {
+			// 일반적인 remote 이름 패턴 체크
+			remoteNames := []string{"origin", "upstream", "remote", "fork"}
+			for _, remoteName := range remoteNames {
+				if parts[0] == remoteName {
+					return fmt.Errorf("remote style ref '%s' not supported, use branch/tag name directly: %w", ref, ErrUnsupportedRef)
+				}
+			}
+		}
 	}
 
 	// 공백/개행 포함 검사

@@ -9,7 +9,6 @@ services:
     env_file:
       - ../../env/build-it/git-executor.env
     volumes:
-      - git_pipelines_data:${GIT_REPO_ROOT}
       - git_executor_data:${GIT_REPO_ROOT}
     networks:
       - collabops-network

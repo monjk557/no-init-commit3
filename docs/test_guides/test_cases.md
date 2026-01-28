@@ -79,50 +79,50 @@
   - 회귀: "`xyz123`, `deadbeef` 같은 애매한 입력은 malformed(400)가 아니라 ref로 해석 시도 후 404"
 
 ### 1.1A Ref Resolution 확장 — "성공하지만 다른 객체를 가리키는" 케이스 ⚠️ 고위험
-- [x] `Test_MergePreview_HEAD_Returns400_UNSUPPORTED_REF` - HEAD를 ref로 입력
-- [x] `Test_MergePreview_FullRefPath_Returns400_UNSUPPORTED_REF` - refs/heads/* 같은 내부 ref 거부
+- [x] `Test_MergePreview_RefIsHEAD_Returns400_UNSUPPORTED_REF` - HEAD를 ref로 입력
+- [x] `Test_MergePreview_RefIsFullRef_RefsHeadsMain_Returns400_UNSUPPORTED_REF`
   - 회귀: "refs/heads/* 같은 내부 ref를 직접 넣어도 우회되지 않는다"
-- [x] `Test_MergePreview_AnnotatedTag_DereferencesToCommit_P0` ⭐ P0
-  - 회귀: "annotated tag(tag object)를 입력해도 commit으로 안정적으로 역참조된다"
-- [x] `Test_MergePreview_LightweightTag_PointsToCommit_P0`
+- [x] `Test_MergePreview_RefIsAnnotatedTag_DereferencesToCommit_Deterministic` ⭐ P0
+  - 회귀: "annotated tag(tag object)를 입력해도 commit으로 안정적으로 역참조된다" 
+- [x] `Test_MergePreview_RefIsLightweightTag_PointsToCommit_Deterministic`
   - 회귀: "lightweight tag가 commit을 가리킬 때 branch와 동일하게 처리된다"
-- [x] `Test_MergePreview_SHALikeBranchName_PrefersBranch_P0` ⭐ P0
+- [x] `Test_MergePreview_RefLooksLikeSHA_ButIsBranchName_PrefersBranch` ⭐ P0
   - 회귀: "sha 모양 branch가 있으면 sha로 해석 안 하고 branch로 해석한다"
-- [ ] `Test_MergePreview_RemoteStyleRef_OriginMain_Returns400` - origin/main 입력 실수 방지
-- [x] `Test_MergePreview_RefWithWhitespace_Returns400_INVALID_REF`
+- [x] `Test_MergePreview_RemoteStyleRef_OriginMain_Returns400` - origin/main 입력 실수 방지
+- [x] `Test_MergePreview_RefContainsWhitespaceOrNewline_Returns400`
   - 회귀: "ref에 공백/개행이 섞여도 parser가 흔들리거나 로그가 오염되지 않는다"
-- [x] `Test_MergePreview_RefIsEmptyOrDot_Returns400_INVALID_REF`
+- [x] `Test_MergePreview_RefIsEmptyOrDotOrDotDot_Returns400`
   - 회귀: "빈 ref, '.', '..'가 들어와도 git 내부 path/ref로 흘러가지 않는다"
-- [x] `Test_MergePreview_RevParseExpression_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_RefIsRevParseExpression_MainCaret_Returns400_UNSUPPORTED_REF`
   - 회귀: "rev-parse 문법(main^, main~1)이 입력으로 들어와도 다른 ref로 오해되지 않는다"
-- [x] `Test_MergePreview_TreeishPath_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_RefIsTreeishPath_Returns400_UNSUPPORTED_REF`
   - 회귀: "tree-ish:path 입력이 path traversal/오해로 이어지지 않는다"
 - [x] `Test_MergePreview_LocalStateRef_Returns400_P0` - FETCH_HEAD, ORIG_HEAD 등 로컬 state ref 거부
 - [x] `Test_MergePreview_MaliciousInput_NoInternalError_P0` - 악의적 입력에서 500 발생 안함
 
 ### 1.1B 호스팅별 특수 Ref ⚠️ 고위험
-- [ ] `Test_MergePreview_PullRequestRef_Returns400_UNSUPPORTED_REF` - refs/pull/<id>/head
-- [ ] `Test_MergePreview_MRRef_Returns400_UNSUPPORTED_REF` - refs/merge-requests/<id>/head
-- [ ] `Test_MergePreview_PullRequestRef_OnNonGitHubHosting_Returns400`
+- [x] `Test_MergePreview_PullRequestRef_Returns400_UNSUPPORTED_REF` - refs/pull/<id>/head
+- [x] `Test_MergePreview_MRRef_Returns400_UNSUPPORTED_REF` - refs/merge-requests/<id>/head
+- [x] `Test_MergePreview_PullRequestRef_OnNonGitHubHosting_Returns400`
   - 회귀: "호스팅별 특수 ref가 타 호스팅에서 조용히 다른 걸 가리키지 않는다"
-- [ ] `Test_MergePreview_MRRef_OnNonGitLabHosting_Returns400`
+- [x] `Test_MergePreview_MRRef_OnNonGitLabHosting_Returns400`
   - 회귀: "MR ref가 일반 ref처럼 오해되어 merge base가 틀어지지 않는다"
 
 > 포인트: "지원 안 하면 400으로 명확히 거절" / "지원하면 동작이 고정". 애매하게 404/409 섞이면 디버깅 지옥.
 
 ### 1.2 Merge Base 계산
-- [ ] `Test_FindMergeBase_NormalBranching_ReturnsBranchPoint` - 일반 분기
-- [ ] `Test_FindMergeBase_LinearHistory_ReturnsAncestor` - 선형 히스토리
-- [ ] `Test_FindMergeBase_SameCommit_ReturnsSelf` - 같은 커밋
-- [ ] `Test_FindMergeBase_NoCommonAncestor_Returns422_NO_COMMON_ANCESTOR`
+- [x] `Test_FindMergeBase_NormalBranching_ReturnsBranchPoint` - 일반 분기
+- [x] `Test_FindMergeBase_LinearHistory_ReturnsAncestor` - 선형 히스토리
+- [x] `Test_FindMergeBase_SameCommit_ReturnsSelf` - 같은 커밋
+- [x] `Test_FindMergeBase_NoCommonAncestor_Returns422_NO_COMMON_ANCESTOR`
   - 회귀: "공통 조상 없는 레포에서 에러가 409/500으로 뭉개지지 않는다"
-- [ ] `Test_FindMergeBase_MultipleMergeBases_ReturnsDeterministicByRule` ⭐ P0
+- [x] `Test_FindMergeBase_MultipleMergeBases_ReturnsDeterministicByRule` ⭐ P0
   - 회귀: "multiple merge base에서 결과가 순회 순서에 따라 바뀌지 않는다"
   - 규칙: **가장 최근(committer time) merge base 선택**
 - [ ] `Test_FindMergeBase_MultipleMergeBases_Returns409_AMBIGUOUS_MERGE_BASE` (대안)
   - 회귀: "criss-cross에서 ambiguous 상태를 명시적으로 알린다"
-- [ ] `Test_FindMergeBase_DeepHistory_HandlesPerformance` - 1000+ 커밋 히스토리
-- [ ] `Test_FindMergeBase_OctopusMerge_ReturnsCorrectBase` - 3개 이상 부모
+- [x] `Test_FindMergeBase_DeepHistory_HandlesPerformance` - 1000+ 커밋 히스토리
+- [x] `Test_FindMergeBase_OctopusMerge_ReturnsCorrectBase` - 3개 이상 부모
 
 ### 1.2A Merge Base / FF — 정책 & 보호 브랜치 ⚠️ 고위험
 - [ ] `Test_MergePreview_ProtectedTargetBranch_Returns403_POLICY_VIOLATION` ⭐ P0
@@ -137,11 +137,11 @@
 - [ ] `Test_MergePreview_AlreadyMerged_ReturnsAlreadyMergedTrue` - 응답 스키마 고정
 
 ### 1.2B MergePreview 결과 스키마 — 경계 케이스 ⚠️ 고위험
-- [ ] `Test_MergePreview_SourceEqualsTarget_ReturnsAlreadyMergedOrNoop`
+- [x] `Test_MergePreview_SourceEqualsTarget_ReturnsAlreadyMergedOrNoop`
   - 회귀: "source==target 입력 실수에서 500/409가 나지 않는다"
 - [ ] `Test_MergePreview_OrphanBranch_NoCommonAncestor_Returns422_NO_COMMON_ANCESTOR`
   - 회귀: "공통 조상 없는 레포에서 에러가 409/500으로 뭉개지지 않는다"
-- [ ] `Test_MergePreview_SourceIsAncestor_AlreadyMerged_HasConflictsFalse_StableSchema`
+- [x] `Test_MergePreview_SourceIsAncestor_AlreadyMerged_HasConflictsFalse_StableSchema`
   - 회귀: "already-merged 상태에서 conflicts/diff 필드가 흔들리지 않는다"
 
 ### 1.2C Preview와 Merge 정책 일관성 ⚠️ 고위험
@@ -153,19 +153,19 @@
   - 회귀: "preview 후 정책/상태가 변해도 500이나 이상한 409가 나오지 않는다"
 
 ### 1.3 Fast-Forward 케이스
-- [ ] `Test_MergePreview_FastForward_IsFastForwardTrue` - FF 가능
-- [ ] `Test_MergePreview_NotFastForward_IsFastForwardFalse` - FF 불가
-- [ ] `Test_MergePreview_TargetIsAncestor_IsFastForwardTrue` - target이 조상
-- [ ] `Test_MergePreview_SourceIsAncestor_AlreadyMerged` - source가 조상 (이미 머지됨)
+- [x] `Test_MergePreview_FastForward_IsFastForwardTrue` - FF 가능
+- [x] `Test_MergePreview_NotFastForward_IsFastForwardFalse` - FF 불가
+- [x] `Test_MergePreview_TargetIsAncestor_IsFastForwardTrue` - target이 조상
+- [x] `Test_MergePreview_SourceIsAncestor_AlreadyMerged` - source가 조상 (이미 머지됨)
 
 ### 1.4 충돌 감지
-- [ ] `Test_MergePreview_NoConflict_HasConflictsFalse` - 충돌 없음
-- [ ] `Test_MergePreview_SingleFileConflict_HasConflictsTrue` - 단일 파일 충돌
-- [ ] `Test_MergePreview_MultipleFileConflicts_ReturnsAllConflicts` - 다중 파일 충돌
-- [ ] `Test_MergePreview_SameLineConflict_DetectsConflict` - 같은 줄 수정
-- [ ] `Test_MergePreview_AdjacentLineConflict_DetectsConflict` - 인접 줄 수정
+- [x] `Test_MergePreview_NoConflict_HasConflictsFalse` - 충돌 없음
+- [x] `Test_MergePreview_SingleFileConflict_HasConflictsTrue` - 단일 파일 충돌
+- [x] `Test_MergePreview_MultipleFileConflicts_ReturnsAllConflicts` - 다중 파일 충돌
+- [x] `Test_MergePreview_SameLineConflict_DetectsConflict` - 같은 줄 수정
+- [x] `Test_MergePreview_AdjacentLineConflict_DetectsConflict` - 인접 줄 수정
 - [ ] `Test_MergePreview_BinaryFileConflict_MarksAsBinary` - 바이너리 파일 충돌
-- [ ] `Test_MergePreview_DeleteVsModify_DetectsConflict` - 삭제 vs 수정 충돌
+- [x] `Test_MergePreview_DeleteVsModify_DetectsConflict` - 삭제 vs 수정 충돌
 - [ ] `Test_MergePreview_RenameConflict_DetectsConflict` - 이름 변경 충돌
 - [ ] `Test_MergePreview_DirectoryFileConflict_DetectsConflict` - 디렉토리/파일 충돌
 
