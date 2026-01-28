@@ -21,9 +21,28 @@ import (
 )
 
 func statusCodeForResolveReferenceError(err error) int {
+	// 400 Bad Request: 문법 오류, 지원하지 않는 형식
+	if errors.Is(err, repositories.ErrInvalidRef) {
+		return http.StatusBadRequest
+	}
+	if errors.Is(err, repositories.ErrUnsupportedRef) {
+		return http.StatusBadRequest
+	}
+	if errors.Is(err, repositories.ErrAmbiguousRef) {
+		return http.StatusBadRequest
+	}
+
+	// 404 Not Found: ref/object 없음
+	if errors.Is(err, repositories.ErrRefNotFound) {
+		return http.StatusNotFound
+	}
+	if errors.Is(err, repositories.ErrObjectNotFound) {
+		return http.StatusNotFound
+	}
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return http.StatusNotFound
 	}
+
 	return http.StatusInternalServerError
 }
 
