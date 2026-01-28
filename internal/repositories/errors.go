@@ -28,21 +28,3 @@ var (
 	// 참고: go-git의 plumbing.ErrReferenceNotFound도 같은 의미
 	ErrRefNotFound = errors.New("ref not found")
 )
-
-// RefErrorCode returns the machine-readable error code for the given error
-func RefErrorCode(err error) string {
-	switch {
-	case errors.Is(err, ErrInvalidRef):
-		return "INVALID_REF"
-	case errors.Is(err, ErrUnsupportedRef):
-		return "UNSUPPORTED_REF"
-	case errors.Is(err, ErrAmbiguousRef):
-		return "AMBIGUOUS_REF"
-	case errors.Is(err, ErrObjectNotFound):
-		return "OBJECT_NOT_FOUND"
-	case errors.Is(err, ErrRefNotFound):
-		return "REF_NOT_FOUND"
-	default:
-		return "INTERNAL_ERROR"
-	}
-}

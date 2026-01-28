@@ -551,9 +551,14 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 	}
 	defer func() { _ = r.Body.Close() }()
 
+	// Add timeout to context for reading request body
+	// This prevents indefinite blocking when client doesn't send data immediately
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
 	// For now, delegate to the existing upload-pack logic
 	// This is a simplified implementation - in production, you'd implement full SSH protocol negotiation
-	err := h.executeSSHGitCommand(r.Context(), "git-upload-pack", sshReq.RepoPath, requestBody, writer, protocolHeaders)
+	err := h.executeSSHGitCommand(ctx, "git-upload-pack", sshReq.RepoPath, requestBody, writer, protocolHeaders)
 	if err != nil {
 		// Write SSH error format
 		if sshErr := writer.WriteSSHError(fmt.Sprintf("upload-pack failed: %v", err)); sshErr != nil {
@@ -740,7 +745,7 @@ func (h *SSHProtocolHandler) executeSSHGitCommand(ctx context.Context, command, 
 	}
 
 	// Parse git protocol v2 commands from input
-	requestData, err := h.parseGitProtocolRequest(input)
+	requestData, err := h.parseGitProtocolRequest(ctx, input)
 	if err != nil {
 		return fmt.Errorf("failed to parse git protocol request: %w", err)
 	}
@@ -757,11 +762,36 @@ func (h *SSHProtocolHandler) executeSSHGitCommand(ctx context.Context, command, 
 }
 
 // parseGitProtocolRequest parses git protocol v2 requests
-func (h *SSHProtocolHandler) parseGitProtocolRequest(input io.ReadCloser) (map[string]string, error) {
+func (h *SSHProtocolHandler) parseGitProtocolRequest(ctx context.Context, input io.ReadCloser) (map[string]string, error) {
 	data := make(map[string]string)
 	buffer := make([]byte, 8192)
 
-	n, err := input.Read(buffer)
+	// Use a channel to receive read result
+	type readResult struct {
+		n   int
+		err error
+	}
+	readCh := make(chan readResult, 1)
+
+	// Read in a goroutine to avoid blocking indefinitely
+	go func() {
+		n, err := input.Read(buffer)
+		readCh <- readResult{n: n, err: err}
+	}()
+
+	// Wait for read to complete or context cancellation
+	var n int
+	var err error
+	select {
+	case result := <-readCh:
+		n = result.n
+		err = result.err
+	case <-ctx.Done():
+		// Context cancelled or timed out - return empty data
+		// This handles the case where client doesn't send data immediately
+		return data, nil
+	}
+
 	if err != nil && err != io.EOF {
 		return nil, err
 	}

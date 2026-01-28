@@ -2,6 +2,8 @@ package merge
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -434,13 +436,23 @@ func (h *MergePreviewHandler) resolveAndValidateRefs(ctx context.Context, repo *
 	// Resolve source
 	sourceCommit, err := h.objectManager.ResolveReference(repo, sourceRef)
 	if err != nil {
-		return statusCodeForResolveReferenceError(err), err
+		if errors.Is(err, repositories.ErrRefNotFound) ||
+			errors.Is(err, repositories.ErrObjectNotFound) ||
+			errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return http.StatusNotFound, err
+		}
+		return http.StatusBadRequest, err
 	}
 
 	// Resolve target
 	targetCommit, err := h.objectManager.ResolveReference(repo, targetRef)
 	if err != nil {
-		return statusCodeForResolveReferenceError(err), err
+		if errors.Is(err, repositories.ErrRefNotFound) ||
+			errors.Is(err, repositories.ErrObjectNotFound) ||
+			errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return http.StatusNotFound, err
+		}
+		return http.StatusBadRequest, err
 	}
 
 	// Same commit check
