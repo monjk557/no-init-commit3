@@ -233,18 +233,32 @@ func newRepo(t *testing.T) *git.Repository {
 }
 ```
 
-### 3.5 파일 분리: 선택적 (inline 우선)
+### 3.5 파일 분리: 선택적 (inline 우선, 중복 시 분리)
 
 > **Go 철학**: 패키지 분리보다 **inline 우선**. helper가 테스트 파일에 같이 있어도 됨.
+> **단, 여러 패키지에서 동일 helper가 반복되면 `testutil`로 분리**한다.
 
 ```go
-// ✅ 권장: 같은 파일에 helper 정의
+// ✅ 권장: 같은 파일에 helper 정의 (패키지 내 1-2개)
 func Test_Something(t *testing.T) { ... }
 
 func newRepo(t *testing.T) *git.Repository { ... }  // 같은 파일
 
-// ⚠️ 선택적: 공유 helper가 많을 때만 분리
-// testutil/git.go - 여러 패키지에서 공유할 때만
+// ⚠️ 여러 패키지에서 중복 시: testutil로 분리
+// internal/testutil/gitrepo/assertions.go
+//   - RequireStatus, RequireBodyContains, RequireNo500 등
+```
+
+**분리 기준**:
+- 패키지 **내** 1-2개 helper → inline OK
+- **3개 이상 패키지**에서 동일 helper → `testutil`로 분리
+
+```go
+// 각 패키지에서는 wrapper로 호출
+func requireStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {
+    t.Helper()
+    gitrepo.RequireStatus(t, w, want)  // testutil 사용
+}
 ```
 
 ```go

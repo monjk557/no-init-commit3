@@ -8,11 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/testutil/gitrepo"
 	"github.com/gin-gonic/gin"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -568,22 +568,17 @@ func openRepo(t *testing.T, path string) *git.Repository {
 }
 
 // =============================================================================
-// Assertion helpers
-// 원칙: 실패 메시지에 body 포함, 정답 강제
+// Assertion helpers - testutil/gitrepo 사용
 // =============================================================================
 
 func requireStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {
 	t.Helper()
-	if w.Code != want {
-		t.Fatalf("status=%d want=%d body=%s", w.Code, want, w.Body.String())
-	}
+	gitrepo.RequireStatus(t, w, want)
 }
 
 func requireBodyContains(t *testing.T, w *httptest.ResponseRecorder, substr string) {
 	t.Helper()
-	if !strings.Contains(w.Body.String(), substr) {
-		t.Errorf("body does not contain %q: %s", substr, w.Body.String())
-	}
+	gitrepo.RequireBodyContains(t, w, substr)
 }
 
 // =============================================================================

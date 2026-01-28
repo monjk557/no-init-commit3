@@ -253,6 +253,43 @@ func RequireStableSchema(t *testing.T, resp *httptest.ResponseRecorder, required
 	}
 }
 
+// RequireBodyContains asserts that response body contains a substring
+// 회귀: "응답 body에 특정 문자열이 포함되어야 함"
+func RequireBodyContains(t *testing.T, resp *httptest.ResponseRecorder, substr string) {
+	t.Helper()
+	if !strings.Contains(resp.Body.String(), substr) {
+		t.Fatalf("body does not contain %q\nBody: %s", substr, resp.Body.String())
+	}
+}
+
+// AssertBodyContains asserts body contains substring (non-fatal)
+func AssertBodyContains(t *testing.T, resp *httptest.ResponseRecorder, substr string) bool {
+	t.Helper()
+	if !strings.Contains(resp.Body.String(), substr) {
+		t.Errorf("body does not contain %q\nBody: %s", substr, resp.Body.String())
+		return false
+	}
+	return true
+}
+
+// RequireNotStatus asserts that status is NOT the given value (회귀 가드용)
+func RequireNotStatus(t *testing.T, resp *httptest.ResponseRecorder, notWant int) {
+	t.Helper()
+	if resp.Code == notWant {
+		t.Fatalf("status should not be %d\nBody: %s", notWant, resp.Body.String())
+	}
+}
+
+// AssertNotStatus asserts status is not the given value (non-fatal, 보조 가드)
+func AssertNotStatus(t *testing.T, resp *httptest.ResponseRecorder, notWant int) bool {
+	t.Helper()
+	if resp.Code == notWant {
+		t.Errorf("status should not be %d\nBody: %s", notWant, resp.Body.String())
+		return false
+	}
+	return true
+}
+
 // RequireJSONField validates specific JSON field exists and has expected value
 func RequireJSONField(t *testing.T, resp *httptest.ResponseRecorder, fieldPath string, expected interface{}) {
 	t.Helper()
