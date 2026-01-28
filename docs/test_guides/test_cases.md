@@ -72,12 +72,18 @@
 - [x] `Test_MergePreview_NonExistentSHA_Returns404_OBJECT_NOT_FOUND` ⭐ P0
   - 회귀: "존재하지 않는 SHA는 404로 떨어져 409/400과 섞이지 않는다"
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 - [x] `Test_MergePreview_MalformedRef_Returns400_INVALID_REF` ⭐ P0
   - 회귀: "형식이 명확히 잘못된 ref는 400으로 거절된다 (공백, rev-parse, tree-ish 등)"
   - 참고: Branch-First Policy에 따라 `xyz123`, `deadbeef` 같은 입력은 malformed가 아닌 404
 - [x] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
 - [x] `Test_MergePreview_AmbiguousLikeRef_Returns404_NotMalformed` - Branch-First Policy 검증
   - 회귀: "`xyz123`, `deadbeef` 같은 애매한 입력은 malformed(400)가 아니라 ref로 해석 시도 후 404"
+=======
+- [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
+  - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
+- [ ] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
+>>>>>>> Stashed changes
 =======
 - [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
   - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
