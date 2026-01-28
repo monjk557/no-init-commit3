@@ -143,6 +143,35 @@ func Test_<Unit>_<Scenario>_<Expect>(t *testing.T) {
 
 ### 실제 예시 (표준형)
 
+#### testutil 사용 버전 (권장)
+
+```go
+import "github.com/collabops/git-executor/internal/testutil/gitrepo"
+
+func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
+    t.Parallel()
+
+    // Given: feature 브랜치가 있는 repo
+    repo := gitrepo.NewRepo(t)
+    repo.Commit("init.txt", "init", "initial commit")
+    repo.BranchCreate("feature/foo")
+    repo.Commit("feat.txt", "feat", "feature commit")
+    repo.BranchCheckout("main")
+
+    // And: 브랜치가 삭제됨
+    repo.BranchDelete("feature/foo")
+
+    // When: 삭제된 브랜치로 MergePreview 호출
+    resp := callMergePreview(t, repo, "feature/foo", "main")
+
+    // Then: 404 반환 (ref not found)
+    gitrepo.Require404RefNotFound(t, resp)  // status + error.code 동시 검증
+    gitrepo.AssertNo500(t, resp)            // 500 방지
+}
+```
+
+#### 직접 helper 사용 버전 (선택적)
+
 ```go
 func Test_MergePreview_DeletedSourceRef_Returns404(t *testing.T) {
     t.Parallel()
@@ -260,6 +289,135 @@ func requireStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {
     gitrepo.RequireStatus(t, w, want)  // testutil 사용
 }
 ```
+
+### 3.6 testutil 패키지 사용 (권장)
+
+> **프로젝트 표준**: `internal/testutil/gitrepo` 패키지는 **공유 helper**로 제공되며, **사용을 권장**합니다.
+
+#### 3.6.1 gitrepo 패키지 사용
+
+```go
+import "github.com/collabops/git-executor/internal/testutil/gitrepo"
+
+// ✅ 권장: testutil 사용
+func Test_MergePreview_DeletedBranch_Returns404(t *testing.T) {
+    t.Parallel()
+    
+    repo := gitrepo.NewRepo(t)  // 자동으로 t.TempDir() + git init + HEAD 설정
+    repo.Commit("file.txt", "content", "Initial commit")
+    repo.BranchCreate("feature")
+    repo.Commit("feature.txt", "feature", "Feature commit")
+    repo.BranchCheckout("main")
+    repo.BranchDelete("feature")
+    
+    // 테스트 실행...
+}
+```
+
+**장점**:
+- **Deterministic**: 시간 자동 고정 (`baseTime` + `timeStep`)
+- **간결성**: boilerplate 제거 (git init, HEAD 설정, user config 등)
+- **일관성**: 모든 테스트에서 동일한 레포 초기 상태
+- **에러 처리**: 내부에서 `require.NoError`로 실패 시 즉시 종료
+
+#### 3.6.2 gitrepo 주요 메서드
+
+```go
+// Repository 생성
+repo := gitrepo.NewRepo(t)        // 일반 레포
+bareRepo := gitrepo.NewBareRepo(t) // bare 레포
+
+// 커밋
+hash := repo.Commit("file.txt", "content", "message")
+hash := repo.CommitWithTime("file.txt", "content", "message", time.Date(...))
+hash := repo.CommitMultiple(map[string]string{"a.txt": "A", "b.txt": "B"}, "msg")
+
+// 브랜치
+repo.BranchCreate("feature")
+repo.BranchCheckout("main")
+repo.BranchDelete("feature")
+repo.BranchRename("old", "new")
+
+// 태그
+repo.TagLightweight("v1.0.0", hash)
+tagHash := repo.TagAnnotated("v1.0.0", "Release", hash)
+repo.TagDelete("v1.0.0")
+
+// 파일 조작 (커밋 전)
+repo.SetFile("file.txt", "content")
+repo.DeleteFile("file.txt")
+repo.StageFile("file.txt")
+repo.StageRemove("file.txt")
+
+// 조회
+headHash := repo.HeadHash()
+commit := repo.GetCommit(hash)
+hasBranch := repo.HasBranch("feature")
+hasTag := repo.HasTag("v1.0.0")
+```
+
+#### 3.6.3 testutil assertion 사용
+
+```go
+import "github.com/collabops/git-executor/internal/testutil/gitrepo"
+
+// ✅ 권장: testutil assertion 사용
+func Test_MergePreview_InvalidRef_Returns400(t *testing.T) {
+    t.Parallel()
+    
+    setup := setupMergePreviewTest(t)
+    resp := setup.doPreview("invalid ref", "main")
+    
+    // testutil assertion 사용 (status + error.code 한번에 검증)
+    gitrepo.Require400InvalidRef(t, resp)
+    // 또는
+    gitrepo.RequireStatus(t, resp, http.StatusBadRequest)
+    gitrepo.RequireErrCode(t, resp, "INVALID_REF")
+}
+```
+
+**주요 assertion 함수**:
+```go
+// 기본 검증
+gitrepo.RequireStatus(t, resp, http.StatusNotFound)
+gitrepo.AssertStatus(t, resp, http.StatusOK)
+
+// 에러 코드 검증 (status + error.code 동시 검증)
+gitrepo.Require400InvalidRef(t, resp)
+gitrepo.Require400UnsupportedRef(t, resp)
+gitrepo.Require404RefNotFound(t, resp)
+gitrepo.Require404ObjectNotFound(t, resp)
+gitrepo.Require403PolicyViolation(t, resp)
+gitrepo.Require409ConcurrentUpdate(t, resp)
+
+// 500 방지 (모든 테스트에 권장)
+gitrepo.RequireNo500(t, resp)  // fatal
+gitrepo.AssertNo500(t, resp)   // non-fatal
+
+// Retry-After 헤더 검증
+gitrepo.RequireRetryAfter(t, resp)
+
+// 스키마 안정성
+gitrepo.RequireStableSchema(t, resp, "success", "data", "error")
+gitrepo.RequireJSONField(t, resp, "error.code", "INVALID_REF")
+```
+
+**장점**:
+- **일관성**: 모든 테스트에서 동일한 assertion 사용
+- **간결성**: 여러 검증을 한 줄로 처리
+- **에러 메시지**: 실패 시 body 자동 포함
+- **회귀 방지**: 500 에러 방지 검증 자동 포함
+
+#### 3.6.4 testutil vs 직접 helper
+
+| 상황 | 권장 방법 |
+|------|----------|
+| **Git 레포 생성/조작** | `gitrepo.NewRepo(t)`, `repo.Commit()`, `repo.BranchCreate()` 등 |
+| **HTTP assertion** | `gitrepo.Require400InvalidRef()`, `gitrepo.RequireStatus()` 등 |
+| **패키지별 특수 helper** | 테스트 파일에 직접 정의 (inline 우선) |
+| **공유 helper가 많을 때** | testutil 패키지에 추가 고려 |
+
+> **원칙**: testutil은 **boilerplate 제거용**으로 사용. 핵심 로직은 여전히 테스트 본문에 inline으로 유지.
 
 ```go
 // ✅ 모든 helper는 t.Helper() 필수
@@ -393,6 +551,21 @@ func asResp(w *httptest.ResponseRecorder) TestResponse {
 ```
 
 ### 5.4 Assertion 구현 (팀 표준)
+
+> **권장**: `internal/testutil/gitrepo` 패키지의 assertion 함수 사용. 직접 구현보다 표준 함수 사용을 우선.
+
+#### testutil 사용 (권장)
+
+```go
+import "github.com/collabops/git-executor/internal/testutil/gitrepo"
+
+// ✅ 권장: testutil assertion 사용
+gitrepo.RequireStatus(t, resp, http.StatusNotFound)
+gitrepo.Require400InvalidRef(t, resp)  // status + error.code 동시 검증
+gitrepo.AssertNo500(t, resp)          // 500 방지
+```
+
+#### 직접 구현 (선택적)
 
 > **네이밍 규칙**: 정답은 `require*` (fatal), 회귀 가드는 `assert*` (non-fatal)
 

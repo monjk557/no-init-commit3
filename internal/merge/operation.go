@@ -222,6 +222,45 @@ func (h *MergeOperationsHandler) analyzeRebaseDryRun(ctx context.Context, repo *
 	}, nil
 }
 
+// validateTargetRefConcurrency checks if target ref has changed since merge started
+// Returns error if target ref was modified or deleted (409 CONCURRENT_UPDATE)
+func (h *MergeOperationsHandler) validateTargetRefConcurrency(repo *gogit.Repository, req *MergeRequest, expectedTargetHash plumbing.Hash) error {
+	// Determine target ref name
+	var refName plumbing.ReferenceName
+	if strings.HasPrefix(req.TargetRef, "refs/") {
+		refName = plumbing.ReferenceName(req.TargetRef)
+	} else {
+		refName = plumbing.ReferenceName("refs/heads/" + req.TargetRef)
+	}
+
+	// Read current target ref
+	currentRef, err := repo.Reference(refName, true)
+	if err != nil {
+		// Target ref was deleted
+		return &ConcurrentUpdateError{
+			Message: "target branch was deleted during merge",
+		}
+	}
+
+	// Check if target ref hash has changed
+	if currentRef.Hash() != expectedTargetHash {
+		return &ConcurrentUpdateError{
+			Message: "target branch was updated during merge",
+		}
+	}
+
+	return nil
+}
+
+// ConcurrentUpdateError represents a concurrent update error
+type ConcurrentUpdateError struct {
+	Message string
+}
+
+func (e *ConcurrentUpdateError) Error() string {
+	return e.Message
+}
+
 // performMerge performs the actual Git merge operation
 func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *MergeAnalysisResult) (*MergeResult, error) {
 	result := &MergeResult{
@@ -367,6 +406,16 @@ func (h *MergeOperationsHandler) performSquashMerge(ctx context.Context, repo *g
 	}
 
 	commit.Hash = hash
+
+	// Hook: Signal before writing target ref (for testing concurrent scenarios)
+	if h.hooks != nil && h.hooks.BeforeWriteTargetRef != nil {
+		<-h.hooks.BeforeWriteTargetRef
+	}
+
+	// CAS validation: Check if target ref has changed since merge started
+	if err := h.validateTargetRefConcurrency(repo, req, targetHash); err != nil {
+		return nil, err
+	}
 
 	// Update the target reference to point to the new squash commit
 	var refName plumbing.ReferenceName
@@ -602,6 +651,16 @@ func (h *MergeOperationsHandler) performRebase(ctx context.Context, repo *gogit.
 			zap.String("rebased", hash.String()))
 	}
 
+	// Hook: Signal before writing target ref (for testing concurrent scenarios)
+	if h.hooks != nil && h.hooks.BeforeWriteTargetRef != nil {
+		<-h.hooks.BeforeWriteTargetRef
+	}
+
+	// CAS validation: Check if target ref has changed since merge started
+	if err := h.validateTargetRefConcurrency(repo, req, targetHash); err != nil {
+		return nil, err
+	}
+
 	// Update target reference to point to the final rebased commit
 	var refName plumbing.ReferenceName
 	if strings.HasPrefix(req.TargetRef, "refs/") {
@@ -748,6 +807,16 @@ func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo 
 	}
 
 	commit.Hash = hash
+
+	// Hook: Signal before writing target ref (for testing concurrent scenarios)
+	if h.hooks != nil && h.hooks.BeforeWriteTargetRef != nil {
+		<-h.hooks.BeforeWriteTargetRef
+	}
+
+	// CAS validation: Check if target ref has changed since merge started
+	if err := h.validateTargetRefConcurrency(repo, req, targetHash); err != nil {
+		return nil, err
+	}
 
 	// Update the target reference to point to the new merge commit
 	if strings.HasPrefix(req.TargetRef, "refs/") {

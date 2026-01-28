@@ -2809,6 +2809,9 @@ components:
       required:
         - data
         - success
+
+    MergeHooks:
+      type: object
   responses:
     BadRequest:
       description: Bad request - Invalid input parameters

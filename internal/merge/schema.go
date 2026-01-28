@@ -31,6 +31,18 @@ const (
 	MergeStrategySubtree   MergeStrategy = "subtree"   // Subtree merge strategy
 )
 
+// MergeHooks provides synchronization points for testing concurrent merge scenarios
+// These hooks are only used in tests and have no effect in production (when nil)
+type MergeHooks struct {
+	// AfterReadTargetRef is signaled after target ref is first read at merge start
+	// Test can block here to ensure merge has read the initial target ref
+	AfterReadTargetRef chan struct{}
+	
+	// BeforeWriteTargetRef is signaled just before writing the target ref
+	// Test can block here, modify target ref, then unblock to test CAS validation
+	BeforeWriteTargetRef chan struct{}
+}
+
 // MergeRequest represents the JSON payload for merge operations
 type MergeRequest struct {
 	SourceRef       string                 `json:"source_ref" binding:"required"` // Source branch/commit to merge FROM

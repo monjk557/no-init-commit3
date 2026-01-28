@@ -27,6 +27,9 @@ type MergeOperationsHandler struct {
 	conflictDetector *ConflictDetector
 	eventsClient     events.RedisStreamClient
 	config           *config.Config
+	// hooks is only set in tests for deterministic concurrent testing
+	// In production, this is always nil and has no effect
+	hooks *MergeHooks
 }
 
 // NewMergeOperationsHandler creates a new merge operations handler
@@ -203,6 +206,11 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		return
 	}
 
+	// Hook: Signal that target ref has been read (for testing concurrent scenarios)
+	if h.hooks != nil && h.hooks.AfterReadTargetRef != nil {
+		close(h.hooks.AfterReadTargetRef)
+	}
+
 	// Perform merge analysis first
 	conflictAnalysis, err := h.analyzeMerge(ctx, repository, sourceCommit, targetCommit, &req)
 	if err != nil {
@@ -290,6 +298,16 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	// Perform the actual merge
 	mergeResult, err := h.performMerge(ctx, repository, sourceCommit, targetCommit, &req, conflictAnalysis)
 	if err != nil {
+		// Check for concurrent update error
+		var concurrentErr *ConcurrentUpdateError
+		if errors.As(err, &concurrentErr) {
+			c.JSON(http.StatusConflict, gin.H{
+				"success":    false,
+				"error_code": "CONCURRENT_UPDATE",
+				"error":      concurrentErr.Message,
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
