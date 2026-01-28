@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
@@ -19,32 +18,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
-
-func statusCodeForResolveReferenceError(err error) int {
-	// 400 Bad Request: 문법 오류, 지원하지 않는 형식
-	if errors.Is(err, repositories.ErrInvalidRef) {
-		return http.StatusBadRequest
-	}
-	if errors.Is(err, repositories.ErrUnsupportedRef) {
-		return http.StatusBadRequest
-	}
-	if errors.Is(err, repositories.ErrAmbiguousRef) {
-		return http.StatusBadRequest
-	}
-
-	// 404 Not Found: ref/object 없음
-	if errors.Is(err, repositories.ErrRefNotFound) {
-		return http.StatusNotFound
-	}
-	if errors.Is(err, repositories.ErrObjectNotFound) {
-		return http.StatusNotFound
-	}
-	if errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return http.StatusNotFound
-	}
-
-	return http.StatusInternalServerError
-}
 
 // MergeOperationsHandler handles REST API operations for Git merge operations
 type MergeOperationsHandler struct {
@@ -144,10 +117,6 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	h.logger.Info("Processing merge request",
-		zap.String("owner", owner),
-		zap.String("repo", repo))
-
 	// Validate path components
 	if err := h.validatePath(owner, repo); err != nil {
 
@@ -200,32 +169,37 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	// Resolve source and target commits
 	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)
 	if err != nil {
-		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		if errors.Is(err, repositories.ErrRefNotFound) ||
+			errors.Is(err, repositories.ErrObjectNotFound) ||
+			errors.Is(err, plumbing.ErrReferenceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
 		return
 	}
 
 	targetCommit, err := h.objectManager.ResolveReference(repository, req.TargetRef)
 	if err != nil {
-		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	h.logger.Debug("Resolved merge references",
-		zap.String("source_commit", sourceCommit.String()),
-		zap.String("target_commit", targetCommit.String()))
-
-	// Check if source and target are the same
-	if sourceCommit == targetCommit {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Source and target references point to the same commit",
-		})
+		if errors.Is(err, repositories.ErrRefNotFound) ||
+			errors.Is(err, repositories.ErrObjectNotFound) ||
+			errors.Is(err, plumbing.ErrReferenceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
 		return
 	}
 
@@ -358,30 +332,11 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 
 	response.Details = details
 
-	// Log success
-	h.logger.Info("Merge completed successfully",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("source_ref", req.SourceRef),
-		zap.String("target_ref", req.TargetRef),
-		zap.String("method", string(req.Method)),
-		zap.Bool("fast_forward", mergeResult.IsFastForward),
-		zap.Bool("had_conflicts", mergeResult.HasConflicts),
-		zap.String("strategy", string(req.Strategy)))
-
 	// Extract user ID from X-USER-ID header
 	userID := c.GetHeader("X-USER-ID")
 	if userID == "" {
 		userID = "" // Empty string if not provided
 	}
-
-	// Debug log for user ID extraction
-	h.logger.Debug("Extracting user ID from header for merge operation",
-		zap.String("user_id", userID),
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("source_ref", req.SourceRef),
-		zap.String("target_ref", req.TargetRef))
 
 	// Publish commit event for merge operations
 	if h.eventsClient != nil {
@@ -407,10 +362,6 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-
-	h.logger.Info("Processing merge preview request",
-		zap.String("owner", owner),
-		zap.String("repo", repo))
 
 	// Validate path components
 	if err := h.validatePath(owner, repo); err != nil {
@@ -468,25 +419,39 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	// Resolve source and target commits
 	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)
 	if err != nil {
-		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		if errors.Is(err, repositories.ErrRefNotFound) ||
+			errors.Is(err, repositories.ErrObjectNotFound) ||
+			errors.Is(err, plumbing.ErrReferenceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
 		return
 	}
 
 	targetCommit, err := h.objectManager.ResolveReference(repository, req.TargetRef)
 	if err != nil {
-		c.JSON(statusCodeForResolveReferenceError(err), gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		if errors.Is(err, repositories.ErrRefNotFound) ||
+			errors.Is(err, repositories.ErrObjectNotFound) ||
+			errors.Is(err, plumbing.ErrReferenceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
 		return
 	}
-
-	h.logger.Debug("Resolved merge preview references",
-		zap.String("source_commit", sourceCommit.String()),
-		zap.String("target_commit", targetCommit.String()))
 
 	// Check if source and target are the same
 	if sourceCommit == targetCommit {
@@ -622,8 +587,6 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 	// Get full filesystem path for the repository
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
 	if err != nil {
-		h.logger.Debug("Failed to get repo path for merge event",
-			zap.Error(err))
 		return
 	}
 
@@ -648,26 +611,12 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, re
 		Timestamp:     commit.Committer.When,
 	}
 
-	// Debug log for merge event creation
-	h.logger.Debug("Creating merge commit event with user context",
-		zap.String("user_id", userID),
-		zap.String("commit_hash", commit.Hash.String()),
-		zap.String("ref_name", refName),
-		zap.String("owner", owner),
-		zap.String("repo", repoName))
-
 	// Publish asynchronously to avoid blocking
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
-			h.logger.Error("Failed to publish merge commit event",
-				zap.String("repo_path", repoPath),
-				zap.String("commit_hash", commit.Hash.String()),
-				zap.String("event_type", string(event.EventType)),
-				zap.Error(err))
-		}
+		_ = h.eventsClient.AddCommitEventToStream(ctx, event)
 	}()
 }
 
@@ -680,17 +629,12 @@ func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Contex
 	// Get commit object
 	commit, err := repo.CommitObject(commitHash)
 	if err != nil {
-		h.logger.Debug("Failed to get commit object for fast-forward merge event",
-			zap.String("commit_hash", commitHash.String()),
-			zap.Error(err))
 		return
 	}
 
 	// Get full filesystem path for the repository
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
 	if err != nil {
-		h.logger.Debug("Failed to get repo path for fast-forward merge event",
-			zap.Error(err))
 		return
 	}
 
@@ -715,24 +659,11 @@ func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Contex
 		Timestamp:     commit.Committer.When,
 	}
 
-	// Debug log for fast-forward merge event creation
-	h.logger.Debug("Creating fast-forward merge event with user context",
-		zap.String("user_id", userID),
-		zap.String("commit_hash", commitHash.String()),
-		zap.String("ref_name", refName),
-		zap.String("owner", owner),
-		zap.String("repo", repoName))
-
 	// Publish asynchronously to avoid blocking
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
-			h.logger.Warn("Failed to publish fast-forward merge event",
-				zap.String("repo_path", repoPath),
-				zap.String("commit_hash", commitHash.String()),
-				zap.Error(err))
-		}
+		_ = h.eventsClient.AddCommitEventToStream(ctx, event)
 	}()
 }

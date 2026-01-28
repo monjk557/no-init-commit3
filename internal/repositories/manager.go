@@ -166,6 +166,7 @@ func (gom *GitObjectManager) ResolveReference(repo *gogit.Repository, ref string
 	}
 
 	// Handle HEAD specially - it resolves to the current branch
+	// validateRefFormat에서 이미 ""와 "HEAD"를 허용하므로 여기서는 "HEAD"만 체크
 	if ref == "HEAD" || ref == "" {
 		headRef, err := repo.Head()
 		if err != nil {

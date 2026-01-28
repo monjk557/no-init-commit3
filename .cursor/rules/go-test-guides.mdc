@@ -1,0 +1,22 @@
+---
+description: Go 테스트 작성 시 test_guides.md 준수. 테스트 작성/수정 시 반드시 참조.
+globs: "**/*_test.go"
+alwaysApply: false
+---
+
+# Go 테스트 작성 규칙
+
+**테스트 작성·수정 시 반드시 아래 문서를 참조한다.**
+
+- `docs/test_guides/test_guides.md`
+
+## Quick Reference (상세는 위 문서)
+
+- **이름**: `Test_<Unit>_<Scenario>_<Expect>` (정답 스펙, `_Not409` 등 부정 기대 금지)
+- **구조**: Given → When(1개) → Then, 코드가 문서. `t.Parallel()` 권장(없으면 이유 주석).
+- **Assert**: 정답 강제 `requireStatus(t, resp, 404)`. `if got == 409` / `assertNotStatus` 단독 **금지**.
+- **Helper**: boilerplate만, `setup*` 금지, `t.Helper()` 필수. When/Assert 숨기지 말 것.
+- **Real test 우선**: mock은 외부 의존/비결정성에만. `t.TempDir()`, 시간 고정.
+- **에러 무시 금지**: `_, _ :=` 사용 금지.
+
+추가 규칙·예시·PR 체크리스트는 `docs/test_guides/test_guides.md` 참고.
