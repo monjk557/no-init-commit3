@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,6 +158,363 @@ func Test_CommitDiff_FileModification_ReturnsCorrectDelta(t *testing.T) {
 	require.NotNil(t, modifiedFile)
 	require.Equal(t, FileDiffStatusModified, modifiedFile.Status)
 	require.Equal(t, 1, modifiedFile.Additions-modifiedFile.Deletions, "net change should be +1 line")
+}
+
+// Test_CommitDiff_SingleLineDeletion_ReturnsCorrectCounts
+// 회귀: 단일 줄 삭제 시 additions=0, deletions=1이어야 함
+func Test_CommitDiff_SingleLineDeletion_ReturnsCorrectCounts(t *testing.T) {
+	t.Parallel()
+
+	// Given: 기존 파일에서 한 줄 삭제
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// 첫 커밋: "Line1\nLine2\n"
+	initialBlobHash := makeBlob(t, repo, []byte("Line1\nLine2\n"))
+	initialTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "delete-one-line.txt", Mode: 0100644, Hash: initialBlobHash},
+	})
+	initialCommitHash := makeCommit(t, repo, "Initial commit", initialTreeHash, nil, now)
+
+	// 두 번째 커밋: "Line1\n" (Line2 삭제)
+	secondBlobHash := makeBlob(t, repo, []byte("Line1\n"))
+	secondTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "delete-one-line.txt", Mode: 0100644, Hash: secondBlobHash},
+	})
+	secondCommitHash := makeCommit(t, repo, "Delete one line", secondTreeHash, []plumbing.Hash{initialCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
+		initialCommitHash.String(), secondCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	var file *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "delete-one-line.txt" {
+			file = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, file)
+	require.Equal(t, FileDiffStatusModified, file.Status)
+	require.Equal(t, 0, file.Additions)
+	require.Equal(t, 1, file.Deletions)
+}
+
+// Test_CommitDiff_FileAddition_StatusAdded
+// 회귀: 파일 추가는 status=added로 표시되어야 함
+func Test_CommitDiff_FileAddition_StatusAdded(t *testing.T) {
+	t.Parallel()
+
+	handler, baseSHA, headSHA := newDiffHandlerWithCommits(t)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", baseSHA, headSHA)
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	var added *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "single-line.txt" {
+			added = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, added)
+	require.Equal(t, FileDiffStatusAdded, added.Status)
+}
+
+// Test_CommitDiff_FileDeletion_StatusDeleted
+// 회귀: 파일 삭제는 status=deleted로 표시되어야 함
+func Test_CommitDiff_FileDeletion_StatusDeleted(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// 첫 커밋: 파일 존재
+	blobHash := makeBlob(t, repo, []byte("content\n"))
+	tree1 := makeTree(t, repo, []object.TreeEntry{
+		{Name: "delete-me.txt", Mode: 0100644, Hash: blobHash},
+	})
+	commit1 := makeCommit(t, repo, "Add file", tree1, nil, now)
+
+	// 두 번째 커밋: 파일 삭제 (빈 트리)
+	tree2 := makeTree(t, repo, []object.TreeEntry{})
+	commit2 := makeCommit(t, repo, "Delete file", tree2, []plumbing.Hash{commit1}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", commit1.String(), commit2.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	var deleted *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "delete-me.txt" {
+			deleted = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, deleted)
+	require.Equal(t, FileDiffStatusDeleted, deleted.Status)
+}
+
+// Test_CommitDiff_FileRename_StatusRenamed
+// 회귀: 파일 이름 변경은 renamed로 표시되거나(지원 시), delete+add로라도 안정적으로 표현되어야 함
+func Test_CommitDiff_FileRename_StatusRenamed(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	blobHash := makeBlob(t, repo, []byte("same content\n"))
+	tree1 := makeTree(t, repo, []object.TreeEntry{
+		{Name: "old-name.txt", Mode: 0100644, Hash: blobHash},
+	})
+	commit1 := makeCommit(t, repo, "Old name", tree1, nil, now)
+
+	tree2 := makeTree(t, repo, []object.TreeEntry{
+		{Name: "new-name.txt", Mode: 0100644, Hash: blobHash},
+	})
+	commit2 := makeCommit(t, repo, "Renamed", tree2, []plumbing.Hash{commit1}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", commit1.String(), commit2.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	// case 1) renamed 지원: new-name.txt 가 renamed 로 나오고 old_path가 old-name.txt
+	for i := range resp.Files {
+		if resp.Files[i].Path == "new-name.txt" && resp.Files[i].Status == FileDiffStatusRenamed {
+			require.Equal(t, "old-name.txt", resp.Files[i].OldPath)
+			return
+		}
+	}
+
+	// case 2) rename detection 미지원: delete+add 로 표현
+	var foundOldDeleted, foundNewAdded bool
+	for i := range resp.Files {
+		if resp.Files[i].Path == "old-name.txt" && resp.Files[i].Status == FileDiffStatusDeleted {
+			foundOldDeleted = true
+		}
+		if resp.Files[i].Path == "new-name.txt" && resp.Files[i].Status == FileDiffStatusAdded {
+			foundNewAdded = true
+		}
+	}
+	require.True(t, foundOldDeleted && foundNewAdded, "rename should be represented either as renamed or delete+add")
+}
+
+// Test_CommitDiff_BinaryFile_MarksAsBinary
+// 회귀: 바이너리 파일은 is_binary=true로 표시되고 changes가 비어야 함
+func Test_CommitDiff_BinaryFile_MarksAsBinary(t *testing.T) {
+	t.Parallel()
+
+	// 기존 service_test의 fixture 사용
+	repoPath, initialCommitSHA, secondCommitSHA, cleanup := setupTestRepositoryForBinaryFiles(t)
+	defer cleanup()
+
+	tempDir := filepath.Dir(filepath.Dir(repoPath))
+	handler := newDiffHandler(t, tempDir)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitSHA, secondCommitSHA)
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var diffResp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&diffResp))
+	require.True(t, diffResp.Success)
+
+	var pngFile *FileDiff
+	for i := range diffResp.Files {
+		if diffResp.Files[i].Path == "image.png" {
+			pngFile = &diffResp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, pngFile)
+	require.True(t, pngFile.IsBinary)
+	// 바이너리는 라인 diff를 만들지 않음
+	require.Equal(t, 0, len(pngFile.Changes))
+}
+
+// Test_CommitDiff_LargeFile_TruncatesContent
+// 회귀: 변경 라인이 너무 크면 changes는 비우고(add/del만 유지) 반환해야 함
+func Test_CommitDiff_LargeFile_TruncatesContent(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base: empty file
+	tree1 := makeTree(t, repo, []object.TreeEntry{})
+	commit1 := makeCommit(t, repo, "Empty base", tree1, nil, now)
+
+	// head: huge file with > MaxChangedLines additions
+	var b strings.Builder
+	for i := 0; i < MaxChangedLines+1; i++ {
+		b.WriteString("line\n")
+	}
+	blob := makeBlob(t, repo, []byte(b.String()))
+	tree2 := makeTree(t, repo, []object.TreeEntry{
+		{Name: "huge.txt", Mode: 0100644, Hash: blob},
+	})
+	commit2 := makeCommit(t, repo, "Huge file", tree2, []plumbing.Hash{commit1}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=3", commit1.String(), commit2.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	var huge *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "huge.txt" {
+			huge = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, huge)
+	require.Equal(t, FileDiffStatusAdded, huge.Status)
+	require.Greater(t, huge.Additions, MaxChangedLines)
+	require.Equal(t, 0, len(huge.Changes), "changes should be omitted/truncated for huge diffs")
+}
+
+// Test_CommitDiff_EmptyFile_HandlesCorrectly
+// 회귀: 빈 파일 추가 시 additions/deletions가 0으로 안정적으로 처리되어야 함
+func Test_CommitDiff_EmptyFile_HandlesCorrectly(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base: empty tree
+	tree1 := makeTree(t, repo, []object.TreeEntry{})
+	commit1 := makeCommit(t, repo, "Empty base", tree1, nil, now)
+
+	// head: empty file
+	blob := makeBlob(t, repo, []byte(""))
+	tree2 := makeTree(t, repo, []object.TreeEntry{
+		{Name: "empty.txt", Mode: 0100644, Hash: blob},
+	})
+	commit2 := makeCommit(t, repo, "Add empty file", tree2, []plumbing.Hash{commit1}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=3", commit1.String(), commit2.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	var empty *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "empty.txt" {
+			empty = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, empty)
+	require.Equal(t, FileDiffStatusAdded, empty.Status)
+	require.Equal(t, 0, empty.Additions)
+	require.Equal(t, 0, empty.Deletions)
 }
 
 // Test_CommitDiff_InvalidBase_Returns400

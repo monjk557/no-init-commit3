@@ -55,17 +55,17 @@ func setupMergePreviewTest(t *testing.T) *testMergePreviewSetup {
 	// gitrepo를 사용하여 레포 생성
 	// NewRepo는 t.TempDir()를 사용하므로, 임시로 생성 후 올바른 경로로 복사
 	tempRepo := gitrepo.NewRepo(t)
-	
+
 	// 레포 내용을 올바른 경로로 복사
 	require.NoError(t, os.RemoveAll(repoPath))
 	require.NoError(t, copyDir(t, tempRepo.Dir, repoPath))
-	
+
 	// 새로운 TestRepo 인스턴스 생성 (올바른 경로에서)
 	gitRepo, err := gogit.PlainOpen(repoPath)
 	require.NoError(t, err)
 	wt, err := gitRepo.Worktree()
 	require.NoError(t, err)
-	
+
 	testRepo := &gitrepo.TestRepo{
 		T:        t,
 		Dir:      repoPath,
@@ -387,13 +387,13 @@ func Test_MergePreview_MalformedSHA_Returns400_INVALID_REF(t *testing.T) {
 		// 명확한 문법 오류는 400
 		{"contains_space", "dead beef", true, "공백 포함 - 명확한 문법 오류"},
 		{"empty_string", "", true, "빈 문자열 - 명확한 문법 오류"},
-		
+
 		// Branch-First Policy에 따라 branch로 해석 시도 후 404가 될 수 있음
 		// 현재 구현: branch로 해석 시도 → 없으면 404 반환
 		{"too_short", "abc123", false, "6자리 - branch로 해석 시도 후 404"},
 		{"non_hex_char", "deadbeefg", false, "16진수 아님 - branch로 해석 시도 후 404"},
 		{"too_long", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef1", false, "41자리 - branch로 해석 시도 후 404"},
-		
+
 		// 대문자/혼합: SHA로 해석 시도하지만 존재하지 않아 404
 		{"uppercase_hex", "DEADBEEF", false, "대문자 - SHA로 해석 시도 후 404"},
 		{"mixed_case", "DeadBeef", false, "대소문자 혼합 - SHA로 해석 시도 후 404"},
@@ -898,32 +898,32 @@ func Test_MergePreview_RenameConflict_DetectsConflict(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 파일 생성
 	setup.repo.Commit("original.txt", "content", "Base commit")
-	
+
 	// feature 브랜치에서 파일 이름 변경
 	setup.repo.BranchCreate("feature")
 	setup.repo.RenameFile("original.txt", "renamed-by-feature.txt")
 	setup.repo.StageRemove("original.txt")
 	setup.repo.StageFile("renamed-by-feature.txt")
 	setup.repo.CommitStaged("Feature rename")
-	
+
 	// main 브랜치에서 다른 이름으로 변경
 	setup.repo.BranchCheckout("main")
 	setup.repo.RenameFile("original.txt", "renamed-by-main.txt")
 	setup.repo.StageRemove("original.txt")
 	setup.repo.StageFile("renamed-by-main.txt")
 	setup.repo.CommitStaged("Main rename")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// rename 충돌이 감지되어야 함
 	if result.HasConflicts {
 		require.Greater(t, result.ConflictCount, 0, "should detect rename conflict")
@@ -945,10 +945,10 @@ func Test_MergePreview_DirectoryFileConflict_DetectsConflict(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 파일 생성
 	setup.repo.Commit("path", "content", "Base commit")
-	
+
 	// feature 브랜치에서 디렉토리로 변경 (파일 삭제 후 디렉토리 생성)
 	setup.repo.BranchCreate("feature")
 	setup.repo.DeleteFile("path")
@@ -956,19 +956,19 @@ func Test_MergePreview_DirectoryFileConflict_DetectsConflict(t *testing.T) {
 	setup.repo.CommitMultiple(map[string]string{
 		"path/file.txt": "content",
 	}, "Feature: file to directory")
-	
+
 	// main 브랜치에서 파일 내용 수정
 	setup.repo.BranchCheckout("main")
 	setup.repo.Commit("path", "modified content", "Main: modify file")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 디렉토리/파일 충돌이 감지되어야 함
 	if result.HasConflicts {
 		require.Greater(t, result.ConflictCount, 0, "should detect directory/file conflict")
@@ -980,26 +980,26 @@ func Test_MergePreview_AddAddSamePath_DetectsConflict(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에는 파일 없음
 	setup.repo.Commit("base.txt", "base", "Base commit")
-	
+
 	// feature 브랜치에서 파일 추가
 	setup.repo.BranchCreate("feature")
 	setup.repo.Commit("newfile.txt", "feature content", "Feature: add file")
-	
+
 	// main 브랜치에서 같은 경로에 다른 내용으로 추가
 	setup.repo.BranchCheckout("main")
 	setup.repo.Commit("newfile.txt", "main content", "Main: add same file")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// add/add 충돌이 감지되어야 함
 	if result.HasConflicts {
 		require.Greater(t, result.ConflictCount, 0, "should detect add/add conflict")
@@ -1021,36 +1021,36 @@ func Test_MergePreview_FileModeChange_ExecutableBit_Handled(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 non-executable 파일 생성
 	filePath := filepath.Join(setup.repo.Dir, "script.sh")
 	err := os.WriteFile(filePath, []byte("#!/bin/bash\necho hello"), 0644)
 	require.NoError(t, err)
 	setup.repo.StageFile("script.sh")
 	setup.repo.CommitStaged("Add non-executable script")
-	
+
 	// feature 브랜치에서 executable로 변경
 	setup.repo.BranchCreate("feature")
 	err = os.Chmod(filePath, 0755)
 	require.NoError(t, err)
 	setup.repo.StageFile("script.sh")
 	setup.repo.CommitStaged("Make script executable")
-	
+
 	// main 브랜치에서 내용 수정 (모드는 그대로)
 	setup.repo.BranchCheckout("main")
 	err = os.WriteFile(filePath, []byte("#!/bin/bash\necho modified"), 0644)
 	require.NoError(t, err)
 	setup.repo.StageFile("script.sh")
 	setup.repo.CommitStaged("Modify script content")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err = json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 파일 모드 변경이 감지되어야 함 (충돌 또는 변경으로)
 	require.NotNil(t, result.ChangesSummary, "changes_summary should be present")
 	// 파일이 변경되었는지 확인
@@ -1062,30 +1062,30 @@ func Test_MergePreview_AlreadyMerged_ReturnsAlreadyMergedTrue(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// main에 초기 커밋
 	setup.repo.Commit("base.txt", "base", "Base commit")
-	
+
 	// feature 브랜치 생성 및 커밋
 	setup.repo.BranchCreate("feature")
 	setup.repo.Commit("feature.txt", "feature", "Feature commit")
 	featureHash := setup.repo.HeadHash()
-	
+
 	// main으로 돌아가서 feature를 이미 머지 (fast-forward)
 	setup.repo.BranchCheckout("main")
 	// main을 feature로 업데이트 (이미 머지됨)
 	ref := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), featureHash)
 	err := setup.repo.Repo.Storer.SetReference(ref)
 	require.NoError(t, err)
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err = json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 이미 머지된 상태: IsFastForward가 true이고 HasConflicts가 false
 	require.True(t, result.IsFastForward, "already merged should be fast-forward")
 	require.False(t, result.HasConflicts, "already merged should have no conflicts")
@@ -1098,7 +1098,7 @@ func Test_MergePreview_RenamedFiles_CountsCorrectly(t *testing.T) {
 
 	setup := setupMergePreviewTest(t)
 	setup.repo.Commit("original.txt", "content", "Initial commit")
-	
+
 	// feature 브랜치에서 파일 이름 변경
 	setup.repo.BranchCreate("feature")
 	setup.repo.RenameFile("original.txt", "renamed.txt")
@@ -1106,15 +1106,15 @@ func Test_MergePreview_RenamedFiles_CountsCorrectly(t *testing.T) {
 	setup.repo.StageFile("renamed.txt")
 	setup.repo.CommitStaged("Rename file")
 	setup.repo.BranchCheckout("main")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	require.NotNil(t, result.ChangesSummary, "changes_summary should be present")
 	assert.Equal(t, 1, result.ChangesSummary.RenamedFiles,
 		"should count 1 renamed file, got %d", result.ChangesSummary.RenamedFiles)
@@ -1126,7 +1126,7 @@ func Test_MergePreview_LargeFile_HandlesMaxSize(t *testing.T) {
 
 	setup := setupMergePreviewTest(t)
 	setup.repo.Commit("small.txt", "small", "Initial commit")
-	
+
 	// feature 브랜치에서 대용량 파일 추가 (>1MB)
 	setup.repo.BranchCreate("feature")
 	largeContent := make([]byte, 2*1024*1024) // 2MB
@@ -1135,15 +1135,15 @@ func Test_MergePreview_LargeFile_HandlesMaxSize(t *testing.T) {
 	}
 	setup.repo.CommitBinary("large.bin", largeContent, "Add large file")
 	setup.repo.BranchCheckout("main")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 대용량 파일이 처리되어야 함 (truncated 또는 제한 내에서 처리)
 	require.NotNil(t, result.ChangesSummary, "changes_summary should be present")
 	assert.Greater(t, result.ChangesSummary.TotalFiles, 0, "should detect large file")
@@ -1154,14 +1154,14 @@ func Test_MergePreview_ManyFiles_HandlesMaxFiles(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 파일들 생성
 	files := make(map[string]string)
 	for i := 0; i < 10; i++ {
 		files[fmt.Sprintf("base%d.txt", i)] = "base content"
 	}
 	setup.repo.CommitMultiple(files, "Base commit")
-	
+
 	// feature 브랜치에서 많은 파일 추가 (1000개 이상)
 	setup.repo.BranchCreate("feature")
 	files = make(map[string]string)
@@ -1170,15 +1170,15 @@ func Test_MergePreview_ManyFiles_HandlesMaxFiles(t *testing.T) {
 	}
 	setup.repo.CommitMultiple(files, "Add many files")
 	setup.repo.BranchCheckout("main")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 많은 파일이 처리되어야 함 (truncated 또는 제한 내에서 처리)
 	require.NotNil(t, result.ChangesSummary, "changes_summary should be present")
 	assert.Greater(t, result.ChangesSummary.TotalFiles, 0, "should detect many files")
@@ -1191,20 +1191,20 @@ func Test_MergePreview_EmptyFiles_HandlesCorrectly(t *testing.T) {
 
 	setup := setupMergePreviewTest(t)
 	setup.repo.Commit("base.txt", "content", "Initial commit")
-	
+
 	// feature 브랜치에서 빈 파일 추가
 	setup.repo.BranchCreate("feature")
 	setup.repo.Commit("empty.txt", "", "Add empty file")
 	setup.repo.BranchCheckout("main")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	require.NotNil(t, result.ChangesSummary, "changes_summary should be present")
 	assert.Equal(t, 1, result.ChangesSummary.AddedFiles,
 		"should count 1 added file (empty file), got %d", result.ChangesSummary.AddedFiles)
@@ -1347,26 +1347,26 @@ func Test_MergePreview_BinaryFileConflict_MarksAsBinary(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 바이너리 파일 생성
 	setup.repo.CommitBinary("image.png", []byte{0x89, 0x50, 0x4E, 0x47, 0x00, 0x01}, "Base binary")
-	
+
 	// feature 브랜치에서 바이너리 수정
 	setup.repo.BranchCreate("feature")
 	setup.repo.CommitBinary("image.png", []byte{0x89, 0x50, 0x4E, 0x47, 0x00, 0x02}, "Feature binary")
-	
+
 	// main 브랜치에서도 바이너리 수정
 	setup.repo.BranchCheckout("main")
 	setup.repo.CommitBinary("image.png", []byte{0x89, 0x50, 0x4E, 0x47, 0x00, 0x03}, "Main binary")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 바이너리 파일 충돌이 감지되어야 함
 	if result.HasConflicts {
 		require.Greater(t, result.ConflictCount, 0, "should detect binary file conflict")
@@ -1385,7 +1385,7 @@ func Test_MergePreview_BinaryFileConflict_MarksAsBinary(t *testing.T) {
 			}
 		}
 	}
-	
+
 	// FilesChanged에서도 바이너리로 표시되어야 함
 	if result.FilesChanged != nil {
 		for _, fileChange := range result.FilesChanged {
@@ -1401,26 +1401,26 @@ func Test_MergePreview_EOLOnlyChange_DoesNotCreateFalseConflict(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 파일 생성 (LF)
 	setup.repo.Commit("file.txt", "line1\nline2\n", "Base commit")
-	
+
 	// feature 브랜치에서 CRLF로 변경
 	setup.repo.BranchCreate("feature")
 	setup.repo.Commit("file.txt", "line1\r\nline2\r\n", "Feature: CRLF")
-	
+
 	// main 브랜치에서 내용은 동일하지만 LF 유지
 	setup.repo.BranchCheckout("main")
 	// main은 변경하지 않음 (LF 유지)
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// EOL 차이만 있는 경우 충돌이 없어야 함 (또는 충돌이 있어도 false conflict가 아님)
 	// 현재 구현에 따라 다를 수 있지만, 최소한 500은 아니어야 함
 	require.NotEqual(t, http.StatusInternalServerError, resp.Code,
@@ -1454,29 +1454,29 @@ func Test_MergePreview_BinaryAndTextMix_ReportsBinaryWithoutPatch(t *testing.T) 
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 텍스트 파일과 바이너리 파일 생성
 	setup.repo.Commit("text.txt", "text content", "Base commit")
 	setup.repo.CommitBinary("binary.bin", []byte{0x00, 0x01, 0x02}, "Base binary")
-	
+
 	// feature 브랜치에서 둘 다 수정
 	setup.repo.BranchCreate("feature")
 	setup.repo.Commit("text.txt", "modified text", "Feature: modify text")
 	setup.repo.CommitBinary("binary.bin", []byte{0x03, 0x04, 0x05}, "Feature: modify binary")
-	
+
 	// main 브랜치에서도 둘 다 수정
 	setup.repo.BranchCheckout("main")
 	setup.repo.Commit("text.txt", "main text", "Main: modify text")
 	setup.repo.CommitBinary("binary.bin", []byte{0x06, 0x07, 0x08}, "Main: modify binary")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 바이너리 파일은 patch 없이 메타데이터만 있어야 함
 	if result.FilesChanged != nil {
 		for _, fileChange := range result.FilesChanged {
@@ -1496,30 +1496,30 @@ func Test_MergePreview_RenameToExistingPath_DetectsConflict(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 두 파일 생성
 	setup.repo.Commit("oldname.txt", "content1", "Base commit")
 	setup.repo.Commit("existing.txt", "content2", "Base commit")
-	
+
 	// feature 브랜치에서 oldname을 existing으로 rename
 	setup.repo.BranchCreate("feature")
 	setup.repo.RenameFile("oldname.txt", "existing.txt")
 	setup.repo.StageRemove("oldname.txt")
 	setup.repo.StageFile("existing.txt")
 	setup.repo.CommitStaged("Feature: rename to existing")
-	
+
 	// main 브랜치에서 existing.txt 수정
 	setup.repo.BranchCheckout("main")
 	setup.repo.Commit("existing.txt", "modified content", "Main: modify existing")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// rename to existing path 충돌이 감지되어야 함
 	if result.HasConflicts {
 		require.Greater(t, result.ConflictCount, 0, "should detect rename to existing path conflict")
@@ -1531,14 +1531,14 @@ func Test_MergePreview_LargeDiff_ReturnsTruncatedFlagAndStableCounts(t *testing.
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 큰 파일 생성
 	largeContent := make([]byte, 5*1024*1024) // 5MB
 	for i := range largeContent {
 		largeContent[i] = byte(i % 256)
 	}
 	setup.repo.CommitBinary("large.bin", largeContent, "Base large file")
-	
+
 	// feature 브랜치에서 큰 파일 수정
 	setup.repo.BranchCreate("feature")
 	largeContent2 := make([]byte, 5*1024*1024) // 5MB
@@ -1547,18 +1547,18 @@ func Test_MergePreview_LargeDiff_ReturnsTruncatedFlagAndStableCounts(t *testing.
 	}
 	setup.repo.CommitBinary("large.bin", largeContent2, "Feature: modify large file")
 	setup.repo.BranchCheckout("main")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// ChangesSummary가 안정적으로 반환되어야 함
 	require.NotNil(t, result.ChangesSummary, "changes_summary should be present")
-	
+
 	// TotalFiles count가 안정적이어야 함
 	assert.Greater(t, result.ChangesSummary.TotalFiles, 0,
 		"should have stable file count even for large diff")
@@ -1576,23 +1576,23 @@ func Test_MergePreview_BinaryDiff_ReturnsNoPatchButHasMetadata(t *testing.T) {
 	t.Parallel()
 
 	setup := setupMergePreviewTest(t)
-	
+
 	// base에 바이너리 파일 생성
 	setup.repo.CommitBinary("image.png", []byte{0x89, 0x50, 0x4E, 0x47, 0x00, 0x01}, "Base binary")
-	
+
 	// feature 브랜치에서 바이너리 수정
 	setup.repo.BranchCreate("feature")
 	setup.repo.CommitBinary("image.png", []byte{0x89, 0x50, 0x4E, 0x47, 0x00, 0x02}, "Feature binary")
 	setup.repo.BranchCheckout("main")
-	
+
 	resp := setup.doPreview("feature", "main")
-	
+
 	require.Equal(t, http.StatusOK, resp.Code, "merge preview should succeed")
-	
+
 	var result MergePreviewResponse
 	err := json.Unmarshal(resp.Body.Bytes(), &result)
 	require.NoError(t, err)
-	
+
 	// 바이너리 파일은 patch 없이 메타데이터만 있어야 함
 	if result.FilesChanged != nil {
 		for _, fileChange := range result.FilesChanged {

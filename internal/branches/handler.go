@@ -447,9 +447,9 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		statusCode := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "does not exist") {
 			statusCode = http.StatusNotFound
-		} else if strings.Contains(err.Error(), "cannot be the same") || strings.Contains(err.Error(), "already exists") {
+		} else if strings.Contains(err.Error(), "cannot be the same") {
 			statusCode = http.StatusBadRequest
-		} else if strings.Contains(err.Error(), "already exists") && strings.Contains(err.Error(), "force=true") {
+		} else if strings.Contains(err.Error(), "already exists") {
 			statusCode = http.StatusConflict
 		} else if strings.Contains(err.Error(), "not a fast-forward") || strings.Contains(err.Error(), "must be provided") {
 			statusCode = http.StatusBadRequest
