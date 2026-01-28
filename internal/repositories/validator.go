@@ -346,6 +346,22 @@ func validateComponent(component, componentType string) error {
 		return fmt.Errorf("%s name cannot be empty", componentType)
 	}
 
+	// Check for null bytes and control characters (security critical)
+	for i, r := range component {
+		if r == 0 {
+			return fmt.Errorf("%s name cannot contain null byte at position %d", componentType, i)
+		}
+		// Control characters (ASCII 0-31 except tab, and DEL 127)
+		if r < 32 || r == 127 {
+			return fmt.Errorf("%s name cannot contain control character (0x%02x) at position %d", componentType, r, i)
+		}
+	}
+
+	// Check for whitespace (space, tab, newline, etc.)
+	if strings.ContainsAny(component, " \t\n\r\v\f") {
+		return fmt.Errorf("%s name cannot contain whitespace: %q", componentType, component)
+	}
+
 	// Check for path traversal attempts
 	if strings.Contains(component, "..") {
 		return fmt.Errorf("%s name cannot contain '..' (path traversal attempt): %s", componentType, component)

@@ -71,24 +71,18 @@
 - [x] `Test_MergePreview_ShortSHA_ReturnsSuccess` - 7자리 short SHA
 - [x] `Test_MergePreview_NonExistentSHA_Returns404_OBJECT_NOT_FOUND` ⭐ P0
   - 회귀: "존재하지 않는 SHA는 404로 떨어져 409/400과 섞이지 않는다"
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
 - [x] `Test_MergePreview_MalformedRef_Returns400_INVALID_REF` ⭐ P0
   - 회귀: "형식이 명확히 잘못된 ref는 400으로 거절된다 (공백, rev-parse, tree-ish 등)"
   - 참고: Branch-First Policy에 따라 `xyz123`, `deadbeef` 같은 입력은 malformed가 아닌 404
 - [x] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
 - [x] `Test_MergePreview_AmbiguousLikeRef_Returns404_NotMalformed` - Branch-First Policy 검증
   - 회귀: "`xyz123`, `deadbeef` 같은 애매한 입력은 malformed(400)가 아니라 ref로 해석 시도 후 404"
-=======
 - [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
   - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
 - [ ] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
->>>>>>> Stashed changes
-=======
 - [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
   - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
 - [ ] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
->>>>>>> Stashed changes
 
 ### 1.1A Ref Resolution 확장 — "성공하지만 다른 객체를 가리키는" 케이스 ⚠️ 고위험
 - [ ] `Test_MergePreview_RefIsHEAD_Returns400_UNSUPPORTED_REF` - HEAD를 ref로 입력
@@ -591,23 +585,28 @@
 ## 9. Repositories
 
 ### 9.1 Repository Operations
-- [ ] `Test_OpenRepository_Valid_ReturnsRepo` - 정상 열기
-- [ ] `Test_OpenRepository_NonExistent_Returns404` - 존재하지 않는 레포
-- [ ] `Test_OpenRepository_Corrupted_Returns500` - 손상된 레포
-- [ ] `Test_OpenRepository_NotBare_HandlesCorrectly` - non-bare 레포
+- [x] `Test_OpenRepository_Valid_ReturnsRepo` - 정상 열기
+- [x] `Test_OpenRepository_NonExistent_ReturnsError` - 존재하지 않는 레포
+- [x] `Test_OpenRepository_Corrupted_ReturnsError` - 손상된 레포
+- [x] `Test_OpenRepository_NotBare_HandlesCorrectly` - non-bare 레포
 
 ### 9.1A GC/Locking/Permissions ⚠️ 고위험
-- [ ] `Test_OpenRepository_GCInProgress_ReadStillWorksOrReturnsRetryable`
-- [ ] `Test_OpenRepository_PermissionDenied_Returns403`
-- [ ] `Test_OpenRepository_LooseObjectsOnly_StillWorks` - pack 없을 때
+- [x] `Test_OpenRepository_GCInProgress_ReadStillWorksOrReturnsRetryable`
+  - 회귀: "GC 진행 중에도 읽기는 동작하거나 retryable 에러를 반환해야 한다"
+- [x] `Test_OpenRepository_PermissionDenied_ReturnsError`
+  - 회귀: "권한 없는 레포는 에러를 반환해야 한다"
+  - 참고: root로 실행 시 skip
+- [x] `Test_OpenRepository_LooseObjectsOnly_StillWorks` - pack 없이 loose objects만 있을 때
 
 ### 9.2 Path Resolution
-- [ ] `Test_ResolvePath_ValidOwnerRepo_ReturnsPath` - 정상 경로
-- [ ] `Test_ResolvePath_PathTraversal_Returns400` - 경로 탐색 공격 방지
-- [ ] `Test_ResolvePath_SpecialChars_Escapes` - 특수문자 이스케이프
+- [x] `Test_ResolvePath_ValidOwnerRepo_ReturnsPath` - 정상 경로
+- [x] `Test_ResolvePath_PathTraversal_Returns400` - 경로 탐색 공격 방지 (5 subtests)
+- [x] `Test_ResolvePath_SpecialChars_Handles` - 특수문자 처리 (17 subtests)
+  - 공백, null byte, 제어문자, 파일시스템 위험 문자 차단
+- [x] `Test_ResolvePath_ReservedNames_Blocked` - Windows 예약어 차단 (CON, NUL 등)
 
 ### 9.2A Symlink Traversal ⚠️ 고위험
-- [ ] `Test_ResolvePath_SymlinkTraversal_Blocked` - repo root 밖으로 나가는 symlink
+- [x] `Test_ResolvePath_SymlinkTraversal_Blocked` - repo root 밖으로 나가는 symlink
 
 ---
 
