@@ -62,28 +62,21 @@
 ## 1. Merge / MergePreview (가장 복잡)
 
 ### 1.1 Ref Resolution 문제 (409 버그 원인)
-- [ ] `Test_MergePreview_DeletedSourceBranch_Returns404` - 삭제된 source 브랜치
-- [ ] `Test_MergePreview_DeletedTargetBranch_Returns404` - 삭제된 target 브랜치
-- [ ] `Test_MergePreview_DeletedBothBranches_Returns404` - 둘 다 삭제된 경우
-- [ ] `Test_MergePreview_BranchNameWithSlash_ReturnsSuccess` - feature/foo 형태
-- [ ] `Test_MergePreview_BranchNameWithMultipleSlashes_ReturnsSuccess` - feature/foo/bar
-- [ ] `Test_MergePreview_CommitSHA_ReturnsSuccess` - 브랜치 대신 SHA 직접 사용
-- [ ] `Test_MergePreview_ShortSHA_ReturnsSuccess` - 7자리 short SHA
-- [ ] `Test_MergePreview_NonExistentSHA_Returns404_OBJECT_NOT_FOUND` ⭐ P0
+- [x] `Test_MergePreview_DeletedSourceBranch_Returns404` - 삭제된 source 브랜치
+- [x] `Test_MergePreview_DeletedTargetBranch_Returns404` - 삭제된 target 브랜치
+- [x] `Test_MergePreview_DeletedBothBranches_Returns404` - 둘 다 삭제된 경우
+- [x] `Test_MergePreview_BranchNameWithSlash_ReturnsSuccess` - feature/foo 형태
+- [x] `Test_MergePreview_BranchNameWithMultipleSlashes_ReturnsSuccess` - feature/foo/bar
+- [x] `Test_MergePreview_CommitSHA_ReturnsSuccess` - 브랜치 대신 SHA 직접 사용
+- [x] `Test_MergePreview_ShortSHA_ReturnsSuccess` - 7자리 short SHA
+- [x] `Test_MergePreview_NonExistentSHA_Returns404_OBJECT_NOT_FOUND` ⭐ P0
   - 회귀: "존재하지 않는 SHA는 404로 떨어져 409/400과 섞이지 않는다"
-<<<<<<< Updated upstream
-- [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
-  - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
-- [ ] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
-=======
 - [x] `Test_MergePreview_MalformedRef_Returns400_INVALID_REF` ⭐ P0
   - 회귀: "형식이 명확히 잘못된 ref는 400으로 거절된다 (공백, rev-parse, tree-ish 등)"
   - 참고: Branch-First Policy에 따라 `xyz123`, `deadbeef` 같은 입력은 malformed가 아닌 404
 - [x] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
 - [x] `Test_MergePreview_AmbiguousLikeRef_Returns404_NotMalformed` - Branch-First Policy 검증
   - 회귀: "`xyz123`, `deadbeef` 같은 애매한 입력은 malformed(400)가 아니라 ref로 해석 시도 후 404"
-  - 정책 문서: `docs/collabops-git/COLLABOPS_RUNTIME_POLICIES.md`
->>>>>>> Stashed changes
 
 ### 1.1A Ref Resolution 확장 — "성공하지만 다른 객체를 가리키는" 케이스 ⚠️ 고위험
 - [ ] `Test_MergePreview_RefIsHEAD_Returns400_UNSUPPORTED_REF` - HEAD를 ref로 입력
