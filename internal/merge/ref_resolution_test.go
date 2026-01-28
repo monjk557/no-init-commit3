@@ -549,7 +549,6 @@ func createTestMergePreviewHandler(t *testing.T, repoRoot string) *MergePreviewH
 		conflictDetector: conflictDetector,
 	}
 }
-<<<<<<< HEAD
 
 // =============================================================================
 // 명시적 테스트 함수들 (문서 1.1A 매핑)
@@ -738,5 +737,3 @@ func Test_MergePreview_RefIsFullRef_RefsHeadsMain_Returns400_UNSUPPORTED_REF(t *
 		})
 	}
 }
-=======
->>>>>>> 190065eef75d7f955c46247ad7aa9c3704cbd1a9

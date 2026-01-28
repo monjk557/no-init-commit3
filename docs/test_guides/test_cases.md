@@ -75,34 +75,30 @@
   - 회귀: "형식이 명확히 잘못된 ref는 400으로 거절된다 (공백, rev-parse, tree-ish 등)"
   - 참고: Branch-First Policy에 따라 `xyz123`, `deadbeef` 같은 입력은 malformed가 아닌 404
 - [x] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
-- [x] `Test_MergePreview_AmbiguousLikeRef_Returns404_NotMalformed` - Branch-First Policy 검증
+- [x] `Test_MergePreview_AmbiguousLikeRef_Returns404_P0` - Branch-First Policy 검증
   - 회귀: "`xyz123`, `deadbeef` 같은 애매한 입력은 malformed(400)가 아니라 ref로 해석 시도 후 404"
-- [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
-  - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
-- [ ] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
-- [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
-  - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
-- [ ] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
 
 ### 1.1A Ref Resolution 확장 — "성공하지만 다른 객체를 가리키는" 케이스 ⚠️ 고위험
-- [ ] `Test_MergePreview_RefIsHEAD_Returns400_UNSUPPORTED_REF` - HEAD를 ref로 입력
-- [ ] `Test_MergePreview_RefIsFullRef_RefsHeadsMain_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_HEAD_Returns400_UNSUPPORTED_REF` - HEAD를 ref로 입력
+- [x] `Test_MergePreview_FullRefPath_Returns400_UNSUPPORTED_REF` - refs/heads/* 같은 내부 ref 거부
   - 회귀: "refs/heads/* 같은 내부 ref를 직접 넣어도 우회되지 않는다"
-- [ ] `Test_MergePreview_RefIsAnnotatedTag_DereferencesToCommit_Deterministic` ⭐ P0
+- [x] `Test_MergePreview_AnnotatedTag_DereferencesToCommit_P0` ⭐ P0
   - 회귀: "annotated tag(tag object)를 입력해도 commit으로 안정적으로 역참조된다"
-- [ ] `Test_MergePreview_RefIsLightweightTag_PointsToCommit_Deterministic`
+- [x] `Test_MergePreview_LightweightTag_PointsToCommit_P0`
   - 회귀: "lightweight tag가 commit을 가리킬 때 branch와 동일하게 처리된다"
-- [ ] `Test_MergePreview_RefLooksLikeSHA_ButIsBranchName_PrefersBranch` ⭐ P0
+- [x] `Test_MergePreview_SHALikeBranchName_PrefersBranch_P0` ⭐ P0
   - 회귀: "sha 모양 branch가 있으면 sha로 해석 안 하고 branch로 해석한다"
 - [ ] `Test_MergePreview_RemoteStyleRef_OriginMain_Returns400` - origin/main 입력 실수 방지
-- [ ] `Test_MergePreview_RefContainsWhitespaceOrNewline_Returns400`
+- [x] `Test_MergePreview_RefWithWhitespace_Returns400_INVALID_REF`
   - 회귀: "ref에 공백/개행이 섞여도 parser가 흔들리거나 로그가 오염되지 않는다"
-- [ ] `Test_MergePreview_RefIsEmptyOrDotOrDotDot_Returns400`
+- [x] `Test_MergePreview_RefIsEmptyOrDot_Returns400_INVALID_REF`
   - 회귀: "빈 ref, '.', '..'가 들어와도 git 내부 path/ref로 흘러가지 않는다"
-- [ ] `Test_MergePreview_RefIsRevParseExpression_MainCaret_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_RevParseExpression_Returns400_UNSUPPORTED_REF`
   - 회귀: "rev-parse 문법(main^, main~1)이 입력으로 들어와도 다른 ref로 오해되지 않는다"
-- [ ] `Test_MergePreview_RefIsTreeishPath_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_TreeishPath_Returns400_UNSUPPORTED_REF`
   - 회귀: "tree-ish:path 입력이 path traversal/오해로 이어지지 않는다"
+- [x] `Test_MergePreview_LocalStateRef_Returns400_P0` - FETCH_HEAD, ORIG_HEAD 등 로컬 state ref 거부
+- [x] `Test_MergePreview_MaliciousInput_NoInternalError_P0` - 악의적 입력에서 500 발생 안함
 
 ### 1.1B 호스팅별 특수 Ref ⚠️ 고위험
 - [ ] `Test_MergePreview_PullRequestRef_Returns400_UNSUPPORTED_REF` - refs/pull/<id>/head
