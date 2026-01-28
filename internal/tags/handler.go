@@ -1,6 +1,7 @@
 package tags
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -130,13 +131,31 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) {
 
 	tag, err := CreateTag(repoWrapper, &req)
 	if err != nil {
-		// 에러 메시지에 따라 적절한 상태 코드 선택
-		statusCode := http.StatusBadRequest
+		// 에러 타입에 따라 적절한 상태 코드 선택
+		if errors.Is(err, ErrTagAlreadyExists) {
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"error":   "Failed to create tag",
+				"details": "tag already exists",
+			})
+			return
+		}
+
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "commit not found") {
-			statusCode = http.StatusNotFound
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Failed to create tag",
+				"details": errMsg,
+			})
+			return
 		}
-		c.JSON(statusCode, gin.H{"success": false, "error": "Failed to create tag", "details": errMsg})
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Failed to create tag",
+			"details": errMsg,
+		})
 		return
 	}
 

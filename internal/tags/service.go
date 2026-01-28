@@ -1,7 +1,9 @@
 package tags
 
 import (
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/collabops/git-executor/internal/repositories"
@@ -9,8 +11,24 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// ErrTagAlreadyExists is returned when trying to create a tag that already exists
+var ErrTagAlreadyExists = errors.New("tag already exists")
+
+// SortOrder defines the sort order for tags
+type SortOrder string
+
+const (
+	SortByName SortOrder = "name"
+	SortByDate SortOrder = "date"
+)
+
 // GetTags는 저장소의 모든 태그를 가져옵니다 (페이지네이션 지원).
 func GetTags(repoWrapper *repositories.RepositoryWrapper, limit, skip int) ([]Tag, int, error) {
+	return GetTagsSorted(repoWrapper, limit, skip, SortByName)
+}
+
+// GetTagsSorted는 저장소의 모든 태그를 정렬하여 가져옵니다.
+func GetTagsSorted(repoWrapper *repositories.RepositoryWrapper, limit, skip int, sortBy SortOrder) ([]Tag, int, error) {
 	repo := repoWrapper.GetRepo()
 	refs, err := repo.References()
 	if err != nil {
@@ -44,6 +62,14 @@ func GetTags(repoWrapper *repositories.RepositoryWrapper, limit, skip int) ([]Ta
 					Email: tagObj.Tagger.Email,
 					Date:  tagObj.Tagger.When,
 				}
+			} else {
+				// Lightweight tag: 커밋 날짜를 가져옴
+				commit, err := repo.CommitObject(tagHash)
+				if err == nil {
+					tag.Tagger = &Tagger{
+						Date: commit.Committer.When,
+					}
+				}
 			}
 
 			allTags = append(allTags, tag)
@@ -55,11 +81,30 @@ func GetTags(repoWrapper *repositories.RepositoryWrapper, limit, skip int) ([]Ta
 		return nil, 0, fmt.Errorf("failed to iterate references: %w", err)
 	}
 
+	// 정렬 적용
+	switch sortBy {
+	case SortByDate:
+		sort.Slice(allTags, func(i, j int) bool {
+			// 날짜 내림차순 (최신 먼저)
+			dateI := getTagDate(allTags[i])
+			dateJ := getTagDate(allTags[j])
+			return dateI.After(dateJ)
+		})
+	case SortByName:
+		fallthrough
+	default:
+		sort.Slice(allTags, func(i, j int) bool {
+			return allTags[i].Name < allTags[j].Name
+		})
+	}
+
 	totalCount := len(allTags)
 
 	// 페이지네이션 적용
 	if skip > 0 && skip < totalCount {
 		allTags = allTags[skip:]
+	} else if skip >= totalCount {
+		allTags = []Tag{}
 	}
 
 	if limit > 0 && limit < len(allTags) {
@@ -67,6 +112,14 @@ func GetTags(repoWrapper *repositories.RepositoryWrapper, limit, skip int) ([]Ta
 	}
 
 	return allTags, totalCount, nil
+}
+
+// getTagDate returns the date of a tag (tagger date or zero time)
+func getTagDate(tag Tag) time.Time {
+	if tag.Tagger != nil {
+		return tag.Tagger.Date
+	}
+	return time.Time{}
 }
 
 // buildPagination은 페이지네이션 정보를 생성합니다.
@@ -112,6 +165,12 @@ func CreateTag(repoWrapper *repositories.RepositoryWrapper, req *CreateTagReques
 	}
 
 	tagRefName := plumbing.ReferenceName(fmt.Sprintf("refs/tags/%s", req.Name))
+
+	// Check if tag already exists (return 409 Conflict)
+	_, err = repo.Reference(tagRefName, false)
+	if err == nil {
+		return nil, ErrTagAlreadyExists
+	}
 
 	// Create Annotated Tag if requested
 	if req.Annotated {

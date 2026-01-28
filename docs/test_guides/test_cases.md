@@ -563,22 +563,25 @@
 ## 8. Tags
 
 ### 8.1 Create Tag
-- [ ] `Test_CreateTag_Lightweight_ReturnsSuccess` - 경량 태그
-- [ ] `Test_CreateTag_Annotated_ReturnsSuccess` - 주석 태그
-- [ ] `Test_CreateTag_DuplicateName_Returns409` - 중복 이름
-- [ ] `Test_CreateTag_InvalidTarget_Returns404` - 잘못된 target
-- [ ] `Test_CreateTag_FromBranch_ReturnsSuccess` - 브랜치에서 생성
-- [ ] `Test_CreateTag_FromCommit_ReturnsSuccess` - 커밋에서 생성
+- [x] `Test_CreateTag_Lightweight_ReturnsSuccess` - 경량 태그
+- [x] `Test_CreateTag_Annotated_ReturnsSuccess` - 주석 태그
+- [x] `Test_CreateTag_DuplicateName_Returns409` - 중복 이름 → **409 `ErrTagAlreadyExists` 반환 구현됨**
+- [x] `Test_CreateTag_InvalidTarget_Returns400` - zero hash (형식 오류)
+- [x] `Test_CreateTag_NonExistentCommit_Returns404` - 존재하지 않는 커밋
+- [x] `Test_CreateTag_FromBranch_ReturnsSuccess` - 브랜치에서 생성
+- [x] `Test_CreateTag_FromCommit_ReturnsSuccess` - 커밋에서 생성
 
 ### 8.2 Delete Tag
-- [ ] `Test_DeleteTag_Existing_ReturnsSuccess` - 정상 삭제
-- [ ] `Test_DeleteTag_NonExistent_Returns404` - 존재하지 않는 태그
+- [x] `Test_DeleteTag_Existing_ReturnsSuccess` - 정상 삭제
+- [x] `Test_DeleteTag_NonExistent_Returns404` - 존재하지 않는 태그
 
 ### 8.3 List Tags
-- [ ] `Test_GetTags_ReturnsAll` - 태그 목록
-- [ ] `Test_GetTags_EmptyRepo_ReturnsEmptyArray` - 빈 레포
-- [ ] `Test_GetTags_SortByName_ReturnsSorted` - 이름순 정렬
-- [ ] `Test_GetTags_SortByDate_ReturnsSorted` - 날짜순 정렬
+- [x] `Test_GetTags_ReturnsAll` - 태그 목록
+- [x] `Test_GetTags_EmptyRepo_ReturnsEmptyArray` - 빈 레포
+- [x] `Test_GetTags_SortByName_ReturnsSorted` - 이름순 정렬 → **`GetTagsSorted(SortByName)` 구현됨**
+- [x] `Test_GetTags_Pagination_ReturnsCorrectPage` - 페이지네이션
+- [x] `Test_GetTags_AnnotatedAndLightweight_ReturnsBoth` - annotated/lightweight 혼합
+- [x] `Test_GetTags_SortByDate_ReturnsSorted` - 날짜순 정렬 → **`GetTagsSorted(SortByDate)` 구현됨**
 
 ---
 
