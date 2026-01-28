@@ -71,13 +71,23 @@
 - [ ] `Test_MergePreview_ShortSHA_ReturnsSuccess` - 7자리 short SHA
 - [ ] `Test_MergePreview_NonExistentSHA_Returns404_OBJECT_NOT_FOUND` ⭐ P0
   - 회귀: "존재하지 않는 SHA는 404로 떨어져 409/400과 섞이지 않는다"
+<<<<<<< Updated upstream
 - [ ] `Test_MergePreview_MalformedSHA_Returns400_INVALID_REF` ⭐ P0
   - 회귀: "SHA 형식이 틀리면 404가 아니라 400으로 명확히 거절된다"
 - [ ] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
+=======
+- [x] `Test_MergePreview_MalformedRef_Returns400_INVALID_REF` ⭐ P0
+  - 회귀: "형식이 명확히 잘못된 ref는 400으로 거절된다 (공백, rev-parse, tree-ish 등)"
+  - 참고: Branch-First Policy에 따라 `xyz123`, `deadbeef` 같은 입력은 malformed가 아닌 404
+- [x] `Test_MergePreview_AmbiguousRef_Returns400_AMBIGUOUS_REF` - 브랜치/태그 이름 충돌
+- [x] `Test_MergePreview_AmbiguousLikeRef_Returns404_NotMalformed` - Branch-First Policy 검증
+  - 회귀: "`xyz123`, `deadbeef` 같은 애매한 입력은 malformed(400)가 아니라 ref로 해석 시도 후 404"
+  - 정책 문서: `docs/collabops-git/COLLABOPS_RUNTIME_POLICIES.md`
+>>>>>>> Stashed changes
 
 ### 1.1A Ref Resolution 확장 — "성공하지만 다른 객체를 가리키는" 케이스 ⚠️ 고위험
 - [ ] `Test_MergePreview_RefIsHEAD_Returns400_UNSUPPORTED_REF` - HEAD를 ref로 입력
-- [ ] `Test_MergePreview_RefIsFullRef_RefsHeadsMain_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_RefIsFullRef_RefsHeadsMain_Returns400_UNSUPPORTED_REF`
   - 회귀: "refs/heads/* 같은 내부 ref를 직접 넣어도 우회되지 않는다"
 - [ ] `Test_MergePreview_RefIsAnnotatedTag_DereferencesToCommit_Deterministic` ⭐ P0
   - 회귀: "annotated tag(tag object)를 입력해도 commit으로 안정적으로 역참조된다"
@@ -86,13 +96,15 @@
 - [ ] `Test_MergePreview_RefLooksLikeSHA_ButIsBranchName_PrefersBranch` ⭐ P0
   - 회귀: "sha 모양 branch가 있으면 sha로 해석 안 하고 branch로 해석한다"
 - [ ] `Test_MergePreview_RemoteStyleRef_OriginMain_Returns400` - origin/main 입력 실수 방지
-- [ ] `Test_MergePreview_RefContainsWhitespaceOrNewline_Returns400`
+- [x] `Test_MergePreview_RefContainsWhitespaceOrNewline_Returns400`
   - 회귀: "ref에 공백/개행이 섞여도 parser가 흔들리거나 로그가 오염되지 않는다"
-- [ ] `Test_MergePreview_RefIsEmptyOrDotOrDotDot_Returns400`
+- [x] `Test_MergePreview_LocalStateRef_Returns400_UNSUPPORTED_REF`
+  - 회귀: "로컬 state ref(FETCH_HEAD, ORIG_HEAD 등)가 API에서 거부된다"
+- [x] `Test_MergePreview_RefIsEmptyOrDotOrDotDot_Returns400`
   - 회귀: "빈 ref, '.', '..'가 들어와도 git 내부 path/ref로 흘러가지 않는다"
-- [ ] `Test_MergePreview_RefIsRevParseExpression_MainCaret_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_RefIsRevParseExpression_Returns400_UNSUPPORTED_REF`
   - 회귀: "rev-parse 문법(main^, main~1)이 입력으로 들어와도 다른 ref로 오해되지 않는다"
-- [ ] `Test_MergePreview_RefIsTreeishPath_Returns400_UNSUPPORTED_REF`
+- [x] `Test_MergePreview_RefIsTreeishPath_Returns400_UNSUPPORTED_REF`
   - 회귀: "tree-ish:path 입력이 path traversal/오해로 이어지지 않는다"
 
 ### 1.1B 호스팅별 특수 Ref ⚠️ 고위험
@@ -106,9 +118,12 @@
 > 포인트: "지원 안 하면 400으로 명확히 거절" / "지원하면 동작이 고정". 애매하게 404/409 섞이면 디버깅 지옥.
 
 ### 1.2 Merge Base 계산
-- [ ] `Test_FindMergeBase_NormalBranching_ReturnsBranchPoint` - 일반 분기
-- [ ] `Test_FindMergeBase_LinearHistory_ReturnsAncestor` - 선형 히스토리
-- [ ] `Test_FindMergeBase_SameCommit_ReturnsSelf` - 같은 커밋
+- [x] `Test_FindMergeBase_NormalBranching_ReturnsBranchPoint` - 일반 분기
+- [x] `Test_FindMergeBase_LinearHistory_ReturnsAncestor` - 선형 히스토리
+- [x] `Test_FindMergeBase_SameCommit_ReturnsSelf` - 같은 커밋
+- [x] `Test_CalculateCommitCounts_BranchDiverged_ReturnsAheadBehind` - ahead/behind 카운트
+- [x] `Test_ResolveReference_DeletedBranch_ReturnsError` - 삭제된 브랜치 해석 에러
+- [x] `Test_ResolveReference_DeletedBranch_CommitStillAccessible` - 삭제된 브랜치의 커밋 접근 가능
 - [ ] `Test_FindMergeBase_NoCommonAncestor_Returns422_NO_COMMON_ANCESTOR`
   - 회귀: "공통 조상 없는 레포에서 에러가 409/500으로 뭉개지지 않는다"
 - [ ] `Test_FindMergeBase_MultipleMergeBases_ReturnsDeterministicByRule` ⭐ P0
