@@ -1472,3 +1472,92 @@ func Test_CommitDiff_EmptyRepo_ReturnsErrorNot500(t *testing.T) {
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
 		"status=%d should not be 500 for empty repo body=%s", w.Code, w.Body.String())
 }
+
+// =============================================================================
+// 미구현/스킵 테스트 (test_cases.md 미체크 항목)
+// =============================================================================
+
+func Test_Diff_RenameDetection_On_ReturnsRenamed(t *testing.T) {
+	t.Parallel()
+	t.Skip("옵션 파라미터 미구현")
+}
+
+func Test_Diff_RenameDetection_Off_ReturnsDeleteAdd(t *testing.T) {
+	t.Parallel()
+	t.Skip("옵션 파라미터 미구현")
+}
+
+func Test_Diff_WhitespaceIgnore_OptionChangesPatch(t *testing.T) {
+	t.Parallel()
+	t.Skip("whitespace ignore 옵션 미구현")
+}
+
+func Test_Diff_Submodule_ReportsSubmoduleDelta(t *testing.T) {
+	t.Parallel()
+	t.Skip("submodule diff 지원 확인 필요")
+}
+
+func Test_Diff_HugeBinary_ReturnsNoPatchButSizeAndOID(t *testing.T) {
+	t.Parallel()
+	t.Skip("OID/size 메타데이터 계약 필요")
+}
+
+func Test_Diff_RenameBinaryFile_ReturnsNoPatchButMetadata(t *testing.T) {
+	t.Parallel()
+	t.Skip("계약/지원 확인 필요")
+}
+
+func Test_CommitDiff_LargeDiff_ReturnsTruncatedFlagAndStableCounts(t *testing.T) {
+	t.Parallel()
+	t.Skip("truncated 플래그/stable counts 계약 확인 필요")
+}
+
+func Test_CommitDiff_MaxFilesExceeded_ReturnsPartialAndNextCursor(t *testing.T) {
+	t.Parallel()
+	t.Skip("pagination/cursor 시스템 미구현")
+}
+
+func Test_BranchDiff_LargeDiff_ReturnsTruncatedFlagAndStableCounts(t *testing.T) {
+	t.Parallel()
+	t.Skip("truncated 플래그 미구현")
+}
+
+func Test_CommitDiff_LargeRepo_ExceedsDeadline_Returns503_TIMEOUT_WithRetryAfter(t *testing.T) {
+	t.Parallel()
+	t.Skip("deadline/timeout 미들웨어 미구현")
+}
+
+func Test_CommitDiff_ContextCanceled_Returns499Or408_CANCELED(t *testing.T) {
+	t.Parallel()
+	t.Skip("context canceled 응답 코드 미구현")
+}
+
+func Test_CommitDiff_UpstreamGoGitTimeout_Returns503_DEPENDENCY_TIMEOUT(t *testing.T) {
+	t.Parallel()
+	t.Skip("dependency timeout 미구현")
+}
+
+func Test_CommitDiff_TooManyConcurrentRequests_Returns429Or503_WithRetryAfter(t *testing.T) {
+	t.Parallel()
+	t.Skip("과부하/429 미구현")
+}
+
+func Test_CommitDiff_ResponseSizeLimit_TriggersTruncationNot500(t *testing.T) {
+	t.Parallel()
+	t.Skip("응답 크기 제한 미구현")
+}
+
+func Test_CommitDiff_HugePatch_DoesNotOOM_StreamsOrTruncates(t *testing.T) {
+	t.Parallel()
+	t.Skip("스트리밍/truncation 미구현")
+}
+
+func Test_ErrorResponse_TimeoutOrOverload_IncludesRequestId_ErrorCode_Correlation(t *testing.T) {
+	t.Parallel()
+	t.Skip("request id/관측성 미구현")
+}
+
+func Test_DiffEndpoint_EmitsMetrics_Duration_Size_Truncated_Flag(t *testing.T) {
+	t.Parallel()
+	t.Skip("메트릭 미구현")
+}

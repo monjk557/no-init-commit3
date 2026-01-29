@@ -467,6 +467,27 @@ func Test_GetBranches_DefaultRepo_ReturnsArrayNotNull(t *testing.T) {
 	require.GreaterOrEqual(t, len(resp.Branches), 1, "should have at least master branch")
 }
 
+// Test_GetBranches_SortByName_ReturnsSorted
+// 회귀: 브랜치 목록이 이름순으로 정렬되어 반환된다
+func Test_GetBranches_SortByName_ReturnsSorted(t *testing.T) {
+	t.Parallel()
+	t.Skip("sort by name 파라미터 미구현")
+}
+
+// Test_GetBranches_SortByDate_ReturnsSorted
+// 회귀: 브랜치 목록이 날짜순으로 정렬되어 반환된다
+func Test_GetBranches_SortByDate_ReturnsSorted(t *testing.T) {
+	t.Parallel()
+	t.Skip("sort by date 파라미터 미구현")
+}
+
+// Test_GetBranches_FilterByPattern_ReturnsMatching
+// 회귀: 패턴 필터에 맞는 브랜치만 반환된다
+func Test_GetBranches_FilterByPattern_ReturnsMatching(t *testing.T) {
+	t.Parallel()
+	t.Skip("filter by pattern 파라미터 미구현")
+}
+
 // =============================================================================
 // Helper functions
 // 원칙: boilerplate만 추상화, 핵심 로직은 테스트 본문에
@@ -1079,6 +1100,20 @@ func Test_CreateBranch_NameIsDashOrDot_Returns400(t *testing.T) {
 	requireBodyContains(t, w, "branch name")
 }
 
+// Test_CreateBranch_UpperLowerCollision_CaseInsensitiveFS_Returns409
+// 회귀: mac 기본 FS에서 Feature vs feature 충돌이 적절히 처리된다
+func Test_CreateBranch_UpperLowerCollision_CaseInsensitiveFS_Returns409(t *testing.T) {
+	t.Parallel()
+	t.Skip("case-insensitive FS 처리 로직 미구현")
+}
+
+// Test_CreateBranch_NameUnicodeNormalization_CollisionsHandled
+// 회귀: NFC vs NFD 정규화 충돌이 적절히 처리된다
+func Test_CreateBranch_NameUnicodeNormalization_CollisionsHandled(t *testing.T) {
+	t.Parallel()
+	t.Skip("unicode 정규화 충돌 처리 미구현")
+}
+
 // =============================================================================
 // 테스트: UpdateBranch 추가 케이스
 // =============================================================================
@@ -1457,6 +1492,20 @@ func Test_UpdateBranch_RenameDefault_ReturnsSuccess(t *testing.T) {
 	requireStatus(t, w, http.StatusOK)
 }
 
+// Test_UpdateBranch_RenameToDifferentCase_CaseInsensitiveFS_BehavesDeterministically
+// 회귀: case-insensitive FS에서 대소문자만 다른 리네임이 결정적으로 동작한다
+func Test_UpdateBranch_RenameToDifferentCase_CaseInsensitiveFS_BehavesDeterministically(t *testing.T) {
+	t.Parallel()
+	t.Skip("case-insensitive FS 처리 로직 미구현")
+}
+
+// Test_UpdateBranch_RenameCaseOnly_WhenOtherCaseExists_Returns409
+// 회귀: mac에서 Feature -> feature 리네임 시 다른 case가 있으면 409
+func Test_UpdateBranch_RenameCaseOnly_WhenOtherCaseExists_Returns409(t *testing.T) {
+	t.Parallel()
+	t.Skip("case-insensitive FS 처리 로직 미구현")
+}
+
 // =============================================================================
 // 테스트: DeleteBranch 추가 케이스
 // =============================================================================
@@ -1566,6 +1615,41 @@ func Test_DeleteBranch_AlreadyDeleted_Returns404(t *testing.T) {
 
 	requireStatus(t, w2, http.StatusNotFound)
 	requireBodyContains(t, w2, "does not exist")
+}
+
+// Test_DeleteBranch_ProtectedBranch_Returns403_POLICY_VIOLATION
+// 회귀: 보호 브랜치 삭제 시 403 POLICY_VIOLATION
+func Test_DeleteBranch_ProtectedBranch_Returns403_POLICY_VIOLATION(t *testing.T) {
+	t.Parallel()
+	t.Skip("브랜치 보호 정책 시스템 미구현")
+}
+
+// Test_DeleteBranch_ConcurrentDelete_SecondReturns404
+// 회귀: 동시 삭제에서 하나는 성공, 다른 하나는 404로 안정적으로 종료한다
+func Test_DeleteBranch_ConcurrentDelete_SecondReturns404(t *testing.T) {
+	t.Parallel()
+	t.Skip("동시 삭제 검증 테스트 (나중에 구현)")
+}
+
+// Test_UpdateBranch_Rename_ConcurrentCreateSameName_Returns409_ALREADY_EXISTS
+// 회귀: rename 중 동일 이름 create 경합이 나도 ref가 손상되지 않는다
+func Test_UpdateBranch_Rename_ConcurrentCreateSameName_Returns409_ALREADY_EXISTS(t *testing.T) {
+	t.Parallel()
+	t.Skip("동시 rename/create 검증 테스트 (나중에 구현)")
+}
+
+// Test_UpdateBranch_RenameWhileClientReads_ListDeterministic
+// 회귀: rename 중에도 list API가 깨지거나 중복 ref를 내지 않는다
+func Test_UpdateBranch_RenameWhileClientReads_ListDeterministic(t *testing.T) {
+	t.Parallel()
+	t.Skip("rename 중 list 검증 테스트 (나중에 구현)")
+}
+
+// Test_DeleteBranch_NotMerged_RequiresForce
+// 회귀: 머지되지 않은 브랜치 삭제는 force 필요 (또는 명시적 허용)
+func Test_DeleteBranch_NotMerged_RequiresForce(t *testing.T) {
+	t.Parallel()
+	t.Skip("not-merged 삭제 정책 미구현")
 }
 
 // =============================================================================

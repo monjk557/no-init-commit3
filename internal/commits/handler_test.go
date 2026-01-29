@@ -1577,3 +1577,79 @@ func Test_MultiFileCommit_PartialFailure_NoPartialCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, seedSHA, branchRef.Hash().String(), "HEAD should not have changed after partial failure")
 }
+
+// =============================================================================
+// 미구현/스킵 테스트 (test_cases.md 미체크 항목)
+// =============================================================================
+
+// Test_MultiFileCommit_IdempotencyKey_RetryDoesNotDuplicateCommit
+func Test_MultiFileCommit_IdempotencyKey_RetryDoesNotDuplicateCommit(t *testing.T) {
+	t.Parallel()
+	t.Skip("idempotency key 미구현")
+}
+
+// Test_MultiFileCommit_ClientRetryAfterTimeout_DoesNotCreateTwoCommits
+func Test_MultiFileCommit_ClientRetryAfterTimeout_DoesNotCreateTwoCommits(t *testing.T) {
+	t.Parallel()
+	t.Skip("복잡한 테스트, 나중에")
+}
+
+// Test_MultiFileCommit_IdempotencyKey_ServerCrashAfterWrite_NoDuplicateOnRetry
+func Test_MultiFileCommit_IdempotencyKey_ServerCrashAfterWrite_NoDuplicateOnRetry(t *testing.T) {
+	t.Parallel()
+	t.Skip("idempotency key 미구현")
+}
+
+// Test_MultiFileCommit_SymlinkCreation_HandledOrRejected
+func Test_MultiFileCommit_SymlinkCreation_HandledOrRejected(t *testing.T) {
+	t.Parallel()
+	t.Skip("symlink 지원 확인 필요")
+}
+
+// Test_CommitsAPI_ByPath_ReturnsCommitsAffectingPath
+func Test_CommitsAPI_ByPath_ReturnsCommitsAffectingPath(t *testing.T) {
+	t.Parallel()
+	t.Skip("경로 기준 조회 API 지원 확인 필요")
+}
+
+// Test_GetCommit_ValidSHA_ReturnsCommit
+func Test_GetCommit_ValidSHA_ReturnsCommit(t *testing.T) {
+	t.Parallel()
+	t.Skip("GetCommit 핸들러 확인 필요")
+}
+
+// Test_GetCommit_ShortSHA_ReturnsCommit
+func Test_GetCommit_ShortSHA_ReturnsCommit(t *testing.T) {
+	t.Parallel()
+	t.Skip("GetCommit 핸들러 확인 필요")
+}
+
+// Test_GetCommit_InvalidSHA_Returns404
+func Test_GetCommit_InvalidSHA_Returns404(t *testing.T) {
+	t.Parallel()
+	t.Skip("GetCommit 핸들러 확인 필요")
+}
+
+// Test_GetCommit_WithFiles_ReturnsFilesChanged
+func Test_GetCommit_WithFiles_ReturnsFilesChanged(t *testing.T) {
+	t.Parallel()
+	t.Skip("GetCommit 핸들러 확인 필요")
+}
+
+// Test_MultiFileCommit_ConcurrentSameBranch_NoConflict
+func Test_MultiFileCommit_ConcurrentSameBranch_NoConflict(t *testing.T) {
+	t.Parallel()
+	t.Skip("동시성 테스트, 나중에")
+}
+
+// Test_MultiFileCommit_ConcurrentSameFile_Returns409
+func Test_MultiFileCommit_ConcurrentSameFile_Returns409(t *testing.T) {
+	t.Parallel()
+	t.Skip("동시성 테스트, 나중에")
+}
+
+// Test_MultiFileCommit_ConcurrentSameBranch_DifferentFiles_OneFastForwardOne409
+func Test_MultiFileCommit_ConcurrentSameBranch_DifferentFiles_OneFastForwardOne409(t *testing.T) {
+	t.Parallel()
+	t.Skip("동시성 테스트, 나중에")
+}
