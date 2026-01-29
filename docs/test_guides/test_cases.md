@@ -848,15 +848,15 @@
 ## 14. Performance / Load
 
 ### 14.1 대용량 처리
-- [ ] `Test_LargeRepo_10000Commits_HandlesInTime` - 10000+ 커밋
-- [ ] `Test_LargeRepo_1000Branches_HandlesInTime` - 1000+ 브랜치
-- [ ] `Test_LargeFile_100MB_HandlesInTime` - 100MB 파일
-- [ ] `Test_ManyFiles_10000Files_HandlesInTime` - 10000+ 파일
+- [x] `Test_LargeRepo_10000Commits_HandlesInTime` - 10000+ 커밋 (short: 500)
+- [x] `Test_LargeRepo_1000Branches_HandlesInTime` - 1000+ 브랜치 (short: 100)
+- [x] `Test_LargeFile_100MB_HandlesInTime` - 100MB 파일 (short: 10MB)
+- [x] `Test_ManyFiles_10000Files_HandlesInTime` - 10000+ 파일 (short: 1000)
 
 ### 14.2 동시성
-- [ ] `Test_ConcurrentReads_NoDeadlock` - 동시 읽기
-- [ ] `Test_ConcurrentWrites_ProperLocking` - 동시 쓰기 잠금
-- [ ] `Test_ConcurrentMixedOps_NoRaceCondition` - 혼합 동시 작업
+- [x] `Test_ConcurrentReads_NoDeadlock` - 동시 읽기
+- [x] `Test_ConcurrentWrites_ProperLocking` - 동시 쓰기 잠금
+- [x] `Test_ConcurrentMixedOps_NoRaceCondition` - 혼합 동시 작업
 
 ---
 
