@@ -572,7 +572,7 @@ func Test_Merge_ThreeWay_CreatesMergeCommit(t *testing.T) {
 	mergeCommit, err := repo.CommitObject(plumbing.NewHash(result.MergeCommit.SHA))
 	require.NoError(t, err)
 	require.Equal(t, 2, mergeCommit.NumParents(), "merge commit should have 2 parents")
-	
+
 	// 부모가 main과 feature인지 확인
 	parents := mergeCommit.ParentHashes
 	require.Contains(t, parents, mainHash, "merge commit should have main as parent")
@@ -647,13 +647,13 @@ func Test_Merge_WithConflicts_Returns422_MERGE_CONFLICT(t *testing.T) {
 	// 충돌이 있으면 422 또는 409를 반환해야 함
 	assert.True(t, w.Code == http.StatusUnprocessableEntity || w.Code == http.StatusConflict,
 		"merge with conflicts should return 422 or 409, got %d\nBody: %s", w.Code, w.Body.String())
-	
+
 	// MERGE_CONFLICT 또는 CONFLICT 에러 코드 확인
 	bodyStr := w.Body.String()
-	assert.True(t, 
-		assert.Contains(t, bodyStr, "MERGE_CONFLICT") || 
-		assert.Contains(t, bodyStr, "CONFLICT") || 
-		assert.Contains(t, bodyStr, "conflict"),
+	assert.True(t,
+		assert.Contains(t, bodyStr, "MERGE_CONFLICT") ||
+			assert.Contains(t, bodyStr, "CONFLICT") ||
+			assert.Contains(t, bodyStr, "conflict"),
 		"response should contain conflict error\nBody: %s", bodyStr)
 }
 
@@ -733,17 +733,17 @@ func Test_Merge_Squash_CreatesSingleCommit(t *testing.T) {
 
 	// squash merge commit이 생성되었는지 확인
 	require.NotNil(t, result.MergeCommit, "should create squash merge commit")
-	
+
 	// squash commit은 main의 현재 HEAD를 부모로 가져야 함
 	squashCommit, err := repo.CommitObject(plumbing.NewHash(result.MergeCommit.SHA))
 	require.NoError(t, err)
 	require.Equal(t, 1, squashCommit.NumParents(), "squash commit should have 1 parent (main)")
-	
+
 	// main 브랜치가 squash commit을 가리키는지 확인
 	mainRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), false)
 	require.NoError(t, err)
 	require.Equal(t, squashCommit.Hash, mainRef.Hash(), "main branch should point to squash commit")
-	
+
 	// feature의 개별 커밋들은 main에 포함되지 않아야 함 (squash이므로)
 	// 하지만 squash commit의 내용에는 feature의 변경사항이 포함되어야 함
 }
@@ -866,11 +866,11 @@ func Test_Merge_SourceAdvancedDuringMerge_Returns409_CONCURRENT_UPDATE(t *testin
 	// Note: 현재 구현은 source 변경을 감지하지 않을 수 있음
 	// 하지만 테스트는 구현을 검증하는 것이므로, 실제 동작에 따라 조정 필요
 	// 일단 409 또는 200을 허용 (구현에 따라 다를 수 있음)
-	assert.True(t, 
+	assert.True(t,
 		mergeResp.Code == http.StatusConflict || mergeResp.Code == http.StatusOK,
 		"merge should return 409 CONCURRENT_UPDATE or 200 when source branch advances, got %d\nBody: %s",
 		mergeResp.Code, mergeResp.Body.String())
-	
+
 	if mergeResp.Code == http.StatusConflict {
 		assert.Contains(t, mergeResp.Body.String(), "CONCURRENT_UPDATE",
 			"response should contain CONCURRENT_UPDATE error code\nBody: %s", mergeResp.Body.String())
@@ -1508,14 +1508,14 @@ func Test_Merge_NoFastForward_CreatesMergeCommit(t *testing.T) {
 	require.True(t, result.Success, "merge should succeed")
 	// 현재 구현: merge method는 항상 merge commit 생성 (--no-ff와 동일)
 	require.NotNil(t, result.MergeCommit, "should create merge commit even for fast-forward")
-	
+
 	// merge commit이 생성되었는지 확인
 	mergeCommit, err := repo.CommitObject(plumbing.NewHash(result.MergeCommit.SHA))
 	require.NoError(t, err)
-	
+
 	// merge commit은 2개의 부모를 가져야 함 (main과 feature)
 	require.Equal(t, 2, mergeCommit.NumParents(), "merge commit should have 2 parents")
-	
+
 	// 부모가 base와 feature인지 확인
 	parents := mergeCommit.ParentHashes
 	require.Contains(t, parents, baseHash, "merge commit should have main (base) as parent")

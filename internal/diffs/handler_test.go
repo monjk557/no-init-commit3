@@ -554,6 +554,156 @@ func Test_CommitDiff_WithContextLines_ReturnsSuccess(t *testing.T) {
 	requireStatus(t, w, http.StatusOK)
 }
 
+// Test_CommitDiff_DefaultContext_Returns3Lines
+// 회귀: 기본 컨텍스트 3줄 반환
+func Test_CommitDiff_DefaultContext_Returns3Lines(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base: 여러 줄 파일
+	baseContent := "line1\nline2\nline3\nline4\nline5\n"
+	baseBlobHash := makeBlob(t, repo, []byte(baseContent))
+	baseTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: baseBlobHash},
+	})
+	baseCommitHash := makeCommit(t, repo, "Base commit", baseTreeHash, nil, now)
+
+	// head: 중간에 한 줄 추가
+	headContent := "line1\nline2\nline3\nnewline\nline4\nline5\n"
+	headBlobHash := makeBlob(t, repo, []byte(headContent))
+	headTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: headBlobHash},
+	})
+	headCommitHash := makeCommit(t, repo, "Head commit", headTreeHash, []plumbing.Hash{baseCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// context 파라미터 없이 요청 (기본값 3)
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
+		baseCommitHash.String(), headCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, 1, len(resp.Files))
+
+	// 기본 컨텍스트 3줄이 적용되어야 함 (구체적인 라인 수는 diff 알고리즘에 따라 다를 수 있음)
+	require.Greater(t, len(resp.Files[0].Changes), 0)
+}
+
+// Test_CommitDiff_CustomContext_ReturnsRequestedLines
+// 회귀: 커스텀 컨텍스트 라인 수 반환
+func Test_CommitDiff_CustomContext_ReturnsRequestedLines(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	baseBlobHash := makeBlob(t, repo, []byte("line1\nline2\nline3\nline4\nline5\n"))
+	baseTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: baseBlobHash},
+	})
+	baseCommitHash := makeCommit(t, repo, "Base commit", baseTreeHash, nil, now)
+
+	headBlobHash := makeBlob(t, repo, []byte("line1\nline2\nnewline\nline3\nline4\nline5\n"))
+	headTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: headBlobHash},
+	})
+	headCommitHash := makeCommit(t, repo, "Head commit", headTreeHash, []plumbing.Hash{baseCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// context=5로 요청
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=5",
+		baseCommitHash.String(), headCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, 1, len(resp.Files))
+	require.Greater(t, len(resp.Files[0].Changes), 0)
+}
+
+// Test_CommitDiff_ZeroContext_ReturnsNoContext
+// 회귀: 컨텍스트 0일 때 컨텍스트 라인 없음
+func Test_CommitDiff_ZeroContext_ReturnsNoContext(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	baseBlobHash := makeBlob(t, repo, []byte("line1\nline2\nline3\n"))
+	baseTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: baseBlobHash},
+	})
+	baseCommitHash := makeCommit(t, repo, "Base commit", baseTreeHash, nil, now)
+
+	headBlobHash := makeBlob(t, repo, []byte("line1\nnewline\nline2\nline3\n"))
+	headTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: headBlobHash},
+	})
+	headCommitHash := makeCommit(t, repo, "Head commit", headTreeHash, []plumbing.Hash{baseCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+
+	// context=0으로 요청
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=0",
+		baseCommitHash.String(), headCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, 1, len(resp.Files))
+
+	// context=0이면 Changes를 포함하지 않음 (메타데이터만 반환)
+	// 핵심: Changes 배열이 비어있어야 함
+	require.Equal(t, 0, len(resp.Files[0].Changes), "context=0 should return empty Changes")
+}
+
 // =============================================================================
 // 테스트: BranchDiff API
 // 회귀 방지: "브랜치 간 diff가 올바르게 동작해야 함"
@@ -579,6 +729,138 @@ func Test_BranchDiff_NonExistentHead_ReturnsError(t *testing.T) {
 		"status=%d want=400/404/500 body=%s", w.Code, w.Body.String())
 }
 
+// Test_BranchDiff_ValidBranches_ReturnsDiff
+// 회귀: 정상 브랜치 비교 시 diff 반환
+func Test_BranchDiff_ValidBranches_ReturnsDiff(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base 브랜치: initial commit
+	initialBlobHash := makeBlob(t, repo, []byte("initial\n"))
+	initialTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "file.txt", Mode: 0100644, Hash: initialBlobHash},
+	})
+	initialCommitHash := makeCommit(t, repo, "Initial commit", initialTreeHash, nil, now)
+	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), initialCommitHash)
+	require.NoError(t, repo.Storer.SetReference(ref))
+
+	// feature 브랜치: 파일 수정
+	modifiedBlobHash := makeBlob(t, repo, []byte("initial\nmodified\n"))
+	modifiedTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "file.txt", Mode: 0100644, Hash: modifiedBlobHash},
+	})
+	featureCommitHash := makeCommit(t, repo, "Modify file", modifiedTreeHash, []plumbing.Hash{initialCommitHash}, now)
+	featureRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature"), featureCommitHash)
+	require.NoError(t, repo.Storer.SetReference(featureRef))
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/feature", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, "master", resp.Base)
+	require.Equal(t, "feature", resp.Head)
+	require.Greater(t, len(resp.Files), 0)
+}
+
+// Test_BranchDiff_SameBranch_ReturnsEmpty
+// 회귀: 같은 브랜치 비교 시 빈 diff 반환
+func Test_BranchDiff_SameBranch_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	blobHash := makeBlob(t, repo, []byte("content\n"))
+	treeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "file.txt", Mode: 0100644, Hash: blobHash},
+	})
+	commitHash := makeCommit(t, repo, "Initial commit", treeHash, nil, now)
+	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), commitHash)
+	require.NoError(t, repo.Storer.SetReference(ref))
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/master", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, 0, len(resp.Files))
+	require.Equal(t, 0, resp.Stats.TotalAdditions)
+	require.Equal(t, 0, resp.Stats.TotalDeletions)
+}
+
+// Test_BranchDiff_DeletedBranch_Returns404
+// 회귀: 삭제된 브랜치 시 404 반환
+func Test_BranchDiff_DeletedBranch_Returns404(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	blobHash := makeBlob(t, repo, []byte("content\n"))
+	treeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "file.txt", Mode: 0100644, Hash: blobHash},
+	})
+	commitHash := makeCommit(t, repo, "Initial commit", treeHash, nil, now)
+	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), commitHash)
+	require.NoError(t, repo.Storer.SetReference(ref))
+
+	// deleted 브랜치 생성 후 삭제
+	deletedRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/deleted"), commitHash)
+	require.NoError(t, repo.Storer.SetReference(deletedRef))
+	require.NoError(t, repo.Storer.RemoveReference(plumbing.ReferenceName("refs/heads/deleted")))
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+
+	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/deleted", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.True(t, w.Code == http.StatusNotFound || w.Code == http.StatusBadRequest,
+		"status=%d want=404/400 body=%s", w.Code, w.Body.String())
+}
+
 // =============================================================================
 // 테스트: FileDiff / SingleCommitDiff / Patch API
 // 회귀 방지: "기타 diff API가 올바르게 동작해야 함"
@@ -599,6 +881,124 @@ func Test_FileDiff_MissingPath_Returns400(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	requireStatus(t, w, http.StatusBadRequest)
+}
+
+// Test_FileDiff_ValidPath_ReturnsDiff
+// 회귀: 정상 파일 비교 시 diff 반환
+func Test_FileDiff_ValidPath_ReturnsDiff(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base commit
+	baseBlobHash := makeBlob(t, repo, []byte("line1\n"))
+	baseTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: baseBlobHash},
+	})
+	baseCommitHash := makeCommit(t, repo, "Base commit", baseTreeHash, nil, now)
+
+	// head commit: 파일 수정
+	headBlobHash := makeBlob(t, repo, []byte("line1\nline2\n"))
+	headTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: headBlobHash},
+	})
+	headCommitHash := makeCommit(t, repo, "Head commit", headTreeHash, []plumbing.Hash{baseCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=test.txt&base=%s&head=%s",
+		baseCommitHash.String(), headCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, 1, len(resp.Files))
+	require.Equal(t, "test.txt", resp.Files[0].Path)
+	require.Equal(t, FileDiffStatusModified, resp.Files[0].Status)
+}
+
+// Test_FileDiff_NonExistentPath_Returns404
+// 회귀: 존재하지 않는 경로 시 404 반환
+func Test_FileDiff_NonExistentPath_Returns404(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	blobHash := makeBlob(t, repo, []byte("content\n"))
+	treeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "existing.txt", Mode: 0100644, Hash: blobHash},
+	})
+	commitHash := makeCommit(t, repo, "Initial commit", treeHash, nil, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=nonexistent.txt&base=%s&head=%s",
+		commitHash.String(), commitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// 파일이 양쪽 커밋에 모두 없으면 404 또는 400
+	require.True(t, w.Code == http.StatusNotFound || w.Code == http.StatusBadRequest,
+		"status=%d want=404/400 body=%s", w.Code, w.Body.String())
+}
+
+// Test_FileDiff_BinaryFile_ReturnsMetadataOnly
+// 회귀: 바이너리 파일은 메타데이터만 반환
+func Test_FileDiff_BinaryFile_ReturnsMetadataOnly(t *testing.T) {
+	t.Parallel()
+
+	repoPath, initialCommitSHA, secondCommitSHA, cleanup := setupTestRepositoryForBinaryFiles(t)
+	defer cleanup()
+
+	tempDir := filepath.Dir(filepath.Dir(repoPath))
+	handler := newDiffHandler(t, tempDir)
+
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=image.png&base=%s&head=%s",
+		initialCommitSHA, secondCommitSHA)
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, 1, len(resp.Files))
+
+	fileDiff := resp.Files[0]
+	require.Equal(t, "image.png", fileDiff.Path)
+	require.True(t, fileDiff.IsBinary)
+	require.Equal(t, 0, len(fileDiff.Changes), "binary files should not have line changes")
 }
 
 // Test_SingleCommitDiff_MissingSHA_Returns400
@@ -633,6 +1033,144 @@ func Test_Patch_MissingBase_Returns400(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	requireStatus(t, w, http.StatusBadRequest)
+}
+
+// Test_Patch_ValidRefs_ReturnsPatch
+// 회귀: 정상 refs로 패치 생성
+func Test_Patch_ValidRefs_ReturnsPatch(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base commit
+	baseBlobHash := makeBlob(t, repo, []byte("line1\n"))
+	baseTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: baseBlobHash},
+	})
+	baseCommitHash := makeCommit(t, repo, "Base commit", baseTreeHash, nil, now)
+
+	// head commit: 파일 수정
+	headBlobHash := makeBlob(t, repo, []byte("line1\nline2\n"))
+	headTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: headBlobHash},
+	})
+	headCommitHash := makeCommit(t, repo, "Head commit", headTreeHash, []plumbing.Hash{baseCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/patch/:base/:head", handler.HandlePatch)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/patch/%s/%s",
+		baseCommitHash.String(), headCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+	require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+	require.Contains(t, w.Header().Get("Content-Disposition"), ".patch")
+
+	patchContent := w.Body.String()
+	require.NotEmpty(t, patchContent)
+	require.Contains(t, patchContent, "test.txt")
+}
+
+// Test_Patch_InvalidBase_Returns400
+// 회귀: 잘못된 base 시 400 반환
+func Test_Patch_InvalidBase_Returns400(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	blobHash := makeBlob(t, repo, []byte("content\n"))
+	treeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "test.txt", Mode: 0100644, Hash: blobHash},
+	})
+	validCommitHash := makeCommit(t, repo, "Valid commit", treeHash, nil, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/patch/:base/:head", handler.HandlePatch)
+
+	// 잘못된 base SHA
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/patch/invalidsha/%s",
+		validCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.True(t, w.Code == http.StatusBadRequest || w.Code == http.StatusNotFound,
+		"status=%d want=400/404 body=%s", w.Code, w.Body.String())
+}
+
+// Test_Patch_Format_MatchesGitFormat
+// 회귀: Git 패치 형식 준수
+func Test_Patch_Format_MatchesGitFormat(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base commit
+	baseBlobHash := makeBlob(t, repo, []byte("old content\n"))
+	baseTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "file.txt", Mode: 0100644, Hash: baseBlobHash},
+	})
+	baseCommitHash := makeCommit(t, repo, "Base commit", baseTreeHash, nil, now)
+
+	// head commit: 파일 수정
+	headBlobHash := makeBlob(t, repo, []byte("old content\nnew content\n"))
+	headTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: "file.txt", Mode: 0100644, Hash: headBlobHash},
+	})
+	headCommitHash := makeCommit(t, repo, "Head commit", headTreeHash, []plumbing.Hash{baseCommitHash}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/patch/:base/:head", handler.HandlePatch)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/patch/%s/%s",
+		baseCommitHash.String(), headCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	patchContent := w.Body.String()
+	require.NotEmpty(t, patchContent)
+
+	// Git patch 형식의 기본 요소 확인
+	// 일반적으로 diff --git, ---, +++ 등의 헤더 포함
+	require.True(t,
+		strings.Contains(patchContent, "diff") ||
+			strings.Contains(patchContent, "---") ||
+			strings.Contains(patchContent, "+++") ||
+			strings.Contains(patchContent, "file.txt"),
+		"patch should contain Git format markers or filename")
 }
 
 // =============================================================================

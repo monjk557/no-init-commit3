@@ -217,6 +217,9 @@ func generateEventID() string {
 // Stream key format: git:events
 // Message format: JSON string in data field
 func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *CommitEvent) error {
+	if event == nil {
+		return fmt.Errorf("event cannot be nil")
+	}
 	// Build stream key: git:events (unified stream for all event types)
 	streamKey := "git:events"
 

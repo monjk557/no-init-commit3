@@ -232,4 +232,3 @@ func ValidateServiceParameter(service string, allowedServices []string) error {
 		fmt.Sprintf("Invalid service: %s, expected one of: %s", service, strings.Join(allowedServices, ", ")),
 		http.StatusBadRequest, false)
 }
-

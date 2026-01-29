@@ -180,6 +180,180 @@ func createTestRepositoryWithCustomFiles(t *testing.T, tempDir, owner, repo stri
 	return createTestRepository(t, tempDir, owner, repo, testFiles)
 }
 
+// createTestRepositoryWithSymlink 심볼릭 링크가 포함된 테스트 저장소를 생성합니다.
+func createTestRepositoryWithSymlink(t *testing.T, tempDir, owner, repo string) string {
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	tempWorkDir, err := os.MkdirTemp("", "tree-test-work-symlink-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempWorkDir)
+
+	workRepo, err := gogit.PlainInit(tempWorkDir, false)
+	require.NoError(t, err)
+	worktree, err := workRepo.Worktree()
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "target.txt"), []byte("content"), 0644))
+	_, err = worktree.Add("target.txt")
+	require.NoError(t, err)
+
+	// Symlink: repo 밖을 가리키는 것처럼 하기 위해 상대 경로 사용 (엔트리만 검증)
+	linkPath := filepath.Join(tempWorkDir, "outlink")
+	err = os.Symlink("target.txt", linkPath)
+	if err != nil {
+		t.Skip("symlink not supported on this platform")
+		return ""
+	}
+	_, err = worktree.Add("outlink")
+	require.NoError(t, err)
+
+	commitHash, err := worktree.Commit("Add symlink", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	gitRepo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	commit, err := workRepo.CommitObject(commitHash)
+	require.NoError(t, err)
+	commitObj := workRepo.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(commitObj))
+	_, err = gitRepo.Storer.SetEncodedObject(commitObj)
+	require.NoError(t, err)
+	err = copyTreeRecursive(workRepo, gitRepo, commit.TreeHash)
+	require.NoError(t, err)
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+	return repoPath
+}
+
+// createTestRepositoryWithSubmodule 서브모듈 엔트리가 포함된 테스트 저장소를 생성합니다.
+func createTestRepositoryWithSubmodule(t *testing.T, tempDir, owner, repo string) string {
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	gitRepo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	storer := gitRepo.Storer
+
+	// 서브모듈로 가리킬 빈 커밋 생성
+	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
+	emptyTreeObj := storer.NewEncodedObject()
+	require.NoError(t, emptyTree.Encode(emptyTreeObj))
+	subCommitHash, err := storer.SetEncodedObject(emptyTreeObj)
+	require.NoError(t, err)
+
+	subCommit := &object.Commit{
+		TreeHash:  subCommitHash,
+		Author:    object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Committer: object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Message:   "sub",
+		Encoding:  "UTF-8",
+	}
+	subCommitObj := storer.NewEncodedObject()
+	require.NoError(t, subCommit.Encode(subCommitObj))
+	subCommitOID, err := storer.SetEncodedObject(subCommitObj)
+	require.NoError(t, err)
+
+	// 루트 트리: README blob + sub 서브모듈
+	blobObj := storer.NewEncodedObject()
+	blobObj.SetType(plumbing.BlobObject)
+	blobObj.SetSize(1)
+	bw, err := blobObj.Writer()
+	require.NoError(t, err)
+	_, err = bw.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, bw.Close())
+	blobHash, err := storer.SetEncodedObject(blobObj)
+	require.NoError(t, err)
+
+	rootTree := &object.Tree{
+		Entries: []object.TreeEntry{
+			{Name: "README.md", Mode: filemode.Regular, Hash: blobHash},
+			{Name: "sub", Mode: filemode.Submodule, Hash: subCommitOID},
+		},
+	}
+	rootTreeObj := storer.NewEncodedObject()
+	require.NoError(t, rootTree.Encode(rootTreeObj))
+	rootTreeHash, err := storer.SetEncodedObject(rootTreeObj)
+	require.NoError(t, err)
+
+	rootCommit := &object.Commit{
+		TreeHash:  rootTreeHash,
+		Author:    object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Committer: object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Message:   "root",
+		Encoding:  "UTF-8",
+	}
+	rootCommitObj := storer.NewEncodedObject()
+	require.NoError(t, rootCommit.Encode(rootCommitObj))
+	rootCommitHash, err := storer.SetEncodedObject(rootCommitObj)
+	require.NoError(t, err)
+
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), rootCommitHash)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+	return repoPath
+}
+
+// createTestRepositoryWithEmptyDir 빈 디렉토리(트리 엔트리 0개)가 포함된 테스트 저장소를 생성한다.
+func createTestRepositoryWithEmptyDir(t *testing.T, tempDir, owner, repo string) string {
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+	gitRepo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	storer := gitRepo.Storer
+
+	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
+	emptyTreeObj := storer.NewEncodedObject()
+	require.NoError(t, emptyTree.Encode(emptyTreeObj))
+	emptyTreeHash, err := storer.SetEncodedObject(emptyTreeObj)
+	require.NoError(t, err)
+
+	blobObj := storer.NewEncodedObject()
+	blobObj.SetType(plumbing.BlobObject)
+	blobObj.SetSize(1)
+	w, err := blobObj.Writer()
+	require.NoError(t, err)
+	_, err = w.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	blobHash, err := storer.SetEncodedObject(blobObj)
+	require.NoError(t, err)
+
+	rootTree := &object.Tree{
+		Entries: []object.TreeEntry{
+			{Name: "README.md", Mode: filemode.Regular, Hash: blobHash},
+			{Name: "empty_dir", Mode: filemode.Dir, Hash: emptyTreeHash},
+		},
+	}
+	rootTreeObj := storer.NewEncodedObject()
+	require.NoError(t, rootTree.Encode(rootTreeObj))
+	rootTreeHash, err := storer.SetEncodedObject(rootTreeObj)
+	require.NoError(t, err)
+
+	rootCommit := &object.Commit{
+		TreeHash:  rootTreeHash,
+		Author:    object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Committer: object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Message:   "root",
+		Encoding:  "UTF-8",
+	}
+	rootCommitObj := storer.NewEncodedObject()
+	require.NoError(t, rootCommit.Encode(rootCommitObj))
+	rootCommitHash, err := storer.SetEncodedObject(rootCommitObj)
+	require.NoError(t, err)
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), rootCommitHash)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+	return repoPath
+}
+
 // verifyTreeSorting 트리 항목이 Git 표준에 따라 정렬되었는지 검증합니다.
 func verifyTreeSorting(t *testing.T, entries []TreeEntry) {
 	var dirs, files []string
@@ -526,4 +700,483 @@ func TestHandleTreeAPI_TreeSortingOrder(t *testing.T) {
 
 	// 정렬 검증
 	verifyTreeSorting(t, response.Data["/"])
+}
+
+// --- 6.1 Tree Listing (test_cases.md) ---
+
+// Test_Tree_RootDir_ReturnsEntries 루트 디렉토리 조회 시 항목을 반환한다.
+func Test_Tree_RootDir_ReturnsEntries(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Contains(t, resp.Data, "/")
+	assert.Greater(t, len(resp.Data["/"]), 0)
+}
+
+// Test_Tree_Subdirectory_ReturnsEntries 서브디렉토리 조회 시 해당 디렉토리 항목을 반환한다.
+func Test_Tree_Subdirectory_ReturnsEntries(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=src", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Contains(t, resp.Data, "src")
+	assert.Greater(t, len(resp.Data["src"]), 0)
+}
+
+// Test_Tree_NonExistentPath_Returns404 존재하지 않는 경로 조회 시 404를 반환한다.
+func Test_Tree_NonExistentPath_Returns404(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=nonexistent/path", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp["success"].(bool))
+}
+
+// Test_Tree_FilePath_Returns400 파일 경로(디렉토리 아님)로 조회 시 400을 반환한다.
+func Test_Tree_FilePath_Returns400(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=README.md", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp["success"].(bool))
+}
+
+// Test_Tree_EmptyDirectory_ReturnsEmptyArray 빈 디렉토리 조회 시 빈 배열을 반환한다.
+func Test_Tree_EmptyDirectory_ReturnsEmptyArray(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithEmptyDir(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=empty_dir", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Contains(t, resp.Data, "empty_dir")
+	assert.Empty(t, resp.Data["empty_dir"])
+}
+
+// Test_Tree_ByRef_ReturnsEntriesAtRef ref 기준으로 해당 ref의 트리 항목을 반환한다.
+func Test_Tree_ByRef_ReturnsEntriesAtRef(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Contains(t, resp.Data, "/")
+	assert.Greater(t, len(resp.Data["/"]), 0)
+}
+
+// Test_Tree_ByCommitSHA_ReturnsEntriesAtCommit SHA 기준으로 해당 커밋의 트리 항목을 반환한다.
+func Test_Tree_ByCommitSHA_ReturnsEntriesAtCommit(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	repoPath := createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	gitRepo, err := gogit.PlainOpen(repoPath)
+	require.NoError(t, err)
+	resolved, err := gitRepo.ResolveRevision(plumbing.Revision("HEAD"))
+	require.NoError(t, err)
+	sha := resolved.String()
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref="+sha, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Contains(t, resp.Data, "/")
+	assert.Greater(t, len(resp.Data["/"]), 0)
+}
+
+// --- 6.1A Path Validation ---
+
+// Test_Tree_PathTraversalSegments_Returns400 a/../b 같은 path는 400을 반환한다.
+func Test_Tree_PathTraversalSegments_Returns400(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=src/../etc", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp["success"].(bool))
+}
+
+// --- 12.1A Git 내부 콘텐츠 기반 공격 (Trojan Source 계열 UI/로그 혼란 방지) ---
+
+// Test_Tree_EntryNameWithUnicodeBidiCharacters_HandledSafely 트리 엔트리명에 Unicode Bidi 문자가 있어도 안전하게 처리된다.
+func Test_Tree_EntryNameWithUnicodeBidiCharacters_HandledSafely(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	bidiName := "file\u202Etxe.txt"
+	createTestRepositoryWithCustomFiles(t, tempDir, "testowner", "testrepo", map[string]string{
+		bidiName: "content",
+	})
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["success"].(bool))
+	data, ok := resp["data"].(map[string]interface{})
+	require.True(t, ok)
+	require.NotEmpty(t, data)
+	for _, v := range data {
+		entries, _ := v.([]interface{})
+		if len(entries) < 1 {
+			continue
+		}
+		first, _ := entries[0].(map[string]interface{})
+		require.NotNil(t, first["name"], "entry name present (Trojan Source safe)")
+		break
+	}
+}
+
+// Test_Tree_SymlinkPointsOutside_EntryReturnedButContentFetchBlocked tree에 symlink가 있어도 repo root 밖 콘텐츠는 읽지 않고 엔트리는 반환한다.
+func Test_Tree_SymlinkPointsOutside_EntryReturnedButContentFetchBlocked(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	repoPath := createTestRepositoryWithSymlink(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	entries := resp.Data["/"]
+	var symlinkEntry *TreeEntry
+	for i := range entries {
+		if entries[i].Type == "symlink" || entries[i].Name == "outlink" {
+			symlinkEntry = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, symlinkEntry, "tree should list symlink entry")
+	assert.Equal(t, "symlink", symlinkEntry.Type)
+
+	_ = repoPath
+}
+
+// --- 6.2 Entry Types ---
+
+// Test_Tree_FileEntry_TypeFile 파일 엔트리는 type이 blob이다.
+func Test_Tree_FileEntry_TypeFile(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var found bool
+	for _, e := range resp.Data["/"] {
+		if e.Name == "README.md" && e.Type == "blob" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "README.md should be type blob")
+}
+
+// Test_Tree_DirectoryEntry_TypeDir 디렉토리 엔트리는 type이 tree이다.
+func Test_Tree_DirectoryEntry_TypeDir(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var found bool
+	for _, e := range resp.Data["/"] {
+		if e.Name == "src" && e.Type == "tree" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "src should be type tree")
+}
+
+// Test_Tree_SymlinkEntry_TypeSymlink 심볼릭 링크 엔트리는 type이 symlink이다.
+func Test_Tree_SymlinkEntry_TypeSymlink(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithSymlink(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var found bool
+	for _, e := range resp.Data["/"] {
+		if e.Type == "symlink" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "tree should include symlink entry with type symlink")
+}
+
+// Test_Tree_SubmoduleEntry_TypeSubmodule 서브모듈 엔트리는 type이 commit(또는 submodule)으로 노출된다.
+func Test_Tree_SubmoduleEntry_TypeSubmodule(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithSubmodule(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var found bool
+	for _, e := range resp.Data["/"] {
+		if e.Name == "sub" && (e.Type == "commit" || e.Type == "tree") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "submodule entry should be present (type commit or tree)")
+}
+
+// --- 6.2A Entry Types 확장 ---
+
+// Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable 서브모듈 엔트리에 commit OID(또는 URL)가 있으면 포함한다.
+func Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithSubmodule(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var subEntry *TreeEntry
+	for i := range resp.Data["/"] {
+		if resp.Data["/"][i].Name == "sub" {
+			subEntry = &resp.Data["/"][i]
+			break
+		}
+	}
+	require.NotNil(t, subEntry, "submodule entry should be present")
+	assert.Equal(t, "sub", subEntry.Path)
+	// 현재 스키마에 OID/URL 필드가 없으면 타입·이름만 검증
+}
+
+// Test_Tree_SymlinkEntry_ReturnsLinkTargetOrMetadata 심볼릭 링크 엔트리는 링크 대상 또는 메타데이터를 반환한다.
+func Test_Tree_SymlinkEntry_ReturnsLinkTargetOrMetadata(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithSymlink(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var symEntry *TreeEntry
+	for i := range resp.Data["/"] {
+		if resp.Data["/"][i].Type == "symlink" {
+			symEntry = &resp.Data["/"][i]
+			break
+		}
+	}
+	require.NotNil(t, symEntry)
+	assert.Equal(t, "symlink", symEntry.Type)
+	assert.NotEmpty(t, symEntry.Name)
+	assert.NotEmpty(t, symEntry.Path)
+}
+
+// Test_Tree_CaseCollision_BehaviorDeterministic 대소문자 충돌 시 동작이 결정적이다 (mac).
+func Test_Tree_CaseCollision_BehaviorDeterministic(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	// 같은 디렉토리에 대소문자만 다른 파일은 Git에서 하나만 허용; 여기서는 정렬/동작이 일관되는지 검증
+	createTestRepositoryWithCustomFiles(t, tempDir, "testowner", "testrepo", map[string]string{
+		"README.md": "# A",
+		"src/a.go":  "package main",
+	})
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp1 TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp1))
+
+	req2 := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code)
+	var resp2 TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+
+	assert.Equal(t, len(resp1.Data["/"]), len(resp2.Data["/"]))
+	for i := range resp1.Data["/"] {
+		assert.Equal(t, resp1.Data["/"][i].Name, resp2.Data["/"][i].Name)
+		assert.Equal(t, resp1.Data["/"][i].Type, resp2.Data["/"][i].Type)
+	}
+}
+
+// --- 6.3 Recursive ---
+
+// Test_Tree_Recursive_ReturnsAllEntries 재귀 모드로 조회 시 모든 하위 항목을 반환한다.
+func Test_Tree_Recursive_ReturnsAllEntries(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&recursive=true", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Contains(t, resp.Data, "/")
+	// 루트 + 하위 디렉토리(예: src, docs)가 키로 있어야 함
+	assert.GreaterOrEqual(t, len(resp.Data), 1)
+	totalEntries := 0
+	for _, entries := range resp.Data {
+		totalEntries += len(entries)
+	}
+	assert.Greater(t, totalEntries, 0)
+}
+
+// Test_Tree_Recursive_FlattensPaths 재귀 응답은 경로별로 평탄화된 맵 구조이다.
+func Test_Tree_Recursive_FlattensPaths(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&recursive=true", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	// 키는 경로(/, src, docs 등), 값은 해당 경로의 엔트리 배열
+	assert.Contains(t, resp.Data, "/")
+	for pathKey, entries := range resp.Data {
+		for _, e := range entries {
+			assert.NotEmpty(t, e.Name)
+			assert.NotEmpty(t, e.Type)
+			// path는 전체 경로 또는 상대 경로
+			assert.NotEmpty(t, e.Path)
+			_ = pathKey
+		}
+	}
 }

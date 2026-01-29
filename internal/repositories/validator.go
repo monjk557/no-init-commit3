@@ -882,6 +882,11 @@ func (v *GitAPIPathValidator) validateBasicPath(path string) error {
 		return fmt.Errorf("file path too long (max 4096 characters)")
 	}
 
+	// Null byte and newline (log/header injection)
+	if strings.Contains(path, "\x00") || strings.Contains(path, "\n") || strings.Contains(path, "\r") {
+		return fmt.Errorf("file path contains invalid control character")
+	}
+
 	// Path traversal protection
 	if strings.Contains(path, "..") {
 		return fmt.Errorf("file path contains path traversal attempt")

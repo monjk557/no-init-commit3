@@ -91,4 +91,3 @@ func (c *Client) ResolveUserIDFromSSHKey(ctx context.Context, fingerprint, repoP
 	}
 	return parsed.UserID, nil
 }
-

@@ -55,4 +55,3 @@ func TestResolveUserIDFromSSHKey_MissingUserID(t *testing.T) {
 		t.Fatalf("expected error, got nil")
 	}
 }
-

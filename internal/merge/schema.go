@@ -37,7 +37,7 @@ type MergeHooks struct {
 	// AfterReadTargetRef is signaled after target ref is first read at merge start
 	// Test can block here to ensure merge has read the initial target ref
 	AfterReadTargetRef chan struct{}
-	
+
 	// BeforeWriteTargetRef is signaled just before writing the target ref
 	// Test can block here, modify target ref, then unblock to test CAS validation
 	BeforeWriteTargetRef chan struct{}

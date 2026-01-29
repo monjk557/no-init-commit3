@@ -15,10 +15,10 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/testutil/gitrepo"
-	gogit 	"github.com/go-git/go-git/v5"
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 func init() {
@@ -1275,7 +1275,7 @@ func Test_UpdateBranch_NonFastForward_Returns400(t *testing.T) {
 	// 커밋 객체를 bare repo로 복사 (tree, blob 포함)
 	// 순서 중요: commit1 (parent)를 먼저 복사
 	bareRepo := openRepo(t, repoPath)
-	
+
 	// commit1 먼저 복사 (parent)
 	commit1Obj, err := workRepo.CommitObject(commit1)
 	require.NoError(t, err)

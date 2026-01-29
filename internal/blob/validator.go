@@ -68,6 +68,12 @@ func ValidateFilePath(path string) error {
 		return fmt.Errorf("path cannot be empty")
 	}
 
+	// Null byte 및 개행(로그/헤더 injection) 차단 (디코딩 전 %0a 등도 차단)
+	if strings.Contains(path, "\x00") || strings.Contains(path, "\n") || strings.Contains(path, "\r") ||
+		strings.Contains(path, "%0a") || strings.Contains(path, "%0d") || strings.Contains(path, "%00") {
+		return fmt.Errorf("path contains invalid control character")
+	}
+
 	// 디렉토리 탐색 시도 확인
 	if strings.Contains(path, "..") {
 		return fmt.Errorf("path cannot contain '..' (directory traversal)")

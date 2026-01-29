@@ -120,11 +120,11 @@ type EventsConfig struct {
 
 // OrchestratorConfig holds API orchestrator integration configuration
 type OrchestratorConfig struct {
-	BaseURL             string        `json:"base_url"`
-	SSHKeyValidatePath  string        `json:"ssh_key_validate_path"`
-	Timeout             time.Duration `json:"timeout"`
-	FingerprintHeader   string        `json:"fingerprint_header"`
-	ForwardAuthHeader   bool          `json:"forward_auth_header"`
+	BaseURL            string        `json:"base_url"`
+	SSHKeyValidatePath string        `json:"ssh_key_validate_path"`
+	Timeout            time.Duration `json:"timeout"`
+	FingerprintHeader  string        `json:"fingerprint_header"`
+	ForwardAuthHeader  bool          `json:"forward_auth_header"`
 }
 
 // Load는 환경변수에서 설정을 로드합니다

@@ -389,6 +389,11 @@ func (vf *ValidationFramework) validatePathComponent(component, componentType st
 		return fmt.Errorf("%s too long (max 255 characters)", componentType)
 	}
 
+	// Check for null byte
+	if strings.Contains(component, "\x00") {
+		return fmt.Errorf("%s contains null byte", componentType)
+	}
+
 	// Check for path traversal
 	if strings.Contains(component, "..") {
 		return fmt.Errorf("%s contains path traversal attempt", componentType)
@@ -414,6 +419,11 @@ func (vf *ValidationFramework) validateFilePath(path string) error {
 
 	if len(path) > vf.config.MaxPathLength {
 		return fmt.Errorf("file path too long (max %d characters)", vf.config.MaxPathLength)
+	}
+
+	// Null byte protection
+	if strings.Contains(path, "\x00") {
+		return fmt.Errorf("file path contains null byte")
 	}
 
 	// Comprehensive path traversal protection

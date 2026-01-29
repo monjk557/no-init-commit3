@@ -13,6 +13,8 @@ import (
 	"github.com/collabops/git-executor/internal/repositories"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // MaxBlobSize는 blob의 최대 크기입니다 (50MB)
@@ -117,6 +119,10 @@ func getBlobFromGogitRepo(ctx context.Context, repo *gogit.Repository, path, ref
 	// 파일 찾기
 	file, err := tree.File(path)
 	if err != nil {
+		// 경로가 디렉토리를 가리키면 400으로 처리
+		if isDir, dirErr := pathIsDirectory(repo, tree, path); dirErr == nil && isDir {
+			return nil, fmt.Errorf("path is a directory")
+		}
 		return nil, fmt.Errorf("file not found: %w", err)
 	}
 
@@ -152,6 +158,34 @@ func getBlobFromGogitRepo(ctx context.Context, repo *gogit.Repository, path, ref
 	}
 
 	return content, nil
+}
+
+// pathIsDirectory returns true if path points to a tree (directory) in the given tree.
+func pathIsDirectory(repo *gogit.Repository, root *object.Tree, path string) (bool, error) {
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return true, nil // root is a tree
+	}
+	parts := strings.Split(path, "/")
+	currentTree := root
+	for i, part := range parts {
+		entry, err := currentTree.FindEntry(part)
+		if err != nil {
+			return false, err
+		}
+		if i == len(parts)-1 {
+			return entry.Mode == filemode.Dir, nil
+		}
+		if entry.Mode != filemode.Dir {
+			return false, nil
+		}
+		subTree, err := repo.TreeObject(entry.Hash)
+		if err != nil {
+			return false, err
+		}
+		currentTree = subTree
+	}
+	return false, nil
 }
 
 // detectContentType는 파일 내용과 이름을 기반으로 Content-Type을 결정합니다.

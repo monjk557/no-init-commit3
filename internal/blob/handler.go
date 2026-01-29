@@ -111,16 +111,19 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 	path := c.Query("path")
 	ref := c.Query("ref")
 
-	// path 파라미터 검증
-	if path == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing required parameter: path"})
+	// owner, repo, path, ref 검증 (빈 값·잘못된 형식 시 400)
+	if err := ValidateBlobParams(owner, repo, path, ref); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// 파일 경로 검증
-	if err := ValidateFilePath(path); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("invalid path: %v", err)})
-		return
+	// Range 헤더가 있으나 유효하지 않으면 416 반환
+	if rangeHeader := c.GetHeader("Range"); rangeHeader != "" {
+		if !parseRangeValid(rangeHeader) {
+			c.Header("Content-Range", "*")
+			c.JSON(http.StatusRequestedRangeNotSatisfiable, gin.H{"success": false, "error": "invalid range"})
+			return
+		}
 	}
 
 	// 공통 검증 및 저장소 열기
@@ -173,10 +176,12 @@ func (h *BlobHandler) sendError(c *gin.Context, err error, statusCode int) {
 func (h *BlobHandler) getErrorStatusCode(err error) int {
 	errMsg := err.Error()
 
+	if strings.Contains(errMsg, "path is a directory") {
+		return http.StatusBadRequest
+	}
 	if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "file not found") {
 		return http.StatusNotFound
 	}
-
 	if strings.Contains(errMsg, "missing") || strings.Contains(errMsg, "invalid") {
 		return http.StatusBadRequest
 	}
@@ -190,4 +195,37 @@ func (h *BlobHandler) getErrorStatusCode(err error) int {
 	}
 
 	return http.StatusInternalServerError
+}
+
+// parseRangeValid returns true if the Range header is valid (e.g. bytes=0-499).
+// Invalid formats (e.g. bytes=invalid) return false.
+func parseRangeValid(rangeHeader string) bool {
+	if rangeHeader == "" {
+		return true
+	}
+	// bytes=N-M or bytes=N- format
+	if !strings.HasPrefix(rangeHeader, "bytes=") {
+		return false
+	}
+	rest := strings.TrimPrefix(rangeHeader, "bytes=")
+	if rest == "" {
+		return false
+	}
+	parts := strings.Split(rest, "-")
+	if len(parts) != 2 {
+		return false
+	}
+	var start, end int64
+	if _, err := fmt.Sscanf(parts[0], "%d", &start); err != nil && parts[0] != "" {
+		return false
+	}
+	if parts[1] != "" {
+		if _, err := fmt.Sscanf(parts[1], "%d", &end); err != nil {
+			return false
+		}
+		if end < start {
+			return false
+		}
+	}
+	return true
 }

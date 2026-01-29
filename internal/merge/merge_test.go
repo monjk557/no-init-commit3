@@ -254,13 +254,13 @@ func Test_FindMergeBase_MultipleMergeBases_Returns409_AMBIGUOUS_MERGE_BASE(t *te
 		// 현재는 첫 번째를 반환하므로, 이 테스트는 현재 동작을 검증
 		require.Greater(t, len(mergeBases), 1,
 			"should detect multiple merge bases in criss-cross scenario")
-		
+
 		// merge base들이 B와 D인지 확인
 		baseHashes := make(map[plumbing.Hash]bool)
 		for _, base := range mergeBases {
 			baseHashes[base.Hash] = true
 		}
-		
+
 		// B 또는 D 중 하나는 merge base여야 함
 		require.True(t,
 			baseHashes[commitBObj.Hash] || baseHashes[commitDObj.Hash] || baseHashes[commitAObj.Hash],

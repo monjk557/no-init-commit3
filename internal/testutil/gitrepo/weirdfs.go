@@ -77,11 +77,11 @@ func SkipOnCaseInsensitiveFS(t interface{ Skip(args ...interface{}) }) {
 
 // UnicodeNormalizationResult contains unicode test data
 type UnicodeNormalizationResult struct {
-	NFCPath    string        // NFC normalized path
-	NFDPath    string        // NFD normalized path
+	NFCPath    string // NFC normalized path
+	NFDPath    string // NFD normalized path
 	NFCCommit  plumbing.Hash
 	NFDCommit  plumbing.Hash
-	TestString string        // The unicode string being tested
+	TestString string // The unicode string being tested
 }
 
 // MakeUnicodeNormalization creates files with different unicode normalizations
@@ -120,11 +120,11 @@ func (r *TestRepo) MakeUnicodeNormalization() UnicodeNormalizationResult {
 
 // SymlinkResult contains symlink test data
 type SymlinkResult struct {
-	SafeSymlink     string        // Symlink within repo
-	UnsafeSymlink   string        // Symlink pointing outside repo
-	SafeTarget      string
-	UnsafeTarget    string
-	CommitHash      plumbing.Hash
+	SafeSymlink   string // Symlink within repo
+	UnsafeSymlink string // Symlink pointing outside repo
+	SafeTarget    string
+	UnsafeTarget  string
+	CommitHash    plumbing.Hash
 }
 
 // MakeSymlinks creates symlink scenarios
@@ -264,26 +264,26 @@ func (r *TestRepo) MakeSpecialCharPaths() SpecialCharPathResult {
 // ForbiddenBranchNames returns list of invalid branch names
 func ForbiddenBranchNames() []string {
 	return []string{
-		"",                    // Empty
-		".",                   // Dot only
-		"..",                  // Double dot
-		".lock",               // Starts with dot
-		"branch.lock",         // Ends with .lock
-		"branch..name",        // Contains ..
-		"branch~1",            // Contains ~
-		"branch^",             // Contains ^
-		"branch:",             // Contains :
-		"branch\\path",        // Contains backslash
-		"branch?name",         // Contains ?
-		"branch*name",         // Contains *
-		"branch[name",         // Contains [
-		"branch@{1}",          // Contains @{
-		"/branch",             // Starts with /
-		"branch/",             // Ends with /
-		"branch//name",        // Contains //
-		"branch\x00name",      // Contains null
-		"branch\nname",        // Contains newline
-		"branch\tname",        // Contains tab
+		"",                       // Empty
+		".",                      // Dot only
+		"..",                     // Double dot
+		".lock",                  // Starts with dot
+		"branch.lock",            // Ends with .lock
+		"branch..name",           // Contains ..
+		"branch~1",               // Contains ~
+		"branch^",                // Contains ^
+		"branch:",                // Contains :
+		"branch\\path",           // Contains backslash
+		"branch?name",            // Contains ?
+		"branch*name",            // Contains *
+		"branch[name",            // Contains [
+		"branch@{1}",             // Contains @{
+		"/branch",                // Starts with /
+		"branch/",                // Ends with /
+		"branch//name",           // Contains //
+		"branch\x00name",         // Contains null
+		"branch\nname",           // Contains newline
+		"branch\tname",           // Contains tab
 		strings.Repeat("a", 256), // Too long
 	}
 }

@@ -81,11 +81,11 @@ type CrissCrossResult struct {
 //
 // History:
 //
-//	      A1---A2---A3 (branch-a)
-//	     /   \ /
-//	    O     X
-//	     \   / \
-//	      B1---B2---B3 (branch-b)
+//	  A1---A2---A3 (branch-a)
+//	 /   \ /
+//	O     X
+//	 \   / \
+//	  B1---B2---B3 (branch-b)
 func (r *TestRepo) MakeCrissCrossHistory() CrissCrossResult {
 	r.T.Helper()
 
@@ -330,10 +330,10 @@ func (r *TestRepo) MakeMultipleConflicts(count int) ConflictSetup {
 
 // FastForwardSetup contains branches for fast-forward merge
 type FastForwardSetup struct {
-	BaseBranch   string
+	BaseBranch    string
 	FeatureBranch string
-	BaseCommit   plumbing.Hash
-	FeatureTip   plumbing.Hash
+	BaseCommit    plumbing.Hash
+	FeatureTip    plumbing.Hash
 }
 
 // MakeFastForwardScenario creates a fast-forward mergeable scenario

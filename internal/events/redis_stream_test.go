@@ -536,3 +536,117 @@ func TestAddCommitEventToStream_MultipleEvents(t *testing.T) {
 			"Should find commit hash %s in stream", event.CommitHash)
 	}
 }
+
+// --- 11.1 Redis Stream Events ---
+
+// Test_PublishEvent_ValidEvent_Publishes 정상 발행
+func Test_PublishEvent_ValidEvent_Publishes(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+
+	event := &CommitEvent{
+		RepoPath:      "owner/repo.git",
+		EventType:     EventTypePush,
+		CommitHash:    "abc123",
+		RefName:       "refs/heads/main",
+		Timestamp:     time.Now(),
+		CommitMessage: "valid event",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+}
+
+// Test_PublishEvent_RedisDown_ReturnsError Redis 다운 시 에러 반환
+func Test_PublishEvent_RedisDown_ReturnsError(t *testing.T) {
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+	_, err := NewRedisStreamClient("redis://nonexistent-host-invalid:6379/0", logger)
+	require.Error(t, err)
+}
+
+// Test_PublishEvent_InvalidPayload_Returns400 잘못된 페이로드(nil event) 시 에러 반환
+func Test_PublishEvent_InvalidPayload_Returns400(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, nil)
+	require.Error(t, err)
+}
+
+// --- 11.1A At-least-once / Ordering / Dedupe ---
+
+// Test_PublishEvent_DuplicateDelivery_IsIdempotentConsumerSide 동일 이벤트 재발행 시에도 성공(컨슈머 측 idempotent)
+func Test_PublishEvent_DuplicateDelivery_IsIdempotentConsumerSide(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+
+	event := &CommitEvent{
+		EventID:       "evt-dedup-test-1",
+		RepoPath:      "owner/repo.git",
+		EventType:     EventTypeCommit,
+		CommitHash:    "samehash",
+		RefName:       "refs/heads/main",
+		Timestamp:     time.Now(),
+		CommitMessage: "duplicate",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+}
+
+// Test_PublishEvent_OrderPreserved_PerRepoPartition 발행 순서가 스트림에서 유지됨
+func Test_PublishEvent_OrderPreserved_PerRepoPartition(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+	opt, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	rdb := redis.NewClient(opt)
+	defer rdb.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	streamKey := "git:events"
+	lenBefore, _ := rdb.XLen(ctx, streamKey).Result()
+
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+
+	first := &CommitEvent{RepoPath: "a/repo.git", EventType: EventTypePush, CommitHash: "order-first", RefName: "refs/heads/main", Timestamp: time.Now()}
+	second := &CommitEvent{RepoPath: "a/repo.git", EventType: EventTypePush, CommitHash: "order-second", RefName: "refs/heads/main", Timestamp: time.Now()}
+	require.NoError(t, client.AddCommitEventToStream(ctx, first))
+	require.NoError(t, client.AddCommitEventToStream(ctx, second))
+
+	messages, err := rdb.XRange(ctx, streamKey, "-", "+").Result()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, int64(len(messages)), lenBefore+2)
+	// 마지막 두 메시지가 우리가 넣은 순서대로여야 함
+	start := len(messages) - 2
+	var hashes []string
+	for i := start; i < len(messages); i++ {
+		data, _ := messages[i].Values["data"].(string)
+		var m map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(data), &m))
+		rev, _ := m["new_rev"].(string)
+		hashes = append(hashes, rev)
+	}
+	require.Equal(t, []string{"order-first", "order-second"}, hashes)
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
@@ -14,9 +15,10 @@ import (
 // TreeHandler는 Git tree REST API 엔드포인트를 처리합니다.
 // 디렉토리 구조 조회 요청을 받아서 JSON 형식으로 응답합니다.
 type TreeHandler struct {
-	pathConfig  *repositories.PathConfig
-	repoManager *repositories.DefaultRepositoryManager
-	logger      *logging.Logger
+	pathConfig    *repositories.PathConfig
+	pathValidator *repositories.GitAPIPathValidator
+	repoManager   *repositories.DefaultRepositoryManager
+	logger        *logging.Logger
 }
 
 // NewTreeHandler는 새로운 tree 핸들러를 생성합니다.
@@ -38,6 +40,9 @@ func NewTreeHandler(cfg *config.Config) (*TreeHandler, error) {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
+	// Create path validator
+	pathValidator := repositories.NewGitAPIPathValidator(pathConfig)
+
 	// Create repository manager
 	repoManager, err := repositories.NewRepositoryManager(pathConfig, logger)
 	if err != nil {
@@ -45,9 +50,10 @@ func NewTreeHandler(cfg *config.Config) (*TreeHandler, error) {
 	}
 
 	return &TreeHandler{
-		pathConfig:  pathConfig,
-		repoManager: repoManager,
-		logger:      logger,
+		pathConfig:    pathConfig,
+		pathValidator: pathValidator,
+		repoManager:   repoManager,
+		logger:        logger,
 	}, nil
 }
 
@@ -100,10 +106,22 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 		return
 	}
 
+	// Validate path when provided (path traversal, invalid chars, etc.)
+	if path != "" {
+		if err := h.pathValidator.ValidateFilePath(path); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+	}
+
 	// Get tree structure
 	if recursive {
 		treeMap, err := h.getTreeStructureRecursive(repoPath, ref, path)
 		if err != nil {
+			if strings.Contains(err.Error(), "path is not a tree") {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+				return
+			}
 			c.JSON(404, gin.H{"success": false, "error": err.Error()})
 			return
 		}
@@ -117,6 +135,10 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 	} else {
 		treeEntries, err := h.getTreeStructure(repoPath, ref, path)
 		if err != nil {
+			if strings.Contains(err.Error(), "path is not a tree") {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+				return
+			}
 			c.JSON(404, gin.H{"success": false, "error": err.Error()})
 			return
 		}

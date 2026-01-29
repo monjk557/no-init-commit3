@@ -16,12 +16,12 @@ import (
 
 // LargeRepoConfig configures large repo generation
 type LargeRepoConfig struct {
-	CommitCount     int  // Number of commits (default: 100)
-	BranchCount     int  // Number of branches (default: 10)
-	FileCount       int  // Files per commit (default: 5)
-	DirDepth        int  // Directory nesting depth (default: 3)
-	LargeDiffLines  int  // Lines in large diff files (default: 1000)
-	SkipIfSlow      bool // Skip in CI if too slow
+	CommitCount    int  // Number of commits (default: 100)
+	BranchCount    int  // Number of branches (default: 10)
+	FileCount      int  // Files per commit (default: 5)
+	DirDepth       int  // Directory nesting depth (default: 3)
+	LargeDiffLines int  // Lines in large diff files (default: 1000)
+	SkipIfSlow     bool // Skip in CI if too slow
 }
 
 // DefaultLargeRepoConfig returns sensible defaults for testing

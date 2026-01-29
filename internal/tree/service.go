@@ -70,6 +70,8 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 			entryType = "tree"
 		} else if entry.Mode == filemode.Submodule {
 			entryType = "commit"
+		} else if entry.Mode == filemode.Symlink {
+			entryType = "symlink"
 		}
 
 		result = append(result, TreeEntry{
