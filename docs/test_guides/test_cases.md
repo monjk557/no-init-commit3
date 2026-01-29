@@ -910,9 +910,9 @@
 
 > "repo 저장 포맷이 달라도 결과가 동일하고 성능만 달라진다"
 
-- [ ] `Test_ListBranches_PackedRefsOnOff_SameResult`
-- [ ] `Test_ResolveRef_LooseVsPacked_SameOID`
-- [ ] `Test_MergeBase_WithCommitGraphEnabled_SameResult`
+- [x] `Test_ListBranches_PackedRefsOnOff_SameResult` (internal/branches/r6_storage_test.go)
+- [x] `Test_ResolveRef_LooseVsPacked_SameOID` (internal/branches/r6_storage_test.go)
+- [x] `Test_MergeBase_WithCommitGraphEnabled_SameResult` (internal/merge/r6_storage_test.go, git 미설치 시 skip)
 
 ---
 
