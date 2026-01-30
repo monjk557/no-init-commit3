@@ -19,16 +19,19 @@ const (
 	EventTypePush   CommitEventType = "push"
 	EventTypeMerge  CommitEventType = "merge"
 	EventTypeCommit CommitEventType = "commit"
+	EventTypeDelete CommitEventType = "delete"
+	EventTypeRename CommitEventType = "rename"
 )
 
 // CommitEvent represents a commit creation event
 type CommitEvent struct {
 	EventID       string          // Unique event ID (e.g., evt-git-1768797509975-0)
 	RepoPath      string          // Relative path (e.g., work_space_name/uuid.git)
-	EventType     CommitEventType // push, merge, commit
+	EventType     CommitEventType // push, merge, commit, delete, rename
 	CommitHash    string          // Commit hash (e.g., 51f2da8...)
 	OldRev        string          // Old commit hash (e.g., e2d382...) - empty for new refs
 	RefName       string          // Branch or ref name (e.g., refs/heads/main)
+	OldRefName    string          // Old ref name for rename (e.g., refs/heads/old-branch)
 	Pusher        string          // Pusher identifier (e.g., "git")
 	UserID        string          // User ID from X-USER-ID header
 	CommitMessage string          // Commit message
@@ -45,6 +48,7 @@ type eventData struct {
 	EventType     string `json:"event_type"`
 	CommitMessage string `json:"commit_message"` // Always include, even if empty
 	OldRev        string `json:"old_rev,omitempty"`
+	OldRef        string `json:"old_ref,omitempty"` // For rename: previous ref name
 	UserID        string `json:"user_id,omitempty"`
 }
 
@@ -237,15 +241,24 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 		EventID:       eventID,
 		Timestamp:     timestamp,
 		RepoPath:      event.RepoPath,
-		NewRev:        event.CommitHash,
 		Ref:           event.RefName,
 		EventType:     string(event.EventType),
 		CommitMessage: event.CommitMessage,
 	}
-
-	// Add optional fields
-	if event.OldRev != "" {
-		data.OldRev = event.OldRev
+	if event.EventType == EventTypeDelete {
+		data.OldRev = event.CommitHash
+		data.NewRev = ""
+	} else if event.EventType == EventTypeRename {
+		data.NewRev = event.CommitHash
+		data.OldRev = event.CommitHash
+		if event.OldRefName != "" {
+			data.OldRef = event.OldRefName
+		}
+	} else {
+		data.NewRev = event.CommitHash
+		if event.OldRev != "" {
+			data.OldRev = event.OldRev
+		}
 	}
 	if event.UserID != "" {
 		data.UserID = event.UserID

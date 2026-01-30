@@ -9,8 +9,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -28,6 +30,7 @@ type BranchOperationsHandler struct {
 	objectManager     *repositories.GitObjectManager
 	branchNamePattern *regexp.Regexp
 	service           *BranchService
+	eventsClient      events.RedisStreamClient
 }
 
 // NewBranchOperationsHandler는 새로운 브랜치 작업 핸들러를 생성합니다.
@@ -68,6 +71,16 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 	// Create branch service
 	service := NewBranchService(logger)
 
+	// Initialize events client if enabled
+	var eventsClient events.RedisStreamClient
+	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
+		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+		if err != nil {
+			// Log warning but continue without events
+			_ = err
+		}
+	}
+
 	return &BranchOperationsHandler{
 		config:            cfg,
 		logger:            logger,
@@ -77,6 +90,7 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 		objectManager:     objectManager,
 		branchNamePattern: branchNamePattern,
 		service:           service,
+		eventsClient:      eventsClient,
 	}, nil
 }
 
@@ -461,6 +475,34 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		return
 	}
 
+	// Publish branch rename event to Redis Stream (non-blocking)
+	if result.Operation == "rename" && h.eventsClient != nil {
+		relativePath := events.GetRelativeRepoPath(repoCtx.repoPath, h.pathConfig.GetRepoRoot())
+		userID := c.GetHeader("X-USER-ID")
+		event := &events.CommitEvent{
+			RepoPath:      relativePath,
+			EventType:     events.EventTypeRename,
+			CommitHash:    result.CommitHash,
+			OldRev:        result.CommitHash,
+			RefName:       result.RefPath,
+			OldRefName:    "refs/heads/" + result.OldBranchName,
+			UserID:        userID,
+			CommitMessage: "",
+			Timestamp:     time.Now(),
+		}
+		go func() {
+			evCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if pubErr := h.eventsClient.AddCommitEventToStream(evCtx, event); pubErr != nil {
+				h.logger.Warn("Failed to publish branch rename event",
+					zap.String("repo_path", repoCtx.repoPath),
+					zap.String("old_branch", result.OldBranchName),
+					zap.String("new_branch", result.NewBranchName),
+					zap.Error(pubErr))
+			}
+		}()
+	}
+
 	// Prepare response data
 	responseData := map[string]interface{}{
 		"branch_name":   result.BranchName,
@@ -544,6 +586,32 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 			"error":   err.Error(),
 		})
 		return
+	}
+
+	// Publish branch delete event to Redis Stream (non-blocking)
+	if h.eventsClient != nil {
+		relativePath := events.GetRelativeRepoPath(repoCtx.repoPath, h.pathConfig.GetRepoRoot())
+		userID := c.GetHeader("X-USER-ID")
+		event := &events.CommitEvent{
+			RepoPath:      relativePath,
+			EventType:     events.EventTypeDelete,
+			CommitHash:    result.CommitHash,
+			OldRev:        result.CommitHash,
+			RefName:       "refs/heads/" + branchName,
+			UserID:        userID,
+			CommitMessage: "",
+			Timestamp:     time.Now(),
+		}
+		go func() {
+			evCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if pubErr := h.eventsClient.AddCommitEventToStream(evCtx, event); pubErr != nil {
+				h.logger.Warn("Failed to publish branch delete event",
+					zap.String("repo_path", repoCtx.repoPath),
+					zap.String("branch", branchName),
+					zap.Error(pubErr))
+			}
+		}()
 	}
 
 	// Prepare response data in the format expected by tests

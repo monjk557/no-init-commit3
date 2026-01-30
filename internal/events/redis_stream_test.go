@@ -397,6 +397,208 @@ func TestAddMergeEventToStream(t *testing.T) {
 	assert.True(t, found, "Should find merge event in stream")
 }
 
+func TestAddDeleteEventToStream(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Logf("Failed to close client: %v", err)
+		}
+	}()
+
+	event := &CommitEvent{
+		RepoPath:      "/test/repo.git",
+		EventType:     EventTypeDelete,
+		CommitHash:    "delete123hash",
+		RefName:       "refs/heads/removed-branch",
+		Pusher:        "git",
+		UserID:        "test-user-id-delete",
+		CommitMessage: "",
+		Timestamp:     time.Now(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+
+	opt, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+
+	redisClient := redis.NewClient(opt)
+	defer redisClient.Close()
+
+	streamKey := "git:events"
+	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+
+	found := false
+	for _, msg := range messages {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if eventData["old_rev"] == event.CommitHash && eventData["event_type"] == string(EventTypeDelete) {
+			found = true
+			assert.Equal(t, string(EventTypeDelete), eventData["event_type"])
+			assert.Equal(t, event.CommitHash, eventData["old_rev"])
+			assert.Equal(t, "", eventData["new_rev"])
+			assert.Equal(t, event.RefName, eventData["ref"])
+			assert.Equal(t, event.UserID, eventData["user_id"])
+			break
+		}
+	}
+
+	assert.True(t, found, "Should find delete event in stream")
+}
+
+func TestAddRenameEventToStream(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Logf("Failed to close client: %v", err)
+		}
+	}()
+
+	event := &CommitEvent{
+		RepoPath:      "owner/repo.git",
+		EventType:     EventTypeRename,
+		CommitHash:    "rename456hash",
+		RefName:       "refs/heads/new-branch",
+		OldRefName:    "refs/heads/old-branch",
+		Pusher:        "git",
+		UserID:        "test-user-id-rename",
+		CommitMessage: "",
+		Timestamp:     time.Now(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+
+	opt, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+
+	redisClient := redis.NewClient(opt)
+	defer redisClient.Close()
+
+	streamKey := "git:events"
+	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+
+	found := false
+	for _, msg := range messages {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if eventData["new_rev"] == event.CommitHash && eventData["event_type"] == string(EventTypeRename) {
+			found = true
+			assert.Equal(t, string(EventTypeRename), eventData["event_type"])
+			assert.Equal(t, event.CommitHash, eventData["new_rev"])
+			assert.Equal(t, event.CommitHash, eventData["old_rev"])
+			assert.Equal(t, event.RefName, eventData["ref"])
+			assert.Equal(t, event.OldRefName, eventData["old_ref"])
+			assert.Equal(t, event.UserID, eventData["user_id"])
+			break
+		}
+	}
+
+	assert.True(t, found, "Should find rename event in stream")
+}
+
+func TestAddRenameEventToStream_WithoutOldRefName(t *testing.T) {
+	redisURL := getTestRedisURL()
+	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
+
+	client, err := NewRedisStreamClient(redisURL, logger)
+	require.NoError(t, err)
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Logf("Failed to close client: %v", err)
+		}
+	}()
+
+	event := &CommitEvent{
+		RepoPath:      "owner/repo.git",
+		EventType:     EventTypeRename,
+		CommitHash:    "rename-no-old-ref-hash",
+		RefName:       "refs/heads/new-only",
+		OldRefName:    "",
+		Pusher:        "git",
+		UserID:        "test-user-id",
+		CommitMessage: "",
+		Timestamp:     time.Now(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = client.AddCommitEventToStream(ctx, event)
+	require.NoError(t, err)
+
+	opt, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+
+	redisClient := redis.NewClient(opt)
+	defer redisClient.Close()
+
+	streamKey := "git:events"
+	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+
+	found := false
+	for _, msg := range messages {
+		dataField, ok := msg.Values["data"].(string)
+		if !ok {
+			continue
+		}
+
+		var eventData map[string]interface{}
+		err := json.Unmarshal([]byte(dataField), &eventData)
+		if err != nil {
+			continue
+		}
+
+		if eventData["new_rev"] == event.CommitHash {
+			found = true
+			assert.Equal(t, event.RefName, eventData["ref"])
+			_, hasOldRef := eventData["old_ref"]
+			assert.False(t, hasOldRef, "old_ref should be omitted when OldRefName is empty")
+			break
+		}
+	}
+
+	assert.True(t, found, "Should find rename event without old_ref in stream")
+}
+
 func TestAddCommitEventToStream_StreamLength(t *testing.T) {
 	redisURL := getTestRedisURL()
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
