@@ -49,6 +49,14 @@ type DuplexConnection struct {
 	protoV2  bool
 }
 
+type v2SectionEnd int
+
+const (
+	v2SectionEndUnknown v2SectionEnd = iota
+	v2SectionEndFlush                // 0000
+	v2SectionEndDelim                // 0001
+)
+
 // deadlineRefreshingReader refreshes TCP read deadlines before each read.
 // This makes large packfile pushes resilient by timing out on idle periods,
 // not total transfer duration.
@@ -152,8 +160,8 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 
 	// Set read/write timeouts for the connection
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		tcpConn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		_ = tcpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = tcpConn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	}
 
 	// Create duplex connection
@@ -295,11 +303,17 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 
 	// 2) 동기 상태머신 (한 섹션씩 처리)
 	for {
-		cmds, err := s.readSection(conn.reader) // delim/flush까지 읽어들임
+		cmds, end, err := s.readSection(conn.reader) // delim/flush까지 읽어들임
 		if err != nil {
 			return err
 		}
 		if len(cmds) == 0 {
+			// Git protocol v2: empty-request = flush-pkt(0000)
+			// Up-to-date 케이스에서는 ls-refs 이후 empty-request로 종료를 표시할 수 있음.
+			// 이를 무시하고 계속 readSection을 호출하면 서버가 다음 섹션을 기다리다 30s 타임아웃으로 종료됨.
+			if end == v2SectionEndFlush {
+				return nil
+			}
 			continue
 		}
 
@@ -313,7 +327,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			// Git protocol v2에서 ls-refs는 두 섹션으로 구성:
 			// 섹션 1: command=ls-refs + delimiter (0001)
 			// 섹션 2: peel, symrefs, ref-prefix 등의 옵션들 + flush (0000)
-			lsRefsOpts, err := s.readSection(conn.reader)
+			lsRefsOpts, _, err := s.readSection(conn.reader)
 			if err != nil {
 				return fmt.Errorf("failed to read ls-refs options: %w", err)
 			}
@@ -336,7 +350,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 		case strings.HasPrefix(cmds[0], "command=fetch"):
 			// [8] fetch 명령 수신
 			// fetch 옵션 섹션 읽기 (command 섹션 다음 섹션)
-			fetchCmds, err := s.readSection(conn.reader)
+			fetchCmds, _, err := s.readSection(conn.reader)
 			if err != nil {
 				return fmt.Errorf("failed to read fetch options: %w", err)
 			}
@@ -407,6 +421,9 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				if _, err := conn.writer.WriteString("0001"); err != nil {
 					return fmt.Errorf("failed to write delim-pkt: %w", err)
 				}
+				if err := conn.writer.Flush(); err != nil {
+					return fmt.Errorf("failed to flush after acknowledgments: %w", err)
+				}
 			} else {
 				// [12] acknowledgments 섹션 생략 (done)
 			}
@@ -469,6 +486,9 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 					return fmt.Errorf("failed to write summary: %w", err)
 				}
 				// [20] 요약 메시지 전송 완료
+				if err := conn.writer.Flush(); err != nil {
+					return fmt.Errorf("failed to flush after packfile summary: %w", err)
+				}
 			}
 
 			// 최종 flush
@@ -1130,45 +1150,48 @@ func (s *DuplexTCPServer) writePackfileWithSideband(
 	return nil
 }
 
-// readV2Section : v2 섹션 읽기 (flush 패킷 전까지)
-func (s *DuplexTCPServer) readSection(reader *bufio.Reader) ([]string, error) {
+// readV2Section : v2 섹션 읽기 (delimiter/flush 전까지)
+func (s *DuplexTCPServer) readSection(reader *bufio.Reader) ([]string, v2SectionEnd, error) {
 	var commands []string
+	end := v2SectionEndUnknown
 
 	for {
 		// 1) 4바이트 길이 헤더 (hex)
 		hdr := make([]byte, 4)
 
 		if _, err := io.ReadFull(reader, hdr); err != nil {
-			return nil, fmt.Errorf("read len hdr: %w", err)
+			return nil, end, fmt.Errorf("read len hdr: %w", err)
 		}
 
 		// 2) flush 패킷인지 확인
 		if string(hdr) == "0000" {
 			// 섹션 끝 → 루프 탈출
+			end = v2SectionEndFlush
 			break
 		}
 
 		// 3) 길이 파싱
 		n64, err := strconv.ParseUint(string(hdr), 16, 16)
 		if err != nil {
-			return nil, fmt.Errorf("bad pkt-len %q: %w", string(hdr), err)
+			return nil, end, fmt.Errorf("bad pkt-len %q: %w", string(hdr), err)
 		}
 		n := int(n64)
 
 		// 0001은 delimiter 패킷 (capabilities와 데이터 구분)
 		// delimiter를 만나면 현재 섹션을 종료하고 반환
 		if n == 1 {
+			end = v2SectionEndDelim
 			break
 		}
 
 		if n < 4 {
-			return nil, fmt.Errorf("invalid pkt-len: %d", n)
+			return nil, end, fmt.Errorf("invalid pkt-len: %d", n)
 		}
 
 		// 4) payload 정확히 n-4바이트 읽기
 		payload := make([]byte, n-4)
 		if _, err := io.ReadFull(reader, payload); err != nil {
-			return nil, fmt.Errorf("read payload: %w", err)
+			return nil, end, fmt.Errorf("read payload: %w", err)
 		}
 
 		// 5) 명령 추가 (개행문자 포함될 수 있으므로 trim)
@@ -1177,7 +1200,7 @@ func (s *DuplexTCPServer) readSection(reader *bufio.Reader) ([]string, error) {
 			commands = append(commands, cmdStr)
 		}
 	}
-	return commands, nil
+	return commands, end, nil
 }
 
 // readPktLine: pkt-line 한 프레임을 읽는다.
