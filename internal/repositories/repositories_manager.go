@@ -190,6 +190,15 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 		return nil, fmt.Errorf("failed to initialize git repository: %w", err)
 	}
 
+	// initial_commit 없어도 HEAD를 default_branch로 설정 (첫 커밋 시 default branch만 허용하기 위함)
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/"+options.DefaultBranch))
+	if err := gitRepo.Storer.SetReference(headRef); err != nil {
+		rm.logger.Warn("Failed to set HEAD to default branch",
+			zap.String("path", options.Path),
+			zap.String("default_branch", options.DefaultBranch),
+			zap.Error(err))
+	}
+
 	// Create repository info
 	repoInfo := &RepositoryInfo{
 		Path:          options.Path,

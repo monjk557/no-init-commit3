@@ -506,61 +506,118 @@ func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 	return fileChange, nil
 }
 
+// repoHasHeads returns true if the repository has at least one refs/heads/* reference.
+func repoHasHeads(gitRepo *git.Repository) (bool, error) {
+	refs, err := gitRepo.References()
+	if err != nil {
+		return false, err
+	}
+	defer refs.Close()
+	hasHeads := false
+	err = refs.ForEach(func(r *plumbing.Reference) error {
+		if strings.HasPrefix(r.Name().String(), "refs/heads/") {
+			hasHeads = true
+		}
+		return nil
+	})
+	return hasHeads, err
+}
+
 // ExecuteMultiFileCommit는 다중 파일 커밋 작업을 실행합니다.
 // 이 메서드는 비즈니스 로직의 핵심을 담당하며, 트랜잭션을 통해 원자적으로 처리합니다.
+// 브랜치/HEAD가 없고 refs/heads가 하나도 없으면 빈 repo로 간주하고 root commit(첫 커밋)을 생성합니다.
 func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository *repositories.RepositoryWrapper, req *MultiFileCommitRequest, branch string, owner, repo, userID string) (*MultiFileCommitResponse, error) {
-	// 기본 커밋 해시 가져오기
-	baseHash, err := repository.ResolveReference(branch)
-	if err != nil {
-		// 브랜치가 없으면 HEAD 시도
-		baseHash, err = repository.ResolveReference("HEAD")
-		if err != nil {
-			return nil, fmt.Errorf("branch '%s' not found", branch)
-		}
-	}
-
-	// 커밋 및 트리 가져오기 (파일 존재 확인용)
 	gitRepo := repository.GetRepo()
 	if gitRepo == nil {
 		return nil, fmt.Errorf("repository is closed")
 	}
 
-	commit, err := gitRepo.CommitObject(baseHash)
-	if err != nil {
-		return nil, fmt.Errorf("commit not found")
+	// branch 비어 있으면 HEAD가 가리키는 브랜치 사용 (default branch)
+	if branch == "" {
+		if headRef, err := gitRepo.Reference(plumbing.HEAD, false); err == nil && headRef != nil && headRef.Type() == plumbing.SymbolicReference {
+			target := headRef.Target().String()
+			if strings.HasPrefix(target, "refs/heads/") {
+				branch = strings.TrimPrefix(target, "refs/heads/")
+			}
+		}
+		if branch == "" {
+			branch = "main"
+		}
 	}
 
-	tree, err := commit.Tree()
+	// 기본 커밋 해시 가져오기
+	baseHash, err := repository.ResolveReference(branch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get commit tree")
+		baseHash, err = repository.ResolveReference("HEAD")
+		if err != nil {
+			// 브랜치/HEAD 모두 없음 → 빈 repo면 root commit 허용
+			hasHeads, headErr := repoHasHeads(gitRepo)
+			if headErr != nil {
+				return nil, fmt.Errorf("branch '%s' not found", branch)
+			}
+			if hasHeads {
+				return nil, fmt.Errorf("branch '%s' not found", branch)
+			}
+
+			// 빈 repo: default branch만 허용 (HEAD symbolic target 기준, 없으면 main)
+			defaultBranch := "main"
+			if headRef, headErr := gitRepo.Reference(plumbing.HEAD, false); headErr == nil && headRef != nil && headRef.Type() == plumbing.SymbolicReference {
+				target := headRef.Target().String()
+				if strings.HasPrefix(target, "refs/heads/") {
+					defaultBranch = strings.TrimPrefix(target, "refs/heads/")
+				}
+			}
+			if branch != "" && branch != defaultBranch {
+				return nil, fmt.Errorf("first commit must use default branch '%s'", defaultBranch)
+			}
+			if branch == "" {
+				branch = defaultBranch
+			}
+
+			// 빈 repo: create 작업만 허용
+			for _, op := range req.Operations {
+				if op.Operation != OperationCreate {
+					return nil, fmt.Errorf("repository has no commits; only create operations are allowed for the first commit")
+				}
+			}
+			baseHash = plumbing.ZeroHash
+		}
 	}
 
-	// create 작업의 파일 존재 충돌 확인 및 delete 작업 검증
-	// baseTree.Files()를 사용하여 모든 파일을 확인 (서브디렉토리 포함)
-	existingFiles := make(map[string]bool)
-	tree.Files().ForEach(func(f *object.File) error {
-		existingFiles[f.Name] = true
-		return nil
-	})
+	var existingFiles map[string]bool
+	if baseHash != plumbing.ZeroHash {
+		commit, err := gitRepo.CommitObject(baseHash)
+		if err != nil {
+			return nil, fmt.Errorf("commit not found")
+		}
+		tree, err := commit.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get commit tree")
+		}
+		existingFiles = make(map[string]bool)
+		tree.Files().ForEach(func(f *object.File) error {
+			existingFiles[f.Name] = true
+			return nil
+		})
+	} else {
+		existingFiles = make(map[string]bool)
+	}
 
 	for _, op := range req.Operations {
 		switch op.Operation {
 		case "create":
-			// 파일이 이미 존재하는지 확인
 			if existingFiles[op.Path] {
 				return nil, fmt.Errorf("file already exists: %s", op.Path)
 			}
 			existingFiles[op.Path] = true
 
 		case "delete":
-			// 파일이 존재하는지 확인 - delete 작업에는 파일이 존재해야 함
 			if !existingFiles[op.Path] {
 				return nil, fmt.Errorf("file '%s' not found in repository", op.Path)
 			}
 			delete(existingFiles, op.Path)
 
 		case "move":
-			// 원본 파일 존재 확인 + 대상 경로 충돌 확인
 			if op.OriginalPath == "" {
 				return nil, fmt.Errorf("original_path is required for move operations")
 			}
@@ -605,7 +662,11 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		}
 	}
 
-	// 커밋 정보 생성
+	// 커밋 정보 생성 (root commit이면 Parents 비움)
+	parents := []plumbing.Hash{}
+	if baseHash != plumbing.ZeroHash {
+		parents = []plumbing.Hash{baseHash}
+	}
 	commitInfo := CommitInfo{
 		Message: req.Message,
 		Author: object.Signature{
@@ -618,7 +679,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 			Email: req.Committer.Email,
 			When:  time.Now(),
 		},
-		Parents: []plumbing.Hash{baseHash},
+		Parents: parents,
 	}
 
 	// 트랜잭션 시작
@@ -709,9 +770,12 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 			// 전체 작업을 실패시키지 않지만 에러를 로깅
 		}
 
-		// Publish commit event if enabled
+		// Publish commit event if enabled (root commit일 때 oldHash는 빈 문자열)
 		if s.eventsClient != nil && owner != "" && repo != "" {
 			oldHashStr := baseHash.String()
+			if baseHash == plumbing.ZeroHash {
+				oldHashStr = ""
+			}
 			s.addCommitEventToStream(ctx, repository, oldHashStr, result.CommitResult.Hash, branch, owner, repo, userID)
 		}
 	}

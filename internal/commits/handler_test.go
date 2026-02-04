@@ -804,6 +804,37 @@ func newCommitsHandler(t *testing.T) *CommitsHandler {
 	return handler
 }
 
+// newCommitsHandlerEmptyRepo returns a handler and repo path for a bare repo with no refs/heads (no initial commit).
+func newCommitsHandlerEmptyRepo(t *testing.T) (*CommitsHandler, string) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
+
+	err := os.MkdirAll(filepath.Dir(repoPath), 0755)
+	require.NoError(t, err)
+
+	repo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	// Do not create initial commit — no refs/heads/main
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
+
+	cfg := &config.Config{
+		Git: config.GitConfig{
+			RepoRoot: tempDir,
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+		},
+	}
+
+	handler, err := NewCommitsHandler(cfg)
+	require.NoError(t, err)
+
+	return handler, repoPath
+}
+
 func newCommitsHandlerWithRepo(t *testing.T) (*CommitsHandler, string) {
 	t.Helper()
 
@@ -1056,6 +1087,38 @@ func Test_MultiFileCommit_InvalidBranch_Returns404(t *testing.T) {
 	// 404 또는 400이어야 함, 500은 안됨
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
 		"status=%d should not be 500 for non-existent branch body=%s", w.Code, w.Body.String())
+}
+
+// Test_MultiFileCommit_FirstCommitOnEmptyRepo_ReturnsSuccess
+// 빈 repo(initial commit 없음)에 branch main으로 첫 커밋 생성 시 성공하고 refs/heads/main이 생긴다.
+func Test_MultiFileCommit_FirstCommitOnEmptyRepo_ReturnsSuccess(t *testing.T) {
+	t.Parallel()
+
+	handler, repoPath := newCommitsHandlerEmptyRepo(t)
+
+	req := MultiFileCommitRequest{
+		Message: "new commit",
+		Branch:  "main",
+		Operations: []MultiFileOperation{
+			{Path: "RAEDME2.md", Operation: "create", Content: "no error 2"},
+		},
+		Author: &CommitAuthor{Name: "seungbaek lee", Email: "monjk557@collabops.ai"},
+	}
+	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+	handler.HandleMultiFileCommit(c)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp MultiFileCommitResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.NotEmpty(t, resp.CommitSHA)
+	require.Equal(t, 1, resp.SuccessfulOps)
+
+	repo := openRepo(t, repoPath)
+	mainHash := getBranchHash(t, repo, "main")
+	require.Equal(t, plumbing.NewHash(resp.CommitSHA), mainHash)
 }
 
 // Test_MultiFileCommit_InvalidOperation_Returns400

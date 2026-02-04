@@ -210,7 +210,8 @@ func generateRandomID(length int) string {
 	return hex.EncodeToString(bytes)
 }
 
-// BeginTransaction은 새 트랜잭션을 시작합니다
+// BeginTransaction은 새 트랜잭션을 시작합니다.
+// baseCommit이 ZeroHash이면 root commit(첫 커밋)용으로 BaseTree 없이 시작합니다.
 func (tm *TransactionManager) BeginTransaction(ctx context.Context, repo *repositories.RepositoryWrapper, baseCommit plumbing.Hash, commitInfo CommitInfo, options TransactionOptions) (*Transaction, error) {
 	txnID := fmt.Sprintf("txn_%d_%s", time.Now().UnixNano(), generateRandomID(8))
 
@@ -219,21 +220,23 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, repo *reposi
 		options.Timeout = tm.defaultTimeout
 	}
 
-	// 커밋에서 기본 트리 가져오기
 	gitRepo := repo.GetRepo()
 	if gitRepo == nil {
 		return nil, fmt.Errorf("repository is closed")
 	}
 
-	commitObj, err := gitRepo.CommitObject(baseCommit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get base commit: %w", err)
+	var baseTree *object.Tree
+	if baseCommit != plumbing.ZeroHash {
+		commitObj, err := gitRepo.CommitObject(baseCommit)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get base commit: %w", err)
+		}
+		baseTree, err = commitObj.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get base tree: %w", err)
+		}
 	}
-
-	baseTree, err := commitObj.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get base tree: %w", err)
-	}
+	// baseCommit == ZeroHash: root commit, BaseTree is nil
 
 	txn := &Transaction{
 		ID:             txnID,
@@ -305,6 +308,23 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 	}
 
 	txn.State = TransactionStateValidating
+
+	// root commit(BaseTree nil)인 경우 create 작업만 허용
+	if txn.BaseTree == nil {
+		for _, op := range txn.Operations {
+			op.State = TransactionStateValidating
+			if op.Type != FileOperationCreate {
+				op.State = TransactionStateFailed
+				op.Error = fmt.Errorf("root commit allows only create operations, got %s", op.Type)
+				if !txn.Options.AllowPartialCommit {
+					txn.State = TransactionStateFailed
+					return op.Error
+				}
+			}
+		}
+		txn.State = TransactionStateActive
+		return nil
+	}
 
 	// 개별 작업 검증
 	for _, op := range txn.Operations {
@@ -503,22 +523,25 @@ type TreeManipulationResult struct {
 }
 
 // createTreeFromChanges는 변경 사항으로부터 트리를 생성합니다
-// 서브디렉토리를 올바르게 처리하기 위해 재귀적으로 트리를 생성합니다
+// 서브디렉토리를 올바르게 처리하기 위해 재귀적으로 트리를 생성합니다.
+// baseTree가 nil이면 root commit으로 빈 트리에서 시작합니다.
 func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, error) {
 	gitRepo := repo.GetRepo()
 	if gitRepo == nil {
 		return nil, fmt.Errorf("repository is closed")
 	}
 
-	// 모든 파일을 경로별로 맵에 저장 (기본 트리에서)
+	// 모든 파일을 경로별로 맵에 저장 (기본 트리에서; root commit이면 빈 맵)
 	files := make(map[string]TreeFileInfo)
-	baseTree.Files().ForEach(func(f *object.File) error {
-		files[f.Name] = TreeFileInfo{
-			Hash: f.Hash,
-			Mode: f.Mode,
-		}
-		return nil
-	})
+	if baseTree != nil {
+		baseTree.Files().ForEach(func(f *object.File) error {
+			files[f.Name] = TreeFileInfo{
+				Hash: f.Hash,
+				Mode: f.Mode,
+			}
+			return nil
+		})
+	}
 
 	var createdFiles, changedFiles, deletedFiles []string
 

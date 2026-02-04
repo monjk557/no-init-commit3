@@ -203,11 +203,8 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
 		}
 	}
 
-	// 기본 브랜치 설정
+	// 기본 브랜치: 비어 있으면 서비스에서 repo의 default branch(HEAD 기준) 사용
 	branch := req.Branch
-	if branch == "" {
-		branch = "main"
-	}
 
 	// 공통 검증 및 저장소 열기
 	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, branch)
