@@ -2812,6 +2812,39 @@ components:
 
     MergeHooks:
       type: object
+
+    BranchResolveResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        commit_sha:
+          type: string
+        ref_path:
+          type: string
+      required:
+        - commit_sha
+        - name
+        - ref_path
+
+    BulkBranchResolveRequest:
+      type: object
+      properties:
+        refs:
+          type: array
+          items:
+            type: string
+      required:
+        - refs
+
+    BulkBranchResolveResponse:
+      type: object
+      properties:
+        refs:
+          type: object
+          additionalProperties: true
+      required:
+        - refs
   responses:
     BadRequest:
       description: Bad request - Invalid input parameters

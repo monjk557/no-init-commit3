@@ -301,7 +301,44 @@ func buildPagination(totalCount, currentPage, pageSize int, baseURL string) Pagi
 	}
 }
 
-// HandleCreateBranch handles POST /repos/{owner}/{repo}/branches for creating new branches
+// HandleResolveBranch handles GET /repos/{owner}/{repo}/branches/resolve/*ref — single branch → commit SHA.
+func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	ref := strings.TrimPrefix(c.Param("ref"), "/")
+	if ref == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "branch name is required"})
+		return
+	}
+
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	if !ok {
+		return
+	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repository := repoCtx.repoWrapper.GetRepo()
+	exists, hash, err := h.service.checkBranchExists(repository, ref)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
+	}
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("branch '%s' not found", ref)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"name":       ref,
+		"commit_sha": hash.String(),
+		"ref_path":   "refs/heads/" + ref,
+	})
+}
+
+// HandleCreateBranch handles POST /repos/{owner}/{repo}/branches for creating new branches.
 func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	ctx := c.Request.Context()
 

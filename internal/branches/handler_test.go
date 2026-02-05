@@ -1751,6 +1751,124 @@ func Test_GetBranches_Pagination_ReturnsCorrectPage(t *testing.T) {
 }
 
 // =============================================================================
+// 테스트: ResolveBranch (GET /repos/{owner}/{repo}/branches/resolve/*ref)
+// =============================================================================
+
+// Test_ResolveBranch_ExistingBranch_ReturnsSHA
+// 회귀: 존재하는 브랜치 resolve 시 200과 name, commit_sha, ref_path 반환
+func Test_ResolveBranch_ExistingBranch_ReturnsSHA(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	_ = initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/master", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["success"].(bool))
+	require.Equal(t, "master", resp["name"])
+	require.Equal(t, "refs/heads/master", resp["ref_path"])
+	sha, ok := resp["commit_sha"].(string)
+	require.True(t, ok)
+	require.Len(t, sha, 40)
+}
+
+// Test_ResolveBranch_BranchWithSlash_ReturnsSHA
+// 회귀: 슬래시 포함 브랜치 이름 resolve 시 올바른 ref_path 반환
+func Test_ResolveBranch_BranchWithSlash_ReturnsSHA(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/login"), head.Hash())
+	require.NoError(t, repo.Storer.SetReference(branchRef))
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/feature/login", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["success"].(bool))
+	require.Equal(t, "feature/login", resp["name"])
+	require.Equal(t, "refs/heads/feature/login", resp["ref_path"])
+	require.Equal(t, head.Hash().String(), resp["commit_sha"])
+}
+
+// Test_ResolveBranch_EmptyRef_Returns400
+// 회귀: ref 비어 있으면 400, branch name is required
+func Test_ResolveBranch_EmptyRef_Returns400(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+	requireBodyContains(t, w, "branch name is required")
+}
+
+// Test_ResolveBranch_RepoNotFound_Returns404
+// 회귀: 존재하지 않는 저장소면 404
+func Test_ResolveBranch_RepoNotFound_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newHandler(t)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/nonexistent/branches/resolve/master", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusNotFound)
+	requireBodyContains(t, w, "repository not found")
+}
+
+// Test_ResolveBranch_BranchNotFound_Returns404
+// 회귀: 존재하지 않는 브랜치면 404
+func Test_ResolveBranch_BranchNotFound_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/nonexistent", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusNotFound)
+	requireBodyContains(t, w, "branch 'nonexistent' not found")
+}
+
+// =============================================================================
 // 테스트: ValidateBranchName 추가 케이스
 // =============================================================================
 
