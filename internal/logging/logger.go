@@ -53,7 +53,7 @@ func NewLogger(cfg config.LoggingConfig) (*Logger, error) {
 		NameKey:        "logger",
 		CallerKey:      "caller",
 		FunctionKey:    "function",
-		MessageKey:     "message",
+		MessageKey:     "msg",
 		StacktraceKey:  "stacktrace",
 		LineEnding:     zapcore.DefaultLineEnding,
 		EncodeLevel:    zapcore.LowercaseLevelEncoder,

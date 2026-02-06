@@ -1,6 +1,7 @@
 package branches
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func Test_BranchService_CreateBranch_ValidRequest_ReturnsSuccess(t *testing.T) {
 	repo, _ := newBareRepoWithMain(t)
 	svc := newBranchService(t)
 
-	result, err := svc.CreateBranch(repo, CreateBranchRequest{
+	result, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{
 		Name:   "feature",
 		Source: "main",
 	})
@@ -130,7 +131,7 @@ func Test_BranchService_CreateBranch_DuplicateName_WithoutForce_ReturnsError(t *
 	repo, _ := newBareRepoWithMain(t)
 	svc := newBranchService(t)
 
-	_, err := svc.CreateBranch(repo, CreateBranchRequest{Name: "main", Source: "HEAD"})
+	_, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{Name: "main", Source: "HEAD"})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already exists")
@@ -142,7 +143,7 @@ func Test_BranchService_CreateBranch_DuplicateName_WithForce_Overwrites(t *testi
 	repo, _ := newBareRepoWithMain(t)
 	svc := newBranchService(t)
 
-	result, err := svc.CreateBranch(repo, CreateBranchRequest{
+	result, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{
 		Name:   "main",
 		Source: "HEAD",
 		Force:  true,
@@ -158,10 +159,10 @@ func Test_BranchService_DeleteBranch_Existing_ReturnsSuccess(t *testing.T) {
 	repo, _ := newBareRepoWithMain(t)
 	svc := newBranchService(t)
 
-	_, err := svc.CreateBranch(repo, CreateBranchRequest{Name: "to-delete", Source: "main"})
+	_, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{Name: "to-delete", Source: "main"})
 	require.NoError(t, err)
 
-	result, err := svc.DeleteBranch(repo, "to-delete")
+	result, err := svc.DeleteBranch(context.Background(), repo, "to-delete")
 
 	require.NoError(t, err)
 	require.Equal(t, "to-delete", result.BranchName)
@@ -176,7 +177,7 @@ func Test_BranchService_DeleteBranch_NonExistent_ReturnsError(t *testing.T) {
 	repo, _ := newBareRepoWithMain(t)
 	svc := newBranchService(t)
 
-	_, err := svc.DeleteBranch(repo, "ghost")
+	_, err := svc.DeleteBranch(context.Background(), repo, "ghost")
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not exist")

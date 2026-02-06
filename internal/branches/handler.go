@@ -346,7 +346,8 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	h.logger.Info("Processing branch creation request",
+	h.logger.LogInfo(c.Request.Context(), "Processing branch creation request",
+		zap.String("event", "branch_create_request"),
 		zap.String("owner", owner),
 		zap.String("repo", repo))
 
@@ -379,7 +380,7 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	repository := repoCtx.repoWrapper.GetRepo()
 
 	// Call service to create branch
-	result, err := h.service.CreateBranch(repository, req)
+	result, err := h.service.CreateBranch(c.Request.Context(), repository, req)
 	if err != nil {
 		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
@@ -429,7 +430,8 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 	branchName := c.Param("branch")
 	branchName = strings.TrimPrefix(branchName, "/")
 
-	h.logger.Info("Processing branch update request",
+	h.logger.LogInfo(c.Request.Context(), "Processing branch update request",
+		zap.String("event", "branch_update_request"),
 		zap.String("owner", owner),
 		zap.String("repo", repo),
 		zap.String("branch", branchName))
@@ -492,7 +494,7 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 	repository := repoCtx.repoWrapper.GetRepo()
 
 	// Call service to update branch
-	result, err := h.service.UpdateBranch(repository, branchName, req)
+	result, err := h.service.UpdateBranch(c.Request.Context(), repository, branchName, req)
 	if err != nil {
 		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
@@ -585,7 +587,8 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 	branchName := c.Param("branch")
 	branchName = strings.TrimPrefix(branchName, "/")
 
-	h.logger.Info("Processing branch deletion request",
+	h.logger.LogInfo(c.Request.Context(), "Processing branch deletion request",
+		zap.String("event", "branch_delete_request"),
 		zap.String("owner", owner),
 		zap.String("repo", repo),
 		zap.String("branch", branchName),
@@ -611,7 +614,7 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 	repository := repoCtx.repoWrapper.GetRepo()
 
 	// Call service to delete branch
-	result, err := h.service.DeleteBranch(repository, branchName)
+	result, err := h.service.DeleteBranch(c.Request.Context(), repository, branchName)
 	if err != nil {
 		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError

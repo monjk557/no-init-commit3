@@ -261,13 +261,20 @@ func (m *JSONResponseMiddleware) RequestMetadataMiddleware() gin.HandlerFunc {
 		// Set start time for duration calculation
 		c.Set("start_time", time.Now())
 
-		// Generate or extract request ID
-		requestID := c.GetHeader("X-Request-ID")
-		if requestID == "" {
-			// Generate a simple request ID (in production, use UUID or similar)
-			requestID = generateRequestID()
+		// Use request ID from context (e.g. set by GinRequestLogger) or header, otherwise generate
+		var requestID string
+		if id, ok := c.Get("request_id"); ok {
+			if s, ok := id.(string); ok && s != "" {
+				requestID = s
+			}
 		}
-		c.Set("request_id", requestID)
+		if requestID == "" {
+			requestID = c.GetHeader("X-Request-ID")
+			if requestID == "" {
+				requestID = generateRequestID()
+			}
+			c.Set("request_id", requestID)
+		}
 
 		// Add request ID to response headers
 		c.Header("X-Request-ID", requestID)

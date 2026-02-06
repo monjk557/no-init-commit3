@@ -1,6 +1,7 @@
 package branches
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -80,7 +81,7 @@ func (s *BranchService) GetBranches(repo *gogit.Repository) ([]BranchInfo, error
 }
 
 // CreateBranch는 새로운 브랜치를 생성합니다.
-func (s *BranchService) CreateBranch(repo *gogit.Repository, req CreateBranchRequest) (*CreateBranchResult, error) {
+func (s *BranchService) CreateBranch(ctx context.Context, repo *gogit.Repository, req CreateBranchRequest) (*CreateBranchResult, error) {
 	// Set default source if not provided - support both field names for compatibility
 	source := req.Source
 	if source == "" {
@@ -141,7 +142,8 @@ func (s *BranchService) CreateBranch(repo *gogit.Repository, req CreateBranchReq
 		},
 	}
 
-	s.logger.Info("Branch created successfully",
+	s.logger.LogInfo(ctx, "Branch created successfully",
+		zap.String("event", "branch_created"),
 		zap.String("branch", req.Name),
 		zap.String("commit_sha", sourceCommit.String()),
 		zap.String("source", source),
@@ -167,7 +169,7 @@ type UpdateBranchResult struct {
 }
 
 // UpdateBranch는 브랜치를 업데이트합니다 (rename 또는 commit update).
-func (s *BranchService) UpdateBranch(repo *gogit.Repository, branchName string, req UpdateBranchRequest) (*UpdateBranchResult, error) {
+func (s *BranchService) UpdateBranch(ctx context.Context, repo *gogit.Repository, branchName string, req UpdateBranchRequest) (*UpdateBranchResult, error) {
 	// Validate that either target or new_name is provided, but not both
 	hasTarget := req.Target != ""
 	hasNewName := req.NewName != ""
@@ -191,15 +193,15 @@ func (s *BranchService) UpdateBranch(repo *gogit.Repository, branchName string, 
 
 	// Handle rename operation
 	if hasNewName {
-		return s.renameBranch(repo, branchName, req.NewName, currentCommit, req.Force)
+		return s.renameBranch(ctx, repo, branchName, req.NewName, currentCommit, req.Force)
 	}
 
 	// Handle commit update operation
-	return s.updateBranchCommit(repo, branchName, req.Target, currentCommit, req.Force, req.Message)
+	return s.updateBranchCommit(ctx, repo, branchName, req.Target, currentCommit, req.Force, req.Message)
 }
 
 // renameBranch는 브랜치 이름을 변경합니다.
-func (s *BranchService) renameBranch(repo *gogit.Repository, oldName, newName string, currentCommit plumbing.Hash, force bool) (*UpdateBranchResult, error) {
+func (s *BranchService) renameBranch(ctx context.Context, repo *gogit.Repository, oldName, newName string, currentCommit plumbing.Hash, force bool) (*UpdateBranchResult, error) {
 	// Check if old and new names are the same
 	if oldName == newName {
 		return nil, fmt.Errorf("old branch name and new branch name cannot be the same")
@@ -235,7 +237,8 @@ func (s *BranchService) renameBranch(repo *gogit.Repository, oldName, newName st
 	if newBranchExists && force {
 		newRefPath := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", newName))
 		if err := repo.Storer.RemoveReference(newRefPath); err != nil {
-			s.logger.Warn("Failed to remove existing new branch reference",
+			s.logger.LogWarning(ctx, "Failed to remove existing new branch reference",
+				zap.String("event", "branch_rename"),
 				zap.String("new_branch", newName),
 				zap.Error(err))
 		}
@@ -259,11 +262,13 @@ func (s *BranchService) renameBranch(repo *gogit.Repository, oldName, newName st
 	if isHeadBranch {
 		newHeadRef := plumbing.NewSymbolicReference(plumbing.HEAD, newRefPath)
 		if err := repo.Storer.SetReference(newHeadRef); err != nil {
-			s.logger.Warn("Failed to update HEAD to renamed branch",
+			s.logger.LogWarning(ctx, "Failed to update HEAD to renamed branch",
+				zap.String("event", "branch_rename"),
 				zap.String("new_branch", newName),
 				zap.Error(err))
 		} else {
-			s.logger.Info("Updated HEAD to renamed branch",
+			s.logger.LogInfo(ctx, "Updated HEAD to renamed branch",
+				zap.String("event", "branch_rename"),
 				zap.String("new_branch", newName))
 		}
 	}
@@ -287,7 +292,8 @@ func (s *BranchService) renameBranch(repo *gogit.Repository, oldName, newName st
 		Forced:        force && newBranchExists,
 	}
 
-	s.logger.Info("Branch renamed successfully",
+	s.logger.LogInfo(ctx, "Branch renamed successfully",
+		zap.String("event", "branch_renamed"),
 		zap.String("old_branch", oldName),
 		zap.String("new_branch", newName),
 		zap.String("commit_hash", currentCommit.String()),
@@ -297,7 +303,7 @@ func (s *BranchService) renameBranch(repo *gogit.Repository, oldName, newName st
 }
 
 // updateBranchCommit는 브랜치가 가리키는 커밋을 업데이트합니다.
-func (s *BranchService) updateBranchCommit(repo *gogit.Repository, branchName, target string, currentCommit plumbing.Hash, force bool, message string) (*UpdateBranchResult, error) {
+func (s *BranchService) updateBranchCommit(ctx context.Context, repo *gogit.Repository, branchName, target string, currentCommit plumbing.Hash, force bool, message string) (*UpdateBranchResult, error) {
 	// Resolve target reference
 	targetCommit, err := s.resolveSourceReference(repo, target)
 	if err != nil {
@@ -358,7 +364,8 @@ func (s *BranchService) updateBranchCommit(repo *gogit.Repository, branchName, t
 		Message:      message,
 	}
 
-	s.logger.Info("Branch updated successfully",
+	s.logger.LogInfo(ctx, "Branch updated successfully",
+		zap.String("event", "branch_updated"),
 		zap.String("branch", branchName),
 		zap.String("from_commit", currentCommit.String()),
 		zap.String("to_commit", targetCommit.String()),
@@ -375,7 +382,7 @@ type DeleteBranchResult struct {
 }
 
 // DeleteBranch는 브랜치를 삭제합니다.
-func (s *BranchService) DeleteBranch(repo *gogit.Repository, branchName string) (*DeleteBranchResult, error) {
+func (s *BranchService) DeleteBranch(ctx context.Context, repo *gogit.Repository, branchName string) (*DeleteBranchResult, error) {
 	// Check if branch exists
 	branchExists, branchCommit, err := s.checkBranchExists(repo, branchName)
 	if err != nil {
@@ -397,7 +404,8 @@ func (s *BranchService) DeleteBranch(repo *gogit.Repository, branchName string) 
 		CommitHash: branchCommit.String(),
 	}
 
-	s.logger.Info("Branch deleted successfully",
+	s.logger.LogInfo(ctx, "Branch deleted successfully",
+		zap.String("event", "branch_deleted"),
 		zap.String("branch", branchName),
 		zap.String("deleted_commit", branchCommit.String()))
 

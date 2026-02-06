@@ -126,8 +126,8 @@ func (s *Server) SetupRouter() *gin.Engine {
 	router := gin.New()
 
 	// Add core middleware first
-	router.Use(gin.Logger())   // Request logging
-	router.Use(gin.Recovery()) // Panic recovery
+	router.Use(logging.GinRequestLogger(s.logger)) // Request logging (JSON event format)
+	router.Use(gin.Recovery())                     // Panic recovery
 
 	// Setup observability middleware and routes
 	s.observabilityManager.SetupMiddleware(router)
