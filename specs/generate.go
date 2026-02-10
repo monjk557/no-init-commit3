@@ -300,6 +300,23 @@ func isHTTPMethod(name string) bool {
 	return false
 }
 
+// routeToSpecPath converts Gin route path (ownerRepoGroup) to OpenAPI spec path.
+// - Gin uses :param and *param; OpenAPI uses {param}
+// - ownerRepoGroup paths are relative to /repos/:owner/:repo
+// - docs routes (/openapi.yaml etc.) return skip=true (스펙에 정의 안 함)
+func routeToSpecPath(routePath string) (specPath string, skip bool) {
+	switch routePath {
+	case "/openapi.yaml", "/openapi.yml", "/swagger.yaml", "/swagger.yml":
+		return "", true
+	}
+	specPath = "/repos/{owner}/{repo}" + routePath
+	// Gin :param → OpenAPI {param}
+	specPath = regexp.MustCompile(`:([a-zA-Z0-9_]+)`).ReplaceAllString(specPath, "{$1}")
+	// Gin *param (catch-all) → OpenAPI {param}
+	specPath = regexp.MustCompile(`\*([a-zA-Z0-9_]+)`).ReplaceAllString(specPath, "{$1}")
+	return specPath, false
+}
+
 func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
 	schemas := make(map[string]SchemaInfo)
 
@@ -409,54 +426,7 @@ func getTypeString(expr ast.Expr) string {
 }
 
 func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, projectRoot string) (string, error) {
-	// Read the existing comprehensive spec as it's already complete
-	// This generator validates that routes and schemas exist
-	existingSpecPath := filepath.Join(projectRoot, "specs/generated/collabops-git-executor.yaml")
-
-	if _, err := os.Stat(existingSpecPath); err == nil {
-		// Use existing comprehensive spec
-		specBytes, err := os.ReadFile(existingSpecPath)
-		if err != nil {
-			return "", err
-		}
-
-		specStr := string(specBytes)
-
-		// Best-effort: keep the existing spec, but ensure all exported Go schema structs exist
-		// under components/schemas to prevent drift between code and spec.
-		updatedSpec, addedSchemaNames, err := upsertSchemasIntoExistingSpec(specStr, schemas)
-		if err == nil && len(addedSchemaNames) > 0 {
-			specStr = updatedSpec
-		}
-
-		// Verify routes and schemas are present (basic validation)
-		missingRoutes := []string{}
-		missingSchemas := []string{}
-
-		for _, route := range routes {
-			if !strings.Contains(specStr, route.Path) {
-				missingRoutes = append(missingRoutes, route.Path)
-			}
-		}
-
-		for name := range schemas {
-			if !strings.Contains(specStr, name) {
-				missingSchemas = append(missingSchemas, name)
-			}
-		}
-
-		if len(missingRoutes) > 0 {
-			fmt.Printf("⚠️  Warning: Some routes not found in spec: %v\n", missingRoutes)
-		}
-
-		if len(missingSchemas) > 0 {
-			fmt.Printf("⚠️  Warning: Some schemas not found in spec: %v\n", missingSchemas)
-		}
-
-		return specStr, nil
-	}
-
-	// If no existing spec, generate from template (simplified)
+	// 항상 Go 기준으로 스펙 생성 (기존 YAML 읽지 않음)
 	tmpl, err := template.New("openapi").Parse(openAPITemplate)
 	if err != nil {
 		return "", err
@@ -484,31 +454,50 @@ func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, proj
 func generatePathsFromRoutes(routes []RouteInfo) string {
 	var buf strings.Builder
 
-	// Group routes by path
+	// specPath 기준으로 그룹 (OpenAPI 경로: /repos/{owner}/{repo}/...)
 	pathMap := make(map[string][]RouteInfo)
 	for _, route := range routes {
-		pathMap[route.Path] = append(pathMap[route.Path], route)
+		specPath, skip := routeToSpecPath(route.Path)
+		if skip {
+			continue
+		}
+		pathMap[specPath] = append(pathMap[specPath], route)
 	}
 
-	// Sort paths for consistent output
 	paths := make([]string, 0, len(pathMap))
-	for path := range pathMap {
-		paths = append(paths, path)
+	for p := range pathMap {
+		paths = append(paths, p)
 	}
 	sort.Strings(paths)
 
-	for _, path := range paths {
-		routes := pathMap[path]
-		buf.WriteString(fmt.Sprintf("  %s:\n", path))
-		for _, route := range routes {
-			buf.WriteString(fmt.Sprintf("    %s:\n", strings.ToLower(route.Method)))
+	for _, specPath := range paths {
+		routesForPath := pathMap[specPath]
+		buf.WriteString(fmt.Sprintf("  %s:\n", specPath))
+		for _, route := range routesForPath {
+			method := strings.ToLower(route.Method)
+			buf.WriteString(fmt.Sprintf("    %s:\n", method))
 			buf.WriteString(fmt.Sprintf("      summary: %s\n", route.HandlerName))
 			buf.WriteString(fmt.Sprintf("      operationId: %s\n", strings.ToLower(route.HandlerName)))
 			buf.WriteString("      tags:\n")
-			buf.WriteString(fmt.Sprintf("        - %s\n", getTagFromPath(path)))
+			buf.WriteString(fmt.Sprintf("        - %s\n", getTagFromPath(specPath)))
 			buf.WriteString("      parameters:\n")
 			buf.WriteString("        - $ref: '#/components/parameters/Owner'\n")
 			buf.WriteString("        - $ref: '#/components/parameters/Repo'\n")
+			for _, p := range pathParamsFromSpecPath(specPath) {
+				buf.WriteString(fmt.Sprintf("        - name: %s\n", p))
+				buf.WriteString("          in: path\n")
+				buf.WriteString("          required: true\n")
+				buf.WriteString("          schema:\n")
+				buf.WriteString("            type: string\n")
+			}
+			if ref := requestSchemaRef(route.Method, specPath); ref != "" {
+				buf.WriteString("      requestBody:\n")
+				buf.WriteString("        required: true\n")
+				buf.WriteString("        content:\n")
+				buf.WriteString("          application/json:\n")
+				buf.WriteString("            schema:\n")
+				buf.WriteString(fmt.Sprintf("              $ref: '#/components/schemas/%s'\n", ref))
+			}
 			buf.WriteString("      responses:\n")
 			buf.WriteString("        '200':\n")
 			buf.WriteString("          description: Success\n")
@@ -518,6 +507,46 @@ func generatePathsFromRoutes(routes []RouteInfo) string {
 	}
 
 	return buf.String()
+}
+
+// requestSchemaRef returns the component schema name for requestBody (POST/PATCH with body). Empty if none.
+func requestSchemaRef(method, specPath string) string {
+	switch method {
+	case "POST":
+		switch specPath {
+		case "/repos/{owner}/{repo}":
+			return "CreateRepositoryRequest"
+		case "/repos/{owner}/{repo}/branches":
+			return "CreateBranchRequest"
+		case "/repos/{owner}/{repo}/commits":
+			return "MultiFileCommitRequest"
+		case "/repos/{owner}/{repo}/tags":
+			return "CreateTagRequest"
+		case "/repos/{owner}/{repo}/merges":
+			return "MergeRequest"
+		}
+	case "PATCH":
+		if strings.Contains(specPath, "/branches/{branch}") {
+			return "UpdateBranchRequest"
+		}
+	}
+	return ""
+}
+
+// pathParamsFromSpecPath returns path param names (e.g. branch, name) from specPath, excluding owner/repo.
+func pathParamsFromSpecPath(specPath string) []string {
+	re := regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
+	matches := re.FindAllStringSubmatch(specPath, -1)
+	var out []string
+	for _, m := range matches {
+		if len(m) >= 2 {
+			name := m[1]
+			if name != "owner" && name != "repo" {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 func getTagFromPath(path string) string {

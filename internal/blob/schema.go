@@ -10,9 +10,11 @@ type BlobRequestParams struct {
 	UserID string
 }
 
-// BlobErrorResponse represents a standardized error response for blob endpoints
+// BlobErrorResponse represents a standardized error response for blob endpoints.
+// 규약: 모든 JSON 에러 응답은 success=false, error 필수.
 type BlobErrorResponse struct {
-	Error   string `json:"error"`
-	Code    string `json:"code,omitempty"`
-	Details string `json:"details,omitempty"`
+	Success bool   `json:"success"`           // MUST be false
+	Error   string `json:"error"`             // 에러 메시지
+	Code    string `json:"code,omitempty"`    // 선택
+	Details string `json:"details,omitempty"` // 선택
 }

@@ -55,9 +55,9 @@ func Test_CreateBranch_ValidRequest_ReturnsSuccess(t *testing.T) {
 	var resp CreateBranchResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Equal(t, "feature/new-feature", resp.Data.BranchName)
-	require.Equal(t, "refs/heads/feature/new-feature", resp.Data.RefPath)
-	require.True(t, resp.Data.IsNewBranch)
+	require.Equal(t, "feature/new-feature", resp.BranchName)
+	require.Equal(t, "refs/heads/feature/new-feature", resp.RefPath)
+	require.True(t, resp.IsNewBranch)
 }
 
 // Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue
@@ -82,7 +82,7 @@ func Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue(t *testing.T) {
 	var resp CreateBranchResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.True(t, resp.Data.Details.Checkout)
+	require.True(t, resp.Details.Checkout)
 }
 
 // Test_CreateBranch_DuplicateName_Returns409
@@ -144,7 +144,7 @@ func Test_CreateBranch_WithForce_OverwritesExisting(t *testing.T) {
 	var resp CreateBranchResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.True(t, resp.Data.Details.ForceUsed)
+	require.True(t, resp.Details.ForceUsed)
 }
 
 // Test_CreateBranch_InvalidBranchName_Returns400
@@ -221,9 +221,8 @@ func Test_UpdateBranch_Rename_ReturnsSuccess(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp["success"].(bool))
-	data := resp["data"].(map[string]interface{})
-	require.Equal(t, "rename", data["operation"])
-	require.Equal(t, "new-branch", data["new_branch_name"])
+	require.Equal(t, "rename", resp["operation"])
+	require.Equal(t, "new-branch", resp["new_branch_name"])
 }
 
 // Test_UpdateBranch_NonExistent_Returns404
@@ -279,9 +278,8 @@ func Test_DeleteBranch_Existing_ReturnsSuccess(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp["success"].(bool))
-	data := resp["data"].(map[string]interface{})
-	require.Equal(t, "feature/to-delete", data["branch_name"])
-	require.Equal(t, "delete", data["operation"])
+	require.Equal(t, "feature/to-delete", resp["branch_name"])
+	require.Equal(t, "delete", resp["operation"])
 }
 
 // Test_DeleteBranch_NonExistent_Returns404
@@ -842,8 +840,8 @@ func Test_CreateBranch_FromCommitSHA_ReturnsSuccess(t *testing.T) {
 	var resp CreateBranchResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Equal(t, "branch-from-sha", resp.Data.BranchName)
-	require.Equal(t, commitHash.String(), resp.Data.CommitSHA)
+	require.Equal(t, "branch-from-sha", resp.BranchName)
+	require.Equal(t, commitHash.String(), resp.CommitSHA)
 }
 
 // Test_CreateBranch_FromTag_ReturnsSuccess
@@ -879,8 +877,8 @@ func Test_CreateBranch_FromTag_ReturnsSuccess(t *testing.T) {
 	var resp CreateBranchResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Equal(t, "branch-from-tag", resp.Data.BranchName)
-	require.Equal(t, head.Hash().String(), resp.Data.CommitSHA)
+	require.Equal(t, "branch-from-tag", resp.BranchName)
+	require.Equal(t, head.Hash().String(), resp.CommitSHA)
 }
 
 // Test_CreateBranch_SlashInName_ReturnsSuccess
@@ -905,7 +903,7 @@ func Test_CreateBranch_SlashInName_ReturnsSuccess(t *testing.T) {
 	var resp CreateBranchResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Equal(t, "feature/foo", resp.Data.BranchName)
+	require.Equal(t, "feature/foo", resp.BranchName)
 }
 
 // Test_CreateBranch_MultipleSlashes_Returns400
@@ -1230,10 +1228,9 @@ func Test_UpdateBranch_FastForward_ReturnsSuccess(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp["success"].(bool))
-	data := resp["data"].(map[string]interface{})
-	require.Equal(t, "update", data["operation"])
-	require.True(t, data["fast_forward"].(bool))
-	require.Equal(t, commit2.String(), data["commit_hash"])
+	require.Equal(t, "update", resp["operation"])
+	require.True(t, resp["fast_forward"].(bool))
+	require.Equal(t, commit2.String(), resp["commit_hash"])
 }
 
 // Test_UpdateBranch_NonFastForward_Returns400
@@ -1458,10 +1455,9 @@ func Test_UpdateBranch_NonFastForwardForce_ReturnsSuccess(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp["success"].(bool))
-	data := resp["data"].(map[string]interface{})
-	require.Equal(t, "update", data["operation"])
-	require.Equal(t, commit3.String(), data["commit_hash"])
-	require.True(t, data["forced"].(bool))
+	require.Equal(t, "update", resp["operation"])
+	require.Equal(t, commit3.String(), resp["commit_hash"])
+	require.True(t, resp["forced"].(bool))
 }
 
 // Test_UpdateBranch_RenameDefault_ReturnsSuccess
@@ -1537,8 +1533,7 @@ func Test_DeleteBranch_WithSlash_ReturnsSuccess(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp["success"].(bool))
-	data := resp["data"].(map[string]interface{})
-	require.Equal(t, "feature/foo", data["branch_name"])
+	require.Equal(t, "feature/foo", resp["branch_name"])
 }
 
 // Test_DeleteBranch_DefaultBranch_ReturnsSuccess

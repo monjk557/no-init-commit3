@@ -125,10 +125,9 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 			c.JSON(404, gin.H{"success": false, "error": err.Error()})
 			return
 		}
-		// Wrap in response structure
 		response := &TreeEntriesRecursiveResponse{
 			Success: true,
-			Data:    treeMap,
+			Tree:    treeMap,
 		}
 		// Send JSON response with map structure
 		c.JSON(http.StatusOK, response)
@@ -150,8 +149,8 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 
 		response := &TreeEntriesRecursiveResponse{
 			Success: true,
-			Data: map[string][]TreeEntry{
-				pathKey: treeEntries.Data,
+			Tree: map[string][]TreeEntry{
+				pathKey: treeEntries.Entries,
 			},
 		}
 

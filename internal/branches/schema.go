@@ -6,14 +6,20 @@ import (
 	"time"
 )
 
-// CreateBranchResponse는 브랜치 생성 응답을 나타냅니다.
-// 생성된 브랜치의 상세 정보와 성공 여부를 포함합니다.
+// CreateBranchResponse는 브랜치 생성 응답을 나타냅니다 (flat, data 래퍼 없음).
 type CreateBranchResponse struct {
-	Success bool             `json:"success"`
-	Data    CreateBranchData `json:"data"`
+	Success     bool                `json:"success"`
+	BranchName  string              `json:"branch_name"`
+	CommitSHA   string              `json:"commit_sha"`
+	Source      string              `json:"source"`
+	RefPath     string              `json:"ref_path"`
+	IsNewBranch bool                `json:"is_new_branch"`
+	Message     string              `json:"message"`
+	CreatedAt   time.Time           `json:"created_at"`
+	Details     CreateBranchDetails `json:"details"`
 }
 
-// CreateBranchData는 생성된 브랜치의 상세 정보를 포함합니다.
+// CreateBranchData는 내부/테스트용 호환 타입 (CreateBranchResponse와 동일 필드).
 type CreateBranchData struct {
 	BranchName  string              `json:"branch_name"`
 	CommitSHA   string              `json:"commit_sha"`

@@ -3,6 +3,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -13,14 +14,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// APIResponse는 표준화된 API 응답 구조를 나타냅니다
+// APIResponse는 표준화된 API 응답 구조를 나타냅니다.
+// 규약: 성공 응답은 data 래퍼 없이 flat (payload 필드는 최상위에 둠).
 type APIResponse struct {
 	// Success는 작업이 성공했는지를 나타냅니다
 	Success bool `json:"success"`
 	// Message는 사람이 읽을 수 있는 설명을 제공합니다
 	Message string `json:"message,omitempty"`
-	// Data는 응답 페이로드를 포함합니다 (성공 응답에만)
-	Data interface{} `json:"data,omitempty"`
 	// Error는 에러 정보를 포함합니다 (에러 응답에만)
 	Error *logging.AppError `json:"error,omitempty"`
 	// Meta는 응답에 대한 메타데이터를 포함합니다
@@ -153,63 +153,69 @@ func (m *JSONResponseMiddleware) handleInternalError(c *gin.Context, ginErr *gin
 	m.SendErrorResponse(c, apiErr, requestID, duration)
 }
 
-// SendSuccessResponse는 표준화된 성공 응답을 전송합니다
-func (m *JSONResponseMiddleware) SendSuccessResponse(c *gin.Context, data interface{}, message string) {
-	// Get request metadata
+// SendSuccessResponse는 flat 성공 응답을 전송합니다 (data 래퍼 없이 payload를 최상위에 병합).
+func (m *JSONResponseMiddleware) SendSuccessResponse(c *gin.Context, payload interface{}, message string) {
 	requestID, _ := c.Get("request_id")
 	requestIDStr, _ := requestID.(string)
-
-	startTime, exists := c.Get("start_time")
 	var duration int64
-	if exists {
-		if start, ok := startTime.(time.Time); ok {
-			duration = time.Since(start).Milliseconds()
+	if start, exists := c.Get("start_time"); exists {
+		if t, ok := start.(time.Time); ok {
+			duration = time.Since(t).Milliseconds()
 		}
 	}
-
-	response := APIResponse{
-		Success:   true,
-		Message:   message,
-		Data:      data,
-		Timestamp: time.Now(),
-		Meta: &ResponseMeta{
+	base := map[string]interface{}{
+		"success":   true,
+		"message":   message,
+		"timestamp": time.Now(),
+		"meta": &ResponseMeta{
 			RequestID: requestIDStr,
 			Duration:  duration,
 			Version:   m.version,
 		},
 	}
-
-	c.JSON(http.StatusOK, response)
-}
-
-// SendSuccessResponseWithPagination sends a paginated success response
-func (m *JSONResponseMiddleware) SendSuccessResponseWithPagination(c *gin.Context, data interface{}, pagination *PaginationMeta, message string) {
-	// Get request metadata
-	requestID, _ := c.Get("request_id")
-	requestIDStr, _ := requestID.(string)
-
-	startTime, exists := c.Get("start_time")
-	var duration int64
-	if exists {
-		if start, ok := startTime.(time.Time); ok {
-			duration = time.Since(start).Milliseconds()
+	if payload != nil {
+		b, _ := json.Marshal(payload)
+		var response map[string]interface{}
+		if json.Unmarshal(b, &response) == nil {
+			for k, v := range response {
+				base[k] = v
+			}
 		}
 	}
+	c.JSON(http.StatusOK, base)
+}
 
-	response := APIResponse{
-		Success:   true,
-		Message:   message,
-		Data:      data,
-		Timestamp: time.Now(),
-		Meta: &ResponseMeta{
+// SendSuccessResponseWithPagination sends a flat paginated success response (data 래퍼 없음).
+func (m *JSONResponseMiddleware) SendSuccessResponseWithPagination(c *gin.Context, payload interface{}, pagination *PaginationMeta, message string) {
+	requestID, _ := c.Get("request_id")
+	requestIDStr, _ := requestID.(string)
+	var duration int64
+	if start, exists := c.Get("start_time"); exists {
+		if t, ok := start.(time.Time); ok {
+			duration = time.Since(t).Milliseconds()
+		}
+	}
+	base := map[string]interface{}{
+		"success":   true,
+		"message":   message,
+		"timestamp": time.Now(),
+		"meta": &ResponseMeta{
 			RequestID:  requestIDStr,
 			Duration:   duration,
 			Version:    m.version,
 			Pagination: pagination,
 		},
 	}
-
-	c.JSON(http.StatusOK, response)
+	if payload != nil {
+		b, _ := json.Marshal(payload)
+		var response map[string]interface{}
+		if json.Unmarshal(b, &response) == nil {
+			for k, v := range response {
+				base[k] = v
+			}
+		}
+	}
+	c.JSON(http.StatusOK, base)
 }
 
 // SendErrorResponse는 표준화된 에러 응답을 전송합니다
@@ -313,11 +319,10 @@ func SendError(c *gin.Context, apiErr *logging.AppError) {
 	middleware.SendErrorResponse(c, apiErr, requestIDStr, duration)
 }
 
-// SendSuccess is a utility function to send success responses
-func SendSuccess(c *gin.Context, data interface{}, message string) {
-	// Create a basic response middleware for this utility
+// SendSuccess is a utility function to send flat success responses
+func SendSuccess(c *gin.Context, payload interface{}, message string) {
 	middleware := NewJSONResponseMiddleware(nil, "")
-	middleware.SendSuccessResponse(c, data, message)
+	middleware.SendSuccessResponse(c, payload, message)
 }
 
 // CreatePagination creates pagination metadata

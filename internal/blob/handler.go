@@ -169,7 +169,7 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 
 // sendError는 에러 응답을 전송합니다.
 func (h *BlobHandler) sendError(c *gin.Context, err error, statusCode int) {
-	c.JSON(statusCode, gin.H{"error": err.Error()})
+	c.JSON(statusCode, gin.H{"success": false, "error": err.Error()})
 }
 
 // getErrorStatusCode는 에러에 따라 적절한 HTTP 상태 코드를 반환합니다.

@@ -417,15 +417,15 @@ func TestHandleTreeAPI_Success_NonRecursive(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, response.Success)
-	assert.NotNil(t, response.Data)
-	assert.Contains(t, response.Data, "/")
-	assert.Greater(t, len(response.Data["/"]), 0)
+	assert.NotNil(t, response.Tree)
+	assert.Contains(t, response.Tree, "/")
+	assert.Greater(t, len(response.Tree["/"]), 0)
 
 	// Git 트리 표준에 따른 정렬 검증:
 	// 1. 디렉토리(tree)가 먼저 나옴
 	// 2. 파일(blob)이 디렉토리 다음에 나옴
 	// 3. 각 그룹 내에서 알파벳 순으로 정렬됨
-	entries := response.Data["/"]
+	entries := response.Tree["/"]
 	assert.Greater(t, len(entries), 0, "최소 하나의 항목이 있어야 합니다")
 
 	// 디렉토리와 파일의 경계 찾기
@@ -494,8 +494,8 @@ func TestHandleTreeAPI_Success_Recursive(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, response.Success)
-	assert.NotNil(t, response.Data)
-	assert.Contains(t, response.Data, "/")
+	assert.NotNil(t, response.Tree)
+	assert.Contains(t, response.Tree, "/")
 }
 
 // TestHandleTreeAPI_WithPath 특정 경로를 지정하여 트리 API를 호출하는 경우를 테스트합니다.
@@ -523,8 +523,8 @@ func TestHandleTreeAPI_WithPath(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, response.Success)
-	assert.NotNil(t, response.Data)
-	assert.Contains(t, response.Data, "src")
+	assert.NotNil(t, response.Tree)
+	assert.Contains(t, response.Tree, "src")
 }
 
 // TestHandleTreeAPI_EmptyRefDefaultsToHEAD ref 파라미터가 없을 때 기본값으로 HEAD를 사용하는 경우를 테스트합니다.
@@ -699,7 +699,7 @@ func TestHandleTreeAPI_TreeSortingOrder(t *testing.T) {
 	assert.True(t, response.Success)
 
 	// 정렬 검증
-	verifyTreeSorting(t, response.Data["/"])
+	verifyTreeSorting(t, response.Tree["/"])
 }
 
 // --- 6.1 Tree Listing (test_cases.md) ---
@@ -720,8 +720,8 @@ func Test_Tree_RootDir_ReturnsEntries(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Contains(t, resp.Data, "/")
-	assert.Greater(t, len(resp.Data["/"]), 0)
+	require.Contains(t, resp.Tree, "/")
+	assert.Greater(t, len(resp.Tree["/"]), 0)
 }
 
 // Test_Tree_Subdirectory_ReturnsEntries 서브디렉토리 조회 시 해당 디렉토리 항목을 반환한다.
@@ -740,8 +740,8 @@ func Test_Tree_Subdirectory_ReturnsEntries(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Contains(t, resp.Data, "src")
-	assert.Greater(t, len(resp.Data["src"]), 0)
+	require.Contains(t, resp.Tree, "src")
+	assert.Greater(t, len(resp.Tree["src"]), 0)
 }
 
 // Test_Tree_NonExistentPath_Returns404 존재하지 않는 경로 조회 시 404를 반환한다.
@@ -796,8 +796,8 @@ func Test_Tree_EmptyDirectory_ReturnsEmptyArray(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Contains(t, resp.Data, "empty_dir")
-	assert.Empty(t, resp.Data["empty_dir"])
+	require.Contains(t, resp.Tree, "empty_dir")
+	assert.Empty(t, resp.Tree["empty_dir"])
 }
 
 // Test_Tree_ByRef_ReturnsEntriesAtRef ref 기준으로 해당 ref의 트리 항목을 반환한다.
@@ -816,8 +816,8 @@ func Test_Tree_ByRef_ReturnsEntriesAtRef(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Contains(t, resp.Data, "/")
-	assert.Greater(t, len(resp.Data["/"]), 0)
+	require.Contains(t, resp.Tree, "/")
+	assert.Greater(t, len(resp.Tree["/"]), 0)
 }
 
 // Test_Tree_ByCommitSHA_ReturnsEntriesAtCommit SHA 기준으로 해당 커밋의 트리 항목을 반환한다.
@@ -842,8 +842,8 @@ func Test_Tree_ByCommitSHA_ReturnsEntriesAtCommit(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Contains(t, resp.Data, "/")
-	assert.Greater(t, len(resp.Data["/"]), 0)
+	require.Contains(t, resp.Tree, "/")
+	assert.Greater(t, len(resp.Tree["/"]), 0)
 }
 
 // --- 6.1A Path Validation ---
@@ -887,10 +887,10 @@ func Test_Tree_EntryNameWithUnicodeBidiCharacters_HandledSafely(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp["success"].(bool))
-	data, ok := resp["data"].(map[string]interface{})
+	tree, ok := resp["tree"].(map[string]interface{})
 	require.True(t, ok)
-	require.NotEmpty(t, data)
-	for _, v := range data {
+	require.NotEmpty(t, tree)
+	for _, v := range tree {
 		entries, _ := v.([]interface{})
 		if len(entries) < 1 {
 			continue
@@ -917,7 +917,7 @@ func Test_Tree_SymlinkPointsOutside_EntryReturnedButContentFetchBlocked(t *testi
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	entries := resp.Data["/"]
+	entries := resp.Tree["/"]
 	var symlinkEntry *TreeEntry
 	for i := range entries {
 		if entries[i].Type == "symlink" || entries[i].Name == "outlink" {
@@ -949,7 +949,7 @@ func Test_Tree_FileEntry_TypeFile(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	var found bool
-	for _, e := range resp.Data["/"] {
+	for _, e := range resp.Tree["/"] {
 		if e.Name == "README.md" && e.Type == "blob" {
 			found = true
 			break
@@ -974,7 +974,7 @@ func Test_Tree_DirectoryEntry_TypeDir(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	var found bool
-	for _, e := range resp.Data["/"] {
+	for _, e := range resp.Tree["/"] {
 		if e.Name == "src" && e.Type == "tree" {
 			found = true
 			break
@@ -999,7 +999,7 @@ func Test_Tree_SymlinkEntry_TypeSymlink(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	var found bool
-	for _, e := range resp.Data["/"] {
+	for _, e := range resp.Tree["/"] {
 		if e.Type == "symlink" {
 			found = true
 			break
@@ -1024,7 +1024,7 @@ func Test_Tree_SubmoduleEntry_TypeSubmodule(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	var found bool
-	for _, e := range resp.Data["/"] {
+	for _, e := range resp.Tree["/"] {
 		if e.Name == "sub" && (e.Type == "commit" || e.Type == "tree") {
 			found = true
 			break
@@ -1051,9 +1051,9 @@ func Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	var subEntry *TreeEntry
-	for i := range resp.Data["/"] {
-		if resp.Data["/"][i].Name == "sub" {
-			subEntry = &resp.Data["/"][i]
+	for i := range resp.Tree["/"] {
+		if resp.Tree["/"][i].Name == "sub" {
+			subEntry = &resp.Tree["/"][i]
 			break
 		}
 	}
@@ -1078,9 +1078,9 @@ func Test_Tree_SymlinkEntry_ReturnsLinkTargetOrMetadata(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	var symEntry *TreeEntry
-	for i := range resp.Data["/"] {
-		if resp.Data["/"][i].Type == "symlink" {
-			symEntry = &resp.Data["/"][i]
+	for i := range resp.Tree["/"] {
+		if resp.Tree["/"][i].Type == "symlink" {
+			symEntry = &resp.Tree["/"][i]
 			break
 		}
 	}
@@ -1117,10 +1117,10 @@ func Test_Tree_CaseCollision_BehaviorDeterministic(t *testing.T) {
 	var resp2 TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
 
-	assert.Equal(t, len(resp1.Data["/"]), len(resp2.Data["/"]))
-	for i := range resp1.Data["/"] {
-		assert.Equal(t, resp1.Data["/"][i].Name, resp2.Data["/"][i].Name)
-		assert.Equal(t, resp1.Data["/"][i].Type, resp2.Data["/"][i].Type)
+	assert.Equal(t, len(resp1.Tree["/"]), len(resp2.Tree["/"]))
+	for i := range resp1.Tree["/"] {
+		assert.Equal(t, resp1.Tree["/"][i].Name, resp2.Tree["/"][i].Name)
+		assert.Equal(t, resp1.Tree["/"][i].Type, resp2.Tree["/"][i].Type)
 	}
 }
 
@@ -1142,11 +1142,11 @@ func Test_Tree_Recursive_ReturnsAllEntries(t *testing.T) {
 	var resp TreeEntriesRecursiveResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Contains(t, resp.Data, "/")
+	require.Contains(t, resp.Tree, "/")
 	// 루트 + 하위 디렉토리(예: src, docs)가 키로 있어야 함
-	assert.GreaterOrEqual(t, len(resp.Data), 1)
+	assert.GreaterOrEqual(t, len(resp.Tree), 1)
 	totalEntries := 0
-	for _, entries := range resp.Data {
+	for _, entries := range resp.Tree {
 		totalEntries += len(entries)
 	}
 	assert.Greater(t, totalEntries, 0)
@@ -1169,8 +1169,8 @@ func Test_Tree_Recursive_FlattensPaths(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 	// 키는 경로(/, src, docs 등), 값은 해당 경로의 엔트리 배열
-	assert.Contains(t, resp.Data, "/")
-	for pathKey, entries := range resp.Data {
+	assert.Contains(t, resp.Tree, "/")
+	for pathKey, entries := range resp.Tree {
 		for _, e := range entries {
 			assert.NotEmpty(t, e.Name)
 			assert.NotEmpty(t, e.Type)

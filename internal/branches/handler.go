@@ -397,24 +397,20 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	}
 
 	response := CreateBranchResponse{
-		Success: true,
-		Data: CreateBranchData{
-			BranchName:  result.BranchName,
-			CommitSHA:   result.CommitSHA,
-			Source:      result.Source,
-			RefPath:     result.RefPath,
-			IsNewBranch: result.IsNewBranch,
-			Message:     result.Message,
-			CreatedAt:   result.CreatedAt,
-			Details: CreateBranchDetails{
-				Checkout:  result.Details.Checkout,
-				ForceUsed: result.Details.ForceUsed,
-				Author:    result.Details.Author,
-			},
+		Success:     true,
+		BranchName:  result.BranchName,
+		CommitSHA:   result.CommitSHA,
+		Source:      result.Source,
+		RefPath:     result.RefPath,
+		IsNewBranch: result.IsNewBranch,
+		Message:     result.Message,
+		CreatedAt:   result.CreatedAt,
+		Details: CreateBranchDetails{
+			Checkout:  result.Details.Checkout,
+			ForceUsed: result.Details.ForceUsed,
+			Author:    result.Details.Author,
 		},
 	}
-
-	// Send success response
 	c.JSON(http.StatusOK, response)
 }
 
@@ -569,11 +565,11 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		responseData["message"] = result.Message
 	}
 
-	// Send success response
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    responseData,
-	})
+	response := gin.H{"success": true}
+	for k, v := range responseData {
+		response[k] = v
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
@@ -654,19 +650,11 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		}()
 	}
 
-	// Prepare response data in the format expected by tests
-	responseData := map[string]interface{}{
+	response := gin.H{
+		"success":     true,
 		"branch_name": result.BranchName,
 		"commit_hash": result.CommitHash,
 		"operation":   "delete",
 	}
-
-	// Prepare full response
-	response := map[string]interface{}{
-		"success": true,
-		"data":    responseData,
-	}
-
-	// Send success response
 	c.JSON(http.StatusOK, response)
 }

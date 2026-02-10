@@ -18,16 +18,14 @@ type TreeEntry struct {
 	Path string `json:"path"` // Full path
 }
 
-// TreeEntriesResponse는 트리 항목 목록 요청에 대한 응답을 나타냅니다.
-// 성공 여부와 트리 항목들의 배열을 포함합니다.
+// TreeEntriesResponse는 트리 항목 목록 요청에 대한 응답을 나타냅니다 (flat, data 래퍼 없음).
 type TreeEntriesResponse struct {
 	Success bool        `json:"success"`
-	Data    []TreeEntry `json:"data"`
+	Entries []TreeEntry `json:"entries"`
 }
 
-// TreeEntriesRecursiveResponse는 재귀적 트리 항목 목록 요청에 대한 응답을 나타냅니다.
-// 성공 여부와 경로별 트리 항목들의 맵을 포함합니다.
+// TreeEntriesRecursiveResponse는 재귀적 트리 항목 목록 요청에 대한 응답을 나타냅니다 (flat).
 type TreeEntriesRecursiveResponse struct {
 	Success bool                   `json:"success"`
-	Data    map[string][]TreeEntry `json:"data"`
+	Tree    map[string][]TreeEntry `json:"tree"`
 }

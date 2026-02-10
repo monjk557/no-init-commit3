@@ -189,7 +189,7 @@ func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntries
 
 	return &TreeEntriesResponse{
 		Success: true,
-		Data:    responseEntries,
+		Entries: responseEntries,
 	}, nil
 }
 
