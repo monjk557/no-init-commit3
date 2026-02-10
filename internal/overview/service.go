@@ -622,7 +622,7 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 	}
 
 	// Navigate to the specified path
-	var targetTree *object.Tree = treeObj
+	targetTree := treeObj
 	if path != "" {
 		treeEntry, err := treeObj.FindEntry(path)
 		if err != nil {
@@ -649,11 +649,14 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		}
 
 		// Entry type 결정
-		entryType := "blob"
-		if entry.Mode == filemode.Dir {
+		var entryType string
+		switch entry.Mode {
+		case filemode.Dir:
 			entryType = "tree"
-		} else if entry.Mode == filemode.Submodule {
+		case filemode.Submodule:
 			entryType = "commit"
+		default:
+			entryType = "blob"
 		}
 
 		// Mode를 문자열로 변환 (Unix permissions)

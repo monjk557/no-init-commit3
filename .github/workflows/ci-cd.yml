@@ -36,8 +36,11 @@ jobs:
       - name: Install dependencies and tools
         run: make install
 
-      - name: Format and lint
+      - name: Format
         run: make format
+
+      - name: Lint
+        run: make lint
 
       - name: Run tests
         run: make test

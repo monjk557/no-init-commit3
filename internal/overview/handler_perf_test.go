@@ -159,7 +159,7 @@ func setupTestHandlerForPerf(t *testing.T) (*RepositoryOverviewHandler, string, 
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return handler, tempDir, cleanup

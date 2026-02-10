@@ -82,7 +82,7 @@ func TestHandleGitProtocol(t *testing.T) {
 // TestDuplexConnection tests DuplexConnection structure
 func TestDuplexConnection(t *testing.T) {
 	conn, _ := net.Pipe()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Note: DuplexConnection fields are unexported, so we can only test creation
 	duplexConn := &server.DuplexConnection{}
@@ -109,7 +109,7 @@ func BenchmarkSSHProtocolWriter(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
-		writer.Write([]byte("test data"))
-		writer.Flush()
+		_, _ = writer.Write([]byte("test data"))
+		_ = writer.Flush()
 	}
 }

@@ -17,7 +17,6 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/merge"
-	git "github.com/go-git/go-git/v5"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -47,7 +46,7 @@ func setupTestHandler(t *testing.T) (*RepositoryOverviewHandler, string, func())
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return handler, tempDir, cleanup
@@ -59,7 +58,7 @@ func createTestRepositoryForHandler(t *testing.T, tempDir, owner, repo string) {
 
 	tempWorkDir, err := os.MkdirTemp("", "overview-handler-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -266,7 +265,7 @@ func createTestRepositoryWithMultiplePathCommits(t *testing.T, tempDir, owner, r
 
 	tempWorkDir, err := os.MkdirTemp("", "overview-handler-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -916,9 +915,9 @@ func Test_LanguageDistribution_ExcludesNodeModules_SkipsNodeModules(t *testing.T
 
 	tempWorkDir, err := os.MkdirTemp("", "overview-nodemodules-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
-	workRepo, err := git.PlainInit(tempWorkDir, false)
+	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
 
 	worktree, err := workRepo.Worktree()
@@ -935,7 +934,7 @@ func Test_LanguageDistribution_ExcludesNodeModules_SkipsNodeModules(t *testing.T
 	_, err = worktree.Add("node_modules/dep.js")
 	require.NoError(t, err)
 
-	commit, err := worktree.Commit("Add files", &git.CommitOptions{
+	commit, err := worktree.Commit("Add files", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test User",
 			Email: "test@example.com",
@@ -944,7 +943,7 @@ func Test_LanguageDistribution_ExcludesNodeModules_SkipsNodeModules(t *testing.T
 	})
 	require.NoError(t, err)
 
-	gitRepo, err := git.PlainInit(repoPath, true)
+	gitRepo, err := gogit.PlainInit(repoPath, true)
 	require.NoError(t, err)
 
 	commitObj, err := workRepo.CommitObject(commit)
@@ -989,9 +988,9 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 
 	tempWorkDir, err := os.MkdirTemp("", "contributors-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
-	workRepo, err := git.PlainInit(tempWorkDir, false)
+	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
 
 	worktree, err := workRepo.Worktree()
@@ -1002,7 +1001,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	_, err = worktree.Add("base.txt")
 	require.NoError(t, err)
 
-	baseCommit, err := worktree.Commit("Base commit", &git.CommitOptions{
+	baseCommit, err := worktree.Commit("Base commit", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Author1",
 			Email: "author1@example.com",
@@ -1012,7 +1011,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	require.NoError(t, err)
 
 	// feature 브랜치: 여러 contributor의 커밋
-	err = worktree.Checkout(&git.CheckoutOptions{
+	err = worktree.Checkout(&gogit.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName("feature"),
 		Create: true,
 	})
@@ -1022,7 +1021,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "file1.txt"), []byte("content1\n"), 0644))
 	_, err = worktree.Add("file1.txt")
 	require.NoError(t, err)
-	commit1, err := worktree.Commit("Add file1", &git.CommitOptions{
+	commit1, err := worktree.Commit("Add file1", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Contributor1",
 			Email: "contributor1@example.com",
@@ -1034,7 +1033,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "file2.txt"), []byte("content2\n"), 0644))
 	_, err = worktree.Add("file2.txt")
 	require.NoError(t, err)
-	commit2, err := worktree.Commit("Add file2", &git.CommitOptions{
+	commit2, err := worktree.Commit("Add file2", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Contributor1",
 			Email: "contributor1@example.com",
@@ -1047,7 +1046,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "file3.txt"), []byte("content3\n"), 0644))
 	_, err = worktree.Add("file3.txt")
 	require.NoError(t, err)
-	_, err = worktree.Commit("Add file3", &git.CommitOptions{
+	_, err = worktree.Commit("Add file3", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Contributor2",
 			Email: "contributor2@example.com",
@@ -1057,7 +1056,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	require.NoError(t, err)
 
 	// 베어 저장소로 복사
-	gitRepo, err := git.PlainInit(repoPath, true)
+	gitRepo, err := gogit.PlainInit(repoPath, true)
 	require.NoError(t, err)
 
 	// 모든 커밋 복사
@@ -1126,9 +1125,9 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 
 	tempWorkDir, err := os.MkdirTemp("", "contributors-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
-	workRepo, err := git.PlainInit(tempWorkDir, false)
+	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
 
 	worktree, err := workRepo.Worktree()
@@ -1138,13 +1137,13 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "base.txt"), []byte("base\n"), 0644))
 	_, err = worktree.Add("base.txt")
 	require.NoError(t, err)
-	baseCommit, err := worktree.Commit("Base", &git.CommitOptions{
+	baseCommit, err := worktree.Commit("Base", &gogit.CommitOptions{
 		Author: &object.Signature{Name: "A", Email: "a@example.com", When: time.Now()},
 	})
 	require.NoError(t, err)
 
 	// feature 브랜치: 여러 contributor
-	err = worktree.Checkout(&git.CheckoutOptions{
+	err = worktree.Checkout(&gogit.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName("feature"),
 		Create: true,
 	})
@@ -1155,7 +1154,7 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, fmt.Sprintf("file%d.txt", i)), []byte("content\n"), 0644))
 		_, err = worktree.Add(fmt.Sprintf("file%d.txt", i))
 		require.NoError(t, err)
-		_, err = worktree.Commit(fmt.Sprintf("Commit %d", i), &git.CommitOptions{
+		_, err = worktree.Commit(fmt.Sprintf("Commit %d", i), &gogit.CommitOptions{
 			Author: &object.Signature{Name: "C1", Email: "c1@example.com", When: time.Now()},
 		})
 		require.NoError(t, err)
@@ -1165,16 +1164,16 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "file4.txt"), []byte("content\n"), 0644))
 	_, err = worktree.Add("file4.txt")
 	require.NoError(t, err)
-	featureHead, err := worktree.Commit("Commit 4", &git.CommitOptions{
+	featureHead, err := worktree.Commit("Commit 4", &gogit.CommitOptions{
 		Author: &object.Signature{Name: "C2", Email: "c2@example.com", When: time.Now()},
 	})
 	require.NoError(t, err)
 
 	// 베어 저장소로 복사
-	gitRepo, err := git.PlainInit(repoPath, true)
+	gitRepo, err := gogit.PlainInit(repoPath, true)
 	require.NoError(t, err)
 
-	commitIter, err := workRepo.Log(&git.LogOptions{From: featureHead})
+	commitIter, err := workRepo.Log(&gogit.LogOptions{From: featureHead})
 	require.NoError(t, err)
 	err = commitIter.ForEach(func(c *object.Commit) error {
 		commitObjEncoded, err := workRepo.Storer.EncodedObject(plumbing.CommitObject, c.Hash)
@@ -1235,9 +1234,9 @@ func Test_Contributors_IncludesEmail(t *testing.T) {
 
 	tempWorkDir, err := os.MkdirTemp("", "contributors-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
-	workRepo, err := git.PlainInit(tempWorkDir, false)
+	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
 
 	worktree, err := workRepo.Worktree()
@@ -1247,13 +1246,13 @@ func Test_Contributors_IncludesEmail(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "base.txt"), []byte("base\n"), 0644))
 	_, err = worktree.Add("base.txt")
 	require.NoError(t, err)
-	baseCommit, err := worktree.Commit("Base", &git.CommitOptions{
+	baseCommit, err := worktree.Commit("Base", &gogit.CommitOptions{
 		Author: &object.Signature{Name: "Base", Email: "base@example.com", When: time.Now()},
 	})
 	require.NoError(t, err)
 
 	// feature 브랜치
-	err = worktree.Checkout(&git.CheckoutOptions{
+	err = worktree.Checkout(&gogit.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName("feature"),
 		Create: true,
 	})
@@ -1262,13 +1261,13 @@ func Test_Contributors_IncludesEmail(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "feature.txt"), []byte("feature\n"), 0644))
 	_, err = worktree.Add("feature.txt")
 	require.NoError(t, err)
-	featureHead, err := worktree.Commit("Feature", &git.CommitOptions{
+	featureHead, err := worktree.Commit("Feature", &gogit.CommitOptions{
 		Author: &object.Signature{Name: "Feature Author", Email: "feature@example.com", When: time.Now()},
 	})
 	require.NoError(t, err)
 
 	// 베어 저장소로 복사
-	gitRepo, err := git.PlainInit(repoPath, true)
+	gitRepo, err := gogit.PlainInit(repoPath, true)
 	require.NoError(t, err)
 
 	commitObjEncoded, err := workRepo.Storer.EncodedObject(plumbing.CommitObject, baseCommit)

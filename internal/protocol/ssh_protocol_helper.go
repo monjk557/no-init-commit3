@@ -18,7 +18,6 @@ import (
 type HashIter struct {
 	St     storer.EncodedObjectStorer
 	Hashes []plumbing.Hash
-	i      int
 }
 
 type PktWriter struct {
@@ -140,7 +139,7 @@ func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
 		switch r.Type() {
 		case plumbing.HashReference:
 			n := r.Name().String()
-			k := 2
+			var k int
 			if strings.HasPrefix(n, "refs/heads/") {
 				k = 0
 			} else if strings.HasPrefix(n, "refs/tags/") {

@@ -37,6 +37,7 @@ func TestMergePreviewLargeFile(t *testing.T) {
 		Branch: plumbing.NewBranchReferenceName("feature"),
 		Create: true,
 	})
+	require.NoError(t, err)
 
 	// Create a file that will generate a large patch (simulate large file by creating many lines)
 	// Note: We don't create actual 100MB file as it would be too slow for tests

@@ -153,7 +153,7 @@ func setupTestRepositoryForBinaryFiles(t *testing.T) (string, string, string, fu
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return repoPath, initialCommitHash.String(), secondCommitHash.String(), cleanup
@@ -338,7 +338,7 @@ func setupTestRepositoryForLargeFiles(t *testing.T) (string, string, string, fun
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return repoPath, initialCommitHash.String(), secondCommitHash.String(), cleanup
@@ -520,7 +520,7 @@ func setupTestRepositoryForLargeChanges(t *testing.T) (string, string, string, f
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return repoPath, initialCommitHash.String(), secondCommitHash.String(), cleanup

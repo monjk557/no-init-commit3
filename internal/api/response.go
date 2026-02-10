@@ -133,7 +133,7 @@ func (m *JSONResponseMiddleware) handlePublicError(c *gin.Context, ginErr *gin.E
 func (m *JSONResponseMiddleware) handleBindError(c *gin.Context, ginErr *gin.Error, requestID string, duration int64) {
 	apiErr := logging.NewValidationError("UNKNOWN_ERROR", "Invalid request format or missing required fields")
 	apiErr.RequestID = requestID
-	apiErr.WithDetails(ginErr.Error())
+	_ = apiErr.WithDetails(ginErr.Error())
 	m.SendErrorResponse(c, apiErr, requestID, duration)
 }
 

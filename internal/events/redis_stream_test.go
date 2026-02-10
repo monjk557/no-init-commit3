@@ -77,7 +77,7 @@ func TestAddCommitEventToStream(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 
@@ -168,7 +168,7 @@ func TestAddCommitEventToStream_WithUserID(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -232,7 +232,7 @@ func TestAddCommitEventToStream_WithoutUserID(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -297,7 +297,7 @@ func TestAddPushEventToStream(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -364,7 +364,7 @@ func TestAddMergeEventToStream(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -430,7 +430,7 @@ func TestAddDeleteEventToStream(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -498,7 +498,7 @@ func TestAddRenameEventToStream(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -567,7 +567,7 @@ func TestAddRenameEventToStream_WithoutOldRefName(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -615,7 +615,7 @@ func TestAddCommitEventToStream_StreamLength(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -708,7 +708,7 @@ func TestAddCommitEventToStream_MultipleEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	redisClient := redis.NewClient(opt)
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	streamKey := "git:events"
 	messages, err := redisClient.XRevRange(ctx, streamKey, "+", "-").Result()
@@ -821,7 +821,7 @@ func Test_PublishEvent_OrderPreserved_PerRepoPartition(t *testing.T) {
 	opt, err := redis.ParseURL(redisURL)
 	require.NoError(t, err)
 	rdb := redis.NewClient(opt)
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

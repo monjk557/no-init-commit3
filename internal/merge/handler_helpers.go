@@ -6,6 +6,8 @@ import (
 
 // writeError writes an error response using the centralized APIError system
 // This is the ONLY place where gin.H conversion happens for errors
+//
+//nolint:unused // kept for consistent error response helpers
 func writeError(c *gin.Context, err error) {
 	apiErr := ToAPIError(err)
 
@@ -28,12 +30,15 @@ func writeError(c *gin.Context, err error) {
 }
 
 // writeSuccess writes a success response
+//
+//nolint:unused
 func writeSuccess(c *gin.Context, status int, data interface{}) {
 	c.JSON(status, data)
 }
 
 // writeErrorWithStatus writes an error response with a specific status code
-// Use this when you need to override the status from ToAPIError
+//
+//nolint:unused
 func writeErrorWithStatus(c *gin.Context, status int, err error) {
 	apiErr := ToAPIError(err)
 	apiErr.Status = status
@@ -55,21 +60,29 @@ func writeErrorWithStatus(c *gin.Context, status int, err error) {
 }
 
 // writeValidationError writes a validation error response
+//
+//nolint:unused
 func writeValidationError(c *gin.Context, message string) {
 	writeError(c, NewValidationError("", message))
 }
 
 // writeNotFoundError writes a not found error response
+//
+//nolint:unused
 func writeNotFoundError(c *gin.Context, kind, name string) {
 	writeError(c, NewNotFoundError(kind, name))
 }
 
 // writeConflictError writes a conflict error response
+//
+//nolint:unused
 func writeConflictError(c *gin.Context, conflictCount, autoResolvable int) {
 	writeError(c, NewConflictError(conflictCount, autoResolvable))
 }
 
 // writeInternalError writes an internal error response
+//
+//nolint:unused
 func writeInternalError(c *gin.Context, op string, err error) {
 	writeError(c, NewInternalError(op, "operation failed", err))
 }

@@ -216,7 +216,7 @@ func Test_OpenRepository_PermissionDenied_ReturnsError(t *testing.T) {
 
 	// cleanup에서 권한 복구 (삭제 가능하도록)
 	t.Cleanup(func() {
-		os.Chmod(repoPath, 0755)
+		_ = os.Chmod(repoPath, 0755)
 	})
 
 	manager := newTestManager(t, tempDir)

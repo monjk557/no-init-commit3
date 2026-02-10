@@ -426,7 +426,7 @@ func getTypeString(expr ast.Expr) string {
 }
 
 func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, projectRoot string) (string, error) {
-	// 항상 Go 기준으로 스펙 생성 (기존 YAML 읽지 않음)
+	// 항상 Go 기준으로 스펙 생성
 	tmpl, err := template.New("openapi").Parse(openAPITemplate)
 	if err != nil {
 		return "", err
@@ -496,7 +496,7 @@ func generatePathsFromRoutes(routes []RouteInfo) string {
 				buf.WriteString("        content:\n")
 				buf.WriteString("          application/json:\n")
 				buf.WriteString("            schema:\n")
-				buf.WriteString(fmt.Sprintf("              $ref: '#/components/schemas/%s'\n", ref))
+				buf.WriteString(fmt.Sprintf("              $ref: '#/components/schemas/%s'\n", openAPISchemaName(ref)))
 			}
 			buf.WriteString("      responses:\n")
 			buf.WriteString("        '200':\n")
@@ -572,6 +572,11 @@ func getTagFromPath(path string) string {
 	return "Repository Management"
 }
 
+// openAPISchemaName returns the schema name for OpenAPI (no dash), so client generators produce e.g. FileOperationResponseOutput instead of FileOperationResponse-Output.
+func openAPISchemaName(s string) string {
+	return strings.ReplaceAll(s, "-", "")
+}
+
 func generateSchemasFromStructs(schemas map[string]SchemaInfo) string {
 	var buf strings.Builder
 
@@ -584,7 +589,7 @@ func generateSchemasFromStructs(schemas map[string]SchemaInfo) string {
 
 	for _, name := range names {
 		schema := schemas[name]
-		buf.WriteString(renderSchemaYAML(schema, schemas))
+		buf.WriteString(renderSchemaYAML(schema, schemas, openAPISchemaName))
 	}
 
 	return buf.String()
@@ -611,81 +616,9 @@ func mapGoTypeToOpenAPI(goType string) string {
 	}
 }
 
-func upsertSchemasIntoExistingSpec(specStr string, schemas map[string]SchemaInfo) (string, []string, error) {
-	lines := strings.Split(specStr, "\n")
-
-	// Find the schemas block within components
-	schemasIdx := -1
-	for i, line := range lines {
-		if strings.TrimRight(line, "\r") == "  schemas:" {
-			schemasIdx = i
-			break
-		}
-	}
-	if schemasIdx == -1 {
-		return specStr, nil, fmt.Errorf("could not find components/schemas block")
-	}
-
-	// Determine end of schemas block (next sibling under components, e.g. "  responses:")
-	endIdx := len(lines)
-	for i := schemasIdx + 1; i < len(lines); i++ {
-		l := strings.TrimRight(lines[i], "\r")
-		if strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "    ") && strings.TrimSpace(l) != "" {
-			endIdx = i
-			break
-		}
-	}
-
-	existing := extractSchemaNamesFromSchemasBlock(lines[schemasIdx+1 : endIdx])
-
-	// Decide what to add
-	toAdd := make([]string, 0)
-	for name := range schemas {
-		if _, ok := existing[name]; !ok {
-			toAdd = append(toAdd, name)
-		}
-	}
-	sort.Strings(toAdd)
-	if len(toAdd) == 0 {
-		return specStr, nil, nil
-	}
-
-	// Render and insert missing schemas right before endIdx
-	insertLines := make([]string, 0, len(toAdd)*8)
-	for _, name := range toAdd {
-		insertLines = append(insertLines, strings.TrimRight(renderSchemaYAML(schemas[name], schemas), "\n"))
-	}
-
-	// Ensure we keep a blank line boundary similar to the existing file
-	block := strings.Join(insertLines, "\n\n")
-	newLines := make([]string, 0, len(lines)+len(insertLines)+2)
-	newLines = append(newLines, lines[:endIdx]...)
-	if len(newLines) > 0 && strings.TrimSpace(newLines[len(newLines)-1]) != "" {
-		newLines = append(newLines, "")
-	}
-	newLines = append(newLines, strings.Split(block, "\n")...)
-	newLines = append(newLines, lines[endIdx:]...)
-
-	return strings.Join(newLines, "\n"), toAdd, nil
-}
-
-func extractSchemaNamesFromSchemasBlock(lines []string) map[string]struct{} {
-	names := make(map[string]struct{})
-	// Schema entry lines look like: "    Tag:" (4 spaces indent)
-	re := regexp.MustCompile(`^ {4}([A-Za-z0-9_]+):\s*$`)
-	for _, line := range lines {
-		l := strings.TrimRight(line, "\r")
-		m := re.FindStringSubmatch(l)
-		if len(m) == 2 {
-			names[m[1]] = struct{}{}
-		}
-	}
-	return names
-}
-
-func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo) string {
+func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, schemaNameFn func(string) string) string {
 	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("    %s:\n", schema.Name))
+	buf.WriteString(fmt.Sprintf("    %s:\n", schemaNameFn(schema.Name)))
 	buf.WriteString("      type: object\n")
 
 	// Only include fields with explicit json tags to avoid accidentally generating incorrect schemas
@@ -706,7 +639,7 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo) str
 	for _, field := range taggedFields {
 		fieldName := field.JSONTag
 		buf.WriteString(fmt.Sprintf("        %s:\n", fieldName))
-		propLines := renderOpenAPIPropertyYAML(field.Type, knownSchemas)
+		propLines := renderOpenAPIPropertyYAML(field.Type, knownSchemas, schemaNameFn)
 		for _, l := range propLines {
 			buf.WriteString("          " + l + "\n")
 		}
@@ -726,12 +659,12 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo) str
 	return buf.String()
 }
 
-func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo) []string {
+func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo, schemaNameFn func(string) string) []string {
 	base := strings.TrimPrefix(goType, "*")
 
 	// If this matches another known schema type name, use $ref
 	if _, ok := knownSchemas[base]; ok {
-		return []string{fmt.Sprintf("$ref: '#/components/schemas/%s'", base)}
+		return []string{fmt.Sprintf("$ref: '#/components/schemas/%s'", schemaNameFn(base))}
 	}
 
 	switch {
@@ -747,15 +680,12 @@ func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo
 		// Best-effort mapping for time.Time (getTypeString strips package)
 		return []string{"type: string", "format: date-time"}
 	case strings.HasPrefix(base, "[]"):
-		elem := strings.TrimPrefix(base, "[]")
-		if strings.HasPrefix(elem, "*") {
-			elem = strings.TrimPrefix(elem, "*")
-		}
+		elem := strings.TrimPrefix(strings.TrimPrefix(base, "[]"), "*")
 		if _, ok := knownSchemas[elem]; ok {
 			return []string{
 				"type: array",
 				"items:",
-				fmt.Sprintf("  $ref: '#/components/schemas/%s'", elem),
+				fmt.Sprintf("  $ref: '#/components/schemas/%s'", schemaNameFn(elem)),
 			}
 		}
 		return []string{

@@ -245,16 +245,17 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 		EventType:     string(event.EventType),
 		CommitMessage: event.CommitMessage,
 	}
-	if event.EventType == EventTypeDelete {
+	switch event.EventType {
+	case EventTypeDelete:
 		data.OldRev = event.CommitHash
 		data.NewRev = ""
-	} else if event.EventType == EventTypeRename {
+	case EventTypeRename:
 		data.NewRev = event.CommitHash
 		data.OldRev = event.CommitHash
 		if event.OldRefName != "" {
 			data.OldRef = event.OldRefName
 		}
-	} else {
+	default:
 		data.NewRev = event.CommitHash
 		if event.OldRev != "" {
 			data.OldRev = event.OldRev

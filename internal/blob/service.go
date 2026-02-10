@@ -139,7 +139,7 @@ func getBlobFromGogitRepo(ctx context.Context, repo *gogit.Repository, path, ref
 	}
 
 	// Blob 내용 읽기
-	reader, err := file.Blob.Reader()
+	reader, err := file.Reader()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read blob: %w", err)
 	}

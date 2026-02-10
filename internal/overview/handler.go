@@ -328,7 +328,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 	// path 기준으로 최신 커밋 조회 (path가 없으면 루트("")의 최신 커밋)
 	latestCommitGitCommit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, repoCtx.ref, repoCtx.path, true)
 	if err != nil {
-		// 에러가 있어도 계속 진행 (latestCommitGitCommit은 nil로 유지)
+		_ = err // 에러가 있어도 계속 진행 (latestCommitGitCommit은 nil로 유지)
 	}
 
 	// 커밋 목록은 선택적으로 가져오기 (성능 최적화)
@@ -420,7 +420,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 	// path 기준으로 최신 커밋 조회 (blob이므로 isTree=false)
 	latestCommitGitCommit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, repoCtx.ref, path, false)
 	if err != nil {
-		// 에러가 있어도 계속 진행 (latestCommitGitCommit은 nil로 유지)
+		_ = err // 에러가 있어도 계속 진행 (latestCommitGitCommit은 nil로 유지)
 	}
 
 	// 커밋 목록은 선택적으로 가져오기 (성능 최적화)

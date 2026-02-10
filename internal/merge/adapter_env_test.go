@@ -75,7 +75,9 @@ func Test_MergeEnv_StoresRepo(t *testing.T) {
 func Test_MergeEnv_StoresContext(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.WithValue(context.Background(), "key", "value")
+	type contextKey string
+	const testKey contextKey = "key"
+	ctx := context.WithValue(context.Background(), testKey, "value")
 	env := NewMergeEnv(ctx, nil, nil, nil)
 
 	if env.Ctx != ctx {

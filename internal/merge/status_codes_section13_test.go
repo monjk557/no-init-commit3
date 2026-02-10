@@ -10,9 +10,9 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/stretchr/testify/require"
 )
 
 // --- 13.1B 409/422/403/423 분기 (test_cases.md 동일 이름) ---

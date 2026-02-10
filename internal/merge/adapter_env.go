@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
+	gogit "github.com/go-git/go-git/v5"
 )
 
 // env.go - Layer 2: Adapters

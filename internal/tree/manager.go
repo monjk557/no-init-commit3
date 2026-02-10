@@ -230,11 +230,14 @@ func (tb *TreeBuilder) GetTree(ref string, path string) ([]TreeEntry, error) {
 	var entries []TreeEntry
 	for _, entry := range tree.Entries {
 		// Convert file mode to entry type
-		entryType := "blob"
-		if entry.Mode == filemode.Dir {
+		var entryType string
+		switch entry.Mode {
+		case filemode.Dir:
 			entryType = "tree"
-		} else if entry.Mode == filemode.Submodule {
+		case filemode.Submodule:
 			entryType = "commit"
+		default:
+			entryType = "blob"
 		}
 
 		entries = append(entries, TreeEntry{

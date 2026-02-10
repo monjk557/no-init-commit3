@@ -133,7 +133,7 @@ func createTestCommit(t *testing.T, repo *git.Repository, files map[string]strin
 		require.NoError(t, err)
 		_, err = writer.Write([]byte(content))
 		require.NoError(t, err)
-		writer.Close()
+		_ = writer.Close()
 
 		hash, err := storer.SetEncodedObject(blob)
 		require.NoError(t, err)
@@ -188,6 +188,8 @@ func createTestCommit(t *testing.T, repo *git.Repository, files map[string]strin
 }
 
 // createTestCommitWithNestedTree builds a commit with nested path structure (e.g. src/main.js).
+//
+//nolint:unused // test helper for future nested-tree tests
 func createTestCommitWithNestedTree(t *testing.T, repo *git.Repository, files map[string]string) plumbing.Hash {
 	t.Helper()
 	storer := repo.Storer
@@ -603,7 +605,7 @@ func Test_Blob_DirectoryPath_Returns400(t *testing.T) {
 
 // Test_Blob_BinaryFile_ReturnsBase64 바이너리 파일은 바이너리로 처리된다 (X-Content-Encoding: binary).
 func Test_Blob_BinaryFile_ReturnsBase64(t *testing.T) {
-	handler, _ := setupTestHandler(t)
+	_, _ = setupTestHandler(t)
 	// setupTestHandler creates README etc; we need a binary file - create custom repo with binary
 	tempDir := t.TempDir()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
@@ -619,7 +621,7 @@ func Test_Blob_BinaryFile_ReturnsBase64(t *testing.T) {
 	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)
 	require.NoError(t, gitRepo.Storer.SetReference(ref))
 	cfg := &config.Config{Git: config.GitConfig{RepoRoot: tempDir}, Logging: config.LoggingConfig{Level: "info", Format: "json"}}
-	handler, err = NewBlobHandler(cfg)
+	handler, err := NewBlobHandler(cfg)
 	require.NoError(t, err)
 	c, w := createGinContext("GET", "/repos/testowner/testrepo/blob?path=bin.dat&ref=main")
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
@@ -654,7 +656,7 @@ func Test_Blob_LargeFile_Truncates(t *testing.T) {
 
 // Test_Blob_EmptyFile_ReturnsEmpty 빈 파일은 빈 본문으로 200을 반환한다.
 func Test_Blob_EmptyFile_ReturnsEmpty(t *testing.T) {
-	handler, _ := setupTestHandler(t)
+	_, _ = setupTestHandler(t)
 	// Add empty file to repo - need custom setup with empty content
 	tempDir := t.TempDir()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
@@ -665,7 +667,7 @@ func Test_Blob_EmptyFile_ReturnsEmpty(t *testing.T) {
 	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)
 	require.NoError(t, gitRepo.Storer.SetReference(ref))
 	cfg := &config.Config{Git: config.GitConfig{RepoRoot: tempDir}, Logging: config.LoggingConfig{Level: "info", Format: "json"}}
-	handler, err = NewBlobHandler(cfg)
+	handler, err := NewBlobHandler(cfg)
 	require.NoError(t, err)
 	c, w := createGinContext("GET", "/repos/testowner/testrepo/blob?path=empty.txt&ref=main")
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
@@ -698,7 +700,7 @@ func Test_Blob_ByCommitSHA_ReturnsContentAtCommit(t *testing.T) {
 
 // Test_Blob_LFSPointer_ReturnsPointerOrResolvesByPolicy LFS 포인터 파일은 포인터 또는 정책에 따라 해석한다.
 func Test_Blob_LFSPointer_ReturnsPointerOrResolvesByPolicy(t *testing.T) {
-	handler, _ := setupTestHandler(t)
+	_, _ = setupTestHandler(t)
 	// LFS pointer format
 	lfsContent := "version https://git-lfs.github.com/spec/v1\noid sha256:abc123\nsize 42\n"
 	tempDir := t.TempDir()
@@ -710,7 +712,7 @@ func Test_Blob_LFSPointer_ReturnsPointerOrResolvesByPolicy(t *testing.T) {
 	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)
 	require.NoError(t, gitRepo.Storer.SetReference(ref))
 	cfg := &config.Config{Git: config.GitConfig{RepoRoot: tempDir}, Logging: config.LoggingConfig{Level: "info", Format: "json"}}
-	handler, err = NewBlobHandler(cfg)
+	handler, err := NewBlobHandler(cfg)
 	require.NoError(t, err)
 	c, w := createGinContext("GET", "/repos/testowner/testrepo/blob?path=file.bin&ref=main")
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}

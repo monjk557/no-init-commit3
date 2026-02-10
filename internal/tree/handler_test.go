@@ -45,7 +45,7 @@ func setupTestHandler(t *testing.T) (*TreeHandler, string, func()) {
 
 	// 테스트 종료 후 임시 디렉토리 정리 함수
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return handler, tempDir, cleanup
@@ -114,7 +114,7 @@ func createTestRepository(t *testing.T, tempDir, owner, repo string, testFiles m
 	// 작업 디렉토리에서 일반 저장소 생성
 	tempWorkDir, err := os.MkdirTemp("", "tree-test-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -187,7 +187,7 @@ func createTestRepositoryWithSymlink(t *testing.T, tempDir, owner, repo string) 
 
 	tempWorkDir, err := os.MkdirTemp("", "tree-test-work-symlink-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := gogit.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -358,9 +358,10 @@ func createTestRepositoryWithEmptyDir(t *testing.T, tempDir, owner, repo string)
 func verifyTreeSorting(t *testing.T, entries []TreeEntry) {
 	var dirs, files []string
 	for _, entry := range entries {
-		if entry.Type == "tree" {
+		switch entry.Type {
+		case "tree":
 			dirs = append(dirs, entry.Name)
-		} else if entry.Type == "blob" {
+		case "blob":
 			files = append(files, entry.Name)
 		}
 	}

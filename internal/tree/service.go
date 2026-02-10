@@ -9,7 +9,6 @@ import (
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // GetTreeEntries는 저장소의 트리 항목을 가져옵니다.
@@ -47,7 +46,7 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 	}
 
 	// Navigate to the specified path
-	var targetTree *object.Tree = tree
+	targetTree := tree
 	if path != "" {
 		treeEntry, err := tree.FindEntry(path)
 		if err != nil {
@@ -65,13 +64,16 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 	// Convert tree entries to TreeEntry format
 	var result []TreeEntry
 	for _, entry := range targetTree.Entries {
-		entryType := "blob"
-		if entry.Mode == filemode.Dir {
+		var entryType string
+		switch entry.Mode {
+		case filemode.Dir:
 			entryType = "tree"
-		} else if entry.Mode == filemode.Submodule {
+		case filemode.Submodule:
 			entryType = "commit"
-		} else if entry.Mode == filemode.Symlink {
+		case filemode.Symlink:
 			entryType = "symlink"
+		default:
+			entryType = "blob"
 		}
 
 		result = append(result, TreeEntry{

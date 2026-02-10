@@ -33,7 +33,7 @@ func Test_CreateTag_Lightweight_ReturnsSuccess(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 경량 태그 생성
 	req := &tags.CreateTagRequest{
@@ -60,7 +60,7 @@ func Test_CreateTag_Annotated_ReturnsSuccess(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 주석 태그 생성
 	req := &tags.CreateTagRequest{
@@ -104,7 +104,7 @@ func Test_CreateTag_DuplicateName_Returns409(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 동일한 이름으로 태그 생성 시도
 	req := &tags.CreateTagRequest{
@@ -129,7 +129,7 @@ func Test_CreateTag_InvalidTarget_Returns400(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: zero hash(형식 오류)에 태그 생성
 	zeroHash := "0000000000000000000000000000000000000000"
@@ -155,7 +155,7 @@ func Test_CreateTag_NonExistentCommit_Returns404(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 존재하지 않는 커밋(valid format but non-existent)에 태그 생성
 	nonExistentHash := "abcd1234567890abcd1234567890abcd12345678"
@@ -199,7 +199,7 @@ func Test_CreateTag_FromBranch_ReturnsSuccess(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: feature 브랜치의 커밋에 태그 생성
 	req := &tags.CreateTagRequest{
@@ -229,7 +229,7 @@ func Test_CreateTag_FromCommit_ReturnsSuccess(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 첫 번째 커밋에 태그 생성 (HEAD가 아닌 과거 커밋)
 	req := &tags.CreateTagRequest{
@@ -266,7 +266,7 @@ func Test_DeleteTag_Existing_ReturnsSuccess(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 태그 삭제
 	err = tags.DeleteTag(repoWrapper, "v1.0.0")
@@ -289,7 +289,7 @@ func Test_DeleteTag_NonExistent_Returns404(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 존재하지 않는 태그 삭제
 	err = tags.DeleteTag(repoWrapper, "nonexistent")
@@ -324,7 +324,7 @@ func Test_GetTags_ReturnsAll(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 태그 목록 조회
 	result, totalCount, err := tags.GetTags(repoWrapper, 100, 0)
@@ -345,7 +345,7 @@ func Test_GetTags_EmptyRepo_ReturnsEmptyArray(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 태그 목록 조회
 	result, totalCount, err := tags.GetTags(repoWrapper, 100, 0)
@@ -375,7 +375,7 @@ func Test_GetTags_Pagination_ReturnsCorrectPage(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: limit=3, skip=0으로 조회
 	result, totalCount, err := tags.GetTags(repoWrapper, 3, 0)
@@ -434,7 +434,7 @@ func Test_GetTags_AnnotatedAndLightweight_ReturnsBoth(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 태그 목록 조회
 	result, totalCount, err := tags.GetTags(repoWrapper, 100, 0)
@@ -482,7 +482,7 @@ func Test_GetTags_SortByName_ReturnsSorted(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 이름순 정렬로 태그 목록 조회
 	result, totalCount, err := tags.GetTagsSorted(repoWrapper, 100, 0, tags.SortByName)
@@ -537,7 +537,7 @@ func Test_GetTags_SortByDate_ReturnsSorted(t *testing.T) {
 
 	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
 	require.NoError(t, err)
-	defer repoWrapper.Close()
+	defer func() { _ = repoWrapper.Close() }()
 
 	// When: 날짜순 정렬로 태그 목록 조회
 	result, totalCount, err := tags.GetTagsSorted(repoWrapper, 100, 0, tags.SortByDate)
@@ -609,6 +609,7 @@ type TestResponse struct {
 	Header http.Header
 }
 
+//nolint:unused // test helper
 func asResp(w *httptest.ResponseRecorder) TestResponse {
 	return TestResponse{
 		Status: w.Code,
@@ -617,6 +618,7 @@ func asResp(w *httptest.ResponseRecorder) TestResponse {
 	}
 }
 
+//nolint:unused // test helper
 func requireStatus(t *testing.T, resp TestResponse, want int) {
 	t.Helper()
 	if resp.Status != want {
@@ -625,6 +627,8 @@ func requireStatus(t *testing.T, resp TestResponse, want int) {
 }
 
 // marshalJSON is a helper for creating JSON request bodies
+//
+//nolint:unused // test helper
 func marshalJSON(t *testing.T, v interface{}) *bytes.Buffer {
 	t.Helper()
 	data, err := json.Marshal(v)

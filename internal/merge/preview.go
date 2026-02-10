@@ -34,7 +34,7 @@ func (h *MergePreviewHandler) validateMergePreviewRequest(req *MergePreviewReque
 	case MergeStrategyRecursive, MergeStrategyResolve, MergeStrategyOurs, MergeStrategyTheirs, MergeStrategySubtree:
 		// Valid strategy
 	default:
-		return http.StatusBadRequest, fmt.Errorf("Invalid merge strategy: %s", req.Strategy)
+		return http.StatusBadRequest, fmt.Errorf("invalid merge strategy: %s", req.Strategy)
 	}
 
 	// Validate file size limits
@@ -58,7 +58,7 @@ func (h *MergePreviewHandler) validateMergePreviewRequest(req *MergePreviewReque
 	case "tree", "diff", "full":
 		// Valid strategies
 	default:
-		return http.StatusBadRequest, fmt.Errorf("Invalid compare strategy: %s (must be tree, diff, or full)", req.CompareStrategy)
+		return http.StatusBadRequest, fmt.Errorf("invalid compare strategy: %s (must be tree, diff, or full)", req.CompareStrategy)
 	}
 
 	return http.StatusOK, nil
@@ -556,7 +556,7 @@ func (h *MergePreviewHandler) getFileContent(repo *gogit.Repository, change *obj
 	if change.From.Name != "" && !change.From.TreeEntry.Hash.IsZero() {
 		if blob, err := repo.BlobObject(change.From.TreeEntry.Hash); err == nil {
 			if reader, err := blob.Reader(); err == nil {
-				defer reader.Close()
+				defer func() { _ = reader.Close() }()
 				data := make([]byte, 1024*1024) // 1MB limit
 				if n, err := reader.Read(data); err == nil || err.Error() == "EOF" {
 					content.SourceContent = string(data[:n])
@@ -569,7 +569,7 @@ func (h *MergePreviewHandler) getFileContent(repo *gogit.Repository, change *obj
 	if change.To.Name != "" && !change.To.TreeEntry.Hash.IsZero() {
 		if blob, err := repo.BlobObject(change.To.TreeEntry.Hash); err == nil {
 			if reader, err := blob.Reader(); err == nil {
-				defer reader.Close()
+				defer func() { _ = reader.Close() }()
 				data := make([]byte, 1024*1024) // 1MB limit
 				if n, err := reader.Read(data); err == nil || err.Error() == "EOF" {
 					content.TargetContent = string(data[:n])

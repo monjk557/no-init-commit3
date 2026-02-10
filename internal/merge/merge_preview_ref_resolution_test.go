@@ -1483,7 +1483,7 @@ func Test_MergePreview_BinaryAndTextMix_ReportsBinaryWithoutPatch(t *testing.T) 
 			if fileChange.IsBinary {
 				// 바이너리 파일은 Changes가 비어있거나 없어야 함
 				assert.True(t,
-					fileChange.Changes == nil || len(fileChange.Changes) == 0,
+					len(fileChange.Changes) == 0,
 					"binary file should not have patch changes, got %d changes",
 					len(fileChange.Changes))
 			}
@@ -1600,7 +1600,7 @@ func Test_MergePreview_BinaryDiff_ReturnsNoPatchButHasMetadata(t *testing.T) {
 				assert.True(t, fileChange.IsBinary, "binary file should be marked as binary")
 				// Changes가 비어있거나 없어야 함
 				assert.True(t,
-					fileChange.Changes == nil || len(fileChange.Changes) == 0,
+					len(fileChange.Changes) == 0,
 					"binary file should not have patch changes")
 				// 메타데이터는 있어야 함
 				assert.NotNil(t, fileChange.Metadata, "binary file should have metadata")

@@ -36,9 +36,9 @@ func (r *TestRepo) MakeOrphanBranch(orphanName string) (mainTip, orphanTip plumb
 	_, err = r.Worktree.Add("orphan.txt")
 	require.NoError(r.T, err)
 
-	// Create commit with no parents (orphan)
-	blob, err := r.Repo.BlobObject(plumbing.NewHash(""))
-	_ = blob // Not used, just checking
+	// Create commit with no parents (orphan) — BlobObject call is only to validate repo
+	_, err = r.Repo.BlobObject(plumbing.NewHash(""))
+	require.NoError(r.T, err)
 
 	// Manual orphan commit creation
 	orphanTip, err = r.Worktree.Commit("Orphan commit", &gogit.CommitOptions{

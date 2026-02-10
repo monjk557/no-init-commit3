@@ -155,7 +155,7 @@ func (s *DuplexTCPServer) Stop() error {
 
 // handleConnection : TCP 연결 처리
 func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	// [TCP] 연결 수락
 
 	// Set read/write timeouts for the connection
@@ -384,7 +384,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				_ = conn.writer.Flush()
 				return nil
 			}
-			defer repoWrapper.Close()
+			defer func() { _ = repoWrapper.Close() }()
 
 			// 내부의 *gogit.Repository 가져오기 (캐시에서)
 			underlyingRepo := repoWrapper.GetRepo()
@@ -424,9 +424,8 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				if err := conn.writer.Flush(); err != nil {
 					return fmt.Errorf("failed to flush after acknowledgments: %w", err)
 				}
-			} else {
-				// [12] acknowledgments 섹션 생략 (done)
 			}
+			// [12] acknowledgments 섹션 생략 시 (else) done
 
 			// === packfile 섹션 ===
 			// objectHashes가 있을 때만 packfile 섹션을 열어 전송
@@ -567,7 +566,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 				time.Sleep(100 * time.Millisecond)
 				// 연결의 읽기 타임아웃 갱신
 				if tcpConn, ok := conn.conn.(*net.TCPConn); ok {
-					tcpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+					_ = tcpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 				}
 				firstRead = false
 				continue
@@ -1248,7 +1247,7 @@ func (s *DuplexTCPServer) cleanupConnections() {
 		now := time.Now()
 		for conn, duplexConn := range s.connections {
 			if now.Sub(duplexConn.lastUsed) > 5*time.Minute {
-				conn.Close()
+				_ = conn.Close()
 				delete(s.connections, conn)
 			}
 		}

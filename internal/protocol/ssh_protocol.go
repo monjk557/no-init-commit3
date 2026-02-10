@@ -562,7 +562,7 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 	if err != nil {
 		// Write SSH error format
 		if sshErr := writer.WriteSSHError(fmt.Sprintf("upload-pack failed: %v", err)); sshErr != nil {
-			// Log the SSH error writing failure, but don't fail the request further
+			_ = sshErr // Log the SSH error writing failure, but don't fail the request further
 		}
 		return
 	}
@@ -584,13 +584,13 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	cache := repositories.GetSimpleCache()
 	goGitRepo, err := cache.Get(sshReq.RepoPath)
 	if err != nil {
-		writer.WriteSSHError(fmt.Sprintf("failed to open repository: %v", err))
+		_ = writer.WriteSSHError(fmt.Sprintf("failed to open repository: %v", err))
 		return
 	}
 
 	// Send v1 advertisement
 	if err := WriteV1Advert(writer, *goGitRepo); err != nil {
-		writer.WriteSSHError(fmt.Sprintf("failed to send advertisement: %v", err))
+		_ = writer.WriteSSHError(fmt.Sprintf("failed to send advertisement: %v", err))
 		return
 	}
 	if err := writer.Flush(); err != nil {
@@ -607,7 +607,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	// Parse receive-pack request (ref updates + packfile)
 	receiveReq, err := h.parseSSHReceivePackRequest(requestBody)
 	if err != nil {
-		writer.WriteSSHError(fmt.Sprintf("failed to parse receive-pack request: %v", err))
+		_ = writer.WriteSSHError(fmt.Sprintf("failed to parse receive-pack request: %v", err))
 		return
 	}
 
@@ -621,7 +621,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	storage := filesystem.NewStorage(fs, nil)
 	gitRepo, err := gogit.Open(storage, fs)
 	if err != nil {
-		writer.WriteSSHError(fmt.Sprintf("failed to open repository: %v", err))
+		_ = writer.WriteSSHError(fmt.Sprintf("failed to open repository: %v", err))
 		return
 	}
 
@@ -635,15 +635,15 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 			parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
 			if err != nil {
 				pw := &PktWriter{W: writer, WithLF: false}
-				pw.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
-				pw.Flush()
+				_ = pw.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
+				_ = pw.Flush()
 				return
 			}
 
 			if _, err := parser.Parse(); err != nil {
 				pw := &PktWriter{W: writer, WithLF: false}
-				pw.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
-				pw.Flush()
+				_ = pw.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
+				_ = pw.Flush()
 				return
 			}
 
@@ -677,7 +677,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	}
 
 	// 8. End with flush packet
-	pw.Flush()
+	_ = pw.Flush()
 }
 
 // addSSHCommitEventToStream adds a commit event to Redis Stream for SSH operations
@@ -828,11 +828,8 @@ func (h *SSHProtocolHandler) parseGitProtocolRequest(ctx context.Context, input 
 							}
 						}
 					}
-				} else {
 				}
-			} else {
 			}
-		} else {
 		}
 	}
 

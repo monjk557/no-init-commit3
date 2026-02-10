@@ -534,7 +534,7 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 	// 모든 파일을 경로별로 맵에 저장 (기본 트리에서; root commit이면 빈 맵)
 	files := make(map[string]TreeFileInfo)
 	if baseTree != nil {
-		baseTree.Files().ForEach(func(f *object.File) error {
+		_ = baseTree.Files().ForEach(func(f *object.File) error {
 			files[f.Name] = TreeFileInfo{
 				Hash: f.Hash,
 				Mode: f.Mode,

@@ -16,16 +16,16 @@ import (
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/tree"
 	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/stretchr/testify/require"
 )
 
 const (
-	perfTimeout       = 30 * time.Second
-	perfCommitCount   = 500   // 10000은 너무 느려 500으로 검증
-	perfBranchCount   = 100   // 1000 대신 100
+	perfTimeout        = 30 * time.Second
+	perfCommitCount    = 500  // 10000은 너무 느려 500으로 검증
+	perfBranchCount    = 100  // 1000 대신 100
 	perfManyFilesCount = 1000 // 10000 대신 1000
 )
 
@@ -123,7 +123,7 @@ func createBareRepoWithBranches(t *testing.T, repoPath string, n int) {
 	commit := &object.Commit{
 		Message: "init", Author: object.Signature{Name: "a", Email: "a@b.com", When: when},
 		Committer: object.Signature{Name: "a", Email: "a@b.com", When: when},
-		TreeHash: treeHash,
+		TreeHash:  treeHash,
 	}
 	commitEnc := repo.Storer.NewEncodedObject()
 	require.NoError(t, commit.Encode(commitEnc))
@@ -162,7 +162,7 @@ func createBareRepoWithManyFiles(t *testing.T, repoPath string, fileCount int) {
 	commit := &object.Commit{
 		Message: "many files", Author: object.Signature{Name: "a", Email: "a@b.com", When: when},
 		Committer: object.Signature{Name: "a", Email: "a@b.com", When: when},
-		TreeHash: treeHash,
+		TreeHash:  treeHash,
 	}
 	commitEnc := repo.Storer.NewEncodedObject()
 	require.NoError(t, commit.Encode(commitEnc))
@@ -258,7 +258,7 @@ func Test_LargeFile_100MB_HandlesInTime(t *testing.T) {
 	commit := &object.Commit{
 		Message: "large", Author: object.Signature{Name: "a", Email: "a@b.com", When: when},
 		Committer: object.Signature{Name: "a", Email: "a@b.com", When: when},
-		TreeHash: treeHash,
+		TreeHash:  treeHash,
 	}
 	commitEnc := repo.Storer.NewEncodedObject()
 	require.NoError(t, commit.Encode(commitEnc))

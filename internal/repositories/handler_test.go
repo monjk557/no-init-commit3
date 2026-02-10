@@ -39,7 +39,7 @@ func setupTestHandler(t *testing.T) (*RepositoryCreationHandler, string, func())
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return handler, tempDir, cleanup

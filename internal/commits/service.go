@@ -595,7 +595,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 			return nil, fmt.Errorf("failed to get commit tree")
 		}
 		existingFiles = make(map[string]bool)
-		tree.Files().ForEach(func(f *object.File) error {
+		_ = tree.Files().ForEach(func(f *object.File) error {
 			existingFiles[f.Name] = true
 			return nil
 		})
@@ -856,18 +856,19 @@ func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
 	var existedBefore bool
 	var previousBranchHash plumbing.Hash
 	ref, refErr := gitRepo.Reference(branchRefName, false)
-	if refErr == nil {
+	switch refErr {
+	case nil:
 		existedBefore = true
 		previousBranchHash = ref.Hash()
-	} else if refErr == plumbing.ErrReferenceNotFound {
+	case plumbing.ErrReferenceNotFound:
 		existedBefore = false
-	} else {
+	default:
 		return nil, fmt.Errorf("failed to read branch reference: %w", refErr)
 	}
 
 	// match BranchService.CreateBranch default behavior: existing branch without force -> conflict
 	if existedBefore {
-		return nil, fmt.Errorf("branch '%s' already exists.", req.CreateBranchName)
+		return nil, fmt.Errorf("branch '%s' already exists", req.CreateBranchName)
 	}
 
 	// HEAD rollback info (best-effort)

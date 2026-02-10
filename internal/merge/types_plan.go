@@ -41,9 +41,9 @@ type PlannedEntry struct {
 // ResolutionPlan represents the plan for merging two trees
 // This is a pure data structure - contains decisions only, no results!
 type ResolutionPlan struct {
-	Entries      []PlannedEntry
-	Strategy     MergeStrategy
-	HasConflicts bool
+	Entries       []PlannedEntry
+	Strategy      MergeStrategy
+	HasConflicts  bool
 	ConflictPaths []string
 }
 

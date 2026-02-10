@@ -86,6 +86,8 @@ func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo 
 }
 
 // performFastForwardMerge performs a fast-forward merge by updating the target reference
+//
+//nolint:unused // merge strategy helper
 func (h *MergeOperationsHandler) performFastForwardMerge(repo *gogit.Repository, targetHash, sourceHash plumbing.Hash, targetRef string) error {
 	// Determine the reference name to update
 	var refName plumbing.ReferenceName

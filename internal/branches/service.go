@@ -99,7 +99,7 @@ func (s *BranchService) CreateBranch(ctx context.Context, repo *gogit.Repository
 
 	// Handle existing branch
 	if branchExists && !req.Force {
-		return nil, fmt.Errorf("branch '%s' already exists.", req.Name)
+		return nil, fmt.Errorf("branch '%s' already exists", req.Name)
 	}
 
 	// Resolve source reference
@@ -276,7 +276,7 @@ func (s *BranchService) renameBranch(ctx context.Context, repo *gogit.Repository
 	// Delete old branch reference
 	if err := repo.Storer.RemoveReference(oldRefPath); err != nil {
 		// Cleanup: remove new reference if old deletion fails
-		repo.Storer.RemoveReference(newRefPath)
+		_ = repo.Storer.RemoveReference(newRefPath)
 		return nil, fmt.Errorf("failed to delete old branch reference: %w", err)
 	}
 

@@ -21,7 +21,8 @@ func validateMultiFileOperation(op *MultiFileOperation) error {
 	}
 
 	// Validate move operation
-	if op.Operation == OperationMove {
+	switch op.Operation {
+	case OperationMove:
 		if op.OriginalPath == "" {
 			return fmt.Errorf("original_path is required for move operations")
 		}
@@ -33,12 +34,12 @@ func validateMultiFileOperation(op *MultiFileOperation) error {
 		}
 		// Move operation can optionally have content (for rename with content change)
 		// If content is provided, it will be used; otherwise, original file content will be used
-	} else if op.Operation == OperationDelete {
+	case OperationDelete:
 		// Validate that delete operations should not have content
 		if op.Content != "" {
 			return fmt.Errorf("content should not be provided for delete operations")
 		}
-	} else if op.Operation == OperationCreate || op.Operation == OperationUpdate {
+	case OperationCreate, OperationUpdate:
 		// Validate content requirements for create/update
 		if op.Content == "" {
 			return fmt.Errorf("content is required for %s operations", op.Operation)

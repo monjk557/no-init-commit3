@@ -234,11 +234,11 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 	t.Run("UploadPack_LsRefs", func(t *testing.T) {
 		conn, err := net.Dial("tcp", suite.serverAddr)
 		require.NoError(t, err)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Set timeouts to prevent hanging
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
-		defer conn.SetDeadline(time.Time{})
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
 		reader := bufio.NewReader(conn)
 		writer := bufio.NewWriter(conn)
@@ -261,7 +261,7 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 		// Read until flush
 		maxIterations := 20
 		for i := 0; i < maxIterations; i++ {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 			l, flush, err := readPktLine(reader)
 			if err != nil {
 				break
@@ -272,7 +272,7 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 			// Check for capabilities
 			lineStr := string(l)
 			if strings.Contains(lineStr, "ls-refs") || strings.Contains(lineStr, "fetch") {
-				// Expected capability
+				_ = lineStr // Expected capability line
 			}
 		}
 
@@ -299,7 +299,7 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 		var refs []string
 		hasError := false
 		for i := 0; i < 50; i++ {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 			line, isFlush, err := readPktLine(reader)
 			if err != nil {
 				if i == 0 {
@@ -340,11 +340,11 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 	t.Run("UploadPack_Fetch", func(t *testing.T) {
 		conn, err := net.Dial("tcp", suite.serverAddr)
 		require.NoError(t, err)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Set timeouts to prevent hanging
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
-		defer conn.SetDeadline(time.Time{})
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
 		reader := bufio.NewReader(conn)
 		writer := bufio.NewWriter(conn)
@@ -361,7 +361,7 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 		// Read and skip advertisement
 		maxIterations := 20
 		for i := 0; i < maxIterations; i++ {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 			_, isFlush, err := readPktLine(reader)
 			if err != nil {
 				break
@@ -406,7 +406,7 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 		// The packfile will be wrapped in sideband packets
 		packfileReceived := false
 		for i := 0; i < 100; i++ {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 			line, isFlush, err := readPktLine(reader)
 			if err != nil {
 				break
@@ -433,7 +433,7 @@ func TestTCPGitServerReceivePack(t *testing.T) {
 		// Create a new repository to push from
 		pushRepoPath, err := os.MkdirTemp("", "tcp-push-repo-*")
 		require.NoError(t, err)
-		defer os.RemoveAll(pushRepoPath)
+		defer func() { _ = os.RemoveAll(pushRepoPath) }()
 
 		// Clone the test repository
 		repo, err := gogit.PlainClone(pushRepoPath, false, &gogit.CloneOptions{
@@ -488,11 +488,11 @@ func TestTCPGitServerReceivePack(t *testing.T) {
 		// Now connect to TCP server and push
 		conn, err := net.Dial("tcp", suite.serverAddr)
 		require.NoError(t, err)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Set timeouts to prevent hanging
-		conn.SetDeadline(time.Now().Add(30 * time.Second))
-		defer conn.SetDeadline(time.Time{})
+		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+		defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
 		reader := bufio.NewReader(conn)
 		writer := bufio.NewWriter(conn)
@@ -510,7 +510,7 @@ func TestTCPGitServerReceivePack(t *testing.T) {
 		var advertLines []string
 		maxIterations := 20
 		for i := 0; i < maxIterations; i++ {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 			line, isFlush, err := readPktLine(reader)
 			if err != nil {
 				break
@@ -567,11 +567,11 @@ func TestTCPGitServerIntegration(t *testing.T) {
 		// Then, fetch it back via TCP
 		conn, err := net.Dial("tcp", suite.serverAddr)
 		require.NoError(t, err)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Set timeouts to prevent hanging
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
-		defer conn.SetDeadline(time.Time{})
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
 		reader := bufio.NewReader(conn)
 		writer := bufio.NewWriter(conn)
@@ -588,7 +588,7 @@ func TestTCPGitServerIntegration(t *testing.T) {
 		// Read advertisement
 		maxIterations := 20
 		for i := 0; i < maxIterations; i++ {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 			_, isFlush, err := readPktLine(reader)
 			if err != nil {
 				break
@@ -626,7 +626,7 @@ func TestTCPGitServerIntegration(t *testing.T) {
 		// Verify response
 		packfileFound := false
 		for i := 0; i < 50; i++ {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 			line, isFlush, err := readPktLine(reader)
 			if err != nil || isFlush {
 				break

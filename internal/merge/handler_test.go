@@ -258,7 +258,7 @@ func setupTestRepository(t *testing.T) (*gogit.Repository, func()) {
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return repo, cleanup

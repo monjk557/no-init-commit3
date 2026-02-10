@@ -41,7 +41,7 @@ func setupTestService(t *testing.T) (*RepositoryOverviewService, string, func())
 	require.NoError(t, err)
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	return service, tempDir, cleanup
@@ -54,7 +54,7 @@ func createTestRepositoryWithCommits(t *testing.T, tempDir string) *git.Reposito
 	// 작업 디렉토리에서 일반 저장소 생성
 	tempWorkDir, err := os.MkdirTemp("", "overview-test-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := git.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -301,7 +301,7 @@ func createTestRepositoryWithMultipleLanguages(t *testing.T, tempDir string) *gi
 	// 작업 디렉토리에서 일반 저장소 생성
 	tempWorkDir, err := os.MkdirTemp("", "overview-test-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := git.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -494,7 +494,7 @@ func createTestRepositoryForLanguageDistributionFiltering(t *testing.T, tempDir 
 
 	tempWorkDir, err := os.MkdirTemp("", "overview-filtering-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := git.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -605,7 +605,7 @@ func createTestRepositoryForLanguageDebugLargeFile(t *testing.T, tempDir string)
 
 	tempWorkDir, err := os.MkdirTemp("", "overview-debug-large-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := git.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)
@@ -679,7 +679,7 @@ func createTestRepositoryForLinguistStyleExclusions(t *testing.T, tempDir string
 
 	tempWorkDir, err := os.MkdirTemp("", "overview-linguist-exclusions-work-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempWorkDir)
+	defer func() { _ = os.RemoveAll(tempWorkDir) }()
 
 	workRepo, err := git.PlainInit(tempWorkDir, false)
 	require.NoError(t, err)

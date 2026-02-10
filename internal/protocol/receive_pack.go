@@ -210,11 +210,6 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
-	peekLen := 200
-	if len(bodyBytes) < peekLen {
-		peekLen = len(bodyBytes)
-	}
-
 	// body를 다시 읽을 수 있도록 복원
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
@@ -474,7 +469,6 @@ func (h *ReceivePackHandler) parsePushSection(cmds []string, body io.Reader) (*R
 				req.Commands = append(req.Commands, cmd)
 				currentOldOid = ""
 				currentNewOid = ""
-				currentRefName = ""
 			}
 		default:
 		}

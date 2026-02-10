@@ -525,6 +525,8 @@ func (h *MergePreviewHandler) validatePath(owner, repo string) error {
 }
 
 // resolveReference resolves a Git reference to a commit hash
+//
+//nolint:unused // ref resolution helper
 func (h *MergeOperationsHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
 	// Try to resolve as hash first
 	if hash := plumbing.NewHash(ref); !hash.IsZero() {
@@ -561,6 +563,8 @@ func (h *MergeOperationsHandler) resolveReference(repo *gogit.Repository, ref st
 }
 
 // resolveReference resolves a Git reference to a commit hash
+//
+//nolint:unused // ref resolution helper
 func (h *MergePreviewHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
 	// Try to resolve as hash first
 	if hash := plumbing.NewHash(ref); !hash.IsZero() {

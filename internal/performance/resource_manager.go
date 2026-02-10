@@ -476,9 +476,6 @@ type RequestTracker struct {
 	logger         *logging.Logger
 	activeRequests map[string]*RequestInfo
 	requestQueue   chan *RequestInfo
-	totalRequests  int64
-	completedReqs  int64
-	timeoutReqs    int64
 }
 
 // RequestInfo contains information about an active request
