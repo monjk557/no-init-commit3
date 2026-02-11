@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/collabops/git-executor/internal/blob"
@@ -32,6 +33,7 @@ type RepositoryOverviewHandler struct {
 	blobService   *blob.BlobService
 	service       *RepositoryOverviewService
 	overviewCache *OverviewCache
+	commitIndex   *CommitIndex
 }
 
 func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandler, error) {
@@ -59,6 +61,7 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 	}
 
 	overviewCache := NewOverviewCache(cfg.Git.MaxCacheSize, cfg.Git.CacheTTL)
+	commitIndex := NewCommitIndex(cfg.Git.MaxCacheSize, service, logger)
 
 	return &RepositoryOverviewHandler{
 		config:        cfg,
@@ -69,6 +72,7 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 		blobService:   blobService,
 		service:       service,
 		overviewCache: overviewCache,
+		commitIndex:   commitIndex,
 	}, nil
 }
 
@@ -154,9 +158,21 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 	}, true
 }
 
-// HandleGetRepositoryOverview는 저장소 개요를 위한 GET /api/v1/repository/{owner}/{repo} 요청을 처리합니다
+// overviewTimeout is the hard request-level timeout for the overview handler.
+// Individual sub-tasks respect ctx cancellation, so the total wall time is bounded.
+const overviewTimeout = 15 * time.Second
+
+// overviewCommitCountCap is the maximum number of commits to iterate when counting.
+// Beyond this, the count is approximate (UI should show "100k+").
+const overviewCommitCountCap = 100_000
+
+// HandleGetRepositoryOverview는 저장소 개요를 위한 GET /api/v1/repository/{owner}/{repo} 요청을 처리합니다.
+// 모든 비동기 작업을 병렬로 실행하여 wall time = max(개별) 로 줄입니다.
 func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) {
-	ctx := c.Request.Context()
+	// Request-level timeout: 어떤 sub-task도 이 시간을 넘기지 못하게 강제합니다.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), overviewTimeout)
+	defer cancel()
+
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	ref := c.Query("ref")
@@ -172,14 +188,138 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	gitRepo := repoCtx.repoWrapper.GetRepo()
 	branchesList := repoCtx.branchesList
 	repoPath := repoCtx.repoPath
-
-	// path 설정 (tree overview와 동일한 방식)
 	repoCtx.path = path
 
-	// 최신 커밋 1개만 가져오기 (성능 최적화)
-	commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
-	if err != nil || len(commitsList) == 0 {
-		// 빈 저장소
+	// ------------------------------------------------------------------
+	// Resolve refHash once (fast, no I/O) — used by cache + all sub-tasks.
+	// ------------------------------------------------------------------
+	refHash := ""
+	if resolvedHash, resolveErr := repoCtx.repoWrapper.ResolveReference(repoCtx.ref); resolveErr == nil {
+		refHash = resolvedHash.String()
+	}
+
+	// ------------------------------------------------------------------
+	// 모든 sub-task를 병렬 실행: wall time = max(개별)
+	// GetCommits(1,0)도 병렬로 포함하여 sequential dependency 제거
+	// ------------------------------------------------------------------
+	var (
+		mu                    sync.Mutex
+		latestCommit          commits.Commit
+		latestCommitFound     bool
+		commitsCount          int
+		commitsApproximate    bool
+		treeEntriesWithCommit []GitTreeEntryWithCommit
+		treeErr               error
+		tagsList              []tags.Tag
+		remotesList           []RemoteInfo
+		readmeContent         string
+	)
+
+	var wg sync.WaitGroup
+
+	// (0) GetCommits(1,0) — 빈 저장소 판별 + latestCommit (이전: sequential blocker)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
+		mu.Lock()
+		if err == nil && len(commitsList) > 0 {
+			latestCommit = commitsList[0]
+			latestCommitFound = true
+		}
+		mu.Unlock()
+	}()
+
+	// (1) CountCommits — capped + cached
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// Cache hit?
+		if refHash != "" {
+			if cached, ok := h.overviewCache.GetCommitCount(repoPath, refHash); ok {
+				mu.Lock()
+				commitsCount = cached
+				mu.Unlock()
+				return
+			}
+		}
+
+		r, err := commits.CountCommitsWithCap(repoCtx.repoWrapper, ctx, repoCtx.ref, overviewCommitCountCap)
+		mu.Lock()
+		if err != nil {
+			h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
+			commitsCount = 1
+		} else {
+			commitsCount = r.Count
+			commitsApproximate = r.Approximate
+			if refHash != "" {
+				h.overviewCache.SetCommitCount(repoPath, refHash, r.Count)
+			}
+		}
+		mu.Unlock()
+	}()
+
+	// (2) GetTreeWithCommit — capped by N-bucket
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		entries, _, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+		mu.Lock()
+		treeEntriesWithCommit = entries
+		treeErr = err
+		mu.Unlock()
+	}()
+
+	// (3) GetTags
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tl, _, err := tags.GetTags(repoCtx.repoWrapper, 100, 0)
+		mu.Lock()
+		if err != nil {
+			tagsList = []tags.Tag{}
+		} else {
+			tagsList = tl
+		}
+		mu.Unlock()
+	}()
+
+	// (4) GetRemotes
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rl, err := h.service.GetRemotes(ctx, gitRepo)
+		mu.Lock()
+		if err != nil {
+			remotesList = []RemoteInfo{}
+		} else {
+			remotesList = rl
+		}
+		mu.Unlock()
+	}()
+
+	// (5) README
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		readmeData, _, err := h.blobService.GetBlobContent(ctx, owner, repo, "README.md", repoCtx.ref, repoCtx.repoWrapper)
+		mu.Lock()
+		if err == nil {
+			const maxReadmeSize = 100 * 1024
+			if len(readmeData) > maxReadmeSize {
+				readmeContent = string(readmeData[:maxReadmeSize])
+			} else {
+				readmeContent = string(readmeData)
+			}
+		}
+		mu.Unlock()
+	}()
+
+	wg.Wait()
+
+	// 빈 저장소 처리 (latestCommit을 못 찾은 경우)
+	if !latestCommitFound {
 		response := RepositoryOverviewResponse{
 			Success:       true,
 			Message:       "Repository overview fetched successfully",
@@ -209,75 +349,17 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		return
 	}
 
-	latestCommit := commitsList[0]
-
-	// 커밋 개수만 세기 (성능 최적화: 커밋 객체를 메모리에 로드하지 않고 카운트만)
-	commitsCount, err := commits.CountCommits(repoCtx.repoWrapper, ctx, repoCtx.ref)
-	if err != nil {
-		h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
-		// 폴백: 최소한 1개는 있다는 것을 알 수 있음
-		commitsCount = 1
-	}
-
-	// 트리 항목 가져오기 (커밋 정보 포함)
-	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
-	if err != nil {
-		// 경로 관련 오류인지 확인
-		errMsg := strings.ToLower(err.Error())
+	// Tree 에러 처리
+	if treeErr != nil {
+		errMsg := strings.ToLower(treeErr.Error())
 		if strings.Contains(errMsg, "failed to find path") ||
 			strings.Contains(errMsg, "path not found") ||
 			strings.Contains(errMsg, "path is not a tree") {
 			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
 			return
 		}
-		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
-	}
-
-	// 태그 가져오기
-	// Repository overview에서는 태그 목록만 필요하므로 적절한 limit 설정
-	tagsList, _, err := tags.GetTags(repoCtx.repoWrapper, 100, 0)
-	if err != nil {
-		h.logger.Warn("Failed to get tags", zap.Error(err))
-		tagsList = []tags.Tag{}
-	}
-
-	// 원격 저장소 가져오기
-	remotesList, err := h.service.GetRemotes(ctx, gitRepo)
-	if err != nil {
-		h.logger.Warn("Failed to get remotes", zap.Error(err))
-		remotesList = []RemoteInfo{}
-	}
-
-	// README 가져오기
-	// README 크기 제한 (100KB) - 큰 README는 메모리 사용량을 증가시킴
-	readmeContent := ""
-	readmeData, _, err := h.blobService.GetBlobContent(ctx, owner, repo, "README.md", repoCtx.ref, repoCtx.repoWrapper)
-	if err != nil {
-		// README를 찾을 수 없는 것은 오류가 아님 - "not found" 오류인지 확인
-		errStr := err.Error()
-		if !strings.Contains(errStr, "not found") && !strings.Contains(errStr, "file not found") {
-			h.logger.Warn("Failed to get README", zap.Error(err))
-		}
-	} else {
-		// 100KB 제한
-		const maxReadmeSize = 100 * 1024
-		if len(readmeData) > maxReadmeSize {
-			readmeContent = string(readmeData[:maxReadmeSize])
-			h.logger.Warn("README truncated", zap.Int("original_size", len(readmeData)), zap.Int("truncated_size", maxReadmeSize))
-		} else {
-			readmeContent = string(readmeData)
-		}
-	}
-
-	// 언어 분포 가져오기 (너무 비쌈)
-	// NOTE: 당분간 overview 응답에서는 언어 분포를 제공하지 않습니다.
-	// languageDistribution := h.service.GetLanguageDistribution(ctx, gitRepo, repoCtx.ref)
-	languageDistribution := LanguageDistribution{
-		Languages:  []LanguageStats{},
-		TotalBytes: 0,
-		TotalFiles: 0,
 	}
 
 	// 응답 구성
@@ -293,14 +375,19 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		Branches:      convertBranchesToGitBranches(branchesList),
 		Tags:          convertTagsToGitTags(tagsList),
 		Count: RepositoryCount{
-			Commits:  commitsCount,
-			Branches: len(branchesList),
-			Tags:     len(tagsList),
-			Remotes:  len(remotesList),
-			Total:    commitsCount + len(branchesList) + len(tagsList) + len(remotesList),
+			Commits:            commitsCount,
+			Branches:           len(branchesList),
+			Tags:               len(tagsList),
+			Remotes:            len(remotesList),
+			Total:              commitsCount + len(branchesList) + len(tagsList) + len(remotesList),
+			CommitsApproximate: commitsApproximate,
 		},
-		Readme:               readmeContent,
-		LanguageDistribution: languageDistribution,
+		Readme: readmeContent,
+		LanguageDistribution: LanguageDistribution{
+			Languages:  []LanguageStats{},
+			TotalBytes: 0,
+			TotalFiles: 0,
+		},
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -323,9 +410,9 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 
 	repoCtx.path = path
 
-	// 트리 항목 가져오기 (커밋 정보 포함)
+	// 트리 항목 가져오기 (커밋 정보 포함; always capped)
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+	treeEntriesWithCommit, _, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
@@ -418,7 +505,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		parentPath = path[:idx]
 	}
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, parentPath)
+	treeEntriesWithCommit, _, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, parentPath)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -708,6 +795,9 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 // HandleGetTreeWithCommitOverview는 트리와 커밋 정보를 함께 반환하는 GET /api/v1/repository/{owner}/{repo}/overview/tree/commits 요청을 처리합니다
 func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Context) {
 	ctx := c.Request.Context()
+	start := time.Now()
+	m := observability.GetApplicationMetrics()
+
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	ref := c.Query("ref")
@@ -723,9 +813,50 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	repoCtx.path = path
 	gitRepo := repoCtx.repoWrapper.GetRepo()
 
-	// 트리 항목 가져오기 (커밋 정보 포함)
-	treeEntriesWithCommit, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+	// Resolve ref hash for index key.
+	resolvedHash, resolveErr := repoCtx.repoWrapper.ResolveReference(repoCtx.ref)
+	refHash := ""
+	if resolveErr == nil {
+		refHash = resolvedHash.String()
+	}
+
+	// --- INDEX LOOKUP ---
+	// If we have a pre-populated index entry for this dir, serve directly ("조회" not "계산").
+	if refHash != "" && h.commitIndex != nil {
+		if idxCommits, idxMeta, hit := h.commitIndex.Lookup(repoCtx.repoPath, refHash, repoCtx.path); hit {
+			// We still need the tree entries (structure), so load tree only.
+			treeEntriesWithCommit, _, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+			if err == nil {
+				// Overlay index commits onto tree entries.
+				for i := range treeEntriesWithCommit {
+					if c, ok := idxCommits[treeEntriesWithCommit[i].Path]; ok {
+						treeEntriesWithCommit[i].LatestCommit = c
+					}
+				}
+				idxMeta.CutReason = "index_hit"
+				m.RecordTreeWithCommit("index_hit", time.Since(start), len(treeEntriesWithCommit))
+
+				response := TreeWithCommitOverviewResponse{
+					Success:    true,
+					Repository: fmt.Sprintf("%s/%s", owner, repo),
+					Owner:      owner,
+					Name:       repo,
+					Path:       path,
+					Tree:       treeEntriesWithCommit,
+					Branches:   convertBranchesToGitBranches(repoCtx.branchesList),
+					Meta:       &idxMeta,
+				}
+				c.JSON(http.StatusOK, response)
+				return
+			}
+			// If tree loading failed, fall through to normal path.
+		}
+	}
+
+	// --- NORMAL PATH (capped) ---
+	treeEntriesWithCommit, treeMeta, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
 	if err != nil {
+		m.RecordTreeWithCommit("error", time.Since(start), 0)
 		// 경로 관련 오류인지 확인
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "failed to find path") ||
@@ -739,6 +870,37 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 		return
 	}
 
+	outcome := "complete"
+	if treeMeta.Incomplete {
+		outcome = "incomplete"
+	}
+	m.RecordTreeWithCommit(outcome, time.Since(start), len(treeEntriesWithCommit))
+
+	// Schedule background population for future index hits.
+	if refHash != "" && h.commitIndex != nil && treeMeta.Incomplete {
+		pathInfos := make([]CommitPathInfo, 0, len(treeEntriesWithCommit))
+		for _, e := range treeEntriesWithCommit {
+			if e.Type == "blob" || e.Type == "tree" {
+				pathInfos = append(pathInfos, CommitPathInfo{
+					Path:   e.Path,
+					IsTree: e.Type == "tree",
+				})
+			}
+		}
+		h.commitIndex.ScheduleBackgroundPopulation(repoCtx.repoPath, refHash, repoCtx.path, gitRepo, pathInfos)
+	}
+
+	// If complete, store in index for instant future hits.
+	if refHash != "" && h.commitIndex != nil && !treeMeta.Incomplete {
+		commitMap := make(map[string]*GitCommit, len(treeEntriesWithCommit))
+		for _, e := range treeEntriesWithCommit {
+			if e.LatestCommit != nil {
+				commitMap[e.Path] = e.LatestCommit
+			}
+		}
+		h.commitIndex.Store(repoCtx.repoPath, refHash, repoCtx.path, commitMap, treeMeta)
+	}
+
 	// 응답 구성
 	response := TreeWithCommitOverviewResponse{
 		Success:    true,
@@ -748,6 +910,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 		Path:       path,
 		Tree:       treeEntriesWithCommit,
 		Branches:   convertBranchesToGitBranches(repoCtx.branchesList),
+		Meta:       &treeMeta,
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -840,39 +1003,45 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 	pathsHash := hex.EncodeToString(hh[:])
 	cachePathKey := dirPath + "|" + pathsHash
 
-	// Cache hit
-	if commits, ok := h.overviewCache.GetLatestCommitsBatch(repoCtx.repoPath, resolvedRefHash, cachePathKey); ok {
-		m.RecordLatestCommitsBatch("cache_hit", time.Since(start), len(pathInfos), 0)
+	// Cache hit: check complete first, then partial (anti-thundering).
+	if cachedCommits, isComplete, found := h.overviewCache.GetLatestCommitsBatchAny(repoCtx.repoPath, resolvedRefHash, cachePathKey); found {
+		cutReason := "cache_hit"
+		incomplete := !isComplete
+		if !isComplete {
+			cutReason = "cache_hit_partial"
+		}
+		m.RecordLatestCommitsBatch(cutReason, time.Since(start), len(pathInfos), 0)
 		resp := LatestCommitsBatchResponse{
 			Success:       true,
 			Repository:    fmt.Sprintf("%s/%s", owner, repo),
 			Owner:         owner,
 			Name:          repo,
 			DirPath:       dirPath,
-			CommitsByPath: commits,
+			CommitsByPath: cachedCommits,
 			Meta: LatestCommitsMeta{
 				ResolvedRefHash: resolvedRefHash,
-				Incomplete:      false,
+				Incomplete:      incomplete,
 				ScannedCommits:  0,
 				TimeBudgetMs:    0,
-				CutReason:       "cache_hit",
+				CutReason:       cutReason,
 			},
 		}
 		c.JSON(http.StatusOK, resp)
 		return
 	}
 
-	// Compute with singleflight
+	// Compute with singleflight (enforced for BOTH partial and complete — thundering herd prevention).
 	sfKey := fmt.Sprintf("latest_commits_batch|%s|%s|%s", repoCtx.repoPath, resolvedRefHash, cachePathKey)
 	v, err, shared := h.overviewCache.Do(sfKey, func() (any, error) {
-		// Apply server-side caps to remove tails.
 		timeBudget := latestCommitsTimeBudget()
 		maxCommits := latestCommitsMaxCommits()
 
 		commits, meta := h.service.GetLatestCommitsForPathsWithMeta(ctx, repoCtx.repoWrapper.GetRepo(), resolvedHash, pathInfos, timeBudget, maxCommits)
-		// Cache only complete results.
+		// Cache complete → long TTL, partial → short TTL (2s, anti-thundering).
 		if !meta.Incomplete {
 			h.overviewCache.SetLatestCommitsBatch(repoCtx.repoPath, resolvedRefHash, cachePathKey, commits)
+		} else {
+			h.overviewCache.SetLatestCommitsBatchPartial(repoCtx.repoPath, resolvedRefHash, cachePathKey, commits)
 		}
 		return struct {
 			commits map[string]*GitCommit

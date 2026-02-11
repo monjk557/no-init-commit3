@@ -614,7 +614,7 @@ func Benchmark_GetTreeWithCommit_Full_S1_NHeavy(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := svc.GetTreeWithCommit(ctx, pr.repo, ref, "")
+		_, _, err := svc.GetTreeWithCommit(ctx, pr.repo, ref, "")
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -1,0 +1,44 @@
+{
+  "generated_at": "2026-02-11T10:32:13.552728Z",
+  "go_version": "go1.25.0",
+  "benchtime": "1s",
+  "pkg": "./internal/overview",
+  "bench_regex": "Benchmark_(GetLatestCommitsOnly|BlobSizeFillOnly|GetTreeWithCommit_Full|LatestCommitsCache_.*WarmHit)",
+  "benches": {
+    "Benchmark_BlobSizeFillOnly_S1_NHeavy": {
+      "ns_per_op": 31787104,
+      "bytes_per_op": 2285617,
+      "allocs_per_op": 29514
+    },
+    "Benchmark_BlobSizeFillOnly_S1_NHeavy_Parallel": {
+      "ns_per_op": 18596553,
+      "bytes_per_op": 2485786,
+      "allocs_per_op": 32946
+    },
+    "Benchmark_GetLatestCommitsOnly_S1_NHeavy": {
+      "ns_per_op": 237478250,
+      "bytes_per_op": 303553238,
+      "allocs_per_op": 6460321
+    },
+    "Benchmark_GetLatestCommitsOnly_S2_CHeavy": {
+      "ns_per_op": 641079958,
+      "bytes_per_op": 426732204,
+      "allocs_per_op": 7543312
+    },
+    "Benchmark_GetLatestCommitsOnly_S3_FHeavy": {
+      "ns_per_op": 518836000,
+      "bytes_per_op": 478764412,
+      "allocs_per_op": 8529018
+    },
+    "Benchmark_GetTreeWithCommit_Full_S1_NHeavy": {
+      "ns_per_op": 274531948,
+      "bytes_per_op": 307563408,
+      "allocs_per_op": 6509701
+    },
+    "Benchmark_LatestCommitsCache_S1_NHeavy_WarmHit": {
+      "ns_per_op": 350,
+      "bytes_per_op": 400,
+      "allocs_per_op": 6
+    }
+  }
+}

@@ -2040,6 +2040,8 @@ components:
           type: integer
         total:
           type: integer
+        commits_approximate:
+          type: boolean
       required:
         - branches
         - commits
@@ -2313,6 +2315,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GitBranch'
+        meta:
+          $ref: '#/components/schemas/LatestCommitsMeta'
       required:
         - branches
         - name

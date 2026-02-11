@@ -1383,3 +1383,149 @@ func Test_Contributors_IncludesEmail(t *testing.T) {
 		require.Contains(t, contributor, "@", "contributor should be an email address: %s", contributor)
 	}
 }
+
+// =============================================================================
+// Tree-with-commit Meta propagation
+// =============================================================================
+
+func Test_TreeWithCommit_ResponseIncludesMeta(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+
+	var resp TreeWithCommitOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.NotNil(t, resp.Meta, "response must include meta for caps visibility")
+	require.NotEmpty(t, resp.Meta.ResolvedRefHash, "meta should have resolved ref hash")
+	require.NotEmpty(t, resp.Meta.CutReason, "meta should have cut reason")
+	require.GreaterOrEqual(t, resp.Meta.ScannedCommits, 0)
+}
+
+func Test_TreeWithCommit_SmallRepo_ReturnsComplete(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp TreeWithCommitOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.NotNil(t, resp.Meta)
+	require.False(t, resp.Meta.Incomplete, "small repo should always complete within caps")
+	require.Equal(t, "complete", resp.Meta.CutReason)
+}
+
+func Test_TreeWithCommit_NonExistentPath_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?path=nonexistent", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// =============================================================================
+// Overview parallel execution + capped commit count
+// =============================================================================
+
+func Test_Overview_Parallel_ReturnsAllFields(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+
+	var resp RepositoryOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	// All fields must be populated (parallelism must not lose data)
+	require.NotEmpty(t, resp.Repository)
+	require.NotEmpty(t, resp.Owner)
+	require.NotEmpty(t, resp.Name)
+	require.NotEmpty(t, resp.Tree, "tree should have entries")
+	require.NotEmpty(t, resp.Branches, "branches should have entries")
+	require.GreaterOrEqual(t, resp.Count.Commits, 1, "commit count should be at least 1")
+	require.GreaterOrEqual(t, resp.Count.Branches, 1)
+	require.False(t, resp.Count.CommitsApproximate, "small repo should have exact count")
+}
+
+func Test_Overview_CommitCountApproximate_FlagExposedInResponse(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Parse raw JSON to verify commits_approximate field exists
+	var raw map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	countMap, ok := raw["count"].(map[string]interface{})
+	require.True(t, ok, "count field should be an object")
+	// For small repos, commits_approximate is either false or omitted (omitempty)
+	if v, exists := countMap["commits_approximate"]; exists {
+		require.Equal(t, false, v, "small repo should not be approximate")
+	}
+}

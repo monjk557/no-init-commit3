@@ -153,6 +153,25 @@ lint:
 	fi
 	@echo "✅ Linting complete!"
 
+# [PERF] make bench-overview-update|bench-overview-check
+# Description: Generate/check benchmark baselines for overview performance (regression gate).
+.PHONY: bench-overview-update bench-overview-check
+bench-overview-update:
+	@go run ./cmd/benchgate \
+		-pkg ./internal/overview \
+		-bench 'Benchmark_(GetLatestCommitsOnly|BlobSizeFillOnly|GetTreeWithCommit_Full|LatestCommitsCache_.*WarmHit)' \
+		-benchtime 1s \
+		-baseline .benchmarks/overview_baseline.json \
+		-update
+
+bench-overview-check:
+	@go run ./cmd/benchgate \
+		-pkg ./internal/overview \
+		-bench 'Benchmark_(GetLatestCommitsOnly|BlobSizeFillOnly|GetTreeWithCommit_Full|LatestCommitsCache_.*WarmHit)' \
+		-benchtime 1s \
+		-baseline .benchmarks/overview_baseline.json \
+		-max-regress 0.15
+
 # [MANUAL 5] make test all|unit|api|integration|e2e [core|config|util|perf]
 # Description: Run tests with new organized structure
 # Options:

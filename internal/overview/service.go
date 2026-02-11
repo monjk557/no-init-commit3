@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -723,6 +724,7 @@ func convertParentHashes(hashes []plumbing.Hash) []string {
 type entryInfo struct {
 	index      int
 	entryType  string
+	sortKey    int // pre-computed: 0=tree,1=blob,2=commit,3=other (avoids switch per comparison)
 	name       string
 	fullPath   string
 	modeStr    string
@@ -731,24 +733,41 @@ type entryInfo struct {
 	commitInfo *GitCommit
 }
 
+// entryTypeSortKey returns a pre-computed sort priority for entry type.
+func entryTypeSortKey(et string) int {
+	switch et {
+	case "tree":
+		return 0
+	case "blob":
+		return 1
+	case "commit":
+		return 2
+	default:
+		return 3
+	}
+}
+
 // GetTreeWithCommit는 트리 항목과 각 항목의 최근 커밋 정보를 함께 가져옵니다.
-func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, ref, path string) ([]GitTreeEntryWithCommit, error) {
+// Always applies N-based caps (no uncapped path). Returns meta for partial status.
+func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, ref, path string) ([]GitTreeEntryWithCommit, LatestCommitsMeta, error) {
+	emptyMeta := LatestCommitsMeta{}
+
 	// ref를 커밋 해시로 해석
 	refObj, err := gitRepo.ResolveRevision(plumbing.Revision(ref))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve reference: %w", err)
+		return nil, emptyMeta, fmt.Errorf("failed to resolve reference: %w", err)
 	}
 
 	// Get commit
 	commit, err := gitRepo.CommitObject(*refObj)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get commit: %w", err)
+		return nil, emptyMeta, fmt.Errorf("failed to get commit: %w", err)
 	}
 
 	// Get tree
 	treeObj, err := commit.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get tree: %w", err)
+		return nil, emptyMeta, fmt.Errorf("failed to get tree: %w", err)
 	}
 
 	// Navigate to the specified path
@@ -756,14 +775,14 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 	if path != "" {
 		treeEntry, err := treeObj.FindEntry(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find path: %w", err)
+			return nil, emptyMeta, fmt.Errorf("failed to find path: %w", err)
 		}
 		if treeEntry.Mode != filemode.Dir {
-			return nil, fmt.Errorf("path is not a tree: %s", path)
+			return nil, emptyMeta, fmt.Errorf("path is not a tree: %s", path)
 		}
 		targetTree, err = gitRepo.TreeObject(treeEntry.Hash)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get target tree: %w", err)
+			return nil, emptyMeta, fmt.Errorf("failed to get target tree: %w", err)
 		}
 	}
 
@@ -775,6 +794,7 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		idx  int
 		hash plumbing.Hash
 	}
+	blobParallelism := blobSizeParallelism() // hoist out of loop
 	blobTasks := make([]blobTask, 0, len(targetTree.Entries))
 	for i, entry := range targetTree.Entries {
 		// Path는 full path from repository root
@@ -794,15 +814,15 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 			entryType = "blob"
 		}
 
-		// Mode를 문자열로 변환 (Unix permissions)
-		modeStr := fmt.Sprintf("%o", entry.Mode)
+		// Mode를 문자열로 변환 (Unix permissions) — strconv avoids fmt alloc.
+		modeStr := strconv.FormatUint(uint64(entry.Mode), 8)
 		// Hash를 문자열로 변환
 		hashStr := entry.Hash.String()
 
 		// Size 계산 (blob인 경우만)
 		var size *int64
 		if entryType == "blob" {
-			if blobSizeParallelism() > 1 {
+			if blobParallelism > 1 {
 				blobTasks = append(blobTasks, blobTask{idx: i, hash: entry.Hash})
 			} else {
 				// Blob 객체 가져오기
@@ -817,6 +837,7 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		entries[i] = entryInfo{
 			index:     i,
 			entryType: entryType,
+			sortKey:   entryTypeSortKey(entryType),
 			name:      entry.Name,
 			fullPath:  fullPath,
 			modeStr:   modeStr,
@@ -825,8 +846,8 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		}
 	}
 
-	if blobSizeParallelism() > 1 && len(blobTasks) > 0 {
-		parallelism := blobSizeParallelism()
+	if blobParallelism > 1 && len(blobTasks) > 0 {
+		parallelism := blobParallelism
 		if parallelism <= 0 {
 			parallelism = 4
 		}
@@ -874,8 +895,11 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		}
 	}
 
-	// 병렬로 커밋 정보 조회
-	commitMap := s.GetLatestCommitsForPaths(ctx, gitRepo, ref, pathInfos)
+	// ALWAYS capped: no uncapped path. Budget is bucketized by N (entry count).
+	// Reuse refObj from the top of this function (no duplicate ResolveRevision).
+	tb := timeBudgetForEntryCount(len(entries))
+	mc := maxCommitsForEntryCount(len(entries))
+	commitMap, meta := s.GetLatestCommitsForPathsWithMeta(ctx, gitRepo, *refObj, pathInfos, tb, mc)
 
 	// 결과를 entries에 매핑
 	for path, commit := range commitMap {
@@ -884,38 +908,12 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		}
 	}
 
-	// 정렬: 트리(디렉토리)가 먼저 오고, 그 다음 blob(파일), 같은 타입 내에서는 파일명 아스키 정렬
+	// 정렬: tree(0) → blob(1) → commit(2), 같은 타입 내에서는 파일명 아스키 정렬
+	// sortKey is pre-computed to avoid switch per O(N log N) comparison.
 	sort.Slice(entries, func(i, j int) bool {
-		// 타입별 우선순위 결정
-		var typeI, typeJ int
-		switch entries[i].entryType {
-		case "tree":
-			typeI = 0
-		case "blob":
-			typeI = 1
-		case "commit":
-			typeI = 2
-		default:
-			typeI = 3
+		if entries[i].sortKey != entries[j].sortKey {
+			return entries[i].sortKey < entries[j].sortKey
 		}
-
-		switch entries[j].entryType {
-		case "tree":
-			typeJ = 0
-		case "blob":
-			typeJ = 1
-		case "commit":
-			typeJ = 2
-		default:
-			typeJ = 3
-		}
-
-		// 타입이 다르면 타입 우선순위로 정렬 (작은 값이 먼저)
-		if typeI != typeJ {
-			return typeI < typeJ
-		}
-
-		// 같은 타입이면 파일명으로 아스키 정렬
 		return entries[i].name < entries[j].name
 	})
 
@@ -933,7 +931,7 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		}
 	}
 
-	return treeEntriesWithCommit, nil
+	return treeEntriesWithCommit, meta, nil
 }
 
 // CountCommitsBetween counts commits between two commits (from excluded, to included)

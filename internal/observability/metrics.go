@@ -58,14 +58,23 @@ type ApplicationMetrics struct {
 	APIServiceCallsTotal    prometheus.CounterVec   // API service calls by endpoint, result
 
 	// Overview / Performance (repo browser)
-	OverviewCacheOpsTotal                 prometheus.CounterVec   // Cache operations by kind/op (hit, miss, set)
-	OverviewCacheEntries                  prometheus.GaugeVec     // Current cache entry count by kind
-	OverviewCacheSingleflightSharedTotal  prometheus.CounterVec   // singleflight shared result count by kind
-	LatestCommitsBatchRequestsTotal       prometheus.CounterVec   // Requests by outcome (cache_hit, complete, incomplete, error)
-	LatestCommitsBatchDuration            prometheus.HistogramVec // Duration by outcome
-	LatestCommitsBatchPaths               prometheus.HistogramVec // Requested path count by outcome
-	LatestCommitsBatchScannedCommits      prometheus.HistogramVec // scanned commits by outcome
-	LatestCommitsBatchCutReasonTotal      prometheus.CounterVec   // cut reason counts (only when incomplete)
+	OverviewCacheOpsTotal                prometheus.CounterVec   // Cache operations by kind/op (hit, miss, set)
+	OverviewCacheEntries                 prometheus.GaugeVec     // Current cache entry count by kind
+	OverviewCacheSingleflightSharedTotal prometheus.CounterVec   // singleflight shared result count by kind
+	LatestCommitsBatchRequestsTotal      prometheus.CounterVec   // Requests by outcome (cache_hit, complete, incomplete, error)
+	LatestCommitsBatchDuration           prometheus.HistogramVec // Duration by outcome
+	LatestCommitsBatchPaths              prometheus.HistogramVec // Requested path count by outcome
+	LatestCommitsBatchScannedCommits     prometheus.HistogramVec // scanned commits by outcome
+	LatestCommitsBatchCutReasonTotal     prometheus.CounterVec   // cut reason counts (only when incomplete)
+
+	// Tree-with-commit endpoint (GET /overview/tree/commits)
+	TreeWithCommitRequestsTotal prometheus.CounterVec   // Requests by outcome (complete, incomplete, error)
+	TreeWithCommitDuration      prometheus.HistogramVec // Duration by outcome
+	TreeWithCommitEntries       prometheus.HistogramVec // Entry count (N) by outcome
+
+	// Commit index (background-populated dir→commit lookup)
+	CommitIndexOpsTotal prometheus.CounterVec // hit / miss / populate / evict
+	CommitIndexEntries  prometheus.Gauge      // current index entry count
 }
 
 // MetricsConfig는 메트릭 수집을 위한 설정을 보유합니다.
@@ -342,6 +351,46 @@ func NewApplicationMetrics() *ApplicationMetrics {
 				},
 				[]string{"reason"},
 			),
+
+			// Tree-with-commit endpoint
+			TreeWithCommitRequestsTotal: *promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "git_executor_tree_with_commit_requests_total",
+					Help: "tree-with-commit requests by outcome (complete, incomplete, error)",
+				},
+				[]string{"outcome"},
+			),
+			TreeWithCommitDuration: *promauto.NewHistogramVec(
+				prometheus.HistogramOpts{
+					Name:    "git_executor_tree_with_commit_duration_seconds",
+					Help:    "tree-with-commit handler duration in seconds by outcome",
+					Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 1.5, 2.5, 5, 10},
+				},
+				[]string{"outcome"},
+			),
+			TreeWithCommitEntries: *promauto.NewHistogramVec(
+				prometheus.HistogramOpts{
+					Name:    "git_executor_tree_with_commit_entries",
+					Help:    "tree-with-commit entry count (N) by outcome",
+					Buckets: []float64{1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000},
+				},
+				[]string{"outcome"},
+			),
+
+			// Commit index
+			CommitIndexOpsTotal: *promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "git_executor_commit_index_ops_total",
+					Help: "commit index operations by op (hit, miss, populate, evict)",
+				},
+				[]string{"op"},
+			),
+			CommitIndexEntries: promauto.NewGauge(
+				prometheus.GaugeOpts{
+					Name: "git_executor_commit_index_entries",
+					Help: "current commit index entry count",
+				},
+			),
 		}
 	})
 	return globalMetrics
@@ -445,6 +494,32 @@ func (m *ApplicationMetrics) RecordLatestCommitsBatchCutReason(reason string) {
 		return
 	}
 	m.LatestCommitsBatchCutReasonTotal.WithLabelValues(reason).Inc()
+}
+
+// RecordTreeWithCommit records metrics for the tree-with-commit endpoint.
+func (m *ApplicationMetrics) RecordTreeWithCommit(outcome string, duration time.Duration, entries int) {
+	if m == nil {
+		return
+	}
+	m.TreeWithCommitRequestsTotal.WithLabelValues(outcome).Inc()
+	m.TreeWithCommitDuration.WithLabelValues(outcome).Observe(duration.Seconds())
+	m.TreeWithCommitEntries.WithLabelValues(outcome).Observe(float64(entries))
+}
+
+// RecordCommitIndexOp records a commit-index operation (hit, miss, populate, evict).
+func (m *ApplicationMetrics) RecordCommitIndexOp(op string) {
+	if m == nil {
+		return
+	}
+	m.CommitIndexOpsTotal.WithLabelValues(op).Inc()
+}
+
+// SetCommitIndexEntries sets the current commit index entry count gauge.
+func (m *ApplicationMetrics) SetCommitIndexEntries(n int) {
+	if m == nil {
+		return
+	}
+	m.CommitIndexEntries.Set(float64(n))
 }
 
 // RecordGitOperation records metrics for a Git operation

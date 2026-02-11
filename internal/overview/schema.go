@@ -26,11 +26,12 @@ type RepositoryOverviewResponse struct {
 
 // RepositoryCount provides counts of different repository types
 type RepositoryCount struct {
-	Commits  int `json:"commits"`
-	Branches int `json:"branches"`
-	Tags     int `json:"tags"`
-	Remotes  int `json:"remotes"`
-	Total    int `json:"total"`
+	Commits            int  `json:"commits"`
+	Branches           int  `json:"branches"`
+	Tags               int  `json:"tags"`
+	Remotes            int  `json:"remotes"`
+	Total              int  `json:"total"`
+	CommitsApproximate bool `json:"commits_approximate,omitempty"` // true when commit count was capped
 }
 
 type LanguageDistribution struct {
@@ -230,6 +231,7 @@ type TreeWithCommitOverviewResponse struct {
 	Path       string                   `json:"path"`
 	Tree       []GitTreeEntryWithCommit `json:"tree"`
 	Branches   []GitBranch              `json:"branches"`
+	Meta       *LatestCommitsMeta       `json:"meta,omitempty"`
 }
 
 type LatestCommitsBatchRequest struct {

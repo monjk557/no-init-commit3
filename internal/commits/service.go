@@ -379,26 +379,43 @@ func GetCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref str
 	return commits, nil
 }
 
+// CommitCountResult holds the result of a commit count operation.
+type CommitCountResult struct {
+	Count       int  // number of commits counted
+	Approximate bool // true if count was capped before reaching the end
+}
+
 // CountCommits는 특정 ref의 전체 커밋 개수를 효율적으로 세는 함수입니다.
 // 커밋 객체를 메모리에 로드하지 않고 iterator를 순회하면서 카운트만 합니다.
+// NOTE: large repo에서 이 함수는 수십 초가 걸릴 수 있습니다. 상한이 필요하면 CountCommitsWithCap을 사용하세요.
 func CountCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref string) (int, error) {
+	r, err := CountCommitsWithCap(rw, ctx, ref, 0)
+	if err != nil {
+		return 0, err
+	}
+	return r.Count, nil
+}
+
+// CountCommitsWithCap counts commits up to maxCount. If maxCount <= 0, no cap is applied.
+// Returns CommitCountResult with Approximate=true if the cap was reached.
+func CountCommitsWithCap(rw *repositories.RepositoryWrapper, ctx context.Context, ref string, maxCount int) (CommitCountResult, error) {
 	// 컨텍스트 취소 확인
 	select {
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return CommitCountResult{}, ctx.Err()
 	default:
 	}
 
 	// 참조를 커밋 해시로 변환
 	hash, err := rw.ResolveReference(ref)
 	if err != nil {
-		return 0, err
+		return CommitCountResult{}, err
 	}
 
 	// 내부 저장소 가져오기
 	gitRepo := rw.GetRepo()
 	if gitRepo == nil {
-		return 0, fmt.Errorf("repository is closed")
+		return CommitCountResult{}, fmt.Errorf("repository is closed")
 	}
 
 	// 커밋 반복자 가져오기
@@ -406,11 +423,12 @@ func CountCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref s
 		From: hash,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("failed to get commit log: %w", err)
+		return CommitCountResult{}, fmt.Errorf("failed to get commit log: %w", err)
 	}
 	defer commitIter.Close()
 
 	count := 0
+	approximate := false
 	err = commitIter.ForEach(func(c *object.Commit) error {
 		// 컨텍스트 취소 확인
 		select {
@@ -419,14 +437,18 @@ func CountCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref s
 		default:
 		}
 		count++
+		if maxCount > 0 && count >= maxCount {
+			approximate = true
+			return io.EOF
+		}
 		return nil
 	})
 
 	if err != nil && err != io.EOF {
-		return 0, fmt.Errorf("failed to iterate commits: %w", err)
+		return CommitCountResult{}, fmt.Errorf("failed to iterate commits: %w", err)
 	}
 
-	return count, nil
+	return CommitCountResult{Count: count, Approximate: approximate}, nil
 }
 
 // convertCommit은 go-git 커밋을 내부 Commit 형식으로 변환합니다.

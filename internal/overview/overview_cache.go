@@ -83,25 +83,33 @@ func (c *ttlLRUCache[V]) Len() int {
 
 // OverviewCache caches expensive overview computations per (repoPath, refHash, path).
 // It is intentionally in-memory and TTL-based; correctness is "eventual" within TTL.
+//
+// Partial cache policy (plan2 Action 1):
+//   - complete results → main cache (long TTL)
+//   - partial results → partialCommits cache (short TTL=2s, anti-thundering only)
+//   - singleflight is enforced for BOTH partial and complete (thundering herd prevention)
 type OverviewCache struct {
 	commitCountTTL time.Duration
 
-	commitCount   *ttlLRUCache[int]
-	languages     *ttlLRUCache[LanguageDistribution]
-	treeEntries   *ttlLRUCache[[]GitTreeEntryWithCommit]
-	latestCommits *ttlLRUCache[map[string]*GitCommit]
+	commitCount    *ttlLRUCache[int]
+	languages      *ttlLRUCache[LanguageDistribution]
+	treeEntries    *ttlLRUCache[[]GitTreeEntryWithCommit]
+	latestCommits  *ttlLRUCache[map[string]*GitCommit]
+	partialCommits *ttlLRUCache[map[string]*GitCommit] // short TTL, anti-thundering
 
 	sf singleflight.Group
 }
 
+const partialCacheTTL = 2 * time.Second
+
 func NewOverviewCache(maxEntries int, ttl time.Duration) *OverviewCache {
-	// Keep it simple: one TTL for all sub-caches for now.
 	return &OverviewCache{
 		commitCountTTL: ttl,
 		commitCount:    newTTLLRUCache[int](maxEntries, ttl),
 		languages:      newTTLLRUCache[LanguageDistribution](maxEntries, ttl),
 		treeEntries:    newTTLLRUCache[[]GitTreeEntryWithCommit](maxEntries, ttl),
 		latestCommits:  newTTLLRUCache[map[string]*GitCommit](maxEntries, ttl),
+		partialCommits: newTTLLRUCache[map[string]*GitCommit](maxEntries, partialCacheTTL),
 	}
 }
 
@@ -183,6 +191,31 @@ func (c *OverviewCache) SetLatestCommitsBatch(repoPath, refHash, key string, com
 	m := observability.GetApplicationMetrics()
 	m.RecordOverviewCacheOp("latest_commits_batch", "set")
 	m.SetOverviewCacheEntries("latest_commits_batch", c.latestCommits.Len())
+}
+
+// SetLatestCommitsBatchPartial stores a partial result with short TTL (anti-thundering).
+func (c *OverviewCache) SetLatestCommitsBatchPartial(repoPath, refHash, key string, commits map[string]*GitCommit) {
+	c.partialCommits.Set(cacheKey("latest_commits_partial", repoPath, refHash, key), commits)
+	m := observability.GetApplicationMetrics()
+	m.RecordOverviewCacheOp("latest_commits_partial", "set")
+}
+
+// GetLatestCommitsBatchAny checks complete cache first, then partial.
+// Returns (commits, isComplete, found).
+func (c *OverviewCache) GetLatestCommitsBatchAny(repoPath, refHash, key string) (map[string]*GitCommit, bool, bool) {
+	// Try complete first.
+	if v, ok := c.GetLatestCommitsBatch(repoPath, refHash, key); ok {
+		return v, true, true
+	}
+	// Try partial (short TTL).
+	k := cacheKey("latest_commits_partial", repoPath, refHash, key)
+	v, ok := c.partialCommits.Get(k)
+	if ok {
+		m := observability.GetApplicationMetrics()
+		m.RecordOverviewCacheOp("latest_commits_partial", "hit")
+		return v, false, true
+	}
+	return nil, false, false
 }
 
 func (c *OverviewCache) Do(key string, fn func() (any, error)) (any, error, bool) {
