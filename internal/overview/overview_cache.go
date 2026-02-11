@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/collabops/git-executor/internal/observability"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/sync/singleflight"
 )
@@ -70,14 +71,25 @@ func (c *ttlLRUCache[V]) Set(key string, value V) {
 	c.mu.Unlock()
 }
 
+func (c *ttlLRUCache[V]) Len() int {
+	if c == nil || !c.enabled || c.lru == nil {
+		return 0
+	}
+	c.mu.RLock()
+	n := c.lru.Len()
+	c.mu.RUnlock()
+	return n
+}
+
 // OverviewCache caches expensive overview computations per (repoPath, refHash, path).
 // It is intentionally in-memory and TTL-based; correctness is "eventual" within TTL.
 type OverviewCache struct {
 	commitCountTTL time.Duration
 
-	commitCount *ttlLRUCache[int]
-	languages   *ttlLRUCache[LanguageDistribution]
-	treeEntries *ttlLRUCache[[]GitTreeEntryWithCommit]
+	commitCount   *ttlLRUCache[int]
+	languages     *ttlLRUCache[LanguageDistribution]
+	treeEntries   *ttlLRUCache[[]GitTreeEntryWithCommit]
+	latestCommits *ttlLRUCache[map[string]*GitCommit]
 
 	sf singleflight.Group
 }
@@ -89,6 +101,7 @@ func NewOverviewCache(maxEntries int, ttl time.Duration) *OverviewCache {
 		commitCount:    newTTLLRUCache[int](maxEntries, ttl),
 		languages:      newTTLLRUCache[LanguageDistribution](maxEntries, ttl),
 		treeEntries:    newTTLLRUCache[[]GitTreeEntryWithCommit](maxEntries, ttl),
+		latestCommits:  newTTLLRUCache[map[string]*GitCommit](maxEntries, ttl),
 	}
 }
 
@@ -97,33 +110,86 @@ func cacheKey(kind, repoPath, refHash, path string) string {
 }
 
 func (c *OverviewCache) GetCommitCount(repoPath, refHash string) (int, bool) {
-	return c.commitCount.Get(cacheKey("commit_count", repoPath, refHash, ""))
+	m := observability.GetApplicationMetrics()
+	v, ok := c.commitCount.Get(cacheKey("commit_count", repoPath, refHash, ""))
+	if ok {
+		m.RecordOverviewCacheOp("commit_count", "hit")
+	} else {
+		m.RecordOverviewCacheOp("commit_count", "miss")
+	}
+	m.SetOverviewCacheEntries("commit_count", c.commitCount.Len())
+	return v, ok
 }
 
 func (c *OverviewCache) SetCommitCount(repoPath, refHash string, count int) {
 	c.commitCount.Set(cacheKey("commit_count", repoPath, refHash, ""), count)
+	m := observability.GetApplicationMetrics()
+	m.RecordOverviewCacheOp("commit_count", "set")
+	m.SetOverviewCacheEntries("commit_count", c.commitCount.Len())
 }
 
 func (c *OverviewCache) GetLanguages(repoPath, refHash string) (LanguageDistribution, bool) {
-	return c.languages.Get(cacheKey("languages", repoPath, refHash, ""))
+	m := observability.GetApplicationMetrics()
+	v, ok := c.languages.Get(cacheKey("languages", repoPath, refHash, ""))
+	if ok {
+		m.RecordOverviewCacheOp("languages", "hit")
+	} else {
+		m.RecordOverviewCacheOp("languages", "miss")
+	}
+	m.SetOverviewCacheEntries("languages", c.languages.Len())
+	return v, ok
 }
 
 func (c *OverviewCache) SetLanguages(repoPath, refHash string, dist LanguageDistribution) {
 	c.languages.Set(cacheKey("languages", repoPath, refHash, ""), dist)
+	m := observability.GetApplicationMetrics()
+	m.RecordOverviewCacheOp("languages", "set")
+	m.SetOverviewCacheEntries("languages", c.languages.Len())
 }
 
 func (c *OverviewCache) GetTreeEntries(repoPath, refHash, path string) ([]GitTreeEntryWithCommit, bool) {
-	return c.treeEntries.Get(cacheKey("tree_entries", repoPath, refHash, path))
+	m := observability.GetApplicationMetrics()
+	v, ok := c.treeEntries.Get(cacheKey("tree_entries", repoPath, refHash, path))
+	if ok {
+		m.RecordOverviewCacheOp("tree_entries", "hit")
+	} else {
+		m.RecordOverviewCacheOp("tree_entries", "miss")
+	}
+	m.SetOverviewCacheEntries("tree_entries", c.treeEntries.Len())
+	return v, ok
 }
 
 func (c *OverviewCache) SetTreeEntries(repoPath, refHash, path string, entries []GitTreeEntryWithCommit) {
 	c.treeEntries.Set(cacheKey("tree_entries", repoPath, refHash, path), entries)
+	m := observability.GetApplicationMetrics()
+	m.RecordOverviewCacheOp("tree_entries", "set")
+	m.SetOverviewCacheEntries("tree_entries", c.treeEntries.Len())
 }
 
-func (c *OverviewCache) Do(key string, fn func() (any, error)) (any, error) {
-	if c == nil {
-		return fn()
+func (c *OverviewCache) GetLatestCommitsBatch(repoPath, refHash, key string) (map[string]*GitCommit, bool) {
+	m := observability.GetApplicationMetrics()
+	v, ok := c.latestCommits.Get(cacheKey("latest_commits_batch", repoPath, refHash, key))
+	if ok {
+		m.RecordOverviewCacheOp("latest_commits_batch", "hit")
+	} else {
+		m.RecordOverviewCacheOp("latest_commits_batch", "miss")
 	}
-	v, err, _ := c.sf.Do(key, fn)
-	return v, err
+	m.SetOverviewCacheEntries("latest_commits_batch", c.latestCommits.Len())
+	return v, ok
+}
+
+func (c *OverviewCache) SetLatestCommitsBatch(repoPath, refHash, key string, commits map[string]*GitCommit) {
+	c.latestCommits.Set(cacheKey("latest_commits_batch", repoPath, refHash, key), commits)
+	m := observability.GetApplicationMetrics()
+	m.RecordOverviewCacheOp("latest_commits_batch", "set")
+	m.SetOverviewCacheEntries("latest_commits_batch", c.latestCommits.Len())
+}
+
+func (c *OverviewCache) Do(key string, fn func() (any, error)) (any, error, bool) {
+	if c == nil {
+		v, err := fn()
+		return v, err, false
+	}
+	v, err, shared := c.sf.Do(key, fn)
+	return v, err, shared
 }

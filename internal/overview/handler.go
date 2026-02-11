@@ -2,6 +2,8 @@ package overview
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"sort"
@@ -13,6 +15,7 @@ import (
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/tags"
 	"github.com/gin-gonic/gin"
@@ -28,6 +31,7 @@ type RepositoryOverviewHandler struct {
 	repoManager   *repositories.DefaultRepositoryManager
 	blobService   *blob.BlobService
 	service       *RepositoryOverviewService
+	overviewCache *OverviewCache
 }
 
 func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandler, error) {
@@ -54,6 +58,8 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 		return nil, fmt.Errorf("failed to create overview service: %w", err)
 	}
 
+	overviewCache := NewOverviewCache(cfg.Git.MaxCacheSize, cfg.Git.CacheTTL)
+
 	return &RepositoryOverviewHandler{
 		config:        cfg,
 		logger:        logger,
@@ -62,6 +68,7 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 		repoManager:   repoManager,
 		blobService:   blobService,
 		service:       service,
+		overviewCache: overviewCache,
 	}, nil
 }
 
@@ -744,4 +751,182 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context) {
+	ctx := c.Request.Context()
+	start := time.Now()
+	m := observability.GetApplicationMetrics()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	var req LatestCommitsBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.Ref) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required field: ref"})
+		return
+	}
+	if len(req.Paths) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required field: paths"})
+		return
+	}
+
+	dirPath := strings.Trim(req.DirPath, "/")
+	if dirPath != "" {
+		if err := h.pathValidator.ValidateFilePath(dirPath); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+	}
+
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, req.Ref)
+	if !ok {
+		return
+	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	// resolved ref hash (fixed)
+	resolvedHash, err := repoCtx.repoWrapper.ResolveReference(repoCtx.ref)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
+		return
+	}
+	resolvedRefHash := resolvedHash.String()
+
+	// Normalize/validate paths and build CommitPathInfo
+	seen := make(map[string]struct{}, len(req.Paths))
+	pathInfos := make([]CommitPathInfo, 0, len(req.Paths))
+	for _, p := range req.Paths {
+		p = strings.Trim(p, "/")
+		if p == "" {
+			continue
+		}
+
+		full := p
+		if dirPath != "" {
+			full = dirPath + "/" + p
+		}
+
+		if err := h.pathValidator.ValidateFilePath(full); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+
+		if _, ok := seen[full]; ok {
+			continue
+		}
+		seen[full] = struct{}{}
+
+		// Policy: this endpoint resolves latest commits for exact file paths by default.
+		pathInfos = append(pathInfos, CommitPathInfo{Path: full, IsTree: false})
+	}
+	if len(pathInfos) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "paths must not be empty"})
+		return
+	}
+
+	// Cache key: dirPath + stable hash(paths)
+	sortedFull := make([]string, 0, len(seen))
+	for full := range seen {
+		sortedFull = append(sortedFull, full)
+	}
+	sort.Strings(sortedFull)
+	hh := sha1.Sum([]byte(strings.Join(sortedFull, "\n")))
+	pathsHash := hex.EncodeToString(hh[:])
+	cachePathKey := dirPath + "|" + pathsHash
+
+	// Cache hit
+	if commits, ok := h.overviewCache.GetLatestCommitsBatch(repoCtx.repoPath, resolvedRefHash, cachePathKey); ok {
+		m.RecordLatestCommitsBatch("cache_hit", time.Since(start), len(pathInfos), 0)
+		resp := LatestCommitsBatchResponse{
+			Success:       true,
+			Repository:    fmt.Sprintf("%s/%s", owner, repo),
+			Owner:         owner,
+			Name:          repo,
+			DirPath:       dirPath,
+			CommitsByPath: commits,
+			Meta: LatestCommitsMeta{
+				ResolvedRefHash: resolvedRefHash,
+				Incomplete:      false,
+				ScannedCommits:  0,
+				TimeBudgetMs:    0,
+				CutReason:       "cache_hit",
+			},
+		}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// Compute with singleflight
+	sfKey := fmt.Sprintf("latest_commits_batch|%s|%s|%s", repoCtx.repoPath, resolvedRefHash, cachePathKey)
+	v, err, shared := h.overviewCache.Do(sfKey, func() (any, error) {
+		// Apply server-side caps to remove tails.
+		timeBudget := latestCommitsTimeBudget()
+		maxCommits := latestCommitsMaxCommits()
+
+		commits, meta := h.service.GetLatestCommitsForPathsWithMeta(ctx, repoCtx.repoWrapper.GetRepo(), resolvedHash, pathInfos, timeBudget, maxCommits)
+		// Cache only complete results.
+		if !meta.Incomplete {
+			h.overviewCache.SetLatestCommitsBatch(repoCtx.repoPath, resolvedRefHash, cachePathKey, commits)
+		}
+		return struct {
+			commits map[string]*GitCommit
+			meta    LatestCommitsMeta
+		}{commits: commits, meta: meta}, nil
+	})
+	if err != nil {
+		m.RecordLatestCommitsBatch("error", time.Since(start), len(pathInfos), 0)
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
+		return
+	}
+	if shared {
+		m.RecordOverviewSingleflightShared("latest_commits_batch")
+	}
+
+	out := v.(struct {
+		commits map[string]*GitCommit
+		meta    LatestCommitsMeta
+	})
+	out.meta.ResolvedRefHash = resolvedRefHash
+
+	// Missing paths list (relative to dirPath input)
+	missing := make([]string, 0)
+	for _, p := range req.Paths {
+		p = strings.Trim(p, "/")
+		if p == "" {
+			continue
+		}
+		full := p
+		if dirPath != "" {
+			full = dirPath + "/" + p
+		}
+		if _, ok := out.commits[full]; !ok {
+			missing = append(missing, p)
+		}
+	}
+	sort.Strings(missing)
+
+	outcome := "complete"
+	if out.meta.Incomplete {
+		outcome = "incomplete"
+		m.RecordLatestCommitsBatchCutReason(out.meta.CutReason)
+	}
+	m.RecordLatestCommitsBatch(outcome, time.Since(start), len(pathInfos), out.meta.ScannedCommits)
+
+	resp := LatestCommitsBatchResponse{
+		Success:       true,
+		Repository:    fmt.Sprintf("%s/%s", owner, repo),
+		Owner:         owner,
+		Name:          repo,
+		DirPath:       dirPath,
+		CommitsByPath: out.commits,
+		Meta:          out.meta,
+		MissingPaths:  missing,
+	}
+	c.JSON(http.StatusOK, resp)
 }

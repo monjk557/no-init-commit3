@@ -231,3 +231,28 @@ type TreeWithCommitOverviewResponse struct {
 	Tree       []GitTreeEntryWithCommit `json:"tree"`
 	Branches   []GitBranch              `json:"branches"`
 }
+
+type LatestCommitsBatchRequest struct {
+	Ref     string   `json:"ref"`
+	DirPath string   `json:"dir_path"`
+	Paths   []string `json:"paths"`
+}
+
+type LatestCommitsMeta struct {
+	ResolvedRefHash string `json:"resolved_ref_hash"`
+	Incomplete      bool   `json:"incomplete"`
+	ScannedCommits  int    `json:"scanned_commits"`
+	TimeBudgetMs    int    `json:"time_budget_ms"`
+	CutReason       string `json:"cut_reason"`
+}
+
+type LatestCommitsBatchResponse struct {
+	Success       bool                  `json:"success"`
+	Repository    string                `json:"repository"`
+	Owner         string                `json:"owner"`
+	Name          string                `json:"name"`
+	DirPath       string                `json:"dir_path"`
+	CommitsByPath map[string]*GitCommit `json:"commits_by_path"`
+	Meta          LatestCommitsMeta     `json:"meta"`
+	MissingPaths  []string              `json:"missing_paths,omitempty"`
+}

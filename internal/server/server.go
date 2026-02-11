@@ -308,6 +308,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/overview/tree/commits", overviewHandler.HandleGetTreeWithCommitOverview)
 	ownerRepoGroup.GET("/overview/blob", overviewHandler.HandleGetBlobOverview)
 	ownerRepoGroup.GET("/overview/branches", overviewHandler.HandleGetBranchesOverview)
+	ownerRepoGroup.POST("/overview/latest-commits", overviewHandler.HandlePostLatestCommitsBatch)
 
 }
 

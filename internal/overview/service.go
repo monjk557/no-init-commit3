@@ -6,6 +6,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -436,6 +438,127 @@ type CommitPathInfo struct {
 	IsTree bool
 }
 
+type pendingPath struct {
+	info CommitPathInfo
+}
+
+func (s *RepositoryOverviewService) GetLatestCommitsForPathsWithMeta(
+	ctx context.Context,
+	repo *gogit.Repository,
+	from plumbing.Hash,
+	pathInfos []CommitPathInfo,
+	timeBudget time.Duration,
+	maxCommits int,
+) (map[string]*GitCommit, LatestCommitsMeta) {
+
+	result := make(map[string]*GitCommit, len(pathInfos))
+	meta := LatestCommitsMeta{
+		ResolvedRefHash: from.String(),
+		TimeBudgetMs:    int(timeBudget / time.Millisecond),
+	}
+	if len(pathInfos) == 0 {
+		meta.CutReason = "complete"
+		return result, meta
+	}
+
+	pending := make(map[string]pendingPath, len(pathInfos))
+	for _, pi := range pathInfos {
+		pending[pi.Path] = pendingPath{info: pi}
+	}
+
+	iter, err := repo.Log(&gogit.LogOptions{From: from})
+	if err != nil {
+		meta.Incomplete = true
+		meta.CutReason = "error"
+		return result, meta
+	}
+	defer iter.Close()
+
+	start := time.Now()
+	scanned := 0
+	incomplete := false
+	cutReason := ""
+
+	walkErr := iter.ForEach(func(c *object.Commit) error {
+		select {
+		case <-ctx.Done():
+			incomplete = true
+			cutReason = "context_cancelled"
+			return io.EOF
+		default:
+		}
+
+		if timeBudget > 0 && time.Since(start) > timeBudget {
+			incomplete = true
+			cutReason = "time_budget"
+			return io.EOF
+		}
+		if maxCommits > 0 && scanned >= maxCommits {
+			incomplete = true
+			cutReason = "max_commits"
+			return io.EOF
+		}
+		scanned++
+
+		if len(pending) == 0 {
+			cutReason = "complete"
+			return io.EOF
+		}
+
+		currentTree, err := c.Tree()
+		if err != nil {
+			return nil
+		}
+
+		var parentTree *object.Tree
+		if len(c.ParentHashes) > 0 {
+			parent, err := repo.CommitObject(c.ParentHashes[0])
+			if err == nil {
+				parentTree, _ = parent.Tree()
+			}
+		}
+
+		if parentTree == nil {
+			for path, p := range pending {
+				if matchInTree(currentTree, path, p.info.IsTree) {
+					result[path] = s.convertCommit(c)
+					delete(pending, path)
+				}
+			}
+			return nil
+		}
+
+		changes, err := object.DiffTree(parentTree, currentTree)
+		if err != nil {
+			return nil
+		}
+
+		// Always use changes-driven matching (feature flags removed).
+		gc := s.convertCommit(c)
+		for _, ch := range changes {
+			applyChangePathToPending(result, pending, gc, ch.From.Name)
+			applyChangePathToPending(result, pending, gc, ch.To.Name)
+		}
+
+		return nil
+	})
+
+	_ = walkErr
+	if cutReason == "" {
+		if len(pending) == 0 {
+			cutReason = "complete"
+		} else {
+			incomplete = true
+			cutReason = "end_of_history"
+		}
+	}
+
+	meta.Incomplete = incomplete
+	meta.CutReason = cutReason
+	meta.ScannedCommits = scanned
+	return result, meta
+}
+
 func (s *RepositoryOverviewService) GetLatestCommitsForPaths(
 	ctx context.Context,
 	repo *gogit.Repository,
@@ -449,9 +572,6 @@ func (s *RepositoryOverviewService) GetLatestCommitsForPaths(
 	}
 
 	// 아직 매칭 안 된 path들
-	type pendingPath struct {
-		info CommitPathInfo
-	}
 	pending := make(map[string]pendingPath, len(pathInfos))
 	for _, pi := range pathInfos {
 		pending[pi.Path] = pendingPath{info: pi}
@@ -512,11 +632,11 @@ func (s *RepositoryOverviewService) GetLatestCommitsForPaths(
 			return nil
 		}
 
-		for path, p := range pending {
-			if diffMatchesPath(changes, path, p.info.IsTree) {
-				result[path] = s.convertCommit(c)
-				delete(pending, path)
-			}
+		// Always use changes-driven matching (feature flags removed).
+		gc := s.convertCommit(c)
+		for _, ch := range changes {
+			applyChangePathToPending(result, pending, gc, ch.From.Name)
+			applyChangePathToPending(result, pending, gc, ch.To.Name)
 		}
 
 		return nil
@@ -535,40 +655,50 @@ func matchInTree(tree *object.Tree, path string, isTree bool) bool {
 		return err == nil
 	}
 
-	found := false
-	_ = tree.Files().ForEach(func(f *object.File) error {
-		if f.Name == path || strings.HasPrefix(f.Name, path+"/") {
-			found = true
-			return io.EOF
-		}
-		return nil
-	})
-	return found
+	// Prefer direct tree entry lookup over scanning all files (which can be O(total files)).
+	entry, err := tree.FindEntry(path)
+	if err != nil {
+		return false
+	}
+	return entry.Mode == filemode.Dir
 }
 
-func diffMatchesPath(changes object.Changes, path string, isTree bool) bool {
-	for _, ch := range changes {
-		from := ch.From.Name
-		to := ch.To.Name
+func applyChangePathToPending(result map[string]*GitCommit, pending map[string]pendingPath, commit *GitCommit, changedPath string) {
+	if changedPath == "" {
+		return
+	}
 
-		if !isTree {
-			if from == path || to == path {
-				return true
-			}
-			continue
-		}
+	// Root tree path ("") matches any change in the previous implementation for isTree==true.
+	if p, ok := pending[""]; ok && p.info.IsTree {
+		result[""] = commit
+		delete(pending, "")
+	}
 
-		if path == "" {
-			return true
-		}
+	// Exact match for pending files.
+	if p, ok := pending[changedPath]; ok && !p.info.IsTree {
+		result[changedPath] = commit
+		delete(pending, changedPath)
+	}
 
-		if from == path || to == path ||
-			strings.HasPrefix(from, path+"/") ||
-			strings.HasPrefix(to, path+"/") {
-			return true
+	// For pending directories, walk up the changed path's parents and match by equality on dir paths.
+	// This mirrors the previous `strings.HasPrefix(path+"/")` semantics without scanning all pending paths.
+	for dir := parentDirGitPath(changedPath); dir != ""; dir = parentDirGitPath(dir) {
+		if p, ok := pending[dir]; ok && p.info.IsTree {
+			result[dir] = commit
+			delete(pending, dir)
 		}
 	}
-	return false
+}
+
+func parentDirGitPath(p string) string {
+	// git paths are slash-separated, regardless of OS.
+	if p == "" {
+		return ""
+	}
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[:i]
+	}
+	return ""
 }
 
 // convertAuthorToGitAuthorFromObject는 object.Signature를 GitAuthor로 변환합니다.
@@ -641,6 +771,11 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 	basePath := strings.Trim(path, "/")
 
 	entries := make([]entryInfo, len(targetTree.Entries))
+	type blobTask struct {
+		idx  int
+		hash plumbing.Hash
+	}
+	blobTasks := make([]blobTask, 0, len(targetTree.Entries))
 	for i, entry := range targetTree.Entries {
 		// Path는 full path from repository root
 		fullPath := entry.Name
@@ -667,11 +802,15 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		// Size 계산 (blob인 경우만)
 		var size *int64
 		if entryType == "blob" {
-			// Blob 객체 가져오기
-			blobObj, err := gitRepo.BlobObject(entry.Hash)
-			if err == nil {
-				blobSize := blobObj.Size
-				size = &blobSize
+			if blobSizeParallelism() > 1 {
+				blobTasks = append(blobTasks, blobTask{idx: i, hash: entry.Hash})
+			} else {
+				// Blob 객체 가져오기
+				blobObj, err := gitRepo.BlobObject(entry.Hash)
+				if err == nil {
+					blobSize := blobObj.Size
+					size = &blobSize
+				}
 			}
 		}
 
@@ -684,6 +823,40 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 			hashStr:   hashStr,
 			size:      size,
 		}
+	}
+
+	if blobSizeParallelism() > 1 && len(blobTasks) > 0 {
+		parallelism := blobSizeParallelism()
+		if parallelism <= 0 {
+			parallelism = 4
+		}
+		sem := make(chan struct{}, parallelism)
+		var wg sync.WaitGroup
+
+		for _, t := range blobTasks {
+			select {
+			case <-ctx.Done():
+				// Best-effort: stop spawning new work.
+				goto waitBlobs
+			default:
+			}
+
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(task blobTask) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				blobObj, err := gitRepo.BlobObject(task.hash)
+				if err == nil {
+					blobSize := blobObj.Size
+					entries[task.idx].size = &blobSize
+				}
+			}(t)
+		}
+
+	waitBlobs:
+		wg.Wait()
 	}
 
 	// 커밋 정보를 병렬로 조회

@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,9 +24,15 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-func setupTestHandler(t *testing.T) (*RepositoryOverviewHandler, string, func()) {
+func init() {
 	gin.SetMode(gin.TestMode)
+}
 
+func fixedBaseTime() time.Time {
+	return time.Unix(1700000000, 0).UTC()
+}
+
+func setupTestHandler(t *testing.T) (*RepositoryOverviewHandler, string, func()) {
 	tempDir, err := os.MkdirTemp("", "overview-handler-test-*")
 	require.NoError(t, err)
 
@@ -98,11 +105,12 @@ func main() {
 	_, err = worktree.Add("README.md")
 	require.NoError(t, err)
 
+	when := time.Unix(1700000000, 0).UTC()
 	_, err = worktree.Commit("Initial commit", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test User",
 			Email: "test@example.com",
-			When:  time.Now(),
+			When:  when,
 		},
 	})
 	require.NoError(t, err)
@@ -130,6 +138,50 @@ func main() {
 
 	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
 	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+}
+
+func Test_PostLatestCommitsBatch_ReturnsCommitsAndMeta(t *testing.T) {
+	t.Parallel()
+
+	h, tempDir, cleanup := setupTestHandler(t)
+	t.Cleanup(cleanup)
+
+	owner := "o"
+	repo := "r"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	r := gin.New()
+	r.POST("/repos/:owner/:repo/overview/latest-commits", h.HandlePostLatestCommitsBatch)
+
+	body := LatestCommitsBatchRequest{
+		Ref:     "main",
+		DirPath: "",
+		Paths:   []string{"README.md", "main.go"},
+	}
+	payload, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/repos/%s/%s/overview/latest-commits", owner, repo),
+		bytes.NewReader(payload),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+
+	var resp LatestCommitsBatchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Equal(t, owner, resp.Owner)
+	require.Equal(t, repo, resp.Name)
+	require.Equal(t, "", resp.DirPath)
+	require.NotEmpty(t, resp.Meta.ResolvedRefHash)
+	require.Greater(t, resp.Meta.ScannedCommits, 0)
+	require.NotNil(t, resp.CommitsByPath["README.md"])
+	require.NotNil(t, resp.CommitsByPath["main.go"])
 }
 
 func copyTreeRecursiveForHandlerTest(workRepo, gitRepo *gogit.Repository, treeHash plumbing.Hash) error {
@@ -216,10 +268,11 @@ func TestHandleGetRepositoryOverview_LanguageDistribution_EmptyRepository(t *tes
 	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
 	require.NoError(t, err)
 
+	when := fixedBaseTime()
 	commit := &object.Commit{
 		Message:   "Initial empty commit",
-		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
-		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: when},
 		TreeHash:  treeHash,
 	}
 
@@ -274,7 +327,7 @@ func createTestRepositoryWithMultiplePathCommits(t *testing.T, tempDir, owner, r
 	require.NoError(t, err)
 
 	commitHashes := make(map[string]plumbing.Hash)
-	baseTime := time.Now()
+	baseTime := fixedBaseTime()
 
 	// 1. Initial commit (root files)
 	readmePath := filepath.Join(tempWorkDir, "README.md")
@@ -543,10 +596,11 @@ func Test_Overview_EmptyRepo_ReturnsEmptyData(t *testing.T) {
 	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
 	require.NoError(t, err)
 
+	when := fixedBaseTime()
 	commit := &object.Commit{
 		Message:   "Initial empty commit",
-		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
-		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: when},
 		TreeHash:  treeHash,
 	}
 	commitObj := gitRepo.Storer.NewEncodedObject()
@@ -710,10 +764,11 @@ func Test_Overview_DefaultBranchMissing_Returns404OrFallbackExplicitly(t *testin
 	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
 	require.NoError(t, err)
 
+	when := fixedBaseTime()
 	commit := &object.Commit{
 		Message:   "Orphan",
-		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
-		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: when},
 		TreeHash:  treeHash,
 	}
 	commitObj := gitRepo.Storer.NewEncodedObject()
@@ -934,11 +989,12 @@ func Test_LanguageDistribution_ExcludesNodeModules_SkipsNodeModules(t *testing.T
 	_, err = worktree.Add("node_modules/dep.js")
 	require.NoError(t, err)
 
+	when := fixedBaseTime()
 	commit, err := worktree.Commit("Add files", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test User",
 			Email: "test@example.com",
-			When:  time.Now(),
+			When:  when,
 		},
 	})
 	require.NoError(t, err)
@@ -996,6 +1052,8 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	worktree, err := workRepo.Worktree()
 	require.NoError(t, err)
 
+	baseTime := fixedBaseTime()
+
 	// main 브랜치: base commit
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "base.txt"), []byte("base\n"), 0644))
 	_, err = worktree.Add("base.txt")
@@ -1005,7 +1063,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 		Author: &object.Signature{
 			Name:  "Author1",
 			Email: "author1@example.com",
-			When:  time.Now(),
+			When:  baseTime,
 		},
 	})
 	require.NoError(t, err)
@@ -1025,7 +1083,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 		Author: &object.Signature{
 			Name:  "Contributor1",
 			Email: "contributor1@example.com",
-			When:  time.Now(),
+			When:  baseTime.Add(1 * time.Second),
 		},
 	})
 	require.NoError(t, err)
@@ -1037,7 +1095,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 		Author: &object.Signature{
 			Name:  "Contributor1",
 			Email: "contributor1@example.com",
-			When:  time.Now(),
+			When:  baseTime.Add(2 * time.Second),
 		},
 	})
 	require.NoError(t, err)
@@ -1050,7 +1108,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 		Author: &object.Signature{
 			Name:  "Contributor2",
 			Email: "contributor2@example.com",
-			When:  time.Now(),
+			When:  baseTime.Add(3 * time.Second),
 		},
 	})
 	require.NoError(t, err)
@@ -1133,12 +1191,14 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 	worktree, err := workRepo.Worktree()
 	require.NoError(t, err)
 
+	baseTime := fixedBaseTime()
+
 	// main 브랜치
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "base.txt"), []byte("base\n"), 0644))
 	_, err = worktree.Add("base.txt")
 	require.NoError(t, err)
 	baseCommit, err := worktree.Commit("Base", &gogit.CommitOptions{
-		Author: &object.Signature{Name: "A", Email: "a@example.com", When: time.Now()},
+		Author: &object.Signature{Name: "A", Email: "a@example.com", When: baseTime},
 	})
 	require.NoError(t, err)
 
@@ -1155,7 +1215,7 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 		_, err = worktree.Add(fmt.Sprintf("file%d.txt", i))
 		require.NoError(t, err)
 		_, err = worktree.Commit(fmt.Sprintf("Commit %d", i), &gogit.CommitOptions{
-			Author: &object.Signature{Name: "C1", Email: "c1@example.com", When: time.Now()},
+			Author: &object.Signature{Name: "C1", Email: "c1@example.com", When: baseTime.Add(time.Duration(i) * time.Second)},
 		})
 		require.NoError(t, err)
 	}
@@ -1165,7 +1225,7 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 	_, err = worktree.Add("file4.txt")
 	require.NoError(t, err)
 	featureHead, err := worktree.Commit("Commit 4", &gogit.CommitOptions{
-		Author: &object.Signature{Name: "C2", Email: "c2@example.com", When: time.Now()},
+		Author: &object.Signature{Name: "C2", Email: "c2@example.com", When: baseTime.Add(10 * time.Second)},
 	})
 	require.NoError(t, err)
 
@@ -1242,12 +1302,14 @@ func Test_Contributors_IncludesEmail(t *testing.T) {
 	worktree, err := workRepo.Worktree()
 	require.NoError(t, err)
 
+	baseTime := fixedBaseTime()
+
 	// main 브랜치
 	require.NoError(t, os.WriteFile(filepath.Join(tempWorkDir, "base.txt"), []byte("base\n"), 0644))
 	_, err = worktree.Add("base.txt")
 	require.NoError(t, err)
 	baseCommit, err := worktree.Commit("Base", &gogit.CommitOptions{
-		Author: &object.Signature{Name: "Base", Email: "base@example.com", When: time.Now()},
+		Author: &object.Signature{Name: "Base", Email: "base@example.com", When: baseTime},
 	})
 	require.NoError(t, err)
 
@@ -1262,7 +1324,7 @@ func Test_Contributors_IncludesEmail(t *testing.T) {
 	_, err = worktree.Add("feature.txt")
 	require.NoError(t, err)
 	featureHead, err := worktree.Commit("Feature", &gogit.CommitOptions{
-		Author: &object.Signature{Name: "Feature Author", Email: "feature@example.com", When: time.Now()},
+		Author: &object.Signature{Name: "Feature Author", Email: "feature@example.com", When: baseTime.Add(1 * time.Second)},
 	})
 	require.NoError(t, err)
 

@@ -408,6 +408,20 @@ paths:
           description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/overview/latest-commits:
+    post:
+      summary: HandlePostLatestCommitsBatch
+      operationId: handlepostlatestcommitsbatch
+      tags:
+        - Overview
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/tree:
     get:
       summary: HandleGetTreeOverview
@@ -1501,6 +1515,70 @@ components:
         - files
         - language
         - percentage
+    LatestCommitsBatchRequest:
+      type: object
+      properties:
+        ref:
+          type: string
+        dir_path:
+          type: string
+        paths:
+          type: array
+          items:
+            type: string
+      required:
+        - dir_path
+        - paths
+        - ref
+    LatestCommitsBatchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        repository:
+          type: string
+        owner:
+          type: string
+        name:
+          type: string
+        dir_path:
+          type: string
+        commits_by_path:
+          type: object
+          additionalProperties: true
+        meta:
+          $ref: '#/components/schemas/LatestCommitsMeta'
+        missing_paths:
+          type: array
+          items:
+            type: string
+      required:
+        - commits_by_path
+        - dir_path
+        - meta
+        - name
+        - owner
+        - repository
+        - success
+    LatestCommitsMeta:
+      type: object
+      properties:
+        resolved_ref_hash:
+          type: string
+        incomplete:
+          type: boolean
+        scanned_commits:
+          type: integer
+        time_budget_ms:
+          type: integer
+        cut_reason:
+          type: string
+      required:
+        - cut_reason
+        - incomplete
+        - resolved_ref_hash
+        - scanned_commits
+        - time_budget_ms
     LineChange:
       type: object
       properties:

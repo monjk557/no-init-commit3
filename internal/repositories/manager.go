@@ -166,7 +166,7 @@ func (gom *GitObjectManager) ResolveReference(repo *gogit.Repository, ref string
 	}
 
 	// Handle empty ref - it resolves to HEAD (current branch)
-	if ref == "" {
+	if ref == "" || ref == "HEAD" {
 		headRef, err := repo.Head()
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to get HEAD reference: %w", err)
@@ -223,9 +223,9 @@ func (gom *GitObjectManager) validateRefFormat(ref string) error {
 		return nil
 	}
 
-	// HEAD는 지원하지 않음 (명시적 ref 입력으로 사용 금지)
+	// HEAD는 empty ref와 동일하게 허용한다.
 	if ref == "HEAD" {
-		return fmt.Errorf("HEAD ref not supported, use branch/tag name directly: %w", ErrUnsupportedRef)
+		return nil
 	}
 
 	// Remote style ref 금지 (origin/main, upstream/feature 등)

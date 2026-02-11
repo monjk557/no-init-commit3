@@ -56,6 +56,16 @@ type ApplicationMetrics struct {
 	RepositoryCacheHitRate  prometheus.Gauge        // Repository cache hit rate
 	PermissionCheckDuration prometheus.HistogramVec // Permission check duration by result
 	APIServiceCallsTotal    prometheus.CounterVec   // API service calls by endpoint, result
+
+	// Overview / Performance (repo browser)
+	OverviewCacheOpsTotal                 prometheus.CounterVec   // Cache operations by kind/op (hit, miss, set)
+	OverviewCacheEntries                  prometheus.GaugeVec     // Current cache entry count by kind
+	OverviewCacheSingleflightSharedTotal  prometheus.CounterVec   // singleflight shared result count by kind
+	LatestCommitsBatchRequestsTotal       prometheus.CounterVec   // Requests by outcome (cache_hit, complete, incomplete, error)
+	LatestCommitsBatchDuration            prometheus.HistogramVec // Duration by outcome
+	LatestCommitsBatchPaths               prometheus.HistogramVec // Requested path count by outcome
+	LatestCommitsBatchScannedCommits      prometheus.HistogramVec // scanned commits by outcome
+	LatestCommitsBatchCutReasonTotal      prometheus.CounterVec   // cut reason counts (only when incomplete)
 }
 
 // MetricsConfig는 메트릭 수집을 위한 설정을 보유합니다.
@@ -265,6 +275,73 @@ func NewApplicationMetrics() *ApplicationMetrics {
 				},
 				[]string{"endpoint", "result"},
 			),
+
+			OverviewCacheOpsTotal: *promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "git_executor_overview_cache_ops_total",
+					Help: "Overview in-memory cache operations by kind and op (hit, miss, set)",
+				},
+				[]string{"kind", "op"},
+			),
+
+			OverviewCacheEntries: *promauto.NewGaugeVec(
+				prometheus.GaugeOpts{
+					Name: "git_executor_overview_cache_entries",
+					Help: "Current overview in-memory cache entry count by kind",
+				},
+				[]string{"kind"},
+			),
+
+			OverviewCacheSingleflightSharedTotal: *promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "git_executor_overview_cache_singleflight_shared_total",
+					Help: "Overview cache singleflight shared result count by kind",
+				},
+				[]string{"kind"},
+			),
+
+			LatestCommitsBatchRequestsTotal: *promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "git_executor_latest_commits_batch_requests_total",
+					Help: "latest-commits batch requests by outcome",
+				},
+				[]string{"outcome"},
+			),
+
+			LatestCommitsBatchDuration: *promauto.NewHistogramVec(
+				prometheus.HistogramOpts{
+					Name:    "git_executor_latest_commits_batch_duration_seconds",
+					Help:    "latest-commits batch handler duration in seconds by outcome",
+					Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 1.5, 2.5, 5, 10},
+				},
+				[]string{"outcome"},
+			),
+
+			LatestCommitsBatchPaths: *promauto.NewHistogramVec(
+				prometheus.HistogramOpts{
+					Name:    "git_executor_latest_commits_batch_paths",
+					Help:    "latest-commits batch requested path count by outcome",
+					Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000},
+				},
+				[]string{"outcome"},
+			),
+
+			LatestCommitsBatchScannedCommits: *promauto.NewHistogramVec(
+				prometheus.HistogramOpts{
+					Name:    "git_executor_latest_commits_batch_scanned_commits",
+					Help:    "latest-commits batch scanned commits by outcome",
+					Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000},
+				},
+				[]string{"outcome"},
+			),
+
+			LatestCommitsBatchCutReasonTotal: *promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "git_executor_latest_commits_batch_cut_reason_total",
+					Help: "latest-commits batch cut reason count (only when incomplete)",
+				},
+				[]string{"reason"},
+			),
 		}
 	})
 	return globalMetrics
@@ -330,6 +407,44 @@ func (m *ApplicationMetrics) RecordHTTPRequest(method, endpoint string, statusCo
 	m.HTTPRequestDuration.WithLabelValues(method, endpoint).Observe(duration.Seconds())
 	m.HTTPRequestSizeBytes.WithLabelValues(method, endpoint).Observe(float64(requestSize))
 	m.HTTPResponseSizeBytes.WithLabelValues(method, endpoint, status).Observe(float64(responseSize))
+}
+
+func (m *ApplicationMetrics) RecordOverviewCacheOp(kind, op string) {
+	if m == nil {
+		return
+	}
+	m.OverviewCacheOpsTotal.WithLabelValues(kind, op).Inc()
+}
+
+func (m *ApplicationMetrics) SetOverviewCacheEntries(kind string, n int) {
+	if m == nil {
+		return
+	}
+	m.OverviewCacheEntries.WithLabelValues(kind).Set(float64(n))
+}
+
+func (m *ApplicationMetrics) RecordOverviewSingleflightShared(kind string) {
+	if m == nil {
+		return
+	}
+	m.OverviewCacheSingleflightSharedTotal.WithLabelValues(kind).Inc()
+}
+
+func (m *ApplicationMetrics) RecordLatestCommitsBatch(outcome string, duration time.Duration, paths int, scannedCommits int) {
+	if m == nil {
+		return
+	}
+	m.LatestCommitsBatchRequestsTotal.WithLabelValues(outcome).Inc()
+	m.LatestCommitsBatchDuration.WithLabelValues(outcome).Observe(duration.Seconds())
+	m.LatestCommitsBatchPaths.WithLabelValues(outcome).Observe(float64(paths))
+	m.LatestCommitsBatchScannedCommits.WithLabelValues(outcome).Observe(float64(scannedCommits))
+}
+
+func (m *ApplicationMetrics) RecordLatestCommitsBatchCutReason(reason string) {
+	if m == nil {
+		return
+	}
+	m.LatestCommitsBatchCutReasonTotal.WithLabelValues(reason).Inc()
 }
 
 // RecordGitOperation records metrics for a Git operation
