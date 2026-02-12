@@ -2,8 +2,7 @@ name: Build and Deploy to GCP Artifact Registry
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*.*.*' ]
+    branches: [ main, 'hotfix/*' ]
   pull_request:
     branches: [ main ]
 
@@ -114,30 +113,20 @@ jobs:
         id: meta
         run: |
           echo "🏷️ Extracting Docker metadata..."
-
-          # 커밋 해시 앞 8자리 추출
           GITHUB_SHA="${{ github.sha }}"
           SHORT_SHA="${GITHUB_SHA:0:8}"
 
-          # Git 레퍼런스 타입 확인
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            # 태그 푸시인 경우 - 태그 이름 사용 (v1.0.0 -> v1.0.0)
-            VERSION="${{ github.ref_name }}"
-            echo "📋 Tag push detected: ${VERSION}"
-          elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
-            # main 브랜치 푸시인 경우 - latest 사용
+          # hotfix/* 또는 main만 존재
+          if [[ "${{ github.ref }}" == refs/heads/hotfix/* ]]; then
+            VERSION=$(echo "${{ github.ref_name }}" | sed 's/\//-/g')
+            echo "📋 Hotfix branch push detected: ${VERSION}"
+          else
             VERSION="latest"
             echo "📋 Main branch push detected: ${VERSION}"
-          else
-            # 다른 브랜치인 경우 - 브랜치명-커밋해시 사용
-            VERSION="${{ github.ref_name }}-${SHORT_SHA}"
-            echo "📋 Feature branch push detected: ${VERSION}"
           fi
 
-          # 출력 설정
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "image-url=${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${VERSION}" >> $GITHUB_OUTPUT
-
           echo "✅ Version: ${VERSION}"
 
       # Verify required secrets and environment variables
@@ -214,6 +203,30 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare branch/tag name for Docker tag
+        id: ref-tag
+        run: |
+          REF_TAG=$(echo "${{ github.ref_name }}" | sed 's/\//-/g')
+          echo "ref-tag=${REF_TAG}" >> $GITHUB_OUTPUT
+          echo "📋 Docker tag for ref: ${REF_TAG}"
+
+      - name: Prepare image tags
+        id: prepare-tags
+        run: |
+          IMAGE_BASE="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}"
+          REF_TAG="${{ steps.ref-tag.outputs.ref-tag }}"
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref }}" == refs/heads/hotfix/* ]]; then
+            echo "${IMAGE_BASE}:${REF_TAG}" >> $GITHUB_OUTPUT
+            echo "${IMAGE_BASE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "📋 Hotfix: ${REF_TAG}, ${{ github.sha }}"
+          else
+            echo "${IMAGE_BASE}:${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "${IMAGE_BASE}:latest" >> $GITHUB_OUTPUT
+            echo "📋 Main: ${{ github.sha }}, latest"
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -226,10 +239,7 @@ jobs:
           push: true
           build-args: |
             APP_ENV=prod
-          tags: |
-            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:latest
-            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ github.ref_name == 'main' && 'main' || format('pr-{0}', github.event.number) }}
+          tags: ${{ steps.prepare-tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -262,13 +272,14 @@ jobs:
             return 1
           }
 
-          # Check each tag
           failed=0
-          for tag in "latest" "${{ github.sha }}" "${{ github.ref_name == 'main' && 'main' || format('pr-{0}', github.event.number) }}"; do
-            if ! check_image_tag "$tag"; then
-              failed=1
-            fi
-          done
+          if [[ "${{ github.ref }}" == refs/heads/hotfix/* ]]; then
+            if ! check_image_tag "${{ steps.ref-tag.outputs.ref-tag }}"; then failed=1; fi
+            if ! check_image_tag "${{ github.sha }}"; then failed=1; fi
+          else
+            if ! check_image_tag "${{ github.sha }}"; then failed=1; fi
+            if ! check_image_tag "latest"; then failed=1; fi
+          fi
 
           # Final verification
           if [ $failed -eq 0 ]; then
@@ -287,9 +298,13 @@ jobs:
           echo "   Repository: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID_SHARED }}/${{ env.REPOSITORY }}"
           echo "   Image: ${{ env.IMAGE }}"
           echo "   Tags:"
-          echo "   • latest"
-          echo "   • ${{ github.sha }}"
-          echo "   • ${{ github.ref_name == 'main' && 'main' || format('pr-{0}', github.event.number) }}"
+          if [[ "${{ github.ref }}" == refs/heads/hotfix/* ]]; then
+            echo "   • ${{ steps.ref-tag.outputs.ref-tag }} (브랜치명)"
+            echo "   • ${{ github.sha }} (커밋 해시)"
+          else
+            echo "   • ${{ github.sha }}"
+            echo "   • latest"
+          fi
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🎉 Deployment completed successfully!"
 
@@ -312,18 +327,15 @@ jobs:
 
       - name: Send Slack notification
         run: |
-          # Fix: Use proper variable assignment instead of command substitution
           GITHUB_SHA="${{ github.sha }}"
           SHORT_SHA="${GITHUB_SHA:0:8}"
-          MAIN_TAG="${{ needs.build-and-push.outputs.image-tag }}"
+          REF_TAG=$(echo "${{ github.ref_name }}" | sed 's/\//-/g')
 
-          # 태그 목록 구성 (중복 제거)
-          if [ "$MAIN_TAG" == "latest" ]; then
-            # main 브랜치인 경우: latest, commit_hash
-            VERSION_TAGS="\`latest\` \`${SHORT_SHA}\`"
+          # hotfix: 브랜치명+커밋해시 / main: latest+sha만
+          if [[ "${{ github.ref }}" == refs/heads/hotfix/* ]]; then
+            VERSION_TAGS="\`${REF_TAG}\` \`${SHORT_SHA}\`"
           else
-            # 태그 푸시인 경우: version, commit_hash, latest
-            VERSION_TAGS="\`${MAIN_TAG}\` \`${SHORT_SHA}\` \`latest\`"
+            VERSION_TAGS="\`latest\` \`${SHORT_SHA}\`"
           fi
 
           # 커밋 메시지 또는 PR 타이틀 추출 (안전한 방식으로 처리)
