@@ -71,6 +71,15 @@ type CommitsByDate struct {
 	Commits []CommitMetadata `json:"commits"` // 해당 날짜의 커밋 목록
 }
 
+// Hunk는 unified diff의 한 덩어리(@@ ... @@)를 나타냅니다. Header는 프론트에서 그대로 표시·context pagination 등에 사용.
+type Hunk struct {
+	StartOld int    `json:"start_old"` // 구 파일에서 hunk 시작 라인
+	CountOld int    `json:"count_old"` // 구 파일에서 hunk 라인 수
+	StartNew int    `json:"start_new"` // 신 파일에서 hunk 시작 라인
+	CountNew int    `json:"count_new"` // 신 파일에서 hunk 라인 수
+	Header   string `json:"header"`    // 원본 라인 e.g. "@@ -78,2 +78,2 @@" — 그대로 표시·버튼용
+}
+
 // FileDiff는 단일 파일의 변경사항을 나타냅니다
 type FileDiff struct {
 	Path      string                 `json:"path"`
@@ -78,16 +87,21 @@ type FileDiff struct {
 	Additions int                    `json:"additions"`
 	Deletions int                    `json:"deletions"`
 	Changes   []LineChange           `json:"changes"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
+	Hunks     []Hunk                 `json:"hunks"`   // hunk 목록. LineChange.hunk_index로 참조 (항상 포함, 없으면 [])
 	IsBinary  bool                   `json:"is_binary"`
 	OldPath   string                 `json:"old_path,omitempty"` // 이름 변경시 사용
 	Metadata  map[string]interface{} `json:"metadata,omitempty"` // 파일 메타데이터 (해시, 모드)
 }
 
-// LineChange는 diff의 단일 라인 변경을 나타냅니다
+// LineChange는 diff의 단일 라인 변경을 나타냅니다. 라인 번호(left_line/right_line)로 접근 가능하며, hunk_index로 Hunks를 참조합니다.
 type LineChange struct {
-	Type    LineChangeType `json:"type"`    // "add", "del", "context"
-	LineNum int            `json:"line"`    // 파일 내 라인 번호
-	Content string         `json:"content"` // diff 접두사가 포함된 라인 내용
+	Type         LineChangeType         `json:"type"`        // "add", "del", "context", "hunk"
+	LeftLineNum  int                    `json:"left_line"`   // 구 파일 라인 번호. 추가 라인이면 0
+	RightLineNum int                    `json:"right_line"`  // 신 파일 라인 번호. 삭제 라인이면 0
+	HunkIndex    int                    `json:"hunk_index"`  // 이 라인이 속한 hunk 인덱스 (FileDiff.Hunks 참조)
+	Content      string                 `json:"content"`     // diff 접두사(공백/+/-)가 포함된 라인 내용
+	Meta         map[string]interface{} `json:"meta,omitempty"`    // 라인 단위 메타 (필요 시)
+	Comment      string                 `json:"comment,omitempty"` // 리뷰용 코멘트 (비어 있으면 생략)
 }
 
 // DiffStats는 diff의 전체 통계를 나타냅니다
@@ -114,6 +128,7 @@ const (
 	LineChangeTypeAdd     LineChangeType = "add"     // 라인 추가
 	LineChangeTypeDel     LineChangeType = "del"     // 라인 삭제
 	LineChangeTypeContext LineChangeType = "context" // 컨텍스트 라인 (변경 없음)
+	LineChangeTypeHunk    LineChangeType = "hunk"    // hunk 헤더. content에 "@@ -n,m +n,m @@" — changes[] 한 번 순회로 렌더
 )
 
 // DiffSizeLimits는 diff 크기 제한을 정의합니다

@@ -56,7 +56,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.5'  # Updated to match go.mod toolchain
+          go-version: '1.25'  # go.mod: go 1.25.0
           check-latest: true
 
       - name: Install Go dependencies

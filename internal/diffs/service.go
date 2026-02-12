@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -286,10 +287,9 @@ func (h *DiffHandler) calculateInitialCommitDiff(ctx context.Context, commit *ob
 			if canIncludeChanges {
 				// 라인 변경 생성
 				var lineChanges []LineChange
-				for i, line := range lines {
+				for _, line := range lines {
 					lineChanges = append(lineChanges, LineChange{
 						Type:    LineChangeTypeAdd,
-						LineNum: i + 1,
 						Content: "+" + line,
 					})
 				}
@@ -377,7 +377,8 @@ func (h *DiffHandler) processChanges(changes object.Changes, contextLines int) (
 			Path:     fileName,
 			Status:   h.getChangeStatus(change),
 			Metadata: GetFileMetadata(change),
-			Changes:  []LineChange{},
+			Changes:  nil,
+			Hunks:    []Hunk{}, // 항상 응답에 hunks 포함 (없으면 [])
 		}
 
 		if change.From.Name != change.To.Name && change.From.Name != "" && change.To.Name != "" {
@@ -454,6 +455,7 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 	fileDiff := FileDiff{
 		Path:     fileName,
 		Metadata: GetFileMetadata(change),
+		Hunks:    []Hunk{},
 	}
 
 	// 변경 상태 결정
@@ -472,11 +474,11 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 	// 라인 레벨 변경을 위한 patch 정보 가져오기
 	patch, err := change.Patch()
 	if err != nil {
-		// patch를 가져올 수 없어도 메타데이터는 포함
 		fileDiff.Additions = 0
 		fileDiff.Deletions = 0
 		fileDiff.IsBinary = isBinaryFileByExtension(fileName)
-		fileDiff.Changes = []LineChange{}
+		fileDiff.Changes = nil
+		fileDiff.Hunks = []Hunk{}
 		return fileDiff, fmt.Errorf("failed to get patch: %w", err)
 	}
 
@@ -484,13 +486,12 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 	patchText := patch.String()
 	patchSize := len([]byte(patchText))
 	if patchSize > MaxPatchSize {
-		// patch가 너무 커도 메타데이터는 포함
-		// patch에서 최소한의 통계 정보는 추출 시도
 		additions, deletions := h.countPatchLines(patch)
 		fileDiff.Additions = additions
 		fileDiff.Deletions = deletions
 		fileDiff.IsBinary = isBinaryFileByExtension(fileName)
-		fileDiff.Changes = []LineChange{}
+		fileDiff.Changes = nil
+		fileDiff.Hunks = []Hunk{}
 		return fileDiff, &DiffTooLargeError{
 			Reason: fmt.Sprintf("patch for file %s is too large (%d bytes > %d bytes)", fileName, patchSize, MaxPatchSize),
 		}
@@ -510,6 +511,7 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 
 	// 바이너리 파일의 경우 changes를 생성하지 않음
 	if isBinary {
+		fileDiff.Hunks = []Hunk{}
 		return fileDiff, nil
 	}
 
@@ -517,26 +519,27 @@ func (h *DiffHandler) processChangeWithPatch(change *object.Change, contextLines
 	changedLines := additions + deletions
 	if changedLines > MaxChangedLines {
 		// 변경된 라인이 너무 많으면 diff 내용(Changes)을 로드하지 않음
-		// 메타데이터(Additions, Deletions, Status 등)는 유지
-		// Changes는 nil로 설정하여 diff 내용을 로드하지 않음을 표시
-		fileDiff.Changes = []LineChange{}
+		fileDiff.Changes = nil
+		fileDiff.Hunks = []Hunk{}
 		return fileDiff, nil
 	}
 
-	// contextLines > 0이면 라인 레벨 변경 생성
+	// contextLines > 0이면 라인 레벨 변경 생성 (left/right 라인 번호, hunk 포함, 수정 라인 위아래 contextLines줄 포함)
 	if contextLines > 0 {
-		lines := SplitLines(patchText)
-
+		lineChanges, hunks, err := GenerateLineChangesFromPatch(patchText, contextLines)
+		if err != nil {
+			fileDiff.Changes = nil
+			return fileDiff, err
+		}
 		// 파일 라인 수 제한 체크 - 너무 많으면 메타데이터만 포함
-		if len(lines) > MaxFileLines {
-			fileDiff.Changes = []LineChange{}
+		if len(lineChanges) > MaxFileLines {
+			fileDiff.Changes = nil
 			return fileDiff, &DiffTooLargeError{
-				Reason: fmt.Sprintf("file %s has too many lines (%d > %d)", fileName, len(lines), MaxFileLines),
+				Reason: fmt.Sprintf("file %s has too many lines (%d > %d)", fileName, len(lineChanges), MaxFileLines),
 			}
 		}
-
-		lineChanges := h.GenerateLineChanges(lines, contextLines)
 		fileDiff.Changes = lineChanges
+		fileDiff.Hunks = hunks
 	}
 
 	return fileDiff, nil
@@ -575,15 +578,153 @@ func (h *DiffHandler) countPatchLines(patch *object.Patch) (additions, deletions
 	return additions, deletions
 }
 
-// GenerateLineChanges는 라인별 diff 정보를 생성합니다
+// hunkHeaderRegex parses @@ -startOld[,countOld] +startNew[,countNew] @@
+var hunkHeaderRegex = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// parseHunkHeader returns startOld, countOld, startNew, countNew. count omitted means 1.
+func parseHunkHeader(line string) (startOld, countOld, startNew, countNew int, ok bool) {
+	matches := hunkHeaderRegex.FindStringSubmatch(line)
+	if matches == nil {
+		return 0, 0, 0, 0, false
+	}
+	startOld, _ = strconv.Atoi(matches[1])
+	startNew, _ = strconv.Atoi(matches[3])
+	countOld, countNew = 1, 1
+	if matches[2] != "" {
+		countOld, _ = strconv.Atoi(matches[2])
+	}
+	if matches[4] != "" {
+		countNew, _ = strconv.Atoi(matches[4])
+	}
+	return startOld, countOld, startNew, countNew, true
+}
+
+// GenerateLineChangesFromPatch parses unified diff patch text and returns line changes with left/right line numbers and hunks.
+// contextLines: 수정된 라인 위아래로 포함할 컨텍스트 라인 수(예: 3). 0이면 컨텍스트 trimming 없이 전부 포함.
+func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineChange, []Hunk, error) {
+	lines := SplitLines(patchText)
+	var lineChanges []LineChange
+	var hunks []Hunk
+	hunkIndex := -1
+	leftLine, rightLine := 0, 0
+
+	for _, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		// @@ hunk header — changes[]에 type "hunk"로 끼워 넣어 프론트가 한 번만 순회하며 렌더링 가능
+		if startOld, countOld, startNew, countNew, ok := parseHunkHeader(line); ok {
+			hunkIndex++
+			hunks = append(hunks, Hunk{
+				StartOld: startOld,
+				CountOld: countOld,
+				StartNew: startNew,
+				CountNew: countNew,
+				Header:   line,
+			})
+			lineChanges = append(lineChanges, LineChange{
+				Type:         LineChangeTypeHunk,
+				LeftLineNum:  startOld,
+				RightLineNum: startNew,
+				HunkIndex:    hunkIndex,
+				Content:      line,
+			})
+			leftLine, rightLine = startOld, startNew
+			continue
+		}
+		// content line: space, +, - only (skip "diff --git", "---", "+++", "\ No newline" 등)
+		if len(line) > 0 && line[0] != ' ' && line[0] != '+' && line[0] != '-' {
+			continue
+		}
+		var prefix byte = ' '
+		if len(line) > 0 {
+			prefix = line[0]
+		}
+		var changeType LineChangeType
+		var leftNum, rightNum int
+		switch prefix {
+		case '-':
+			changeType = LineChangeTypeDel
+			leftNum, rightNum = leftLine, 0
+			leftLine++
+		case '+':
+			changeType = LineChangeTypeAdd
+			leftNum, rightNum = 0, rightLine
+			rightLine++
+		case ' ':
+			changeType = LineChangeTypeContext
+			leftNum, rightNum = leftLine, rightLine
+			leftLine++
+			rightLine++
+		default:
+			continue
+		}
+
+		idx := hunkIndex
+		if idx < 0 {
+			idx = 0
+		}
+		lineChanges = append(lineChanges, LineChange{
+			Type:         changeType,
+			LeftLineNum:  leftNum,
+			RightLineNum: rightNum,
+			HunkIndex:    idx,
+			Content:      line,
+		})
+	}
+
+	if contextLines <= 0 {
+		return lineChanges, hunks, nil
+	}
+	// 수정된 라인 위아래 contextLines줄만 남기기
+	return trimContextAroundChanges(lineChanges, contextLines), hunks, nil
+}
+
+// trimContextAroundChanges keeps only context lines within contextLines of a change (add/del).
+func trimContextAroundChanges(changes []LineChange, contextLines int) []LineChange {
+	if len(changes) == 0 {
+		return changes
+	}
+	keep := make([]bool, len(changes))
+	for i := range changes {
+		if changes[i].Type == LineChangeTypeHunk {
+			keep[i] = true
+			continue
+		}
+		if changes[i].Type != LineChangeTypeContext {
+			keep[i] = true
+			continue
+		}
+		// context line: keep if within contextLines of any change
+		for d := 1; d <= contextLines; d++ {
+			if i-d >= 0 && (changes[i-d].Type == LineChangeTypeAdd || changes[i-d].Type == LineChangeTypeDel) {
+				keep[i] = true
+				break
+			}
+			if i+d < len(changes) && (changes[i+d].Type == LineChangeTypeAdd || changes[i+d].Type == LineChangeTypeDel) {
+				keep[i] = true
+				break
+			}
+		}
+	}
+	var out []LineChange
+	for i, k := range keep {
+		if !k {
+			continue
+		}
+		out = append(out, changes[i])
+	}
+	return out
+}
+
+// GenerateLineChanges는 라인별 diff 정보를 생성합니다 (기존 API 호환).
 func (h *DiffHandler) GenerateLineChanges(lines []string, contextLines int) []LineChange {
 	return GenerateLineChanges(lines, contextLines)
 }
 
-// GenerateLineChanges는 라인별 diff 정보를 생성하는 공통 함수입니다
+// GenerateLineChanges는 라인별 diff 정보를 생성하는 공통 함수입니다 (patch 문자열 없이 사용 시).
 func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 	var lineChanges []LineChange
-	lineNum := 1
 
 	for _, line := range lines {
 		if len(line) == 0 {
@@ -603,14 +744,12 @@ func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 		}
 
 		lineChanges = append(lineChanges, LineChange{
-			Type:    changeType,
-			LineNum: lineNum,
-			Content: line,
+			Type:         changeType,
+			LeftLineNum:  0,
+			RightLineNum: 0,
+			HunkIndex:    0,
+			Content:      line,
 		})
-
-		if changeType != LineChangeTypeDel {
-			lineNum++
-		}
 	}
 
 	return lineChanges
@@ -1062,10 +1201,9 @@ func (h *DiffHandler) processFileAddition(file *object.File, filePath string, co
 	// contextLines > 0이면 라인 변경 생성
 	if contextLines > 0 {
 		var lineChanges []LineChange
-		for i, line := range lines {
+		for _, line := range lines {
 			lineChanges = append(lineChanges, LineChange{
 				Type:    LineChangeTypeAdd,
-				LineNum: i + 1,
 				Content: "+" + line,
 			})
 		}
@@ -1128,10 +1266,9 @@ func (h *DiffHandler) processFileDeletion(file *object.File, filePath string, co
 	// contextLines > 0이면 라인 변경 생성
 	if contextLines > 0 {
 		var lineChanges []LineChange
-		for i, line := range lines {
+		for _, line := range lines {
 			lineChanges = append(lineChanges, LineChange{
 				Type:    LineChangeTypeDel,
-				LineNum: i + 1,
 				Content: "-" + line,
 			})
 		}
@@ -1225,7 +1362,6 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 
 	baseIndex := 0
 	headIndex := 0
-	lineNum := 1
 
 	for baseIndex < len(baseLines) || headIndex < len(headLines) {
 		if baseIndex >= len(baseLines) {
@@ -1233,19 +1369,16 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 			for headIndex < len(headLines) {
 				lineChanges = append(lineChanges, LineChange{
 					Type:    LineChangeTypeAdd,
-					LineNum: lineNum,
 					Content: "+" + headLines[headIndex],
 				})
 				additions++
 				headIndex++
-				lineNum++
 			}
 		} else if headIndex >= len(headLines) {
 			// base에 남은 라인들은 삭제
 			for baseIndex < len(baseLines) {
 				lineChanges = append(lineChanges, LineChange{
 					Type:    LineChangeTypeDel,
-					LineNum: lineNum,
 					Content: "-" + baseLines[baseIndex],
 				})
 				deletions++
@@ -1255,17 +1388,14 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 			// 라인이 동일하면 컨텍스트 윈도우 내에 있을 경우 컨텍스트로 추가
 			lineChanges = append(lineChanges, LineChange{
 				Type:    LineChangeTypeContext,
-				LineNum: lineNum,
 				Content: " " + baseLines[baseIndex],
 			})
 			baseIndex++
 			headIndex++
-			lineNum++
 		} else {
 			// 라인이 다르면 삭제와 추가로 표시
 			lineChanges = append(lineChanges, LineChange{
 				Type:    LineChangeTypeDel,
-				LineNum: lineNum,
 				Content: "-" + baseLines[baseIndex],
 			})
 			deletions++
@@ -1273,12 +1403,10 @@ func (h *DiffHandler) calculateLineDiff(baseLines, headLines []string, contextLi
 
 			lineChanges = append(lineChanges, LineChange{
 				Type:    LineChangeTypeAdd,
-				LineNum: lineNum,
 				Content: "+" + headLines[headIndex],
 			})
 			additions++
 			headIndex++
-			lineNum++
 		}
 	}
 

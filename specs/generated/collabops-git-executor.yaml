@@ -1299,6 +1299,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LineChange'
+        hunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hunk'
         is_binary:
           type: boolean
         old_path:
@@ -1310,6 +1314,7 @@ components:
         - additions
         - changes
         - deletions
+        - hunks
         - is_binary
         - path
         - status
@@ -1484,6 +1489,25 @@ components:
         - reference
         - target
         - type
+    Hunk:
+      type: object
+      properties:
+        start_old:
+          type: integer
+        count_old:
+          type: integer
+        start_new:
+          type: integer
+        count_new:
+          type: integer
+        header:
+          type: string
+      required:
+        - count_new
+        - count_old
+        - header
+        - start_new
+        - start_old
     LanguageDistribution:
       type: object
       properties:
@@ -1584,13 +1608,24 @@ components:
       properties:
         type:
           type: object
-        line:
+        left_line:
+          type: integer
+        right_line:
+          type: integer
+        hunk_index:
           type: integer
         content:
           type: string
+        meta:
+          type: object
+          additionalProperties: true
+        comment:
+          type: string
       required:
         - content
-        - line
+        - hunk_index
+        - left_line
+        - right_line
         - type
     MergeAnalysisRequest:
       type: object
