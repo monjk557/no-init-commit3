@@ -558,6 +558,40 @@ func Test_Overview_ValidRepo_ReturnsOverview(t *testing.T) {
 	require.NotEmpty(t, resp.Count)
 }
 
+// Test_OverviewEndpoints_With500Commits_Return200 ensures overview, overview/tree, overview/blob return 200 for a repo with 500 commits (time budget applied).
+func Test_OverviewEndpoints_With500Commits_Return200(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "o"
+	repo := "r"
+	createTestRepositoryWith500CommitsAtPath(t, filepath.Join(tempDir, owner, repo+".git"))
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview/tree", handler.HandleGetTreeOverview)
+	router.GET("/repos/:owner/:repo/overview/blob", handler.HandleGetBlobOverview)
+
+	t.Run("overview", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview?ref=main", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	})
+	t.Run("overview_tree", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree?ref=main&path=", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	})
+	t.Run("overview_blob", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/blob?ref=main&path=README.md", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	})
+}
+
 func Test_Overview_NonExistentRepo_Returns404(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,7 @@ package overview
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,6 +179,71 @@ func copyTreeRecursiveForTest(workRepo, gitRepo *git.Repository, treeHash plumbi
 	return nil
 }
 
+const numCommits500 = 500
+
+// createTestRepositoryWith500CommitsAtPath creates a bare repo with exactly 500 commits and one file README.md at repoPath.
+// Used by handler tests that need {owner}/{repo}.git layout.
+func createTestRepositoryWith500CommitsAtPath(t *testing.T, repoPath string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	repo, err := git.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	blob := repo.Storer.NewEncodedObject()
+	blob.SetType(plumbing.BlobObject)
+	blob.SetSize(int64(len("# Repo with 500 commits\n")))
+	w, err := blob.Writer()
+	require.NoError(t, err)
+	_, err = w.Write([]byte("# Repo with 500 commits\n"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	blobHash, err := repo.Storer.SetEncodedObject(blob)
+	require.NoError(t, err)
+
+	entries := []object.TreeEntry{
+		{Name: "README.md", Mode: filemode.Regular, Hash: blobHash},
+	}
+	treeObj := &object.Tree{Entries: entries}
+	treeEnc := repo.Storer.NewEncodedObject()
+	require.NoError(t, treeObj.Encode(treeEnc))
+	treeHash, err := repo.Storer.SetEncodedObject(treeEnc)
+	require.NoError(t, err)
+
+	when := time.Unix(1700000000, 0).UTC()
+	var parent plumbing.Hash
+	for i := 0; i < numCommits500; i++ {
+		commit := &object.Commit{
+			Message:   fmt.Sprintf("commit %d", i),
+			Author:    object.Signature{Name: "test", Email: "test@example.com", When: when.Add(time.Duration(i) * time.Second)},
+			Committer: object.Signature{Name: "test", Email: "test@example.com", When: when.Add(time.Duration(i) * time.Second)},
+			TreeHash:  treeHash,
+		}
+		if i > 0 {
+			commit.ParentHashes = []plumbing.Hash{parent}
+		}
+		commitEnc := repo.Storer.NewEncodedObject()
+		require.NoError(t, commit.Encode(commitEnc))
+		commitHash, err := repo.Storer.SetEncodedObject(commitEnc)
+		require.NoError(t, err)
+		parent = commitHash
+	}
+
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), parent)))
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
+}
+
+// createTestRepositoryWith500Commits creates a bare repo with exactly 500 commits and one file README.md.
+// Used to test behavior (e.g. time budget) against a non-trivial history length.
+func createTestRepositoryWith500Commits(t *testing.T, tempDir string) *git.Repository {
+	t.Helper()
+	repoPath := filepath.Join(tempDir, "repowith500.git")
+	createTestRepositoryWith500CommitsAtPath(t, repoPath)
+	opened, err := git.PlainOpen(repoPath)
+	require.NoError(t, err)
+	return opened
+}
+
 func TestGetLatestCommitForPath_BlobFile(t *testing.T) {
 	service, tempDir, cleanup := setupTestService(t)
 	defer cleanup()
@@ -238,6 +304,44 @@ func TestGetLatestCommitForPath_RootPath(t *testing.T) {
 	require.NotNil(t, commit)
 
 	assert.NotEmpty(t, commit.SHA)
+}
+
+func TestGetLatestCommitForPath_With500Commits_CompletesWithinBudget(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gitRepo := createTestRepositoryWith500Commits(t, tempDir)
+
+	commit, err := service.GetLatestCommitForPath(ctx, gitRepo, "HEAD", "README.md", false)
+	require.NoError(t, err)
+	require.NotNil(t, commit)
+	assert.NotEmpty(t, commit.SHA)
+	assert.Contains(t, commit.Message, "commit")
+}
+
+func TestGetLatestCommitsForPathsWithMeta_With500Commits_RespectsBudget(t *testing.T) {
+	service, tempDir, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gitRepo := createTestRepositoryWith500Commits(t, tempDir)
+
+	refHash, err := gitRepo.ResolveRevision(plumbing.Revision("HEAD"))
+	require.NoError(t, err)
+
+	pathInfos := []CommitPathInfo{{Path: "README.md", IsTree: false}}
+	timeBudget := 2 * time.Second
+	maxCommits := 15_000
+
+	commitMap, meta := service.GetLatestCommitsForPathsWithMeta(ctx, gitRepo, *refHash, pathInfos, timeBudget, maxCommits)
+
+	require.LessOrEqual(t, meta.ScannedCommits, maxCommits)
+	if meta.Incomplete {
+		require.NotEmpty(t, meta.CutReason)
+	}
+	// README.md는 첫 커밋에서 등장하므로 500개 전부 스캔하면 찾을 수 있음; budget으로 끊겼으면 nil일 수 있음
+	_ = commitMap
 }
 
 func TestGetLatestCommitsForPaths_MultiplePaths(t *testing.T) {

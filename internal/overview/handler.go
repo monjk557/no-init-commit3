@@ -498,20 +498,19 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 	lines := strings.Count(strings.ReplaceAll(string(blobContent), "\r\n", "\n"), "\n") + 1
 	size := int64(len(blobContent))
 
-	// tree entries 가져오기 (커밋 정보 포함)
-	// blob overview에서는 파일의 부모 디렉토리 경로를 사용
+	// blob overview에서는 부모 디렉터리 트리만 조회 (커밋 정보 없음, timeout 방지)
+	gitRepo := repoCtx.repoWrapper.GetRepo()
 	parentPath := ""
 	if idx := strings.LastIndex(path, "/"); idx != -1 {
 		parentPath = path[:idx]
 	}
-	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, _, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, parentPath)
+	treeEntriesWithCommit, err := h.service.GetTreeOnly(ctx, gitRepo, repoCtx.ref, parentPath)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
 	}
 
-	// path 기준으로 최신 커밋 조회 (blob이므로 isTree=false)
+	// path 기준으로 최신 커밋 조회 (blob이므로 isTree=false, timeBudget/maxCommits 적용됨)
 	latestCommitGitCommit, err := h.service.GetLatestCommitForPath(ctx, gitRepo, repoCtx.ref, path, false)
 	if err != nil {
 		_ = err // 에러가 있어도 계속 진행 (latestCommitGitCommit은 nil로 유지)

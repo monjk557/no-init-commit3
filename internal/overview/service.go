@@ -288,137 +288,26 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 }
 
 // GetLatestCommitForPath는 특정 경로의 최근 커밋을 가져옵니다.
-// blob인 경우 해당 파일의 최근 커밋, tree인 경우 하위를 재귀적으로 탐색하여 가장 최근 커밋을 반환합니다.
+// timeBudget/maxCommits로 제한되어 timeout을 방지합니다.
+// blob인 경우 해당 파일의 최근 커밋, tree인 경우 해당 경로가 변경된 최근 커밋을 반환합니다.
 func (s *RepositoryOverviewService) GetLatestCommitForPath(ctx context.Context, repo *gogit.Repository, ref, filePath string, isTree bool) (*GitCommit, error) {
-	// 컨텍스트 취소 확인
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
 
-	// ref를 커밋 해시로 해석
 	commitHash, err := s.objectManager.ResolveReference(repo, ref)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve reference: %w", err)
 	}
 
-	// 경로 정규화 (슬래시 제거 및 정리)
 	normalizedPath := strings.Trim(filePath, "/")
-
-	// 커밋 로그 가져오기 (경로 필터링)
-	// PathFilter는 변경된 파일 경로만 필터링하므로, 디렉토리 경로 자체는 매칭되지 않음
-	var pathFilter func(string) bool
-	if isTree {
-		// tree인 경우: 해당 경로로 시작하는 모든 하위 파일 경로 포함
-		// 예: "src" -> "src/main.go", "src/utils/helper.go" 등 모두 포함
-		if normalizedPath == "" {
-			// 루트 경로인 경우 모든 경로 포함
-			pathFilter = func(path string) bool {
-				return true
-			}
-		} else {
-			// 하위 경로인지 확인 (디렉토리 경로 자체는 커밋에 포함되지 않으므로 하위 파일만 체크)
-			// normalizedPath가 "src"인 경우 "src/main.go", "src/utils/helper.go" 등을 포함
-			normalizedPathWithSlash := normalizedPath + "/"
-			pathFilter = func(path string) bool {
-				return strings.HasPrefix(path, normalizedPathWithSlash) || path == normalizedPath
-			}
-		}
-	} else {
-		// blob인 경우: 정확히 일치하는 경로만
-		pathFilter = func(path string) bool {
-			return path == normalizedPath
-		}
-	}
-
-	commitIter, err := repo.Log(&gogit.LogOptions{
-		From:       commitHash,
-		PathFilter: pathFilter,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commit log: %w", err)
-	}
-	defer commitIter.Close()
-
-	// 첫 번째 커밋 가져오기 (가장 최근 커밋)
-	var latestCommit *object.Commit
-	err = commitIter.ForEach(func(c *object.Commit) error {
-		latestCommit = c
-		// 첫 번째 커밋만 가져오고 중지 (성능 최적화)
-		return io.EOF
-	})
-
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("failed to iterate commits: %w", err)
-	}
-
-	if latestCommit == nil {
-
-		fallbackIter, err := repo.Log(&gogit.LogOptions{
-			From: commitHash,
-		})
-		if err != nil {
-			return nil, nil
-		}
-		defer fallbackIter.Close()
-
-		err = fallbackIter.ForEach(func(c *object.Commit) error {
-			currentTree, err := c.Tree()
-			if err != nil {
-				return nil
-			}
-
-			var parentTree *object.Tree
-			if len(c.ParentHashes) > 0 {
-				parentCommit, err := repo.CommitObject(c.ParentHashes[0])
-				if err == nil {
-					parentTree, _ = parentCommit.Tree()
-				}
-			}
-
-			var currEntry *object.TreeEntry
-			var parentEntry *object.TreeEntry
-
-			if normalizedPath != "" {
-				currEntry, _ = currentTree.FindEntry(normalizedPath)
-				if parentTree != nil {
-					parentEntry, _ = parentTree.FindEntry(normalizedPath)
-				}
-			} else {
-				// 루트 경로는 항상 트리 존재
-				currEntry = &object.TreeEntry{}
-				if parentTree != nil {
-					parentEntry = &object.TreeEntry{}
-				}
-			}
-
-			// 둘 다 없으면 변화 없음
-			if currEntry == nil && parentEntry == nil {
-				return nil
-			}
-
-			// 신규 생성 / 삭제 / hash 변경
-			if currEntry == nil || parentEntry == nil ||
-				currEntry.Hash != parentEntry.Hash {
-				latestCommit = c
-				return io.EOF
-			}
-
-			return nil
-		})
-
-		if err != nil && err != io.EOF {
-			return nil, nil
-		}
-
-		if latestCommit == nil {
-			return nil, nil
-		}
-	}
-
-	// GitCommit으로 변환
-	return s.convertCommit(latestCommit), nil
+	pathInfos := []CommitPathInfo{{Path: normalizedPath, IsTree: isTree}}
+	tb := latestCommitsTimeBudget()
+	mc := latestCommitsMaxCommits()
+	commitMap, _ := s.GetLatestCommitsForPathsWithMeta(ctx, repo, commitHash, pathInfos, tb, mc)
+	return commitMap[normalizedPath], nil
 }
 
 // convertCommit은 object.Commit을 GitCommit으로 변환합니다.
@@ -747,30 +636,38 @@ func entryTypeSortKey(et string) int {
 	}
 }
 
+// GetTreeOnly는 트리 항목만 가져옵니다. 각 항목의 latest_commit은 채우지 않습니다.
+// blob overview 등 커밋 조회 없이 디렉터리 목록만 필요할 때 사용합니다.
+func (s *RepositoryOverviewService) GetTreeOnly(ctx context.Context, gitRepo *gogit.Repository, ref, path string) ([]GitTreeEntryWithCommit, error) {
+	entries, _, err := s.getTreeEntries(ctx, gitRepo, ref, path, false)
+	return entries, err
+}
+
 // GetTreeWithCommit는 트리 항목과 각 항목의 최근 커밋 정보를 함께 가져옵니다.
 // Always applies N-based caps (no uncapped path). Returns meta for partial status.
 func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRepo *gogit.Repository, ref, path string) ([]GitTreeEntryWithCommit, LatestCommitsMeta, error) {
+	return s.getTreeEntries(ctx, gitRepo, ref, path, true)
+}
+
+// getTreeEntries returns tree entries; when withCommits is true also fetches latest commit per path (capped).
+func (s *RepositoryOverviewService) getTreeEntries(ctx context.Context, gitRepo *gogit.Repository, ref, path string, withCommits bool) ([]GitTreeEntryWithCommit, LatestCommitsMeta, error) {
 	emptyMeta := LatestCommitsMeta{}
 
-	// ref를 커밋 해시로 해석
 	refObj, err := gitRepo.ResolveRevision(plumbing.Revision(ref))
 	if err != nil {
 		return nil, emptyMeta, fmt.Errorf("failed to resolve reference: %w", err)
 	}
 
-	// Get commit
 	commit, err := gitRepo.CommitObject(*refObj)
 	if err != nil {
 		return nil, emptyMeta, fmt.Errorf("failed to get commit: %w", err)
 	}
 
-	// Get tree
 	treeObj, err := commit.Tree()
 	if err != nil {
 		return nil, emptyMeta, fmt.Errorf("failed to get tree: %w", err)
 	}
 
-	// Navigate to the specified path
 	targetTree := treeObj
 	if path != "" {
 		treeEntry, err := treeObj.FindEntry(path)
@@ -786,7 +683,6 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		}
 	}
 
-	// Normalize base path (remove leading/trailing slashes)
 	basePath := strings.Trim(path, "/")
 
 	entries := make([]entryInfo, len(targetTree.Entries))
@@ -794,16 +690,14 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		idx  int
 		hash plumbing.Hash
 	}
-	blobParallelism := blobSizeParallelism() // hoist out of loop
+	blobParallelism := blobSizeParallelism()
 	blobTasks := make([]blobTask, 0, len(targetTree.Entries))
 	for i, entry := range targetTree.Entries {
-		// Path는 full path from repository root
 		fullPath := entry.Name
 		if basePath != "" {
 			fullPath = basePath + "/" + entry.Name
 		}
 
-		// Entry type 결정
 		var entryType string
 		switch entry.Mode {
 		case filemode.Dir:
@@ -814,18 +708,14 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 			entryType = "blob"
 		}
 
-		// Mode를 문자열로 변환 (Unix permissions) — strconv avoids fmt alloc.
 		modeStr := strconv.FormatUint(uint64(entry.Mode), 8)
-		// Hash를 문자열로 변환
 		hashStr := entry.Hash.String()
 
-		// Size 계산 (blob인 경우만)
 		var size *int64
 		if entryType == "blob" {
 			if blobParallelism > 1 {
 				blobTasks = append(blobTasks, blobTask{idx: i, hash: entry.Hash})
 			} else {
-				// Blob 객체 가져오기
 				blobObj, err := gitRepo.BlobObject(entry.Hash)
 				if err == nil {
 					blobSize := blobObj.Size
@@ -857,7 +747,6 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		for _, t := range blobTasks {
 			select {
 			case <-ctx.Done():
-				// Best-effort: stop spawning new work.
 				goto waitBlobs
 			default:
 			}
@@ -880,36 +769,54 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		wg.Wait()
 	}
 
-	// 커밋 정보를 병렬로 조회
-	pathInfos := make([]CommitPathInfo, 0, len(entries))
-	pathToIndex := make(map[string]int, len(entries))
+	if withCommits {
+		pathInfos := make([]CommitPathInfo, 0, len(entries))
+		pathToIndex := make(map[string]int, len(entries))
 
-	for i := range entries {
-		if entries[i].entryType == "blob" || entries[i].entryType == "tree" {
-			isTree := entries[i].entryType == "tree"
-			pathInfos = append(pathInfos, CommitPathInfo{
-				Path:   entries[i].fullPath,
-				IsTree: isTree,
-			})
-			pathToIndex[entries[i].fullPath] = i
+		for i := range entries {
+			if entries[i].entryType == "blob" || entries[i].entryType == "tree" {
+				isTree := entries[i].entryType == "tree"
+				pathInfos = append(pathInfos, CommitPathInfo{
+					Path:   entries[i].fullPath,
+					IsTree: isTree,
+				})
+				pathToIndex[entries[i].fullPath] = i
+			}
 		}
+
+		tb := timeBudgetForEntryCount(len(entries))
+		mc := maxCommitsForEntryCount(len(entries))
+		commitMap, meta := s.GetLatestCommitsForPathsWithMeta(ctx, gitRepo, *refObj, pathInfos, tb, mc)
+
+		for path, commit := range commitMap {
+			if idx, ok := pathToIndex[path]; ok {
+				entries[idx].commitInfo = commit
+			}
+		}
+
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].sortKey != entries[j].sortKey {
+				return entries[i].sortKey < entries[j].sortKey
+			}
+			return entries[i].name < entries[j].name
+		})
+
+		treeEntriesWithCommit := make([]GitTreeEntryWithCommit, len(entries))
+		for i, e := range entries {
+			treeEntriesWithCommit[i] = GitTreeEntryWithCommit{
+				Type:         e.entryType,
+				Name:         e.name,
+				Path:         e.fullPath,
+				Mode:         &e.modeStr,
+				Hash:         &e.hashStr,
+				Size:         e.size,
+				LatestCommit: e.commitInfo,
+			}
+		}
+		return treeEntriesWithCommit, meta, nil
 	}
 
-	// ALWAYS capped: no uncapped path. Budget is bucketized by N (entry count).
-	// Reuse refObj from the top of this function (no duplicate ResolveRevision).
-	tb := timeBudgetForEntryCount(len(entries))
-	mc := maxCommitsForEntryCount(len(entries))
-	commitMap, meta := s.GetLatestCommitsForPathsWithMeta(ctx, gitRepo, *refObj, pathInfos, tb, mc)
-
-	// 결과를 entries에 매핑
-	for path, commit := range commitMap {
-		if idx, ok := pathToIndex[path]; ok {
-			entries[idx].commitInfo = commit
-		}
-	}
-
-	// 정렬: tree(0) → blob(1) → commit(2), 같은 타입 내에서는 파일명 아스키 정렬
-	// sortKey is pre-computed to avoid switch per O(N log N) comparison.
+	// without commits: sort and convert with LatestCommit = nil
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].sortKey != entries[j].sortKey {
 			return entries[i].sortKey < entries[j].sortKey
@@ -917,7 +824,6 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 		return entries[i].name < entries[j].name
 	})
 
-	// 결과를 정렬된 순서대로 변환
 	treeEntriesWithCommit := make([]GitTreeEntryWithCommit, len(entries))
 	for i, e := range entries {
 		treeEntriesWithCommit[i] = GitTreeEntryWithCommit{
@@ -927,11 +833,10 @@ func (s *RepositoryOverviewService) GetTreeWithCommit(ctx context.Context, gitRe
 			Mode:         &e.modeStr,
 			Hash:         &e.hashStr,
 			Size:         e.size,
-			LatestCommit: e.commitInfo,
+			LatestCommit: nil,
 		}
 	}
-
-	return treeEntriesWithCommit, meta, nil
+	return treeEntriesWithCommit, emptyMeta, nil
 }
 
 // CountCommitsBetween counts commits between two commits (from excluded, to included)
