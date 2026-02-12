@@ -1290,7 +1290,8 @@ components:
         path:
           type: string
         status:
-          type: object
+          type: string
+          enum: [added, deleted, modified, renamed]
         additions:
           type: integer
         deletions:
@@ -1607,7 +1608,8 @@ components:
       type: object
       properties:
         type:
-          type: object
+          type: string
+          enum: [add, del, context, hunk]
         left_line:
           type: integer
         right_line:

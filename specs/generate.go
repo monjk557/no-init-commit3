@@ -679,6 +679,10 @@ func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo
 	case base == "Time":
 		// Best-effort mapping for time.Time (getTypeString strips package)
 		return []string{"type: string", "format: date-time"}
+	case base == "LineChangeType":
+		return []string{"type: string", "enum: [add, del, context, hunk]"}
+	case base == "FileDiffStatus":
+		return []string{"type: string", "enum: [added, deleted, modified, renamed]"}
 	case strings.HasPrefix(base, "[]"):
 		elem := strings.TrimPrefix(strings.TrimPrefix(base, "[]"), "*")
 		if _, ok := knownSchemas[elem]; ok {
