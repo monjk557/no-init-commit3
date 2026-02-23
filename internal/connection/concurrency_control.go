@@ -99,61 +99,63 @@ var (
 	metricsInitOnce         sync.Once
 )
 
+// initMetrics registers TCP/connection-layer metrics with distinct names from observability
+// (git_executor_git_operation_duration_seconds etc.) to avoid duplicate descriptor panic.
 func initMetrics(namespace string) {
 	operationDurationVec = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
-		Name:      "git_operation_duration_seconds",
-		Help:      "Duration of Git operations in seconds",
+		Name:      "tcp_operation_duration_seconds",
+		Help:      "Duration of TCP Git operations (clone/push) in seconds",
 		Buckets:   prometheus.ExponentialBuckets(0.1, 2, 10),
 	}, []string{"operation", "status"})
 
 	timeoutEventsVec = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
-		Name:      "git_timeout_events_total",
-		Help:      "Total number of timeout events",
+		Name:      "tcp_timeout_events_total",
+		Help:      "Total number of TCP timeout events",
 	}, []string{"type", "operation"})
 
 	progressRateVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
-		Name:      "git_transfer_rate_bytes_per_second",
-		Help:      "Current transfer rate in bytes per second",
+		Name:      "tcp_transfer_rate_bytes_per_second",
+		Help:      "Current TCP transfer rate in bytes per second",
 	}, []string{"operation", "tenant"})
 
 	concurrentOperationsVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
-		Name:      "git_concurrent_operations",
-		Help:      "Number of concurrent Git operations",
+		Name:      "tcp_concurrent_operations",
+		Help:      "Number of concurrent TCP Git operations",
 	}, []string{"operation"})
 
 	stallDetectionsVec = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
-		Name:      "git_stall_detections_total",
-		Help:      "Total number of stall detections",
+		Name:      "tcp_stall_detections_total",
+		Help:      "Total number of TCP stall detections",
 	}, []string{"operation", "tenant"})
 
 	queueWaitTimeVec = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
-		Name:      "git_queue_wait_time_seconds",
-		Help:      "Time spent waiting in queue",
+		Name:      "tcp_queue_wait_time_seconds",
+		Help:      "Time spent waiting in TCP queue",
 		Buckets:   prometheus.ExponentialBuckets(0.01, 2, 8),
 	}, []string{"operation"})
 
 	operationsTotalVec = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
-		Name:      "git_operations_total",
-		Help:      "Total number of Git operations",
+		Name:      "tcp_operations_total",
+		Help:      "Total number of TCP Git operations",
 	}, []string{"operation", "status"})
 
 	operationsInProgressVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
-		Name:      "git_operations_in_progress",
-		Help:      "Number of Git operations currently in progress",
+		Name:      "tcp_operations_in_progress",
+		Help:      "Number of TCP Git operations currently in progress",
 	}, []string{"operation"})
 
 	connectionErrorsVec = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
-		Name:      "git_connection_errors_total",
-		Help:      "Total number of connection errors",
+		Name:      "tcp_connection_errors_total",
+		Help:      "Total number of TCP connection errors",
 	}, []string{"type", "operation"})
 }
 
