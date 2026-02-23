@@ -1454,7 +1454,6 @@ components:
         size:
           type: integer
         latest_commit:
-          nullable: true
           $ref: '#/components/schemas/GitCommit'
       required:
         - name

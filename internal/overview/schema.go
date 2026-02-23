@@ -86,10 +86,10 @@ type GitTreeEntryWithCommit struct {
 	Type         string     `json:"type"`
 	Name         string     `json:"name"`
 	Path         string     `json:"path"`
-	Mode         *string    `json:"mode,omitempty"` // 파일 모드 (Unix permissions)
-	Hash         *string    `json:"hash,omitempty"` // Git object hash
-	Size         *int64     `json:"size,omitempty"` // 파일 크기 (바이트, blob인 경우만)
-	LatestCommit *GitCommit `json:"latest_commit"`  // 최신 커밋 정보 (tree만 조회 시 null)
+	Mode         *string    `json:"mode,omitempty"`          // 파일 모드 (Unix permissions)
+	Hash         *string    `json:"hash,omitempty"`          // Git object hash
+	Size         *int64     `json:"size,omitempty"`          // 파일 크기 (바이트, blob인 경우만)
+	LatestCommit *GitCommit `json:"latest_commit,omitempty"` // 최신 커밋 정보
 }
 
 // 변환 함수들 - 다른 패키지의 타입을 overview 패키지 타입으로 변환
