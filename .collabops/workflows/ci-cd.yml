@@ -1,0 +1,387 @@
+name: Build and Deploy to GCP Artifact Registry
+
+triggers:
+  push:
+    branches: ["main", "hotfix/*"]
+  change_request:
+    branches: ["main"]
+
+env:
+  REGION: asia-northeast3
+  REPOSITORY: git-executor
+  IMAGE: collabops-git-executor
+
+jobs:
+  test:
+    name: Run Tests
+    steps:
+      - name: Checkout code
+        image: debian:bookworm-slim
+        env:
+          GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
+          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          apt-get update && apt-get install -y --no-install-recommends git openssh-client
+          mkdir -p ~/.ssh
+          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
+          if [ -n "${GIT_HOST}" ]; then
+            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
+          [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
+          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          cd /workspace/source
+          git fetch origin "${COMMIT_SHA}"
+          git checkout "${COMMIT_SHA}"
+
+      - name: Install dependencies and tools
+        image: golang:1.25-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make install
+
+      - name: Format
+        image: golang:1.25-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make format
+
+      - name: Lint
+        image: golang:1.25-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make lint
+
+      - name: Run tests
+        image: golang:1.25-bookworm
+        env:
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          set -eu
+          cd /workspace/source
+          make test
+
+  build:
+    name: Build Only (PR)
+    needs: [test]
+    if: collabops.event_name == 'change_request'
+    steps:
+      - name: Checkout code
+        image: debian:bookworm-slim
+        env:
+          GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
+          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          apt-get update && apt-get install -y --no-install-recommends git openssh-client
+          mkdir -p ~/.ssh
+          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
+          if [ -n "${GIT_HOST}" ]; then
+            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
+          [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
+          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          cd /workspace/source
+          git fetch origin "${COMMIT_SHA}"
+          git checkout "${COMMIT_SHA}"
+
+      - name: Build Docker image (no push)
+        image: gcr.io/kaniko-project/executor:debug
+        run: |
+          set -eu
+          echo "Building image for PR (no push)...."
+          CONTEXT="/workspace/source"
+          DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
+          /kaniko/executor \
+            --context="${CONTEXT}" \
+            --dockerfile="${DOCKERFILE}" \
+            --destination=tar:///workspace/source/git-executor-pr.tar \
+            --no-push
+
+  build-and-push:
+    name: Build and Push
+    needs: [test]
+    if: collabops.event_name == 'push'
+    env:
+      CLOUDSDK_CONFIG: /workspace/source/.gcp
+    steps:
+      - name: Checkout code
+        image: debian:bookworm-slim
+        env:
+          GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
+          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          apt-get update && apt-get install -y --no-install-recommends git openssh-client
+          mkdir -p ~/.ssh
+          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
+          if [ -n "${GIT_HOST}" ]; then
+            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
+          [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
+          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          cd /workspace/source
+          git fetch origin "${COMMIT_SHA}"
+          git checkout "${COMMIT_SHA}"
+
+      - name: Extract metadata and prepare tags
+        image: alpine:3.19
+        env:
+          REGION: ${{ env.REGION }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          IMAGE: ${{ env.IMAGE }}
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          echo "🏷️ Extracting Docker metadata..."
+          REF_TAG=$(echo "${COLLABOPS_REF_NAME}" | sed 's/\//-/g')
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}/${IMAGE}"
+
+          if echo "${COLLABOPS_REF}" | grep -q 'refs/heads/hotfix/'; then
+            VERSION="${REF_TAG}"
+            echo "📋 Hotfix branch push detected: ${VERSION}"
+            echo "${IMAGE_BASE}:${REF_TAG}" > /tmp/image-tags
+            echo "${IMAGE_BASE}:${COMMIT_SHA}" >> /tmp/image-tags
+          else
+            VERSION="latest"
+            echo "📋 Main branch push detected: ${VERSION}"
+            echo "${IMAGE_BASE}:${COMMIT_SHA}" > /tmp/image-tags
+            echo "${IMAGE_BASE}:latest" >> /tmp/image-tags
+          fi
+          echo "✅ Version: ${VERSION}"
+
+      - name: Prepare branch/tag name for Docker tag
+        image: alpine:3.19
+        env:
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+        run: |
+          REF_TAG=$(echo "${COLLABOPS_REF_NAME}" | sed 's/\//-/g')
+          echo "📋 Docker tag for ref: ${REF_TAG}"
+
+      - name: Verify prerequisites
+        image: alpine:3.19
+        run: |
+          set -eu
+          echo "🔍 Verifying prerequisites..."
+          [ -f "/workspace/source/config/docker/Dockerfile" ] && echo "✓ Dockerfile exists" || { echo "✗ Dockerfile not found" ; exit 1; }
+          [ -f "/workspace/source/go.mod" ] && echo "✓ go.mod exists" || { echo "✗ go.mod not found" ; exit 1; }
+          [ -f "/workspace/source/Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
+
+      - name: Google Cloud Auth
+        image: google/cloud-sdk:slim
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          set -eu
+          mkdir -p ${{ env.CLOUDSDK_CONFIG }}
+          printf '%s' "${GCP_SA_KEY}" | tr -d '\r' > "${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json"
+          export GOOGLE_APPLICATION_CREDENTIALS=${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
+          gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}"
+          gcloud config set project "${GCP_PROJECT_ID_SHARED}"
+
+      - name: Set up Cloud SDK
+        image: google/cloud-sdk:slim
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+        run: |
+          set -eu
+          export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
+          echo "Cloud SDK ready. Project: $(gcloud config get-value project)"
+
+      - name: Verify GCP Configuration
+        image: google/cloud-sdk:slim
+        env:
+          REGION: ${{ env.REGION }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
+        run: |
+          set -eu
+          echo "🔍 Verifying GCP configuration..."
+
+          export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
+
+          CURRENT_PROJECT=$(gcloud config get-value project)
+          if [ "$CURRENT_PROJECT" != "${GCP_PROJECT_ID_SHARED}" ]; then
+            echo "❌ Project mismatch: Current=$CURRENT_PROJECT, Expected=${GCP_PROJECT_ID_SHARED}"
+            exit 1
+          fi
+          echo "✓ Project correctly set to: $CURRENT_PROJECT"
+
+          echo "Verifying Artifact Registry repository..."
+          if gcloud artifacts repositories describe "${REPOSITORY}" \
+            --location="${REGION}" >/dev/null 2>&1; then
+            echo "✓ Repository ${REPOSITORY} exists"
+          else
+            echo "❌ Repository ${REPOSITORY} not found"
+            exit 1
+          fi
+
+      - name: Configure Docker Authentication
+        image: google/cloud-sdk:slim
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
+        run: |
+          set -eu
+          export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
+
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and Push
+        image: gcr.io/kaniko-project/executor:debug
+        env:
+          REGION: ${{ env.REGION }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          IMAGE: ${{ env.IMAGE }}
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+          COMMIT_SHA: ${{ collabops.sha }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
+        run: |
+          set -eu
+          REF_TAG=$(echo "${COLLABOPS_REF_NAME}" | sed 's/\//-/g')
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}/${IMAGE}"
+          CONTEXT="/workspace/source"
+          DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
+
+          if echo "${COLLABOPS_REF}" | grep -q 'refs/heads/hotfix/'; then
+            echo "📋 Hotfix: ${REF_TAG}, ${COMMIT_SHA}"
+            echo "Building and pushing hotfix tags: ${REF_TAG}, ${COMMIT_SHA}"
+            /kaniko/executor \
+              --context="${CONTEXT}" \
+              --dockerfile="${DOCKERFILE}" \
+              --destination="${IMAGE_BASE}:${REF_TAG}" \
+              --destination="${IMAGE_BASE}:${COMMIT_SHA}"
+          else
+            echo "📋 Main: ${COMMIT_SHA}, latest"
+            echo "Building and pushing main tags: ${COMMIT_SHA}, latest"
+            /kaniko/executor \
+              --context="${CONTEXT}" \
+              --dockerfile="${DOCKERFILE}" \
+              --destination="${IMAGE_BASE}:${COMMIT_SHA}" \
+              --destination="${IMAGE_BASE}:latest"
+          fi
+
+      - name: Verify All Images Push
+        image: google/cloud-sdk:slim
+        env:
+          REGION: ${{ env.REGION }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          IMAGE: ${{ env.IMAGE }}
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          echo "🔍 Verifying all images push..."
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}/${IMAGE}"
+          REF_TAG=$(echo "${COLLABOPS_REF_NAME}" | sed 's/\//-/g')
+
+          export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
+
+          check_tag() {
+            local tag=$1
+            echo "Checking ${IMAGE}:${tag}..."
+            if gcloud artifacts docker images describe "${IMAGE_BASE}:${tag}" >/dev/null 2>&1; then
+              echo "✓ ${IMAGE}:${tag} exists"
+              return 0
+            else
+              echo "❌ ${IMAGE}:${tag} not found"
+              return 1
+            fi
+          }
+
+          failed=0
+          if echo "${COLLABOPS_REF}" | grep -q 'refs/heads/hotfix/'; then
+            check_tag "${REF_TAG}" || failed=1
+            check_tag "${COMMIT_SHA}" || failed=1
+          else
+            check_tag "${COMMIT_SHA}" || failed=1
+            check_tag "latest" || failed=1
+          fi
+          [ $failed -eq 0 ] || exit 1
+          echo "✅ All image tags verified successfully!"
+
+  notify-completion:
+    name: Notify Image Push Success
+    needs: [build-and-push]
+    if: collabops.event_name == 'push' && success()
+    steps:
+      - name: Show Deployment Summary
+        image: alpine:3.19
+        env:
+          REGION: ${{ env.REGION }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          IMAGE: ${{ env.IMAGE }}
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          REF_TAG=$(echo "${COLLABOPS_REF_NAME}" | sed 's/\//-/g')
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}"
+
+          echo "✨ Deployment Summary ✨"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 ${IMAGE}:"
+          echo "   Repository: ${IMAGE_BASE}"
+          echo "   Image: ${IMAGE}"
+          if echo "${COLLABOPS_REF}" | grep -q 'refs/heads/hotfix/'; then
+            echo "   Tags: ${REF_TAG}, ${COMMIT_SHA}"
+          else
+            echo "   Tags: ${COMMIT_SHA}, latest"
+          fi
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎉 All images deployed successfully!"
+
+      - name: Send Slack notification
+        image: curlimages/curl:8.5.0
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_ARTIFACT_REGISTRY_QA1 }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+          COMMIT_SHA: ${{ collabops.sha }}
+          COMMIT_MESSAGE: ${{ collabops.commit_message }}
+          ACTOR: ${{ collabops.actor }}
+        run: |
+          SHORT_SHA=$(echo "${COMMIT_SHA}" | cut -c1-8)
+          REF_TAG=$(echo "${COLLABOPS_REF_NAME}" | sed 's/\//-/g')
+
+          if echo "${COLLABOPS_REF}" | grep -q 'refs/heads/hotfix/'; then
+            VERSION_TAGS="\`${REF_TAG}\` \`${SHORT_SHA}\`"
+          else
+            VERSION_TAGS="\`latest\` \`${SHORT_SHA}\`"
+          fi
+
+          COMMIT_TITLE=$(echo "${COMMIT_MESSAGE}" | sed 's/"/\\"/g' | head -1)
+          KST_TIME=$(TZ='KST-9' date '+%Y-%m-%d %H:%M:%S KST')
+
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\": \"🚀 **${IMAGE}** image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\n👤 Contributor: ${ACTOR} | 🕐 Time: ${KST_TIME}\"}" \
+            "${SLACK_WEBHOOK_URL}"
