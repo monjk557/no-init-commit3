@@ -1,0 +1,48 @@
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates tzdata curl bash build-base
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# 빌드 단계: 바이너리 빌드
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o git-executor ./cmd/git-executor
+
+# Air 설치 (hot reload용) - 직접 빌드하여 특정 위치에 저장
+RUN mkdir -p /usr/local/bin && \
+    (go install github.com/cosmtrek/air@latest && \
+     cp /go/bin/air /usr/local/bin/air 2>/dev/null || \
+     cp /root/go/bin/air /usr/local/bin/air 2>/dev/null || \
+     (cd /tmp && \
+      git clone https://github.com/cosmtrek/air.git && \
+      cd air && \
+      go build -o /usr/local/bin/air . && \
+      cd .. && rm -rf air)) && \
+    chmod +x /usr/local/bin/air
+
+# 런타임 이미지
+FROM golang:1.25-alpine 
+
+RUN apk add --no-cache ca-certificates tzdata curl git bash build-base
+
+WORKDIR /app
+
+# 빌더에서 빌드된 바이너리 복사
+COPY --from=builder /app/git-executor .
+
+# Air 바이너리 복사 (hot reload용)
+COPY --from=builder /usr/local/bin/air /usr/local/bin/air
+
+# Go 캐시 환경변수 설정
+ENV GOCACHE=/app/build/go-build
+ENV GOMODCACHE=/app/build/go-mod
+
+EXPOSE 5001 5222
+
+# 기본 실행: air로 hot reload (docker-compose에서 오버라이드 가능)
+CMD ["air"]
+

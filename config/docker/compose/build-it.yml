@@ -2,30 +2,38 @@ services:
   collabops-git-executor:
     build:
       context: ../../../../collabops-git-executor
-      dockerfile: config/docker/Dockerfile
+      dockerfile: config/docker/Dockerfile.dev
     ports:
-      - "${GIT_EXECUTOR_PORT:-5001}:5001"
-      - "${GIT_EXECUTOR_SSH_PORT:-5222}:5222"
+      - "5001:5001"
+      - "5222:5222"
+    command: ["sh", "-c", "mkdir -p /app/tmp /app/build/go-build /app/build/go-mod && air"]
     env_file:
       - ../../env/build-it/git-executor.env
+    environment:
+      - GOCACHE=/app/build/go-build
+      - GOMODCACHE=/app/build/go-mod
+    user: "2000:2000"
     volumes:
-      - git_executor_data:${GIT_REPO_ROOT}
+      - nfs_git_repos:/var/lib/git/repos
+      - ../../../../collabops-git-executor:/app
     networks:
       - collabops-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 4G
     logging:
       driver: "json-file"
       options:
         max-size: "100m"
         max-file: "5"
         labels: "service=collabops-git-executor"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
-# API Orchestrator (FastAPI) - Pull from Artifact Registry
   collabops-api-orchestrator:
     build:
       context: ../../../../collabops-api-orchestrator
@@ -34,26 +42,18 @@ services:
         APP_ENV: local
         ENABLE_RELOAD: "true"
     ports:
-      - "${ORCHESTRATOR_PORT:-2345}:2345"
-    
+      - "2345:2345"
     volumes:
-      - ../../../../collabops-api-orchestrator/app:/app/app:ro                    # Mount Python source code (read-only)
-      - ../../../../collabops-api-orchestrator/config:/app/config:ro              # Mount config files
-      - ../../../../collabops-api-orchestrator/pyproject.toml:/app/pyproject.toml:ro  # UV project configuration
-      - ../../../../collabops-api-orchestrator/uv.lock:/app/uv.lock:ro            # UV dependency lock file
+      - ../../../../collabops-api-orchestrator/app:/app/app:ro
+      - ../../../../collabops-api-orchestrator/config:/app/config:ro
+      - ../../../../collabops-api-orchestrator/pyproject.toml:/app/pyproject.toml:ro
+      - ../../../../collabops-api-orchestrator/uv.lock:/app/uv.lock:ro
       - ../../../../collabops-api-orchestrator/pytest.ini:/app/pytest.ini:ro
     env_file:
       - ../../env/build-it/orchestrator.env
-    
-    # Override command for hot reload - goes through entrypoint.py for auto-initialization
-    # Use entrypoint with server arguments to ensure auto-initialization runs
     entrypoint: ["uv", "run", "python", "/entrypoint.py"]
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "2345", "--reload", "--reload-dir", "/app/app", "--log-level", "debug"]
     depends_on:
-      orchestrator-db:
-        condition: service_healthy
-      redis-orchestrator:
-        condition: service_healthy
       openfga:
         condition: service_started
     networks:
@@ -71,22 +71,18 @@ services:
       timeout: 10s
       retries: 3
 
-  # CollabOps API Service (Pre-built Image)
-  collabops-api-service:
-    image: asia-northeast3-docker.pkg.dev/collabops-shared/api-service/collabops-api-service:latest
+  collabops-api-piper:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/api-piper/collabops-api-piper:latest
     platform: linux/amd64
     pull_policy: always
-    env_file:
-      - ../../env/build-it/common.env
-      - ../../env/build-it/api-service.env
     ports:
-      - "${API_SERVICE_PORT:-8000}:8000"
-    # Django management command will handle all startup
-    depends_on:
-      api-service-db:
-        condition: service_healthy
-      redis-api-service:
-        condition: service_healthy
+      - "8001:8001"
+    volumes:
+      - nfs_git_repos:/var/lib/git/repos:ro
+      - nfs_git_pipelines:/var/lib/git/pipelines
+      - ~/.kube/config:/root/.kube/config:ro
+    env_file:
+      - ../../env/build-it/api-piper.env
     networks:
       - collabops-network
     restart: unless-stopped
@@ -95,314 +91,294 @@ services:
       options:
         max-size: "100m"
         max-file: "5"
-        labels: "service=api-service"
+        labels: "service=piper"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # Web Frontend (Next.js App)
-  collabops-web:
-    image: asia-northeast3-docker.pkg.dev/collabops-shared/web/collabops-web:latest
+  collabops-api-piper-specs:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/api-piper/collabops-api-piper-specs:latest
     platform: linux/amd64
     pull_policy: always
     ports:
-      - "${WEB_PORT:-3000}:3000"
-    env_file:
-      - ../../env/build-it/common.env
-      - ../../env/build-it/web.env
-    depends_on:
-      - collabops-api-orchestrator
+      - "8002:80"
     networks:
       - collabops-network
     restart: unless-stopped
     logging:
       driver: "json-file"
       options:
-        max-size: "100m"
-        max-file: "5"
-        labels: "service=web"
+        max-size: "50m"
+        max-file: "3"
+        labels: "service=api-piper-specs"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  collabops-gateway-ingress:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/gateway-ingress/collabops-gateway-ingress:latest
+    platform: linux/amd64
+    pull_policy: always
+    ports:
+      - '80:80'
+    env_file:
+      - ../../env/build-it/ingress-gateway.env
+    depends_on:
+      - collabops-web
+      - collabops-api-orchestrator
+      - collabops-api-service
+      - collabops-git-executor
+      - openfga
+      - collabops-git-ssh
+      - collabops-service-wtm
+    networks:
+      collabops-network:
+        aliases:
+          - collabops-local.ai
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost/health']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-  openfga-migrate:
-    image: openfga/openfga:v1.9.5
+  collabops-web:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/web/collabops-web:latest
+    platform: linux/amd64
+    pull_policy: always
+    ports:
+      - '3000:3000'
+    env_file:
+      - ../../env/build-it/web.env
     depends_on:
-      openfga-db:
-        condition: service_healthy
-    command: >
-      migrate --datastore-engine=postgres
-          --datastore-uri=postgres://openfga:openfga@openfga-db:5432/openfga?sslmode=disable
-    networks:
-      - collabops-network
-    restart: "no"
-
-  openfga:
-    image: openfga/openfga:v1.9.5
-    depends_on:
-      - openfga-db
-      - openfga-migrate
-    command: >
-      run --datastore-engine=postgres
-          --datastore-uri=postgres://openfga:openfga@openfga-db:5432/openfga?sslmode=disable
-          --check-query-cache-enabled
+      - collabops-api-orchestrator
+      - collabops-web-socket
     networks:
       - collabops-network
     restart: unless-stopped
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8080/healthz']
+      test: ['CMD', 'curl', '-f', 'http://localhost:3000/api/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    extra_hosts:
+      - 'localhost:host-gateway'
+
+  collabops-web-socket:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/web-socket/collabops-web-socket:latest
+    platform: linux/amd64
+    pull_policy: always
+    ports:
+      - '3001:3001'
+    env_file:
+      - ../../env/build-it/web-socket.env
+    networks:
+      - collabops-network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3001/']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  collabops-api-docs:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/api-docs/collabops-api-docs:latest
+    platform: linux/amd64
+    pull_policy: always
+    ports:
+      - '8084:8084'
+    env_file:
+      - ../../env/build-it/api-docs.env
+    networks:
+      - collabops-network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8084/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  collabops-api-service:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/api-service/collabops-api-service:latest
+    platform: linux/amd64
+    pull_policy: always
+    ports:
+      - '8000:8000'
+    env_file:
+      - ../../env/build-it/api-service.env
+    networks:
+      - collabops-network
+    restart: unless-stopped
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '100m'
+        max-file: '5'
+        labels: 'service=api-service'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    extra_hosts:
+      - 'localhost:host-gateway'
+
+  openfga:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/service-rebac/collabops-service-rebac:latest
+    platform: linux/amd64
+    pull_policy: always
+    entrypoint: ["/entrypoint.sh"]
+    command: >
+      run --datastore-engine=postgres
+          --datastore-uri=postgres://postgres:apaoUsd4C7EGnMg9BWpy@192.168.0.30:5432/openfga?sslmode=disable
+          --check-query-cache-enabled
+          --playground-enabled
+          --playground-port=3002
+          --http-cors-allowed-origins=*
+    env_file:
+      - ../../env/build-it/openfga-db.env
+    ports:
+      - "8089:8080"
+      - "8081:8081"
+      - "3002:3002"
+    networks:
+      - collabops-network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://localhost:8080/healthz']
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
 
-  # PostgreSQL Database for OpenFGA
-  openfga-db:
-    image: postgres:15
-    env_file:
-      - ../../env/build-it/openfga-db.env
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'pg_isready -U openfga -d openfga',
-        ]
-  
-  # Object Storage Proxy (local-it 전용)
-  # MinIO 요청을 받아서 그대로 objectstorage로 전달하는 nginx
-  collabops-oss-proxy:
-    image: asia-northeast3-docker.pkg.dev/collabops-shared/gateway-ingress/collabops-oss-proxy:latest
+  collabops-git-executor-specs:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/git-executor/collabops-git-executor-specs:latest
     platform: linux/amd64
     pull_policy: always
     ports:
-      - '9000:9000'   # S3 API 포트 (nginx가 프록시)
+      - "5002:80"
     networks:
       - collabops-network
-    depends_on:
-      collabops-service-objstorage:
-        condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        labels: "service=git-executor-specs"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
       start_period: 10s
 
-  # Object Storage (MinIO)
-  collabops-service-objstorage:
-    image: asia-northeast3-docker.pkg.dev/collabops-shared/service-objstore/collabops-service-objstore:latest
-    platform: linux/amd64
-    # 포트 노출 제거 - nginx를 통해서만 접근
-    expose:
-      - '9000'
-      - '9001'   # Web Console은 직접 접근 가능하도록 유지
-    ports:
-      - '9001:9001'   # Web Console만 외부 노출
-    env_file:
-      - ../../env/build-it/service-objstorage.env
-    volumes:
-      - minio_data:/data
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    healthcheck:
-      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:9000/minio/health/ready']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  # PostgreSQL Database for API Service
-  api-service-db:
-    image: postgres:15-alpine
-    env_file:
-      - ../../env/build-it/api-service-db.env
-    volumes:
-      - api_service_postgres_data:/var/lib/postgresql/data
-      - ./api-service-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'pg_isready -U ${DB_USER} -d ${DB_NAME}',
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # PostgreSQL Database for Orchestrator
-  orchestrator-db:
-    image: postgres:15-alpine
-    env_file:
-      - ../../env/build-it/orchestrator-db.env
-    volumes:
-      - orchestrator_postgres_data:/var/lib/postgresql/data
-      - ./orchestrator-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'pg_isready -U postgres -d collabops_orchestrator',
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis Cache for Orchestrator
-  redis-orchestrator:
-    image: redis:7-alpine
-    volumes:
-      - orchestrator_redis_data:/data
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
-        labels: "service=redis-orchestrator"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-# redis for api service (TODO: Establish convention for redis port naming)
-  redis-api-service:
-    image: redis:7-alpine
-    volumes:
-      - api_service_redis_data:/data
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
-        labels: "service=redis-api-service"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis Cache for Web App Sessions
-  session-redis:
-    image: redis:7-alpine
-    volumes:
-      - session_redis_data:/data
-    networks:
-      - collabops-network
-    restart: unless-stopped
-    healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Git SSH (Go) - Build Locally
   collabops-git-ssh:
-    build:
-      context: ../../../../collabops-git-ssh
-      dockerfile: config/docker/Dockerfile
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/git-ssh/collabops-git-ssh:latest
     platform: linux/amd64
+    pull_policy: always
     ports:
-      - "${SSH_PORT:-22}:22"
-    
+      - "22:22"
     env_file:
-      - ../../../../collabops-git-ssh/config/env/build-it/git-ssh.env
-
+      - ../../env/build-it/git-ssh.env
+    depends_on:
+      - collabops-git-executor
+      - collabops-api-orchestrator
     networks:
       - collabops-network
     restart: unless-stopped
     logging:
-      driver: "json-file"
+      driver: 'json-file'
       options:
-        max-size: "100m"
-        max-file: "5"
-        labels: "service=git-ssh"
+        max-size: '100m'
+        max-file: '5'
+        labels: 'service=git-ssh'
     healthcheck:
-      test: ["CMD", "/usr/local/bin/git-ssh", "-health-check"]
+      test: ['CMD', '/usr/local/bin/git-ssh', '-health-check']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-  
-  # WTM Volume Initialization (runs once to set proper permissions)
-  wtm-volume-init:
-    image: alpine:3.19
-    user: "0:0"  # root로 실행
-    volumes:
-      - git_pipelines_data:/data:rw
-    command:
-      - sh
-      - -c
-      - "find /data -type f -exec chmod o+r {} \\; 2>/dev/null || true && find /data -type d -exec chmod o+rwx {} \\; 2>/dev/null || true"
-    restart: "no"  
 
-  # WTM (WorkTree Manager)
   collabops-service-wtm:
     image: asia-northeast3-docker.pkg.dev/collabops-shared/service-wtm/collabops-service-wtm:latest
     platform: linux/amd64
-    pull_policy: always 
-    ports:
-      - "${WTM_PORT:-8082}:8082"
+    pull_policy: always
     env_file:
       - ../../env/build-it/wtm.env
+    ports:
+      - "8082:8082"
     volumes:
-      # Read-write access to bare repositories (git worktree needs to create metadata)
-      - git_pipelines_data:/var/lib/git/repos:rw
-      # Read-write access for workspaces
-      - wtm_pipelines:/var/lib/git/pipelines:rw
+      - nfs_git_repos:/var/lib/git/repos:rw
+      - nfs_git_pipelines:/var/lib/git/pipelines:rw
     networks:
       - collabops-network
     depends_on:
       - collabops-git-executor
-      - wtm-volume-init
     restart: unless-stopped
-    user: "2000:2000"  # Run as non-root user (UID:GID 1000)
+    user: '2000:2000'
+    group_add:
+      - "2001"
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '100m'
+        max-file: '5'
+        labels: 'service=wtm'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8082/healthz']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  collabops-service-notifier:
+    image: asia-northeast3-docker.pkg.dev/collabops-shared/service-notifier/collabops-service-notifier:latest
+    platform: linux/amd64
+    pull_policy: always
+    ports:
+      - "8083:8080"
+    env_file:
+      - ../../env/build-it/notifier.env
+    networks:
+      - collabops-network
+    restart: unless-stopped
     logging:
       driver: "json-file"
       options:
         max-size: "100m"
         max-file: "5"
-        labels: "service=wtm"
+        labels: "service=notifier"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8083/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
 
 volumes:
-  node_modules:
-  api_service_postgres_data:
-  orchestrator_postgres_data:
-  orchestrator_redis_data:
-  api_service_redis_data:
-  session_redis_data:
-  minio_data:
-  git_pipelines_data:
-  jenkins_home:
-  agent_workspace:
-  wtm_pipelines:
-  git_executor_data:
+  # NFS path base: /srv/nfs/share/collabops/dev
+
+  nfs_git_repos:
+    driver: local
+    driver_opts:
+      type: "nfs"
+      o: "addr=192.168.0.30,nfsvers=4,rw"
+      device: ":/srv/nfs/share/collabops/dev/git/repos"
+
+  nfs_git_pipelines:
+    driver: local
+    driver_opts:
+      type: "nfs"
+      o: "addr=192.168.0.30,nfsvers=4,rw"
+      device: ":/srv/nfs/share/collabops/dev/git/pipelines"
 
 networks:
   collabops-network:
