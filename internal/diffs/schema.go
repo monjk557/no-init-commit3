@@ -95,11 +95,11 @@ type FileDiff struct {
 
 // LineChange는 diff의 단일 라인 변경을 나타냅니다. 라인 번호(left_line/right_line)로 접근 가능하며, hunk_index로 Hunks를 참조합니다.
 type LineChange struct {
-	Type         LineChangeType         `json:"type"`        // "add", "del", "context", "hunk"
-	LeftLineNum  int                    `json:"left_line"`   // 구 파일 라인 번호. 추가 라인이면 0
-	RightLineNum int                    `json:"right_line"`  // 신 파일 라인 번호. 삭제 라인이면 0
-	HunkIndex    int                    `json:"hunk_index"`  // 이 라인이 속한 hunk 인덱스 (FileDiff.Hunks 참조)
-	Content      string                 `json:"content"`     // diff 접두사(공백/+/-)가 포함된 라인 내용
+	Type         LineChangeType         `json:"type"`              // "add", "del", "context", "hunk"
+	LeftLineNum  int                    `json:"left_line"`         // 구 파일 라인 번호. 추가 라인이면 0
+	RightLineNum int                    `json:"right_line"`        // 신 파일 라인 번호. 삭제 라인이면 0
+	HunkIndex    int                    `json:"hunk_index"`        // 이 라인이 속한 hunk 인덱스 (FileDiff.Hunks 참조)
+	Content      string                 `json:"content"`           // diff 접두사(공백/+/-)가 포함된 라인 내용
 	Meta         map[string]interface{} `json:"meta,omitempty"`    // 라인 단위 메타 (필요 시)
 	Comment      string                 `json:"comment,omitempty"` // 리뷰용 코멘트 (비어 있으면 생략)
 }

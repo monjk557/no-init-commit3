@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/connection"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/protocol"
@@ -29,25 +30,19 @@ import (
 
 // DuplexTCPServer handles bidirectional TCP communication for Git operations
 type DuplexTCPServer struct {
-	config       *config.Config
-	eventsClient events.RedisStreamClient
-	listener     net.Listener
-	connections  map[net.Conn]*DuplexConnection
-	mu           sync.RWMutex
-	logger       *logging.Logger
+	config                *config.Config
+	eventsClient          events.RedisStreamClient
+	listener              net.Listener
+	connections           map[net.Conn]*connection.ProgressAwareConnection
+	concurrencyController *connection.ConcurrencyController
+	timeoutPolicy         *connection.TimeoutPolicy
+	metrics               *connection.MetricsCollector
+	mu                    sync.RWMutex
+	logger                *logging.Logger
 }
 
-// DuplexConnection represents a bidirectional connection
-type DuplexConnection struct {
-	conn     net.Conn
-	reader   *bufio.Reader
-	writer   *bufio.Writer
-	owner    string
-	repo     string
-	userID   string
-	lastUsed time.Time
-	protoV2  bool
-}
+// Legacy DuplexConnection type alias for compatibility during migration
+type DuplexConnection = connection.ProgressAwareConnection
 
 type v2SectionEnd int
 
@@ -80,10 +75,8 @@ type sidebandWriter struct {
 	firstWrite bool // 첫 번째 쓰기인지 추적
 }
 
-// NewDuplexTCPServer creates a new duplex TCP server
+// NewDuplexTCPServer creates a new duplex TCP server with progress-aware connection management
 func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
-	// Create permission client
-
 	// Initialize logger
 	logger, err := logging.NewLogger(config.Logging)
 	if err != nil {
@@ -100,12 +93,33 @@ func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 		}
 	}
 
-	return &DuplexTCPServer{
-		config:       config,
-		eventsClient: eventsClient,
-		connections:  make(map[net.Conn]*DuplexConnection),
-		logger:       logger,
-	}, nil
+	// Initialize metrics collector
+	metrics := connection.NewMetricsCollector("git_executor")
+
+	// Initialize timeout policy
+	timeoutPolicy := connection.DefaultTimeoutPolicy()
+
+	// Initialize concurrency controller
+	concurrencyConfig := connection.DefaultConcurrencyConfig()
+	concurrencyController := connection.NewConcurrencyController(concurrencyConfig, metrics, logger.Logger)
+
+	server := &DuplexTCPServer{
+		config:                config,
+		eventsClient:          eventsClient,
+		connections:           make(map[net.Conn]*connection.ProgressAwareConnection),
+		concurrencyController: concurrencyController,
+		timeoutPolicy:         timeoutPolicy,
+		metrics:               metrics,
+		logger:                logger,
+	}
+
+	logger.Info("Progress-aware Git executor server initialized",
+		zap.Int("max_concurrent_clones", concurrencyConfig.MaxConcurrentClones),
+		zap.Int("max_concurrent_pushes", concurrencyConfig.MaxConcurrentPushes),
+		zap.Duration("operation_idle_timeout", timeoutPolicy.OperationIdleTimeout),
+		zap.Duration("operation_max_timeout", timeoutPolicy.OperationMaxTimeout))
+
+	return server, nil
 }
 
 // Start starts the TCP server on configured port
@@ -145,36 +159,49 @@ func (s *DuplexTCPServer) Start() error {
 	return nil
 }
 
-// Stop stops the TCP server
+// Stop stops the TCP server and cleans up resources
 func (s *DuplexTCPServer) Stop() error {
+	var err error
 	if s.listener != nil {
-		return s.listener.Close()
+		err = s.listener.Close()
 	}
-	return nil
+
+	// Stop concurrency controller
+	if s.concurrencyController != nil {
+		s.concurrencyController.Stop()
+	}
+
+	// Close all active connections
+	s.mu.Lock()
+	for conn, progressConn := range s.connections {
+		progressConn.Close()
+		delete(s.connections, conn)
+	}
+	s.mu.Unlock()
+
+	s.logger.Info("Progress-aware TCP server stopped")
+	return err
 }
 
-// handleConnection : TCP 연결 처리
+// handleConnection : TCP 연결 처리 with progress-aware timeout management
 func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	// [TCP] 연결 수락
 
-	// Set read/write timeouts for the connection
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		_ = tcpConn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-	}
+	// Create progress-aware connection wrapper
+	progressConn := connection.NewProgressAwareConnection(conn, s.timeoutPolicy, s.logger.Logger)
+	defer progressConn.Close()
 
-	// Create duplex connection
-	duplexConn := &DuplexConnection{
-		conn:     conn,
-		reader:   bufio.NewReader(conn),
-		writer:   bufio.NewWriter(conn),
-		lastUsed: time.Now(),
+	// Start with handshake phase
+	if err := progressConn.SetPhase(connection.PhaseHandshake); err != nil {
+		s.logger.Error("Failed to set handshake phase",
+			zap.String("remote_addr", conn.RemoteAddr().String()),
+			zap.Error(err))
+		return
 	}
 
 	// Register connection
 	s.mu.Lock()
-	s.connections[conn] = duplexConn
+	s.connections[conn] = progressConn
 	s.mu.Unlock()
 
 	// Cleanup on exit
@@ -182,34 +209,44 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 		s.mu.Lock()
 		delete(s.connections, conn)
 		s.mu.Unlock()
-		// [TCP] 연결 종료
+		s.logger.Debug("Connection cleaned up",
+			zap.String("remote_addr", conn.RemoteAddr().String()))
 	}()
 
+	s.logger.Info("New progress-aware TCP connection established",
+		zap.String("remote_addr", conn.RemoteAddr().String()))
+
 	// Handle Git protocol negotiation
-	if err := s.handleGitProtocol(duplexConn); err != nil {
-		// [TCP] 프로토콜 에러
+	if err := s.handleGitProtocol(progressConn); err != nil {
+		s.logger.Error("Git protocol error",
+			zap.String("remote_addr", conn.RemoteAddr().String()),
+			zap.Error(err))
+		s.metrics.RecordConnectionError("protocol_error", connection.OperationClone)
 		return
 	}
 }
 
-// handleGitProtocol : Git 프로토콜 핸드셰이크 처리
-func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
-	// [1] 핸드셰이크 시작
+// handleGitProtocol : Git 프로토콜 핸드셰이크 처리 with phase management
+func (s *DuplexTCPServer) handleGitProtocol(conn *connection.ProgressAwareConnection) error {
+	// Transition to protocol negotiation phase
+	if err := conn.SetPhase(connection.PhaseProtocolNegotiation); err != nil {
+		return fmt.Errorf("failed to set protocol negotiation phase: %w", err)
+	}
 
 	// 1) 첫 pkt-line (service line) 읽기
-	line, isFlush, err := readPktLine(conn.reader)
+	reader := conn.GetReader()
+	line, isFlush, err := readPktLine(reader)
 	if err != nil {
 		return fmt.Errorf("failed to read first pkt-line: %w", err)
 	}
 	if isFlush {
 		return fmt.Errorf("unexpected flush before service line")
 	}
-	// [2] 서비스 라인 수신
 
 	// 2) (선택) 추가 pkt-line 수집: 예) "version=2"
 	var protoV2 bool
 	for {
-		l, flush, err := readPktLine(conn.reader)
+		l, flush, err := readPktLine(reader)
 		if err != nil {
 			return fmt.Errorf("failed to read subsequent pkt-line: %w", err)
 		}
@@ -243,9 +280,15 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 		if v == "" {
 			continue
 		}
+		var userID string
 		switch k {
 		case "user-id", "user_id", "userid", "uid":
-			conn.userID = v
+			userID = v
+		}
+		// Set userID in connection metadata
+		if userID != "" {
+			owner, repo, _, protoV2Prev := conn.GetConnectionInfo()
+			conn.SetConnectionInfo(owner, repo, userID, protoV2Prev)
 		}
 	}
 
@@ -267,13 +310,10 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 	}
 	owner := pathParts[0]
 	repo := strings.TrimSuffix(pathParts[1], ".git")
-	conn.owner = owner
-	conn.repo = repo
 
-	// [3] 파싱 완료: service, owner, repo, v2
-
-	// (원하면) proto_v2를 이후 단계에서 환경변수로 넘길 수 있도록 conn에 표시
-	conn.protoV2 = protoV2 // 필요 시 DuplexConnection에 bool 필드 추가
+	// Set connection metadata
+	_, _, userID, _ := conn.GetConnectionInfo()
+	conn.SetConnectionInfo(owner, repo, userID, protoV2)
 
 	// 4) 서비스별 처리 (기존 로직 재사용)
 	switch service {
@@ -288,22 +328,49 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *DuplexConnection) error {
 	}
 }
 
-// handleUploadPack : git-upload-pack (fetch, clone) 처리
-func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo string) error {
-	// [4] upload-pack 처리 시작
+// handleUploadPack : git-upload-pack (fetch, clone) 처리 with progress-aware connection
+func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnection, owner, repo string) error {
+	// Transition to operation phase for clone/fetch
+	if err := conn.SetPhase(connection.PhaseOperation); err != nil {
+		return fmt.Errorf("failed to set operation phase: %w", err)
+	}
+
+	// Get client IP for concurrency control
+	clientIP := connection.GetClientIP(conn.GetRemoteAddr())
+	tenantID := fmt.Sprintf("%s/%s", owner, repo) // Use owner/repo as tenant ID
+
+	// Request operation permission (clone)
+	ctx := context.Background()
+	if err := s.concurrencyController.RequestOperation(ctx, connection.OperationClone, tenantID, clientIP); err != nil {
+		s.logger.Warn("Clone operation denied",
+			zap.String("tenant", tenantID),
+			zap.String("client_ip", clientIP),
+			zap.Error(err))
+		return fmt.Errorf("operation denied: %w", err)
+	}
+
+	// Ensure we release the operation slot
+	operationStartTime := time.Now()
+	defer func() {
+		s.concurrencyController.ReleaseOperation(connection.OperationClone, tenantID, clientIP)
+		s.metrics.RecordOperationComplete(connection.OperationClone, time.Since(operationStartTime), true, tenantID)
+	}()
+
+	// Get connection components
+	reader := conn.GetReader()
+	writer := conn.GetWriter()
 
 	// 1) v2 광고 (ls-refs, fetch 지원)
-	if err := protocol.WriteV2Advert(conn.writer, "git-executor/0.1.0", "ls-refs", "fetch"); err != nil {
+	if err := protocol.WriteV2Advert(writer, "git-executor/0.1.0", "ls-refs", "fetch"); err != nil {
 		return fmt.Errorf("failed to send advert: %w", err)
 	}
-	if err := conn.writer.Flush(); err != nil {
+	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("flush advert: %w", err)
 	}
-	// [5] v2 광고 전송 완료
 
 	// 2) 동기 상태머신 (한 섹션씩 처리)
 	for {
-		cmds, end, err := s.readSection(conn.reader) // delim/flush까지 읽어들임
+		cmds, end, err := s.readSection(reader) // delim/flush까지 읽어들임
 		if err != nil {
 			return err
 		}
@@ -327,7 +394,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			// Git protocol v2에서 ls-refs는 두 섹션으로 구성:
 			// 섹션 1: command=ls-refs + delimiter (0001)
 			// 섹션 2: peel, symrefs, ref-prefix 등의 옵션들 + flush (0000)
-			lsRefsOpts, _, err := s.readSection(conn.reader)
+			lsRefsOpts, _, err := s.readSection(reader)
 			if err != nil {
 				return fmt.Errorf("failed to read ls-refs options: %w", err)
 			}
@@ -350,7 +417,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 		case strings.HasPrefix(cmds[0], "command=fetch"):
 			// [8] fetch 명령 수신
 			// fetch 옵션 섹션 읽기 (command 섹션 다음 섹션)
-			fetchCmds, _, err := s.readSection(conn.reader)
+			fetchCmds, _, err := s.readSection(reader)
 			if err != nil {
 				return fmt.Errorf("failed to read fetch options: %w", err)
 			}
@@ -377,11 +444,11 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 			repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
 			if err != nil {
 				// 프로토콜 호환 에러 응답
-				pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
+				pw := &protocol.PktWriter{W: writer, WithLF: false}
 				if err := pw.Err("repository not found"); err != nil {
 					return fmt.Errorf("failed to write error response: %w", err)
 				}
-				_ = conn.writer.Flush()
+				_ = conn.Flush()
 				return nil
 			}
 			defer func() { _ = repoWrapper.Close() }()
@@ -418,10 +485,10 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 					}
 				}
 				// 섹션 구분자(delim)
-				if _, err := conn.writer.WriteString("0001"); err != nil {
+				if _, err := writer.WriteString("0001"); err != nil {
 					return fmt.Errorf("failed to write delim-pkt: %w", err)
 				}
-				if err := conn.writer.Flush(); err != nil {
+				if err := conn.Flush(); err != nil {
 					return fmt.Errorf("failed to flush after acknowledgments: %w", err)
 				}
 			}
@@ -434,11 +501,11 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				// "packfile" 섹션 헤더
 				// 참고: Git protocol v2에서 "packfile" 섹션 헤더 이후에 sideband 데이터를 보낼 수 있습니다
 				// Progress 메시지는 "packfile" 섹션 헤더 이후에 보내야 하며, 이전에 보내면 안 됩니다
-				if err := protocol.WritePackfileSectionHeader(conn.writer); err != nil {
+				if err := protocol.WritePackfileSectionHeader(writer); err != nil {
 					return fmt.Errorf("failed to write packfile section header: %w", err)
 				}
 				// "packfile" 헤더가 packfile 데이터 전에 전송되도록 flush
-				if err := conn.writer.Flush(); err != nil {
+				if err := conn.Flush(); err != nil {
 					return fmt.Errorf("failed to flush packfile section header: %w", err)
 				}
 				// [14] packfile 헤더 전송 완료
@@ -447,17 +514,17 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				// 이들은 sideband channel 2 (progress)로 전송됩니다
 				totalObjects := len(objectHashes)
 				// [15] progress 메시지 전송 시작
-				if err := writeProgressMessage(conn.writer, fmt.Sprintf("Enumerating objects: %d, done.\n", totalObjects)); err != nil {
+				if err := writeProgressMessage(writer, fmt.Sprintf("Enumerating objects: %d, done.\n", totalObjects)); err != nil {
 					return fmt.Errorf("failed to write enumerating message: %w", err)
 				}
-				if err := writeProgressMessage(conn.writer, fmt.Sprintf("Counting objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
+				if err := writeProgressMessage(writer, fmt.Sprintf("Counting objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
 					return fmt.Errorf("failed to write counting completion: %w", err)
 				}
 				// [16] progress 메시지 전송 완료
 
 				// Flush progress messages before starting packfile transmission
 				// This ensures progress messages are sent before packfile data
-				if err := conn.writer.Flush(); err != nil {
+				if err := conn.Flush(); err != nil {
 					return fmt.Errorf("failed to flush progress messages: %w", err)
 				}
 
@@ -471,7 +538,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 
 				// packfile 인코딩 후 compressing 완료 및 요약 전송
 				// [19] compressing 완료 메시지 전송
-				if err := writeProgressMessage(conn.writer, fmt.Sprintf("Compressing objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
+				if err := writeProgressMessage(writer, fmt.Sprintf("Compressing objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
 					return fmt.Errorf("failed to write compressing completion: %w", err)
 				}
 
@@ -481,21 +548,21 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 				// 최종 요약 전송
 				summary := fmt.Sprintf("Total %d (delta %d), reused %d (delta %d), pack-reused 0 (from 0)\n",
 					totalObjects, deltaCount, totalObjects, deltaCount)
-				if err := writeProgressMessage(conn.writer, summary); err != nil {
+				if err := writeProgressMessage(writer, summary); err != nil {
 					return fmt.Errorf("failed to write summary: %w", err)
 				}
 				// [20] 요약 메시지 전송 완료
-				if err := conn.writer.Flush(); err != nil {
+				if err := conn.Flush(); err != nil {
 					return fmt.Errorf("failed to flush after packfile summary: %w", err)
 				}
 			}
 
 			// 최종 flush
 			// [21] 최종 flush
-			if _, err := conn.writer.WriteString("0000"); err != nil {
+			if _, err := writer.WriteString("0000"); err != nil {
 				return fmt.Errorf("failed to write final flush: %w", err)
 			}
-			if err := conn.writer.Flush(); err != nil {
+			if err := conn.Flush(); err != nil {
 				return fmt.Errorf("failed to flush writer: %w", err)
 			}
 			// [22] 모든 처리 완료
@@ -504,8 +571,34 @@ func (s *DuplexTCPServer) handleUploadPack(conn *DuplexConnection, owner, repo s
 	}
 }
 
-// handleReceivePack : git-receive-pack (push) 처리
-func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo string) error {
+// handleReceivePack : git-receive-pack (push) 처리 with progress-aware connection and atomic updates
+func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnection, owner, repo string) error {
+	// Transition to operation phase for push
+	if err := conn.SetPhase(connection.PhaseOperation); err != nil {
+		return fmt.Errorf("failed to set operation phase: %w", err)
+	}
+
+	// Get client IP for concurrency control
+	clientIP := connection.GetClientIP(conn.GetRemoteAddr())
+	tenantID := fmt.Sprintf("%s/%s", owner, repo) // Use owner/repo as tenant ID
+
+	// Request operation permission (push)
+	ctx := context.Background()
+	if err := s.concurrencyController.RequestOperation(ctx, connection.OperationPush, tenantID, clientIP); err != nil {
+		s.logger.Warn("Push operation denied",
+			zap.String("tenant", tenantID),
+			zap.String("client_ip", clientIP),
+			zap.Error(err))
+		return fmt.Errorf("operation denied: %w", err)
+	}
+
+	// Ensure we release the operation slot
+	operationStartTime := time.Now()
+	var operationSuccess bool
+	defer func() {
+		s.concurrencyController.ReleaseOperation(connection.OperationPush, tenantID, clientIP)
+		s.metrics.RecordOperationComplete(connection.OperationPush, time.Since(operationStartTime), operationSuccess, tenantID)
+	}()
 
 	// 1) Repository 열기
 	pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
@@ -527,11 +620,19 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
+	// Initialize atomic push handler
+	operationID := fmt.Sprintf("push-%s-%s-%d", owner, repo, time.Now().UnixNano())
+	atomicPushHandler := connection.NewAtomicPushHandler(gitRepo, operationID, s.logger.Logger)
+
+	// Get connection components
+	reader := conn.GetReader()
+	writer := conn.GetWriter()
+
 	// 2) V1 광고 전송
-	if err := protocol.WriteV1Advert(conn.writer, *gitRepo); err != nil {
+	if err := protocol.WriteV1Advert(writer, *gitRepo); err != nil {
 		return fmt.Errorf("failed to send advert: %w", err)
 	}
-	if err := conn.writer.Flush(); err != nil {
+	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("flush advert: %w", err)
 	}
 
@@ -544,7 +645,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 	// 첫 번째 읽기에서 flush가 오면 잠시 대기 후 다시 시도
 	firstRead := true
 	for {
-		line, isFlush, err := readPktLine(conn.reader)
+		line, isFlush, err := readPktLine(reader)
 		if err != nil {
 			// 타임아웃이나 연결 종료 에러인 경우
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -564,10 +665,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 				// 짧은 대기 후 다시 시도
 				s.logger.Info("Received flush immediately after advertisement, waiting briefly for ref updates")
 				time.Sleep(100 * time.Millisecond)
-				// 연결의 읽기 타임아웃 갱신
-				if tcpConn, ok := conn.conn.(*net.TCPConn); ok {
-					_ = tcpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-				}
+				// With progress-aware connection, no need to manually set deadlines
 				firstRead = false
 				continue
 			}
@@ -593,32 +691,34 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 			zap.String("worktree_path", workTree.Filesystem.Root()))
 	}
 
-	// 5) packfile 데이터 읽기 및 unpack
+	// Prepare atomic push operation with collected ref updates
+	if len(refUpdates) > 0 {
+		if err := atomicPushHandler.PreparePushOperation(refUpdates); err != nil {
+			s.logger.Error("Failed to prepare atomic push operation", zap.Error(err))
+			return fmt.Errorf("failed to prepare push operation: %w", err)
+		}
+	}
+
+	// 5) packfile 데이터 읽기 및 unpack with progress tracking
 	// 참고: ref updates 섹션 이후에 packfile이 raw binary로 전송됨
 	// packfile이 있는지 확인 (peek으로 "PACK" 시그니처 확인)
 	hasPackfile := false
-	if peekData, err := conn.reader.Peek(4); err == nil && len(peekData) == 4 {
+	if peekData, err := reader.Peek(4); err == nil && len(peekData) == 4 {
 		if string(peekData) == "PACK" {
 			hasPackfile = true
 		}
 	}
 
 	if hasPackfile {
-		s.logger.Info("Starting packfile read")
+		s.logger.Info("Starting packfile read with progress tracking")
 
-		// Idle 기반(silding) read deadline:
-		// - 총 처리 시간이 아니라 "마지막으로 데이터를 받은 시점"부터의 유휴 시간 기준으로 타임아웃
-		// - 대용량(1GB/2GB+)이라도 전송이 계속되면 타임아웃되지 않음
-		idleTimeout := 30 * time.Second
-		var packReader io.Reader = conn.reader // 중요: pkt-line 리더 말고, 원본 io.Reader
-		if tcpConn, ok := conn.conn.(*net.TCPConn); ok {
-			packReader = &deadlineRefreshingReader{
-				r:    conn.reader,
-				conn: tcpConn,
-				idle: idleTimeout,
-			}
-			s.logger.Debug("Using idle-based read deadline for packfile parsing", zap.Duration("idle_timeout", idleTimeout))
-		}
+		// Set pack-objects phase for special progress handling
+		progressTracker := conn.GetProgressTracker()
+		progressTracker.SetPackObjectsPhase(true)
+		defer progressTracker.SetPackObjectsPhase(false)
+
+		// Use the reader directly - progress tracking is handled by ProgressAwareConnection
+		var packReader io.Reader = reader
 
 		scanner := packfile.NewScanner(packReader)
 		parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
@@ -629,14 +729,18 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		// 6) packfile 데이터 디코드
 		if _, err := parser.Parse(); err != nil {
 			s.logger.Error("Failed to parse packfile", zap.Error(err))
+			// Handle timeout scenario for atomic push
+			if err := atomicPushHandler.HandlePushTimeout(); err != nil {
+				s.logger.Error("Failed to handle push timeout", zap.Error(err))
+			}
 			// Send unpack error response
 			if err := s.writePktLine(conn, fmt.Sprintf("unpack %s", err.Error())); err != nil {
 				return fmt.Errorf("failed to write unpack error: %w", err)
 			}
-			if _, err := conn.writer.WriteString("0000"); err != nil {
+			if _, err := writer.WriteString("0000"); err != nil {
 				return fmt.Errorf("failed to write flush: %w", err)
 			}
-			if err := conn.writer.Flush(); err != nil {
+			if err := conn.Flush(); err != nil {
 				return fmt.Errorf("failed to flush: %w", err)
 			}
 			return err
@@ -647,22 +751,41 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 		s.logger.Info("No packfile detected, skipping unpack")
 	}
 
-	// 7) unpack 성공 응답 전송
+	// 7) Execute atomic push operation
+	if len(refUpdates) > 0 {
+		if err := atomicPushHandler.ExecutePushOperation(); err != nil {
+			s.logger.Error("Failed to execute atomic push operation", zap.Error(err))
+			// Send unpack error response for atomic failure
+			if err := s.writePktLine(conn, fmt.Sprintf("unpack atomic push failed: %s", err.Error())); err != nil {
+				return fmt.Errorf("failed to write atomic push error: %w", err)
+			}
+			if _, err := writer.WriteString("0000"); err != nil {
+				return fmt.Errorf("failed to write flush: %w", err)
+			}
+			if err := conn.Flush(); err != nil {
+				return fmt.Errorf("failed to flush: %w", err)
+			}
+			return err
+		}
+	}
+
+	// 8) unpack 성공 응답 전송
 	if err := s.writePktLine(conn, "unpack ok"); err != nil {
 		return fmt.Errorf("failed to write unpack ok: %w", err)
 	}
 
-	// 8) 각 ref 업데이트 처리 및 응답 전송
+	// 9) 각 ref 업데이트 성공 응답 전송
 	if len(refUpdates) == 0 {
 		s.logger.Warn("No ref updates received from client - this may indicate a protocol issue or empty push")
 		// ref updates가 없으면 "unpack ok"만 보내고 종료
 		// (클라이언트가 push할 내용이 없으면 ref updates가 없을 수 있음)
 	} else {
+		// Since we used atomic push, all refs were updated successfully or none were updated
+		// Send success response for each ref that was processed atomically
+		_, _, userID, _ := conn.GetConnectionInfo()
 		for _, refUpdate := range refUpdates {
-			// Parse ref update line: "old-hash new-hash ref-name\0capabilities" or "old-hash new-hash ref-name capabilities"
-			// Handle null-separated format first
+			// Parse ref update line for response formatting
 			var refName string
-			var oldHash, newHash string
 
 			if strings.Contains(refUpdate, "\x00") {
 				// Null-separated format: "old-hash new-hash ref-name\0capabilities"
@@ -670,61 +793,69 @@ func (s *DuplexTCPServer) handleReceivePack(conn *DuplexConnection, owner, repo 
 				refAndHashes := parts[0]
 				hashParts := strings.Fields(refAndHashes)
 				if len(hashParts) >= 3 {
-					oldHash = hashParts[0]
-					newHash = hashParts[1]
 					refName = hashParts[2]
 				}
 			} else {
 				// Space-separated format: "old-hash new-hash ref-name [capabilities]"
 				parts := strings.Fields(refUpdate)
 				if len(parts) >= 3 {
-					oldHash = parts[0]
-					newHash = parts[1]
 					refName = parts[2]
 				}
 			}
 
-			if oldHash == "" || newHash == "" || refName == "" {
-				s.logger.Warn("Invalid ref update format", zap.String("update", refUpdate))
+			if refName == "" {
+				s.logger.Warn("Invalid ref update format for response", zap.String("update", refUpdate))
 				continue
 			}
 
-			s.logger.Info("Processing ref update",
-				zap.String("old_hash", oldHash),
-				zap.String("new_hash", newHash),
-				zap.String("ref_name", refName))
+			s.logger.Info("Ref update processed atomically",
+				zap.String("ref_name", refName),
+				zap.String("operation_id", operationID))
 
-			// ref 업데이트 수행
-			if err := s.updateRef(gitRepo, oldHash, newHash, refName, owner, repo, conn.userID); err != nil {
-				s.logger.Error("Failed to update ref",
-					zap.String("ref_name", refName),
-					zap.Error(err))
-
-				// Send error response for this ref
-				statusLine := fmt.Sprintf("ng %s %s", refName, err.Error())
-				if err := s.writePktLine(conn, statusLine); err != nil {
-					return fmt.Errorf("failed to write ref error status: %w", err)
-				}
-				continue
-			}
-
-			// Send success response for this ref
+			// Send success response for this ref (all succeeded due to atomic operation)
 			statusLine := fmt.Sprintf("ok %s", refName)
 			if err := s.writePktLine(conn, statusLine); err != nil {
 				return fmt.Errorf("failed to write ref success status: %w", err)
 			}
+
+			// Handle events for successful ref updates
+			if s.eventsClient != nil && strings.HasPrefix(refName, "refs/heads/") {
+				// Extract old and new hashes for event
+				var oldHash, newHash string
+				if strings.Contains(refUpdate, "\x00") {
+					parts := strings.SplitN(refUpdate, "\x00", 2)
+					hashParts := strings.Fields(parts[0])
+					if len(hashParts) >= 2 {
+						oldHash, newHash = hashParts[0], hashParts[1]
+					}
+				} else {
+					parts := strings.Fields(refUpdate)
+					if len(parts) >= 2 {
+						oldHash, newHash = parts[0], parts[1]
+					}
+				}
+
+				if oldHash != "" && newHash != "" {
+					s.addCommitEventToStream(gitRepo, oldHash, newHash, refName, owner, repo, userID, events.EventTypePush)
+				}
+			}
 		}
 	}
 
-	// 9) 최종 flush 패킷 전송
-	if _, err := conn.writer.WriteString("0000"); err != nil {
+	// 10) 최종 flush 패킷 전송
+	if _, err := writer.WriteString("0000"); err != nil {
 		return fmt.Errorf("failed to write final flush: %w", err)
 	}
-	if err := conn.writer.Flush(); err != nil {
+	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("failed to flush writer: %w", err)
 	}
 
-	s.logger.Info("Push request processed successfully")
+	// Mark operation as successful
+	operationSuccess = true
+	s.logger.Info("Atomic push request processed successfully",
+		zap.String("operation_id", operationID),
+		zap.Int("ref_count", len(refUpdates)),
+		zap.Duration("duration", time.Since(operationStartTime)))
 	return nil
 }
 
@@ -814,8 +945,9 @@ func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, re
 	return nil
 }
 
-// handleLsRefs : ls-refs 명령 처리 (info/refs)
-func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo string, lsRefsReq *protocol.LsRefsReq) error {
+// handleLsRefs : ls-refs 명령 처리 (info/refs) with progress-aware connection
+func (s *DuplexTCPServer) handleLsRefs(conn *connection.ProgressAwareConnection, owner, repo string, lsRefsReq *protocol.LsRefsReq) error {
+	writer := conn.GetWriter()
 
 	// ls-refs 응답 형식 (Git protocol v2):
 	// 1. 직접 refs 목록만 전송 (capabilities는 보내지 않음)
@@ -844,7 +976,7 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 	gitRepo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		// Send error response according to Git protocol
-		pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
+		pw := &protocol.PktWriter{W: writer, WithLF: false}
 		if err := pw.Err("repository not found"); err != nil {
 			return fmt.Errorf("failed to write error response: %w", err)
 		}
@@ -994,12 +1126,12 @@ func (s *DuplexTCPServer) handleLsRefs(conn *DuplexConnection, owner, repo strin
 	if err != nil {
 		return fmt.Errorf("failed to list references: %w", err)
 	}
-	pw := &protocol.PktWriter{W: conn.writer, WithLF: false}
+	pw := &protocol.PktWriter{W: writer, WithLF: false}
 	if err := pw.Flush(); err != nil {
 		return fmt.Errorf("failed to write flush packet: %w", err)
 	}
 
-	return conn.writer.Flush()
+	return conn.Flush()
 }
 
 func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
@@ -1081,11 +1213,12 @@ func writeProgressMessage(w io.Writer, message string) error {
 
 // --- main: v2 side-band-64k로 PACK 전송 ---
 func (s *DuplexTCPServer) writePackfileWithSideband(
-	conn *DuplexConnection,
+	conn *connection.ProgressAwareConnection,
 	st storer.EncodedObjectStorer,
 	hashes []plumbing.Hash,
 	fetchReq *protocol.FetchReq,
 ) error {
+	writer := conn.GetWriter()
 	// v2 packfile 스트림은 항상 side-band-64k.
 	// OfsDelta 요청 시 보통 ref-delta를 끔.
 	useRefDelta := !fetchReq.OfsDelta
@@ -1101,7 +1234,7 @@ func (s *DuplexTCPServer) writePackfileWithSideband(
 	// 보낼 수 있지만, go-git의 encoder는 progress callback을 제공하지 않으므로
 	// 프로토콜 오류를 피하기 위해 progress 메시지를 건너뜁니다.
 	// [17-1] sideband writer 생성
-	sbw := newSidebandWriter(conn.writer, 0x01)
+	sbw := newSidebandWriter(writer, 0x01)
 
 	// [17-2] packfile encoder 생성
 	enc := packfile.NewEncoder(sbw, st, useRefDelta)
@@ -1131,7 +1264,7 @@ func (s *DuplexTCPServer) writePackfileWithSideband(
 	// packfile encoder가 완료된 후, sideband writer의 버퍼에 남아있는 데이터가 있을 수 있으므로
 	// 먼저 underlying writer를 flush하여 모든 packfile 데이터(트레일러 포함)가 전송되도록 보장
 	// [17-5] writer flush (packfile 데이터 전송 보장)
-	if err := conn.writer.Flush(); err != nil {
+	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("socket flush after encoding: %w", err)
 	}
 
@@ -1143,7 +1276,7 @@ func (s *DuplexTCPServer) writePackfileWithSideband(
 
 	// 최종 flush
 	// [17-7] 최종 writer flush
-	if err := conn.writer.Flush(); err != nil {
+	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("socket flush: %w", err)
 	}
 	return nil
@@ -1228,26 +1361,29 @@ func readPktLine(r *bufio.Reader) ([]byte, bool, error) {
 	return buf, false, nil
 }
 
-// writePktLine : pkt-line 전송
-func (s *DuplexTCPServer) writePktLine(conn *DuplexConnection, data string) error {
+// writePktLine : pkt-line 전송 with progress-aware connection
+func (s *DuplexTCPServer) writePktLine(conn *connection.ProgressAwareConnection, data string) error {
 	// pkt-line 형식: [4자리 hex 길이][데이터]\n
+	writer := conn.GetWriter()
 	length := len(data) + 4
 	line := fmt.Sprintf("%04x%s", length, data)
-	_, err := conn.writer.WriteString(line)
+	_, err := writer.WriteString(line)
 	return err
 }
 
-// cleanupConnections : 유휴 연결 정리
+// cleanupConnections : 유휴 연결 정리 with progress-aware monitoring
 func (s *DuplexTCPServer) cleanupConnections() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		s.mu.Lock()
-		now := time.Now()
-		for conn, duplexConn := range s.connections {
-			if now.Sub(duplexConn.lastUsed) > 5*time.Minute {
-				_ = conn.Close()
+		for conn, progressConn := range s.connections {
+			// Use IsAlive to check if connection is healthy and not stalled
+			if !progressConn.IsAlive() {
+				s.logger.Debug("Cleaning up unhealthy connection",
+					zap.String("remote_addr", conn.RemoteAddr().String()))
+				progressConn.Close()
 				delete(s.connections, conn)
 			}
 		}
