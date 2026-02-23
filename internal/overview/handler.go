@@ -260,11 +260,11 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		mu.Unlock()
 	}()
 
-	// (2) GetTreeWithCommit — capped by N-bucket
+	// (2) GetTreeOnly — 트리 구조만 (커밋 정보 없음)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		entries, _, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+		entries, err := h.service.GetTreeOnly(ctx, gitRepo, repoCtx.ref, repoCtx.path)
 		mu.Lock()
 		treeEntriesWithCommit = entries
 		treeErr = err
@@ -410,9 +410,9 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 
 	repoCtx.path = path
 
-	// 트리 항목 가져오기 (커밋 정보 포함; always capped)
+	// 트리 항목만 가져오기 (커밋 정보 없음)
 	gitRepo := repoCtx.repoWrapper.GetRepo()
-	treeEntriesWithCommit, _, err := h.service.GetTreeWithCommit(ctx, gitRepo, repoCtx.ref, repoCtx.path)
+	treeEntriesWithCommit, err := h.service.GetTreeOnly(ctx, gitRepo, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		// 실제 저장소 손상 오류인 경우
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
@@ -819,7 +819,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 		refHash = resolvedHash.String()
 	}
 
-	// --- INDEX LOOKUP ---
+	// --- INDEX LOOKUP -DP
 	// If we have a pre-populated index entry for this dir, serve directly ("조회" not "계산").
 	if refHash != "" && h.commitIndex != nil {
 		if idxCommits, idxMeta, hit := h.commitIndex.Lookup(repoCtx.repoPath, refHash, repoCtx.path); hit {
@@ -842,7 +842,6 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 					Name:       repo,
 					Path:       path,
 					Tree:       treeEntriesWithCommit,
-					Branches:   convertBranchesToGitBranches(repoCtx.branchesList),
 					Meta:       &idxMeta,
 				}
 				c.JSON(http.StatusOK, response)
@@ -908,7 +907,6 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 		Name:       repo,
 		Path:       path,
 		Tree:       treeEntriesWithCommit,
-		Branches:   convertBranchesToGitBranches(repoCtx.branchesList),
 		Meta:       &treeMeta,
 	}
 

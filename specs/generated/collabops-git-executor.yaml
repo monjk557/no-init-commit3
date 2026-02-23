@@ -2348,14 +2348,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GitTreeEntryWithCommit'
-        branches:
-          type: array
-          items:
-            $ref: '#/components/schemas/GitBranch'
         meta:
           $ref: '#/components/schemas/LatestCommitsMeta'
       required:
-        - branches
         - name
         - owner
         - path

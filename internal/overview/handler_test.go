@@ -1494,7 +1494,149 @@ func Test_TreeWithCommit_NonExistentPath_Returns404(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Equal(t, http.StatusNotFound, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+}
+
+func Test_TreeWithCommit_NonExistentRepo_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	// Do not create repo; only ensure base dir exists.
+	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, owner), 0755))
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+}
+
+func Test_TreeWithCommit_WithPathParam_ReturnsEntriesForPath(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main&path=src", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+
+	var resp TreeWithCommitOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.Equal(t, "src", resp.Path)
+	require.NotEmpty(t, resp.Tree, "src/ should have entries (main.go, util.go)")
+}
+
+func Test_TreeWithCommit_WithRefParam_Returns200(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+
+	var resp TreeWithCommitOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.NotEmpty(t, resp.Tree)
+}
+
+func Test_TreeWithCommit_NonExistentRef_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=nonexistent-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+}
+
+func Test_TreeWithCommit_FilePath_Returns404(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	// path가 파일(README.md)이면 tree가 아니므로 404
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?path=README.md", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+}
+
+func Test_TreeWithCommit_ResponseHasRequiredFields(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "status=%d body=%s", w.Code, w.Body.String())
+
+	var resp TreeWithCommitOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success, "success must be true")
+	require.NotEmpty(t, resp.Repository, "repository must be set")
+	require.NotEmpty(t, resp.Owner, "owner must be set")
+	require.NotEmpty(t, resp.Name, "name must be set")
+	require.NotNil(t, resp.Tree, "tree must be present (may be empty slice)")
+	require.NotNil(t, resp.Meta, "meta must be present for caps visibility")
 }
 
 // =============================================================================

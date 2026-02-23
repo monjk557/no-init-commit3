@@ -230,7 +230,6 @@ type TreeWithCommitOverviewResponse struct {
 	Name       string                   `json:"name"`
 	Path       string                   `json:"path"`
 	Tree       []GitTreeEntryWithCommit `json:"tree"`
-	Branches   []GitBranch              `json:"branches"`
 	Meta       *LatestCommitsMeta       `json:"meta,omitempty"`
 }
 

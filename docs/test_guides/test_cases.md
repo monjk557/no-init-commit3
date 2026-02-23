@@ -508,6 +508,17 @@
 - [x] `Test_Contributors_SortsByCommitCount` - 커밋 수 정렬 (Merge Preview API, CountSummary 확인)
 - [x] `Test_Contributors_IncludesEmail` - 이메일 포함 (Merge Preview API)
 
+### 5.4 Tree with commit (GET /overview/tree/commits)
+- [x] `Test_TreeWithCommit_ResponseIncludesMeta` - 응답에 meta(resolved_ref_hash, cut_reason 등) 포함
+- [x] `Test_TreeWithCommit_SmallRepo_ReturnsComplete` - 소규모 레포에서 meta.incomplete=false, cut_reason=complete
+- [x] `Test_TreeWithCommit_NonExistentPath_Returns404` - 존재하지 않는 path → 404
+- [x] `Test_TreeWithCommit_NonExistentRepo_Returns404` - 존재하지 않는 레포 → 404
+- [x] `Test_TreeWithCommit_WithPathParam_ReturnsEntriesForPath` - path 쿼리로 서브디렉토리 조회 시 해당 경로 트리 반환
+- [x] `Test_TreeWithCommit_WithRefParam_Returns200` - ref 쿼리(main 등) 시 해당 ref 기준 트리 반환
+- [x] `Test_TreeWithCommit_NonExistentRef_Returns404` - 존재하지 않는 ref → 404
+- [x] `Test_TreeWithCommit_FilePath_Returns404` - path가 파일(디렉토리 아님)이면 404 (path is not a tree)
+- [x] `Test_TreeWithCommit_ResponseHasRequiredFields` - 응답 스키마: success, repository, tree, branches, meta
+
 ---
 
 ## 6. Tree
