@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-02-23T11:20:16Z",
+  "test_summary": {
+    "collabops_version": "fd7bff3",
+    "test_date": "2026-02-23",
+    "test_duration": "5 minutes"
+  },
+  "baselines": {
+    "github_api": {
+      "small_repo": 300,
+      "medium_repo": 300,
+      "large_repo": 300,
+      "notes": "Consistent performance across all scales"
+    }
+  },
+  "collabops_results": {
+    "baseline": {
+      "small_repo": "TBD",
+      "medium_repo": "TBD",
+      "large_repo": "TBD",
+      "notes": "Without commit-graph optimization"
+    },
+    "optimized": {
+      "small_repo": "TBD",
+      "medium_repo": "TBD",
+      "large_repo": "TBD",
+      "improvement": "Expected 60% for commit operations",
+      "notes": "With commit-graph enabled"
+    }
+  },
+  "targets": {
+    "excellent": 200,
+    "good": 500,
+    "acceptable": 1000,
+    "poor": 2000
+  },
+  "recommendations": [
+    "Enable commit-graph optimization immediately",
+    "Monitor performance metrics continuously",
+    "Target <500ms for competitive parity",
+    "Consider database caching for expensive operations"
+  ]
+}

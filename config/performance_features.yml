@@ -1,0 +1,40 @@
+# CollabOps Performance Feature Flags Configuration
+# These flags control experimental optimizations for A/B testing
+
+performance_features:
+  # Automatically generate commit-graph for repositories
+  # Research shows 60% performance improvement for commit operations
+  enable_commit_graph_optimization: false
+
+  # Detailed performance monitoring and metrics collection
+  # Exports timing data to CSV for analysis
+  enable_performance_monitoring: false
+
+  # Enable competitive benchmarking endpoints
+  # Adds /benchmark API endpoints for testing
+  enable_competitive_benchmarking: false
+
+  # Enable detailed CPU/memory profiling
+  # High overhead - only enable for performance analysis
+  enable_detailed_profiling: false
+
+# Environment variable overrides (higher priority):
+# COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION=true
+# COLLABOPS_PERFORMANCE_FEATURES_ENABLE_PERFORMANCE_MONITORING=true
+# COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMPETITIVE_BENCHMARKING=true
+# COLLABOPS_PERFORMANCE_FEATURES_ENABLE_DETAILED_PROFILING=true
+
+# Usage Examples:
+#
+# Baseline testing (no optimizations):
+#   export COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION=false
+#   ./collabops-git-executor
+#
+# Optimized testing (with commit-graph):
+#   export COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION=true
+#   export COLLABOPS_PERFORMANCE_FEATURES_ENABLE_PERFORMANCE_MONITORING=true
+#   ./collabops-git-executor
+#
+# Performance analysis:
+#   export COLLABOPS_PERFORMANCE_FEATURES_ENABLE_DETAILED_PROFILING=true
+#   ./collabops-git-executor

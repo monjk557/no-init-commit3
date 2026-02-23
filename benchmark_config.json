@@ -1,0 +1,24 @@
+{
+  "collabops_url": "http://localhost:8090",
+  "github_token": "",
+  "output_file": "benchmark_results.json",
+  "test_duration": "5m",
+  "concurrent_users": 5,
+  "test_repositories": [
+    {
+      "scale": "small",
+      "github_repo": "octocat/Hello-World",
+      "local_repo": "small-repo"
+    },
+    {
+      "scale": "medium",
+      "github_repo": "facebook/react",
+      "local_repo": "medium-repo"
+    },
+    {
+      "scale": "large",
+      "github_repo": "torvalds/linux",
+      "local_repo": "large-repo"
+    }
+  ]
+}
