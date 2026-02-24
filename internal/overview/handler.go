@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +56,7 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 	}
 
 	blobService := blob.NewBlobService(pathConfig)
-	service, err := NewRepositoryOverviewService(logger, pathConfig, repoManager)
+	service, err := NewRepositoryOverviewService(logger, pathConfig, repoManager, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create overview service: %w", err)
 	}
@@ -802,6 +803,35 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	ref := c.Query("ref")
 	path := c.Query("path")
 
+	// Phase 2 개선: 페이지네이션 파라미터 파싱
+	pageStr := c.Query("page")
+	perPageStr := c.Query("per_page")
+
+	var page, perPage int
+	var err error
+
+	// 페이지 번호 파싱
+	if pageStr != "" {
+		if page, err = strconv.Atoi(pageStr); err != nil || page < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid page parameter"})
+			return
+		}
+	}
+
+	// 페이지당 항목 수 파싱
+	if perPageStr != "" {
+		if perPage, err = strconv.Atoi(perPageStr); err != nil || perPage < 1 || perPage > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid per_page parameter (must be 1-100)"})
+			return
+		}
+	}
+
+	// 페이지네이션이 요청된 경우 새로운 페이지네이션 핸들러로 처리
+	if pageStr != "" || perPageStr != "" {
+		h.handleTreeWithCommitPaginated(c, ctx, owner, repo, ref, path, page, perPage, start)
+		return
+	}
+
 	// 공통 검증 및 저장소 열기
 	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
 	if !ok {
@@ -909,6 +939,116 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 		Tree:       treeEntriesWithCommit,
 		Meta:       &treeMeta,
 	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ============================================================================
+// Phase 2 개선: 페이지네이션 핸들러
+// ============================================================================
+
+// handleTreeWithCommitPaginated는 페이지네이션이 적용된 트리 조회를 처리합니다.
+func (h *RepositoryOverviewHandler) handleTreeWithCommitPaginated(
+	c *gin.Context,
+	ctx context.Context,
+	owner, repo, ref, path string,
+	page, perPage int,
+	startTime time.Time,
+) {
+	m := observability.GetApplicationMetrics()
+
+	// 공통 검증 및 저장소 열기
+	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
+	if !ok {
+		return
+	}
+	defer func() { _ = repoCtx.repoWrapper.Close() }()
+
+	repoCtx.path = path
+	gitRepo := repoCtx.repoWrapper.GetRepo()
+
+	// 요청 구조체 생성
+	req := &TreeDirectoryRequest{
+		Owner:   owner,
+		Repo:    repo,
+		Ref:     repoCtx.ref,
+		Path:    path,
+		Page:    page,
+		PerPage: perPage,
+	}
+
+	// 기본 URL 구성 (페이지네이션 URL 생성용)
+	baseURL := fmt.Sprintf("/api/v1/repository/%s/%s/overview/tree/commits", owner, repo)
+	if ref != "" {
+		baseURL += "?ref=" + ref
+	}
+	if path != "" {
+		if ref != "" {
+			baseURL += "&path=" + path
+		} else {
+			baseURL += "?path=" + path
+		}
+	}
+
+	h.logger.Info("Processing paginated tree request",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("ref", ref),
+		zap.String("path", path),
+		zap.Int("page", page),
+		zap.Int("per_page", perPage),
+	)
+
+	// 페이지네이션이 적용된 서비스 메서드 호출
+	response, err := h.service.GetTreeWithCommitPaginated(ctx, gitRepo, req, baseURL)
+	if err != nil {
+		m.RecordTreeWithCommit("paginated_error", time.Since(startTime), 0)
+
+		h.logger.Error("Failed to get paginated tree", zap.Error(err))
+
+		// 경로 관련 오류인지 확인
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "failed to find path") ||
+			strings.Contains(errMsg, "path not found") ||
+			strings.Contains(errMsg, "path is not a tree") {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
+			return
+		}
+
+		// 다른 오류들
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to retrieve directory"})
+		return
+	}
+
+	// 성공 메트릭 기록
+	outcome := "paginated_complete"
+	if response.Meta != nil && response.Meta.Incomplete {
+		outcome = "paginated_incomplete"
+	}
+	m.RecordTreeWithCommit(outcome, time.Since(startTime), len(response.Tree))
+
+	// 응답 헤더 설정 (GitLab 패턴)
+	if response.Pagination != nil {
+		c.Header("X-Total", strconv.Itoa(response.Pagination.TotalFiles))
+		c.Header("X-Total-Pages", strconv.Itoa(response.Pagination.TotalPages))
+		c.Header("X-Page", strconv.Itoa(response.Pagination.Page))
+		c.Header("X-Per-Page", strconv.Itoa(response.Pagination.PerPage))
+
+		if response.Pagination.HasNextPage {
+			c.Header("X-Next-Page", strconv.Itoa(response.Pagination.Page+1))
+		}
+		if response.Pagination.HasPrevPage {
+			c.Header("X-Prev-Page", strconv.Itoa(response.Pagination.Page-1))
+		}
+	}
+
+	h.logger.Info("Completed paginated tree request",
+		zap.Duration("total_time", time.Since(startTime)),
+		zap.Int("returned_files", len(response.Tree)),
+		zap.Int("total_files", response.Pagination.TotalFiles),
+		zap.Int("page", response.Pagination.Page),
+		zap.Int("per_page", response.Pagination.PerPage),
+	)
 
 	c.JSON(http.StatusOK, response)
 }

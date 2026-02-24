@@ -231,6 +231,9 @@ type TreeWithCommitOverviewResponse struct {
 	Path       string                   `json:"path"`
 	Tree       []GitTreeEntryWithCommit `json:"tree"`
 	Meta       *LatestCommitsMeta       `json:"meta,omitempty"`
+
+	// 새로 추가: 페이지네이션 메타데이터
+	Pagination *PaginationInfo `json:"pagination,omitempty"`
 }
 
 type LatestCommitsBatchRequest struct {
@@ -245,6 +248,11 @@ type LatestCommitsMeta struct {
 	ScannedCommits  int    `json:"scanned_commits"`
 	TimeBudgetMs    int    `json:"time_budget_ms"`
 	CutReason       string `json:"cut_reason"`
+
+	// Week 3 개선: 인덱싱 시스템 메타데이터
+	IndexUsed      bool `json:"index_used,omitempty"`      // O(1) 인덱싱 사용 여부
+	IndexedLookups int  `json:"indexed_lookups,omitempty"` // 인덱스로 조회한 파일 수
+	GitFallbacks   int  `json:"git_fallbacks,omitempty"`   // Git 순회로 fallback한 파일 수
 }
 
 type LatestCommitsBatchResponse struct {
@@ -256,4 +264,36 @@ type LatestCommitsBatchResponse struct {
 	CommitsByPath map[string]*GitCommit `json:"commits_by_path"`
 	Meta          LatestCommitsMeta     `json:"meta"`
 	MissingPaths  []string              `json:"missing_paths,omitempty"`
+}
+
+// ============================================================================
+// Phase 2 개선: 스마트 페이지네이션 구조체
+// ============================================================================
+
+// PaginationInfo는 페이지네이션 메타데이터를 제공합니다.
+type PaginationInfo struct {
+	Page        int    `json:"page"`                    // 현재 페이지 (1부터 시작)
+	PerPage     int    `json:"per_page"`                // 페이지당 항목 수
+	TotalFiles  int    `json:"total_files"`             // 전체 파일 수
+	TotalPages  int    `json:"total_pages"`             // 전체 페이지 수
+	HasNextPage bool   `json:"has_next_page"`           // 다음 페이지 존재 여부
+	HasPrevPage bool   `json:"has_prev_page"`           // 이전 페이지 존재 여부
+	NextPageURL string `json:"next_page_url,omitempty"` // 다음 페이지 URL (있는 경우)
+	PrevPageURL string `json:"prev_page_url,omitempty"` // 이전 페이지 URL (있는 경우)
+}
+
+// TreeDirectoryRequest는 디렉토리 조회 요청 파라미터입니다.
+type TreeDirectoryRequest struct {
+	// 기본 파라미터
+	Owner string `json:"owner"` // 저장소 소유자
+	Repo  string `json:"repo"`  // 저장소 이름
+	Ref   string `json:"ref"`   // 브랜치/태그/커밋 참조
+	Path  string `json:"path"`  // 디렉토리 경로
+
+	// 페이지네이션 파라미터
+	Page    int `json:"page,omitempty"`     // 페이지 번호 (기본값: 1)
+	PerPage int `json:"per_page,omitempty"` // 페이지당 항목 수 (0이면 자동 결정)
+
+	// 성능 관련 파라미터
+	TimeBudgetMs int `json:"time_budget_ms,omitempty"` // 최대 허용 시간 (밀리초)
 }

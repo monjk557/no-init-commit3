@@ -1,0 +1,193 @@
+# Multi-Tier Cache Configuration for CollabOps Git Executor
+# Phase 2 Implementation: Targeting 90% → 98% cache hit rate and 40% performance improvement
+
+cache:
+  # Enable/disable caching system
+  enabled: true
+
+  # Performance targets and monitoring
+  performance:
+    # Target metrics for Phase 2 improvements
+    target_hit_ratio: 0.98          # 98% cache hit rate target
+    target_improvement: 0.40        # 40% performance improvement on repeated requests
+    enable_monitoring: true
+    metrics_interval: "30s"
+
+  # L1 Memory Cache Configuration (Microsecond-level access)
+  l1_memory:
+    max_size: 1000                  # Maximum number of cached directory responses
+    default_ttl: "10m"              # 10 minutes TTL for hot data
+    cleanup_interval: "1m"          # Cleanup expired entries every minute
+    enable_metrics: true
+
+    # Performance tuning
+    initial_capacity: 256           # Initial map capacity to reduce allocations
+    concurrency_level: 16           # Lock striping for better concurrent access
+
+  # L2 Redis Cache Configuration (Millisecond-level access)
+  l2_redis:
+    # Connection settings
+    address: "localhost:6379"       # Redis server address
+    password: ""                    # Redis password (empty for no auth)
+    db: 0                          # Redis database number
+    pool_size: 10                  # Connection pool size
+    prefix: "collabops:cache:"     # Key prefix for namespacing
+
+    # Timeout settings
+    dial_timeout: "5s"             # Connection timeout
+    read_timeout: "3s"             # Read operation timeout
+    write_timeout: "3s"            # Write operation timeout
+    idle_timeout: "300s"           # Idle connection timeout (5 minutes)
+    max_retries: 3                 # Maximum retry attempts
+
+    # Cache settings
+    default_ttl: "1h"              # 1 hour TTL for persistent storage
+    max_key_size: "250KB"          # Maximum size per cached response
+
+  # Multi-tier coordination settings
+  coordination:
+    enable_cache_warming: true      # Enable proactive cache warming
+    warm_l1_from_l2: true          # Automatically warm L1 from L2 hits
+    enable_performance_mode: true   # Enable optimizations for performance
+
+    # Warming control
+    max_concurrent_warming: 5       # Limit concurrent warming operations
+    warming_timeout: "5s"           # Timeout for warming operations
+    warming_batch_size: 10          # Batch size for bulk warming
+
+    # Intelligent eviction
+    enable_smart_eviction: true     # Use access patterns for smarter eviction
+    eviction_sample_size: 5         # Sample size for LRU decision making
+
+# Development and testing overrides
+development:
+  cache:
+    # Faster cleanup for development
+    l1_memory:
+      cleanup_interval: "10s"
+      default_ttl: "2m"
+
+    l2_redis:
+      # Use different database for development
+      db: 1
+      default_ttl: "10m"
+
+    coordination:
+      # More aggressive warming for testing
+      max_concurrent_warming: 10
+      warming_timeout: "2s"
+
+# Production optimizations
+production:
+  cache:
+    # Larger cache for production load
+    l1_memory:
+      max_size: 2000
+      default_ttl: "30m"
+      cleanup_interval: "5m"
+
+    l2_redis:
+      # Production Redis settings
+      pool_size: 20
+      default_ttl: "4h"             # Longer TTL in production
+      max_retries: 5
+
+    coordination:
+      # Conservative warming in production
+      max_concurrent_warming: 3
+      warming_timeout: "10s"
+
+# High availability configuration
+ha:
+  cache:
+    l2_redis:
+      # Multiple Redis instances for HA
+      addresses:
+        - "redis-1:6379"
+        - "redis-2:6379"
+        - "redis-3:6379"
+
+      # Failover settings
+      failover_timeout: "3s"
+      sentinel_master_name: "mymaster"
+      sentinel_password: ""
+
+      # Backup strategy
+      enable_backup: true
+      backup_interval: "1h"
+      backup_retention: "24h"
+
+# Monitoring and alerting
+monitoring:
+  metrics:
+    # Prometheus metrics
+    enable_prometheus: true
+    prometheus_namespace: "collabops"
+    prometheus_subsystem: "cache"
+
+    # Custom metrics
+    track_access_patterns: true     # Track access patterns for optimization
+    track_warming_effectiveness: true
+    track_memory_usage: true
+
+  # Health checks
+  health_check:
+    interval: "30s"                # Health check interval
+    timeout: "5s"                  # Health check timeout
+    failure_threshold: 3           # Failures before marking unhealthy
+
+  # Alerting thresholds
+  alerts:
+    low_hit_ratio_threshold: 0.85  # Alert if hit ratio drops below 85%
+    high_memory_usage_threshold: 0.90  # Alert if memory usage > 90%
+    redis_connection_failures: 5   # Alert after 5 Redis connection failures
+    l1_eviction_rate_threshold: 100  # Alert if L1 evictions > 100/min
+
+# Cache invalidation strategies
+invalidation:
+  # Repository-level invalidation
+  repository:
+    on_push: true                  # Invalidate on git push
+    on_merge: true                 # Invalidate on merge/pull request
+    on_branch_create: false        # Don't invalidate on branch creation
+    on_tag_create: false           # Don't invalidate on tag creation
+
+  # Directory-level invalidation
+  directory:
+    on_file_change: true           # Invalidate directory when files change
+    on_directory_rename: true      # Invalidate on directory rename
+    propagate_to_parent: true      # Invalidate parent directories
+
+  # Time-based invalidation
+  time_based:
+    enable_scheduled_cleanup: true # Enable scheduled cleanup
+    cleanup_schedule: "0 2 * * *"  # Daily at 2 AM (cron format)
+    max_age: "24h"                 # Maximum cache age regardless of TTL
+
+  # Pattern-based invalidation
+  patterns:
+    # Invalidate all cache entries matching these patterns on events
+    - pattern: "dir:{{.RepoID}}:*"
+      events: ["push", "merge"]
+    - pattern: "commit:{{.RepoID}}:*"
+      events: ["push", "merge", "rebase"]
+
+# Security settings
+security:
+  # Redis security
+  redis:
+    enable_tls: false              # Enable TLS for Redis connections
+    tls_cert_file: ""
+    tls_key_file: ""
+    tls_ca_file: ""
+
+  # Access control
+  access:
+    enable_rate_limiting: true     # Enable rate limiting for cache operations
+    max_requests_per_second: 1000  # Max cache requests per second per client
+    burst_size: 100                # Burst capacity
+
+  # Data protection
+  data:
+    enable_encryption_at_rest: false  # Encrypt cached data (performance impact)
+    encryption_key_rotation: "30d"   # Rotate encryption keys every 30 days

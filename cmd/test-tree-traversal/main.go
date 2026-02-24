@@ -12,6 +12,8 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/overview"
 	"github.com/collabops/git-executor/internal/repositories"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -80,8 +82,15 @@ func runLanguageDetectionTest(repo *gogit.Repository, repoPath string, logger *l
 		return
 	}
 
+	// Initialize database
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		fmt.Printf("   ❌ Failed to initialize database: %v\n", err)
+		return
+	}
+
 	// Create overview service
-	overviewService, err := overview.NewRepositoryOverviewService(logger, pathConfig, repoManager)
+	overviewService, err := overview.NewRepositoryOverviewService(logger, pathConfig, repoManager, db)
 	if err != nil {
 		fmt.Printf("   ❌ Failed to create overview service: %v\n", err)
 		return

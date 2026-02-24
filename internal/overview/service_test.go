@@ -18,6 +18,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func setupTestService(t *testing.T) (*RepositoryOverviewService, string, func()) {
@@ -38,7 +40,11 @@ func setupTestService(t *testing.T) (*RepositoryOverviewService, string, func())
 	repoManager, err := repositories.NewRepositoryManager(pathConfig, logger)
 	require.NoError(t, err)
 
-	service, err := NewRepositoryOverviewService(logger, pathConfig, repoManager)
+	// Initialize test database
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+
+	service, err := NewRepositoryOverviewService(logger, pathConfig, repoManager, db)
 	require.NoError(t, err)
 
 	cleanup := func() {

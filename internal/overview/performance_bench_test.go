@@ -19,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 type perfRepo struct {
@@ -45,7 +47,11 @@ func newOverviewServiceForBench(tb testing.TB, repoRoot string) *RepositoryOverv
 	repoManager, err := repositories.NewRepositoryManager(pathConfig, logger)
 	require.NoError(tb, err)
 
-	svc, err := NewRepositoryOverviewService(logger, pathConfig, repoManager)
+	// Initialize test database
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(tb, err)
+
+	svc, err := NewRepositoryOverviewService(logger, pathConfig, repoManager, db)
 	require.NoError(tb, err)
 	return svc
 }

@@ -1,0 +1,176 @@
+# Kubernetes ConfigMap for CollabOps Git Executor Cache Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collabops-cache-config
+  namespace: collabops
+  labels:
+    app: collabops-git-executor
+    component: cache
+    phase: phase-2-implementation
+data:
+  cache.yaml: |
+    cache:
+      enabled: true
+      performance:
+        target_hit_ratio: 0.98
+        target_improvement: 0.40
+        enable_monitoring: true
+        metrics_interval: "30s"
+
+      l1_memory:
+        max_size: 2000
+        default_ttl: "30m"
+        cleanup_interval: "5m"
+        enable_metrics: true
+        initial_capacity: 512
+        concurrency_level: 32
+
+      l2_redis:
+        address: "redis-service:6379"
+        password: ""
+        db: 0
+        pool_size: 20
+        prefix: "collabops:cache:"
+        dial_timeout: "5s"
+        read_timeout: "3s"
+        write_timeout: "3s"
+        idle_timeout: "300s"
+        max_retries: 5
+        default_ttl: "4h"
+        max_key_size: "1MB"
+
+      coordination:
+        enable_cache_warming: true
+        warm_l1_from_l2: true
+        enable_performance_mode: true
+        max_concurrent_warming: 3
+        warming_timeout: "10s"
+        warming_batch_size: 20
+        enable_smart_eviction: true
+        eviction_sample_size: 8
+
+    monitoring:
+      metrics:
+        enable_prometheus: true
+        prometheus_namespace: "collabops"
+        prometheus_subsystem: "cache"
+        track_access_patterns: true
+        track_warming_effectiveness: true
+        track_memory_usage: true
+
+      health_check:
+        interval: "30s"
+        timeout: "5s"
+        failure_threshold: 3
+
+      alerts:
+        low_hit_ratio_threshold: 0.90
+        high_memory_usage_threshold: 0.85
+        redis_connection_failures: 3
+        l1_eviction_rate_threshold: 50
+
+    invalidation:
+      repository:
+        on_push: true
+        on_merge: true
+        on_branch_create: false
+        on_tag_create: false
+      directory:
+        on_file_change: true
+        on_directory_rename: true
+        propagate_to_parent: true
+      time_based:
+        enable_scheduled_cleanup: true
+        cleanup_schedule: "0 3 * * *"
+        max_age: "48h"
+
+    security:
+      redis:
+        enable_tls: true
+        tls_cert_file: "/etc/ssl/certs/redis-client.crt"
+        tls_key_file: "/etc/ssl/private/redis-client.key"
+        tls_ca_file: "/etc/ssl/certs/ca.crt"
+      access:
+        enable_rate_limiting: true
+        max_requests_per_second: 2000
+        burst_size: 200
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: collabops
+  labels:
+    app: redis
+    component: cache-l2
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 6379
+    tcp-backlog 511
+    tcp-keepalive 60
+    timeout 300
+
+    databases 16
+
+    loglevel notice
+
+    maxmemory 2gb
+    maxmemory-policy allkeys-lru
+    maxmemory-samples 8
+
+    lazyfree-lazy-eviction yes
+    lazyfree-lazy-expire yes
+    lazyfree-lazy-server-del yes
+
+    save 900 1
+    save 300 10
+    save 60 10000
+
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 128mb
+    aof-load-truncated yes
+    aof-use-rdb-preamble yes
+
+    maxclients 10000
+
+    hash-max-ziplist-entries 512
+    hash-max-ziplist-value 64
+    list-max-ziplist-size -2
+    set-max-intset-entries 512
+    zset-max-ziplist-entries 128
+    zset-max-ziplist-value 64
+
+    activerehashing yes
+
+    client-output-buffer-limit normal 0 0 0
+    client-output-buffer-limit replica 256mb 64mb 60
+    client-output-buffer-limit pubsub 32mb 8mb 60
+
+    client-query-buffer-limit 1gb
+    proto-max-bulk-len 512mb
+
+    lua-time-limit 5000
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+    latency-monitor-threshold 100
+
+    hz 10
+
+    io-threads 4
+    io-threads-do-reads yes
+
+    replica-read-only yes
+    replica-serve-stale-data yes

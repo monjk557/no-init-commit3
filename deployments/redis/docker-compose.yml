@@ -1,0 +1,190 @@
+# Redis deployment for CollabOps Git Executor L2 Cache
+# Phase 2 Implementation: Multi-tier caching system
+
+version: '3.8'
+
+services:
+  # Primary Redis instance for L2 cache
+  redis-primary:
+    image: redis:7.2-alpine
+    container_name: collabops-redis-primary
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+    # Redis configuration
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 300
+      --databases 16
+      --dir /data
+      --dbfilename dump.rdb
+      --appendfilename appendonly.aof
+      --logfile /var/log/redis/redis.log
+      --loglevel notice
+
+    volumes:
+      - redis-primary-data:/data
+      - redis-logs:/var/log/redis
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+
+    # Environment variables
+    environment:
+      - REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL,KEYS,CONFIG
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1.2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis Sentinel for high availability (optional)
+  redis-sentinel-1:
+    image: redis:7.2-alpine
+    container_name: collabops-redis-sentinel-1
+    restart: unless-stopped
+    ports:
+      - "26379:26379"
+
+    command: >
+      redis-sentinel /usr/local/etc/redis/sentinel.conf
+
+    volumes:
+      - ./sentinel.conf:/usr/local/etc/redis/sentinel.conf:ro
+      - redis-sentinel-logs:/var/log/redis
+
+    depends_on:
+      - redis-primary
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Redis Insight for monitoring (development only)
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    container_name: collabops-redis-insight
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+
+    volumes:
+      - redis-insight-data:/db
+
+    environment:
+      - RIPORT=8001
+      - RIHOMEDIR=/db
+
+    profiles:
+      - development
+
+    depends_on:
+      - redis-primary
+
+  # Redis Exporter for Prometheus monitoring
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: collabops-redis-exporter
+    restart: unless-stopped
+    ports:
+      - "9121:9121"
+
+    environment:
+      - REDIS_ADDR=redis://redis-primary:6379
+      - REDIS_EXPORTER_INCL_SYSTEM_METRICS=true
+      - REDIS_EXPORTER_CHECK_KEYS=collabops:cache:*
+
+    depends_on:
+      - redis-primary
+
+    profiles:
+      - monitoring
+
+  # Backup service
+  redis-backup:
+    image: redis:7.2-alpine
+    container_name: collabops-redis-backup
+    restart: unless-stopped
+
+    volumes:
+      - redis-primary-data:/source-data:ro
+      - redis-backup-data:/backup
+      - ./backup.sh:/backup.sh:ro
+
+    command: sh /backup.sh
+
+    environment:
+      - BACKUP_INTERVAL=3600  # Backup every hour
+      - BACKUP_RETENTION=168  # Keep backups for 7 days (168 hours)
+      - REDIS_HOST=redis-primary
+      - REDIS_PORT=6379
+
+    depends_on:
+      - redis-primary
+
+    profiles:
+      - production
+
+volumes:
+  # Persistent data volumes
+  redis-primary-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis-primary
+
+  redis-backup-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis-backup
+
+  # Log volumes
+  redis-logs:
+    driver: local
+
+  redis-sentinel-logs:
+    driver: local
+
+  # Monitoring volumes
+  redis-insight-data:
+    driver: local
+
+networks:
+  default:
+    name: collabops-cache-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
