@@ -385,3 +385,4 @@ jobs:
           curl -sS -X POST -H 'Content-type: application/json' \
             --data "{\"text\": \"🚀 **${IMAGE}** image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\n👤 Contributor: ${ACTOR} | 🕐 Time: ${KST_TIME}\"}" \
             "${SLACK_WEBHOOK_URL}"
+
