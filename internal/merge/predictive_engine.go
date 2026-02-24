@@ -503,6 +503,11 @@ func NewConflictPredictionModel() *ConflictPredictionModel {
 
 // Predict makes a conflict prediction based on extracted features
 func (cpm *ConflictPredictionModel) Predict(features *MergeFeatures) *ConflictPrediction {
+	// Handle nil features gracefully
+	if features == nil {
+		features = &MergeFeatures{} // Default empty features
+	}
+
 	// Normalize features
 	normalizedFeatures := cpm.normalizeFeatures(features)
 
