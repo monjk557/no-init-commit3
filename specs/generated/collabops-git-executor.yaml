@@ -1598,6 +1598,12 @@ components:
           type: integer
         cut_reason:
           type: string
+        index_used:
+          type: boolean
+        indexed_lookups:
+          type: integer
+        git_fallbacks:
+          type: integer
       required:
         - cut_reason
         - incomplete
@@ -1937,24 +1943,28 @@ components:
     PaginationInfo:
       type: object
       properties:
-        count:
+        page:
           type: integer
-        next:
-          type: string
-        previous:
-          type: string
-        current_page:
+        per_page:
+          type: integer
+        total_files:
           type: integer
         total_pages:
           type: integer
-        page_size:
-          type: integer
+        has_next_page:
+          type: boolean
+        has_prev_page:
+          type: boolean
+        next_page_url:
+          type: string
+        prev_page_url:
+          type: string
       required:
-        - count
-        - current_page
-        - next
-        - page_size
-        - previous
+        - has_next_page
+        - has_prev_page
+        - page
+        - per_page
+        - total_files
         - total_pages
     PaginationParams:
       type: object
@@ -2258,6 +2268,28 @@ components:
         - pagination
         - results
         - success
+    TreeDirectoryRequest:
+      type: object
+      properties:
+        owner:
+          type: string
+        repo:
+          type: string
+        ref:
+          type: string
+        path:
+          type: string
+        page:
+          type: integer
+        per_page:
+          type: integer
+        time_budget_ms:
+          type: integer
+      required:
+        - owner
+        - path
+        - ref
+        - repo
     TreeEntriesRecursiveResponse:
       type: object
       properties:
@@ -2350,6 +2382,8 @@ components:
             $ref: '#/components/schemas/GitTreeEntryWithCommit'
         meta:
           $ref: '#/components/schemas/LatestCommitsMeta'
+        pagination:
+          $ref: '#/components/schemas/PaginationInfo'
       required:
         - name
         - owner
