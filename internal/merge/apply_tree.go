@@ -205,9 +205,12 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 		case MergeStrategyOurs:
 			return entry.targetHash, entry.targetMode, nil
 		case MergeStrategyRecursive, MergeStrategyResolve, MergeStrategyORT:
-			// For recursive/resolve/ORT strategies, prefer source version
-			// ORT (Optimized Recursive Three-way) is an improved version of recursive
-			return entry.sourceHash, entry.sourceMode, nil
+			// SAFETY FIX: Environment-aware conflict resolution
+			if h.isEnvironmentFile(entry.path) {
+				return h.resolveEnvironmentConflict(entry)
+			}
+			// For non-environment files, use intelligent resolution
+			return h.intelligentConflictResolution(entry)
 		default:
 			// Default to source for other strategies
 			return entry.sourceHash, entry.sourceMode, nil
@@ -636,4 +639,95 @@ func (h *MergeOperationsHandler) resolveTypeConflict(
 		}
 	}
 	return nil, nil
+}
+
+// SAFETY FIX: Environment file detection
+func (h *MergeOperationsHandler) isEnvironmentFile(path string) bool {
+	environmentPatterns := []string{
+		"config/env/",
+		".env",
+		"environments/",
+		"config/staging/",
+		"config/production/",
+		"*.env",
+	}
+
+	for _, pattern := range environmentPatterns {
+		if matchPath(path, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// SAFETY FIX: Environment-aware conflict resolution
+func (h *MergeOperationsHandler) resolveEnvironmentConflict(entry *mergeFileEntry) (plumbing.Hash, filemode.FileMode, error) {
+	h.logger.Warn("Environment file conflict detected",
+		zap.String("path", entry.path),
+		zap.String("resolution", "preserving_target"))
+
+	// CRITICAL SAFETY: Always preserve target environment unless explicitly overridden
+	if !entry.targetHash.IsZero() {
+		h.logger.Info("Preserving target environment file", zap.String("path", entry.path))
+		return entry.targetHash, entry.targetMode, nil
+	}
+
+	// If target doesn't exist but source does, require explicit confirmation
+	if !entry.sourceHash.IsZero() {
+		h.logger.Warn("Environment file creation requires explicit confirmation",
+			zap.String("path", entry.path))
+		return plumbing.ZeroHash, 0, &EnvironmentConflictError{
+			Path:    entry.path,
+			Message: fmt.Sprintf("Environment file %s requires explicit approval for creation/modification", entry.path),
+		}
+	}
+
+	// No environment file in either branch
+	return plumbing.ZeroHash, 0, nil
+}
+
+// SAFETY FIX: Intelligent conflict resolution for non-environment files
+func (h *MergeOperationsHandler) intelligentConflictResolution(entry *mergeFileEntry) (plumbing.Hash, filemode.FileMode, error) {
+	// For non-environment files, use contextual resolution
+
+	baseExists := !entry.baseHash.IsZero()
+	sourceExists := !entry.sourceHash.IsZero()
+	targetExists := !entry.targetHash.IsZero()
+
+	// If only one side changed, choose the changed version
+	if baseExists && sourceExists && targetExists {
+		if entry.baseHash == entry.targetHash && entry.baseHash != entry.sourceHash {
+			// Only source changed - choose source
+			h.logger.Debug("Choosing source version (only source changed)", zap.String("path", entry.path))
+			return entry.sourceHash, entry.sourceMode, nil
+		}
+		if entry.baseHash == entry.sourceHash && entry.baseHash != entry.targetHash {
+			// Only target changed - choose target
+			h.logger.Debug("Choosing target version (only target changed)", zap.String("path", entry.path))
+			return entry.targetHash, entry.targetMode, nil
+		}
+	}
+
+	// Both sides changed or complex scenario - require manual resolution
+	h.logger.Warn("Complex conflict requires manual resolution", zap.String("path", entry.path))
+	return plumbing.ZeroHash, 0, &ComplexConflictError{
+		Path:    entry.path,
+		Message: fmt.Sprintf("File %s has complex conflicts requiring manual resolution", entry.path),
+	}
+}
+
+// Helper function for path matching
+func matchPath(path, pattern string) bool {
+	// Simple pattern matching - can be enhanced with proper glob matching
+	if pattern[len(pattern)-1] == '/' {
+		// Directory pattern
+		return len(path) > len(pattern) && path[:len(pattern)] == pattern
+	}
+	if pattern[0] == '*' {
+		// Suffix pattern
+		suffix := pattern[1:]
+		return len(path) >= len(suffix) && path[len(path)-len(suffix):] == suffix
+	}
+	// Exact or prefix match
+	return path == pattern || (len(path) > len(pattern) && path[:len(pattern)] == pattern)
 }

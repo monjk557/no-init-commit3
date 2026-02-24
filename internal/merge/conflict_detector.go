@@ -280,11 +280,43 @@ func (cd *ConflictDetector) analyzeFileConflict(ctx context.Context, repo *gogit
 	sourceExists := source != nil
 	targetExists := target != nil
 
-	// No conflict if file is unchanged
+	// SAFETY FIX: Proper single-side change detection (fix Bug #1)
+
+	// No conflict if all versions are identical
 	if baseExists && sourceExists && targetExists &&
 		base.Hash == source.Hash && base.Hash == target.Hash {
 		return nil, nil
 	}
+
+	// FIXED: Single-side changes are NOT conflicts
+	if baseExists && sourceExists && targetExists {
+		// Only source changed - not a conflict
+		if base.Hash == target.Hash && base.Hash != source.Hash {
+			cd.logger.Debug("Only source changed, no conflict", zap.String("path", path))
+			return nil, nil
+		}
+		// Only target changed - not a conflict
+		if base.Hash == source.Hash && base.Hash != target.Hash {
+			cd.logger.Debug("Only target changed, no conflict", zap.String("path", path))
+			return nil, nil
+		}
+		// Both changed differently - this IS a real conflict, continue to analysis
+	}
+
+	// Addition/deletion cases without conflicts
+	if !baseExists && sourceExists && !targetExists {
+		// File added only in source - not a conflict
+		cd.logger.Debug("File added in source only, no conflict", zap.String("path", path))
+		return nil, nil
+	}
+	if !baseExists && !sourceExists && targetExists {
+		// File added only in target - not a conflict
+		cd.logger.Debug("File added in target only, no conflict", zap.String("path", path))
+		return nil, nil
+	}
+
+	// Only report REAL conflicts that need user resolution
+	cd.logger.Info("Real conflict detected requiring resolution", zap.String("path", path))
 
 	// Analyze conflict type and create file versions
 	baseVersion := cd.createFileVersion(repo, base)

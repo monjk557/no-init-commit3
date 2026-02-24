@@ -17,6 +17,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.uber.org/zap"
 )
 
 // MergeOperationsHandler handles REST API operations for Git merge operations
@@ -288,11 +289,45 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		return
 	}
 
-	// Check for conflicts (unless force is specified)
-	if conflictAnalysis.HasConflicts && !req.ForceConflict {
+	// SAFETY FIX: Replace dangerous force_conflict with explicit conflict resolution
+	if conflictAnalysis.HasConflicts {
+		// Check if this is an environment file conflict
+		hasEnvironmentConflicts := h.hasEnvironmentFileConflicts(conflictAnalysis)
 
-		c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("Merge has %d conflicts. Use force_conflict=true to override", conflictAnalysis.ConflictCount)})
-		return
+		if hasEnvironmentConflicts && !req.ForceConflict {
+			// Environment conflicts require explicit acknowledgment
+			c.JSON(http.StatusConflict, gin.H{
+				"success":             false,
+				"error":               "Environment file conflicts detected - manual resolution required",
+				"conflicts":           h.formatConflictsForResponse(conflictAnalysis),
+				"safety_warning":      "Environment files contain sensitive configuration. Please review conflicts manually.",
+				"resolution_required": true,
+			})
+			return
+		}
+
+		if !req.ForceConflict {
+			// For non-environment conflicts, provide clear resolution options
+			c.JSON(http.StatusConflict, gin.H{
+				"success":   false,
+				"error":     fmt.Sprintf("Merge has %d conflicts requiring resolution", conflictAnalysis.ConflictCount),
+				"conflicts": h.formatConflictsForResponse(conflictAnalysis),
+				"resolution_options": map[string]interface{}{
+					"manual_resolution": "Resolve conflicts manually and retry merge",
+					"choose_source":     "Use source branch version (set force_conflict=true with confirmation)",
+					"choose_target":     "Use target branch version (default behavior)",
+				},
+				"warning": "Forcing merge may overwrite important changes. Review conflicts carefully.",
+			})
+			return
+		}
+
+		// If force_conflict=true, log the decision for audit
+		h.logger.Warn("Forced merge with conflicts",
+			zap.String("source", req.SourceRef),
+			zap.String("target", req.TargetRef),
+			zap.Int("conflict_count", conflictAnalysis.ConflictCount),
+			zap.Bool("has_environment_conflicts", hasEnvironmentConflicts))
 	}
 
 	// Perform the actual merge
@@ -688,4 +723,64 @@ func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Contex
 
 		_ = h.eventsClient.AddCommitEventToStream(ctx, event)
 	}()
+}
+
+// SAFETY FIX: Helper methods for enhanced conflict handling
+
+// hasEnvironmentFileConflicts checks if any conflicts involve environment files
+func (h *MergeOperationsHandler) hasEnvironmentFileConflicts(analysis *MergeAnalysisResult) bool {
+	if analysis == nil {
+		return false
+	}
+
+	environmentPatterns := []string{
+		"config/env/",
+		".env",
+		"environments/",
+		"config/staging/",
+		"config/production/",
+	}
+
+	for _, conflict := range analysis.FileConflicts {
+		for _, pattern := range environmentPatterns {
+			if h.matchesPattern(conflict.FilePath, pattern) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// formatConflictsForResponse formats conflicts for API response
+func (h *MergeOperationsHandler) formatConflictsForResponse(analysis *MergeAnalysisResult) []map[string]interface{} {
+	if analysis == nil {
+		return []map[string]interface{}{}
+	}
+
+	conflicts := make([]map[string]interface{}, 0, len(analysis.FileConflicts))
+	for _, conflict := range analysis.FileConflicts {
+		conflicts = append(conflicts, map[string]interface{}{
+			"file_path":           conflict.FilePath,
+			"conflict_type":       string(conflict.ConflictType),
+			"severity":            string(conflict.Severity),
+			"is_environment_file": h.isEnvironmentFile(conflict.FilePath),
+			"auto_resolvable":     conflict.AutoResolvable,
+		})
+	}
+	return conflicts
+}
+
+// matchesPattern provides simple pattern matching
+func (h *MergeOperationsHandler) matchesPattern(path, pattern string) bool {
+	if len(pattern) > 0 && pattern[len(pattern)-1] == '/' {
+		// Directory pattern
+		return len(path) > len(pattern) && path[:len(pattern)] == pattern
+	}
+	if len(pattern) > 0 && pattern[0] == '*' {
+		// Suffix pattern
+		suffix := pattern[1:]
+		return len(path) >= len(suffix) && path[len(path)-len(suffix):] == suffix
+	}
+	// Exact or prefix match
+	return path == pattern || (len(path) > len(pattern) && path[:len(pattern)] == pattern)
 }

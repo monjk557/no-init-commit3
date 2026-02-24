@@ -286,3 +286,39 @@ func NewLockedError(resource string) error {
 func NewInternalError(op, message string, err error) error {
 	return InternalError{Op: op, Message: message, Err: err}
 }
+
+// SAFETY FIX: Environment file conflict error
+type EnvironmentConflictError struct {
+	Path    string
+	Message string
+}
+
+func (e EnvironmentConflictError) Error() string {
+	return e.Message
+}
+
+func (e EnvironmentConflictError) Unwrap() error {
+	return ErrConflict
+}
+
+func (e EnvironmentConflictError) HTTPStatusCode() int {
+	return http.StatusConflict
+}
+
+// SAFETY FIX: Complex conflict error requiring manual resolution
+type ComplexConflictError struct {
+	Path    string
+	Message string
+}
+
+func (e ComplexConflictError) Error() string {
+	return e.Message
+}
+
+func (e ComplexConflictError) Unwrap() error {
+	return ErrConflict
+}
+
+func (e ComplexConflictError) HTTPStatusCode() int {
+	return http.StatusConflict
+}
