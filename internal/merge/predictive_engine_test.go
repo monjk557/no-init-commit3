@@ -85,15 +85,15 @@ func TestConflictPredictionModel_BasicPrediction(t *testing.T) {
 	model := NewConflictPredictionModel()
 
 	features := &MergeFeatures{
-		TotalFiles:          5,
-		ModifiedFiles:       3,
-		EnvironmentFiles:    1,
-		LinesAdded:          150,
-		LinesDeleted:        50,
-		AuthorExperience:    0.5,
-		SemanticComplexity:  0.3,
-		DatabaseChanges:     false,
-		APIChanges:          false,
+		TotalFiles:         5,
+		ModifiedFiles:      3,
+		EnvironmentFiles:   1,
+		LinesAdded:         150,
+		LinesDeleted:       50,
+		AuthorExperience:   0.5,
+		SemanticComplexity: 0.3,
+		DatabaseChanges:    false,
+		APIChanges:         false,
 	}
 
 	prediction := model.Predict(features)
@@ -213,18 +213,18 @@ func TestIntegrationBasicWorkflow(t *testing.T) {
 
 	// Create sample features
 	features := &MergeFeatures{
-		TotalFiles:          8,
-		ModifiedFiles:       5,
-		AddedFiles:          2,
-		DeletedFiles:        1,
-		EnvironmentFiles:    2,
-		LinesAdded:          250,
-		LinesDeleted:        100,
-		AuthorExperience:    0.6,
-		BranchAge:           24.0,
-		SemanticComplexity:  0.4,
-		DatabaseChanges:     false,
-		APIChanges:          true,
+		TotalFiles:           8,
+		ModifiedFiles:        5,
+		AddedFiles:           2,
+		DeletedFiles:         1,
+		EnvironmentFiles:     2,
+		LinesAdded:           250,
+		LinesDeleted:         100,
+		AuthorExperience:     0.6,
+		BranchAge:            24.0,
+		SemanticComplexity:   0.4,
+		DatabaseChanges:      false,
+		APIChanges:           true,
 		FileTypeDistribution: map[string]int{"go": 6, "yaml": 2},
 	}
 
@@ -253,15 +253,15 @@ func BenchmarkConflictPrediction(b *testing.B) {
 	model := NewConflictPredictionModel()
 
 	features := &MergeFeatures{
-		TotalFiles:          10,
-		ModifiedFiles:       6,
-		EnvironmentFiles:    2,
-		LinesAdded:          300,
-		LinesDeleted:        150,
-		AuthorExperience:    0.7,
-		SemanticComplexity:  0.5,
-		DatabaseChanges:     true,
-		APIChanges:          false,
+		TotalFiles:         10,
+		ModifiedFiles:      6,
+		EnvironmentFiles:   2,
+		LinesAdded:         300,
+		LinesDeleted:       150,
+		AuthorExperience:   0.7,
+		SemanticComplexity: 0.5,
+		DatabaseChanges:    true,
+		APIChanges:         false,
 	}
 
 	b.ResetTimer()

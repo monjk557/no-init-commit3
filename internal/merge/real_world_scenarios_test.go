@@ -18,81 +18,81 @@ func TestRealWorldMergeScenarios(t *testing.T) {
 		features    *MergeFeatures
 		expected    struct {
 			shouldPredict bool
-			hasRisk      bool
+			hasRisk       bool
 		}
 	}{
 		{
 			name:        "emergency_production_hotfix",
 			description: "Emergency production hotfix touching environment files",
 			features: &MergeFeatures{
-				TotalFiles:          3,
-				ModifiedFiles:       2,
-				AddedFiles:          1,
-				EnvironmentFiles:    2, // Critical: Multiple environment files
-				LinesAdded:          25,
-				LinesDeleted:        10,
-				AuthorExperience:    0.9, // Experienced developer
-				SemanticComplexity:  0.7, // High complexity due to env changes
-				DatabaseChanges:     false,
-				APIChanges:          false,
+				TotalFiles:           3,
+				ModifiedFiles:        2,
+				AddedFiles:           1,
+				EnvironmentFiles:     2, // Critical: Multiple environment files
+				LinesAdded:           25,
+				LinesDeleted:         10,
+				AuthorExperience:     0.9, // Experienced developer
+				SemanticComplexity:   0.7, // High complexity due to env changes
+				DatabaseChanges:      false,
+				APIChanges:           false,
 				FileTypeDistribution: map[string]int{"env": 2, "go": 1},
-				TimeOfDay:           23, // Late night emergency
-				DayOfWeek:           0,  // Sunday emergency
+				TimeOfDay:            23, // Late night emergency
+				DayOfWeek:            0,  // Sunday emergency
 			},
 			expected: struct {
 				shouldPredict bool
-				hasRisk      bool
+				hasRisk       bool
 			}{true, true}, // Should predict and identify risk
 		},
 		{
 			name:        "large_team_refactoring",
 			description: "Large codebase refactoring with multiple contributors",
 			features: &MergeFeatures{
-				TotalFiles:          45,
-				ModifiedFiles:       40,
-				AddedFiles:          3,
-				DeletedFiles:        2,
-				EnvironmentFiles:    0, // No environment files
-				LinesAdded:          1200,
-				LinesDeleted:        800,
-				AuthorExperience:    0.6, // Mixed experience team
-				BranchAge:           168, // Week-long branch
-				SemanticComplexity:  0.8, // High complexity refactor
-				CrossFileReferences: 25,  // Many interdependencies
-				DatabaseChanges:     true,
-				APIChanges:          true,
+				TotalFiles:           45,
+				ModifiedFiles:        40,
+				AddedFiles:           3,
+				DeletedFiles:         2,
+				EnvironmentFiles:     0, // No environment files
+				LinesAdded:           1200,
+				LinesDeleted:         800,
+				AuthorExperience:     0.6, // Mixed experience team
+				BranchAge:            168, // Week-long branch
+				SemanticComplexity:   0.8, // High complexity refactor
+				CrossFileReferences:  25,  // Many interdependencies
+				DatabaseChanges:      true,
+				APIChanges:           true,
 				FileTypeDistribution: map[string]int{"go": 40, "sql": 3, "yaml": 2},
-				TimeOfDay:           14, // Normal working hours
-				DayOfWeek:           2,  // Tuesday
+				TimeOfDay:            14, // Normal working hours
+				DayOfWeek:            2,  // Tuesday
 			},
 			expected: struct {
 				shouldPredict bool
-				hasRisk      bool
+				hasRisk       bool
 			}{true, true}, // High risk due to complexity and scale
 		},
 		{
 			name:        "simple_documentation_update",
 			description: "Simple documentation and comment updates",
 			features: &MergeFeatures{
-				TotalFiles:          5,
-				ModifiedFiles:       5,
-				AddedFiles:          0,
-				DeletedFiles:        0,
-				EnvironmentFiles:    0,
-				LinesAdded:          35,
-				LinesDeleted:        20,
-				AuthorExperience:    0.7,
-				SemanticComplexity:  0.1, // Very low complexity
-				CrossFileReferences: 0,
-				DatabaseChanges:     false,
-				APIChanges:          false,
+				TotalFiles:           5,
+				ModifiedFiles:        5,
+				AddedFiles:           0,
+				DeletedFiles:         0,
+				EnvironmentFiles:     0,
+				LinesAdded:           35,
+				LinesDeleted:         20,
+				AuthorExperience:     0.7,
+				SemanticComplexity:   0.1, // Very low complexity
+				CrossFileReferences:  0,
+				DatabaseChanges:      false,
+				APIChanges:           false,
 				FileTypeDistribution: map[string]int{"md": 3, "go": 2}, // Mostly docs
-				TimeOfDay:           10, // Normal working hours
-				DayOfWeek:           3,  // Wednesday
+				TimeOfDay:            10,                               // Normal working hours
+				DayOfWeek:            3,                                // Wednesday
 			},
 			expected: struct {
 				shouldPredict bool
-				hasRisk      bool
+				hasRisk       bool
 			}{true, false}, // Low risk - mostly documentation
 		},
 	}
@@ -198,8 +198,8 @@ func TestPerformanceValidation(t *testing.T) {
 	engine := NewPredictiveConflictEngine(logger)
 
 	performanceTests := []struct {
-		name     string
-		features *MergeFeatures
+		name      string
+		features  *MergeFeatures
 		maxTimeMs float64
 	}{
 		{
@@ -214,11 +214,11 @@ func TestPerformanceValidation(t *testing.T) {
 		{
 			name: "medium_change_performance",
 			features: &MergeFeatures{
-				TotalFiles:          25,
-				ModifiedFiles:       20,
-				EnvironmentFiles:    3,
-				LinesAdded:          500,
-				SemanticComplexity:  0.6,
+				TotalFiles:           25,
+				ModifiedFiles:        20,
+				EnvironmentFiles:     3,
+				LinesAdded:           500,
+				SemanticComplexity:   0.6,
 				FileTypeDistribution: map[string]int{"go": 20, "yaml": 3, "env": 2},
 			},
 			maxTimeMs: 5.0, // Must complete under 5ms
@@ -226,12 +226,12 @@ func TestPerformanceValidation(t *testing.T) {
 		{
 			name: "large_change_performance",
 			features: &MergeFeatures{
-				TotalFiles:          100,
-				ModifiedFiles:       80,
-				EnvironmentFiles:    10,
-				LinesAdded:          2000,
-				SemanticComplexity:  0.8,
-				CrossFileReferences: 50,
+				TotalFiles:           100,
+				ModifiedFiles:        80,
+				EnvironmentFiles:     10,
+				LinesAdded:           2000,
+				SemanticComplexity:   0.8,
+				CrossFileReferences:  50,
 				FileTypeDistribution: map[string]int{"go": 70, "yaml": 15, "env": 10, "sql": 5},
 			},
 			maxTimeMs: 10.0, // Must complete under 10ms
@@ -289,15 +289,15 @@ func TestSystemIntegration(t *testing.T) {
 
 		// Simulate realistic merge scenario
 		features := &MergeFeatures{
-			TotalFiles:          12,
-			ModifiedFiles:       8,
-			EnvironmentFiles:    2,
-			LinesAdded:          300,
-			LinesDeleted:        150,
-			AuthorExperience:    0.7,
-			SemanticComplexity:  0.5,
-			DatabaseChanges:     true,
-			APIChanges:          false,
+			TotalFiles:           12,
+			ModifiedFiles:        8,
+			EnvironmentFiles:     2,
+			LinesAdded:           300,
+			LinesDeleted:         150,
+			AuthorExperience:     0.7,
+			SemanticComplexity:   0.5,
+			DatabaseChanges:      true,
+			APIChanges:           false,
 			FileTypeDistribution: map[string]int{"go": 8, "env": 2, "sql": 2},
 		}
 
@@ -359,20 +359,20 @@ func TestIntelligenceAccuracy(t *testing.T) {
 	t.Run("environment_file_risk_detection", func(t *testing.T) {
 		// High-risk scenario with environment files
 		highRiskFeatures := &MergeFeatures{
-			TotalFiles:          10,
-			EnvironmentFiles:    5, // Many environment files
-			SemanticComplexity:  0.8, // High complexity
-			DatabaseChanges:     true,
-			AuthorExperience:    0.3, // Inexperienced author
+			TotalFiles:         10,
+			EnvironmentFiles:   5,   // Many environment files
+			SemanticComplexity: 0.8, // High complexity
+			DatabaseChanges:    true,
+			AuthorExperience:   0.3, // Inexperienced author
 		}
 
 		// Low-risk scenario without environment files
 		lowRiskFeatures := &MergeFeatures{
-			TotalFiles:          5,
-			EnvironmentFiles:    0, // No environment files
-			SemanticComplexity:  0.2, // Low complexity
-			DatabaseChanges:     false,
-			AuthorExperience:    0.9, // Experienced author
+			TotalFiles:         5,
+			EnvironmentFiles:   0,   // No environment files
+			SemanticComplexity: 0.2, // Low complexity
+			DatabaseChanges:    false,
+			AuthorExperience:   0.9, // Experienced author
 		}
 
 		highRiskPrediction := model.Predict(highRiskFeatures)
@@ -385,9 +385,8 @@ func TestIntelligenceAccuracy(t *testing.T) {
 		// The system should generally predict higher risk for the high-risk scenario
 		t.Logf("   Risk differentiation: %s",
 			map[bool]string{
-				true: "✅ DETECTED (high > low risk)",
-				false: "⚠️  SIMILAR RISK LEVELS"}[
-				highRiskPrediction.ConflictProbability >= lowRiskPrediction.ConflictProbability])
+				true:  "✅ DETECTED (high > low risk)",
+				false: "⚠️  SIMILAR RISK LEVELS"}[highRiskPrediction.ConflictProbability >= lowRiskPrediction.ConflictProbability])
 
 		assert.True(t, highRiskPrediction.ConflictProbability >= 0, "High risk prediction should be valid")
 		assert.True(t, lowRiskPrediction.ConflictProbability >= 0, "Low risk prediction should be valid")
