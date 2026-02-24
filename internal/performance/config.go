@@ -12,6 +12,8 @@ type PerformanceConfig struct {
 	EnablePerformanceMonitoring   bool
 	EnableCompetitiveBenchmarking bool
 	EnableDetailedProfiling       bool
+	EnableObjectCache             bool
+	EnableFileDescriptorPool      bool
 }
 
 // NewPerformanceConfig creates a new performance configuration from environment variables
@@ -21,6 +23,8 @@ func NewPerformanceConfig() *PerformanceConfig {
 		EnablePerformanceMonitoring:   getBoolEnv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_PERFORMANCE_MONITORING", false),
 		EnableCompetitiveBenchmarking: getBoolEnv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMPETITIVE_BENCHMARKING", false),
 		EnableDetailedProfiling:       getBoolEnv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_DETAILED_PROFILING", false),
+		EnableObjectCache:             getBoolEnv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", false),
+		EnableFileDescriptorPool:      getBoolEnv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", false),
 	}
 }
 

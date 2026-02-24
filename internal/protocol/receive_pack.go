@@ -26,9 +26,9 @@ import (
 )
 
 // Repository lock manager for preventing concurrent pushes
+// PERFORMANCE OPTIMIZATION: Replace global mutex with concurrent map for better scalability
 var (
-	repoLocks  = make(map[string]*sync.Mutex)
-	locksMutex = sync.RWMutex{}
+	repoLocks = &sync.Map{} // Lock-free concurrent map - no global contention!
 )
 
 // ReceivePackRequest represents a parsed receive-pack request from the client
@@ -921,26 +921,20 @@ func isValidRefName(refName string) bool {
 }
 
 func getRepositoryLock(repoPath string) *sync.Mutex {
-	locksMutex.RLock()
-	lock, exists := repoLocks[repoPath]
-	locksMutex.RUnlock()
+	// PERFORMANCE OPTIMIZATION: Lock-free repository lock acquisition
+	// No global mutex contention - each repo gets independent access
 
-	if exists {
-		return lock
+	// Try to load existing lock (lock-free operation)
+	if value, exists := repoLocks.Load(repoPath); exists {
+		return value.(*sync.Mutex)
 	}
 
-	// Create new lock
-	locksMutex.Lock()
-	defer locksMutex.Unlock()
+	// Create new lock and try to store it atomically
+	newLock := &sync.Mutex{}
+	actual, _ := repoLocks.LoadOrStore(repoPath, newLock)
 
-	// Double-check in case another goroutine created it
-	if lock, exists := repoLocks[repoPath]; exists {
-		return lock
-	}
-
-	lock = &sync.Mutex{}
-	repoLocks[repoPath] = lock
-	return lock
+	// Return the lock that's actually stored (might be from another goroutine)
+	return actual.(*sync.Mutex)
 }
 
 func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string, eventType events.CommitEventType) {

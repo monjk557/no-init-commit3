@@ -49,33 +49,79 @@ func main() {
 	fmt.Printf("🔍 Testing performance on repository: %s\n", repoPath)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
-	// Test 1: Without commit-graph optimization
-	fmt.Printf("📊 Test 1: Baseline (no optimization)\n")
+	// Test 1: Baseline (no optimizations)
+	fmt.Printf("📊 Test 1: Baseline (no optimizations)\n")
 	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
-	runPerformanceTest(repo, repoPath, logger, false)
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
+	runPerformanceTest(repo, repoPath, logger, "baseline")
 
 	fmt.Printf("\n")
 
-	// Test 2: With commit-graph optimization
+	// Test 2: With commit-graph optimization only
 	fmt.Printf("⚡ Test 2: With commit-graph optimization\n")
 	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
-	runPerformanceTest(repo, repoPath, logger, true)
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
+	runPerformanceTest(repo, repoPath, logger, "commit-graph")
+
+	fmt.Printf("\n")
+
+	// Test 3: With object cache optimization only
+	fmt.Printf("💾 Test 3: With object cache optimization\n")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
+	runPerformanceTest(repo, repoPath, logger, "object-cache")
+
+	fmt.Printf("\n")
+
+	// Test 4: With FD pool optimization only
+	fmt.Printf("📁 Test 4: With file descriptor pool optimization\n")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
+	runPerformanceTest(repo, repoPath, logger, "fd-pool")
+
+	fmt.Printf("\n")
+
+	// Test 5: With ALL optimizations (maximum power!)
+	fmt.Printf("🚀 Test 5: With ALL optimizations (commit-graph + object cache + FD pool)\n")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
+	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
+	runPerformanceTest(repo, repoPath, logger, "all")
 
 	fmt.Printf("\n🎯 Performance test completed!\n")
 }
 
-func runPerformanceTest(repo *gogit.Repository, repoPath string, logger *logging.Logger, optimized bool) {
+func runPerformanceTest(repo *gogit.Repository, repoPath string, logger *logging.Logger, testType string) {
 	// Initialize performance config and commit-graph optimizer
 	perfConfig := performance.NewPerformanceConfig()
 	commitGraphOpt := performance.NewCommitGraphOptimizer(perfConfig, logger.Logger)
 
-	if optimized {
+	switch testType {
+	case "commit-graph", "all":
 		// Ensure commit-graph exists for the repository
 		if err := commitGraphOpt.EnsureCommitGraph(repoPath); err != nil {
 			fmt.Printf("   ⚠️  Failed to ensure commit-graph: %v\n", err)
 		} else {
 			fmt.Printf("   ✅ Commit-graph optimization enabled\n")
 		}
+	}
+
+	switch testType {
+	case "object-cache", "all":
+		fmt.Printf("   ✅ Object cache optimization enabled\n")
+	}
+
+	switch testType {
+	case "fd-pool", "all":
+		fmt.Printf("   ✅ File descriptor pool optimization enabled\n")
+	}
+
+	if testType == "baseline" {
+		fmt.Printf("   📊 No optimizations (baseline measurement)\n")
 	}
 
 	// Create path config and repository manager
