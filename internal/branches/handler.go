@@ -62,8 +62,9 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 		return nil, fmt.Errorf("failed to create object manager: %w", err)
 	}
 
-	// Compile branch name pattern
-	branchNamePattern, err := regexp.Compile(`^[a-zA-Z0-9_/-]+$`)
+	// Compile branch name pattern following git check-ref-format rules (blocklist approach)
+	// Blocks: control chars (0x00-0x1f, 0x7f), space, ~, ^, :, ?, *, [, \
+	branchNamePattern, err := regexp.Compile(`^[^\x00-\x20\x7f~^:?*\[\\]+$`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile branch name pattern: %w", err)
 	}

@@ -21,8 +21,8 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 	}
 
 	// Git branch name restrictions
-	if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") {
-		return fmt.Errorf("branch name cannot start or end with a dot")
+	if strings.HasSuffix(name, ".") {
+		return fmt.Errorf("branch name cannot end with a dot")
 	}
 
 	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
@@ -41,23 +41,33 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 		return fmt.Errorf("branch name cannot contain spaces")
 	}
 
-	// Additional validation: Reject names that look like "invalid/branch/name" pattern
-	// (multiple levels might be considered invalid for this specific test)
-	if strings.Count(name, "/") >= 2 {
-		return fmt.Errorf("branch name cannot contain more than one slash level")
+	// git check-ref-format: @{ sequence is forbidden
+	if strings.Contains(name, "@{") {
+		return fmt.Errorf("branch name cannot contain '@{' sequence")
 	}
 
-	// Check for invalid characters using pattern if available
+	// git check-ref-format: cannot be exactly "@"
+	if name == "@" {
+		return fmt.Errorf("branch name cannot be '@'")
+	}
+
+	// git check-ref-format: no slash-separated component may start with "." or end with ".lock"
+	// applies to every component, not just the full name (e.g. "feature/.hidden", "feature.lock/fix")
+	for _, component := range strings.Split(name, "/") {
+		if component == "" {
+			continue // leading/trailing/consecutive slashes already caught above
+		}
+		if strings.HasPrefix(component, ".") {
+			return fmt.Errorf("branch name component cannot start with a dot")
+		}
+		if strings.HasSuffix(component, ".lock") {
+			return fmt.Errorf("branch name component cannot end with '.lock'")
+		}
+	}
+
+	// Check for invalid characters using pattern if available (blocklist: control chars, ~, ^, :, ?, *, [, \)
 	if h.branchNamePattern != nil && !h.branchNamePattern.MatchString(name) {
 		return fmt.Errorf("branch name contains invalid characters")
-	}
-
-	// Additional specific character checks
-	invalidChars := []string{"~", "^", ":", "?", "*", "[", "\\", "@"}
-	for _, char := range invalidChars {
-		if strings.Contains(name, char) {
-			return fmt.Errorf("branch name contains invalid characters")
-		}
 	}
 
 	return nil
