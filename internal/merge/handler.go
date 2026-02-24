@@ -28,6 +28,9 @@ type MergeOperationsHandler struct {
 	conflictDetector *ConflictDetector
 	eventsClient     events.RedisStreamClient
 	config           *config.Config
+	// PHASE 1 & 2: Centralized tree protection system
+	protectionLayer *TreeProtectionLayer
+	orchestrator    *UniversalMergeOrchestrator
 	// hooks is only set in tests for deterministic concurrent testing
 	// In production, this is always nil and has no effect
 	hooks *MergeHooks
@@ -65,6 +68,22 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		}
 	}
 
+	// Initialize centralized protection and orchestration systems
+	protectionLayer := NewTreeProtectionLayer(logger.Logger)
+	orchestratorConfig := &OrchestratorConfig{
+		EnableIntelligentMerging:   true,
+		EnablePredictiveAnalysis:   true,
+		EnableAdaptiveFallback:     true,
+		EnableComprehensiveLogging: true,
+		SafetyChecksEnabled:        true,
+		LearningEnabled:            true,
+	}
+	orchestrator := NewUniversalMergeOrchestrator(logger.Logger, orchestratorConfig)
+
+	logger.Info("Centralized merge protection enabled",
+		zap.Bool("tree_protection", true),
+		zap.Bool("intelligent_orchestration", true))
+
 	return &MergeOperationsHandler{
 		pathConfig:       pathConfig,
 		logger:           logger,
@@ -72,7 +91,27 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		conflictDetector: conflictDetector,
 		eventsClient:     eventsClient,
 		config:           cfg,
+		protectionLayer:  protectionLayer,
+		orchestrator:     orchestrator,
 	}, nil
+}
+
+// extractEnvironmentFiles extracts environment file paths from merge analysis
+// This helper method supports the centralized protection system
+func (h *MergeOperationsHandler) extractEnvironmentFiles(analysis *MergeAnalysisResult) []string {
+	var envFiles []string
+
+	if analysis == nil {
+		return envFiles
+	}
+
+	for _, conflict := range analysis.FileConflicts {
+		if h.protectionLayer != nil && h.protectionLayer.environmentDetector.IsEnvironmentFile(conflict.FilePath) {
+			envFiles = append(envFiles, conflict.FilePath)
+		}
+	}
+
+	return envFiles
 }
 
 // MergePreviewHandler handles REST API operations for Git merge preview operations

@@ -179,9 +179,38 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 					if !isSquash {
 						fallbackTree = targetCommit.TreeHash
 					}
+
+					// **CRITICAL FIX**: Apply tree protection to prevent environment deletion
+					if isSquash && h.protectionLayer != nil {
+						fallbackContext := FallbackContext{
+							SourceCommit:     sourceCommit,
+							TargetCommit:     targetCommit,
+							BaseCommit:       nil, // Will be found automatically
+							Strategy:         strategy,
+							IsSquash:         isSquash,
+							ConflictCount:    analysis.ConflictCount,
+							AutoResolvable:   analysis.AutoResolvable,
+							EnvironmentFiles: h.extractEnvironmentFiles(analysis),
+						}
+
+						protectedTree, protErr := h.protectionLayer.ProtectFallback(ctx, repo, fallbackTree, fallbackContext)
+						if protErr != nil {
+							h.logger.Error("Failed to apply protection during merge failure fallback",
+								zap.Error(protErr),
+								zap.Error(err))
+						} else if protectedTree != fallbackTree {
+							h.logger.Info("Environment protection applied during merge failure fallback",
+								zap.String("original_tree", fallbackTree.String()),
+								zap.String("protected_tree", protectedTree.String()),
+								zap.Error(err))
+							fallbackTree = protectedTree
+						}
+					}
+
 					h.logger.Error("Failed to create merged tree, falling back",
 						zap.Error(err),
-						zap.Bool("is_squash", isSquash))
+						zap.Bool("is_squash", isSquash),
+						zap.String("fallback_tree", fallbackTree.String()))
 					return fallbackTree, nil
 				}
 				h.logger.Info("Successfully created merged tree",
@@ -202,9 +231,38 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 					if !isSquash {
 						fallbackTree = targetCommit.TreeHash
 					}
+
+					// **CRITICAL FIX**: Apply tree protection to prevent environment deletion
+					if isSquash && h.protectionLayer != nil {
+						fallbackContext := FallbackContext{
+							SourceCommit:     sourceCommit,
+							TargetCommit:     targetCommit,
+							BaseCommit:       nil, // Will be found automatically
+							Strategy:         strategy,
+							IsSquash:         isSquash,
+							ConflictCount:    analysis.ConflictCount,
+							AutoResolvable:   analysis.AutoResolvable,
+							EnvironmentFiles: h.extractEnvironmentFiles(analysis),
+						}
+
+						protectedTree, protErr := h.protectionLayer.ProtectFallback(ctx, repo, fallbackTree, fallbackContext)
+						if protErr != nil {
+							h.logger.Error("Failed to apply protection during partial merge fallback",
+								zap.Error(protErr),
+								zap.Error(err))
+						} else if protectedTree != fallbackTree {
+							h.logger.Info("Environment protection applied during partial merge fallback",
+								zap.String("original_tree", fallbackTree.String()),
+								zap.String("protected_tree", protectedTree.String()),
+								zap.Error(err))
+							fallbackTree = protectedTree
+						}
+					}
+
 					h.logger.Error("Failed to create partially merged tree, falling back",
 						zap.Error(err),
-						zap.Bool("is_squash", isSquash))
+						zap.Bool("is_squash", isSquash),
+						zap.String("fallback_tree", fallbackTree.String()))
 					return fallbackTree, nil
 				}
 				h.logger.Info("Successfully created partially merged tree",
@@ -212,14 +270,43 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 					zap.String("strategy", string(strategy)))
 				return mergedTree, nil
 			} else {
-				// No auto-resolvable conflicts
+				// No auto-resolvable conflicts - APPLY PROTECTION HERE
 				fallbackTree := sourceCommit.TreeHash
 				if !isSquash {
 					fallbackTree = targetCommit.TreeHash
 				}
+
+				// **CRITICAL FIX**: Apply tree protection to prevent environment deletion
+				if isSquash && h.protectionLayer != nil {
+					fallbackContext := FallbackContext{
+						SourceCommit:     sourceCommit,
+						TargetCommit:     targetCommit,
+						BaseCommit:       nil, // Will be found automatically
+						Strategy:         strategy,
+						IsSquash:         isSquash,
+						ConflictCount:    analysis.ConflictCount,
+						AutoResolvable:   analysis.AutoResolvable,
+						EnvironmentFiles: h.extractEnvironmentFiles(analysis),
+					}
+
+					protectedTree, err := h.protectionLayer.ProtectFallback(ctx, repo, fallbackTree, fallbackContext)
+					if err != nil {
+						h.logger.Error("Failed to apply protection during fallback, using unprotected tree",
+							zap.Error(err),
+							zap.String("fallback_tree", fallbackTree.String()))
+					} else if protectedTree != fallbackTree {
+						h.logger.Info("Environment protection applied during squash fallback",
+							zap.String("original_tree", fallbackTree.String()),
+							zap.String("protected_tree", protectedTree.String()),
+							zap.Strings("protected_files", fallbackContext.EnvironmentFiles))
+						fallbackTree = protectedTree
+					}
+				}
+
 				h.logger.Warn("No auto-resolvable conflicts - using fallback tree",
 					zap.Bool("is_squash", isSquash),
-					zap.String("strategy", string(strategy)))
+					zap.String("strategy", string(strategy)),
+					zap.String("fallback_tree", fallbackTree.String()))
 				return fallbackTree, nil
 			}
 
