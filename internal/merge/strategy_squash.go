@@ -64,6 +64,10 @@ func (h *MergeOperationsHandler) performSquashMerge(ctx context.Context, repo *g
 		Committer:    committer,
 	}
 
+	h.logger.Info("Creating squash commit",
+		zap.String("squash_tree_hash", squashTreeHash.String()),
+		zap.String("target_hash", targetHash.String()))
+
 	// Store the commit
 	obj := repo.Storer.NewEncodedObject()
 	if err := commit.Encode(obj); err != nil {
@@ -76,6 +80,10 @@ func (h *MergeOperationsHandler) performSquashMerge(ctx context.Context, repo *g
 	}
 
 	commit.Hash = hash
+
+	h.logger.Info("Squash commit created",
+		zap.String("commit_hash", hash.String()),
+		zap.String("commit_tree_hash", commit.TreeHash.String()))
 
 	// Update the target reference to point to the new squash commit
 	var refName plumbing.ReferenceName
