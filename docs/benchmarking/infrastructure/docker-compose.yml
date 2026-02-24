@@ -1,0 +1,207 @@
+version: '3.8'
+
+services:
+  # GitLab CE for benchmarking
+  gitlab:
+    image: gitlab/gitlab-ce:16.8.1-ce.0
+    hostname: gitlab.local
+    container_name: benchmark-gitlab
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.local:8080'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2224
+        # Performance optimizations for benchmarking
+        gitlab_rails['env'] = {
+          'RAILS_ENV' => 'production'
+        }
+        puma['worker_processes'] = 4
+        sidekiq['max_concurrency'] = 10
+    ports:
+      - '8080:80'
+      - '2224:22'
+    volumes:
+      - gitlab-data:/var/opt/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-config:/etc/gitlab
+    shm_size: '256m'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/users/sign_in"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Gitea for benchmarking
+  gitea:
+    image: gitea/gitea:1.21.4
+    container_name: benchmark-gitea
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=postgres
+      - GITEA__database__HOST=gitea-db:5432
+      - GITEA__database__NAME=gitea
+      - GITEA__database__USER=gitea
+      - GITEA__database__PASSWD=gitea_password
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    volumes:
+      - gitea-data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - gitea-db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Gitea Database
+  gitea-db:
+    image: postgres:15
+    container_name: benchmark-gitea-db
+    environment:
+      - POSTGRES_USER=gitea
+      - POSTGRES_PASSWORD=gitea_password
+      - POSTGRES_DB=gitea
+    restart: unless-stopped
+    volumes:
+      - gitea-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitea"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # CollabOps Git Executor
+  collabops:
+    build:
+      context: ../../../
+      dockerfile: Dockerfile
+    container_name: benchmark-collabops
+    environment:
+      # Phase 1 optimizations enabled
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_PARALLEL_TREE=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_BINARY_PROTOCOL=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_MYERS_DIFF=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_SMART_LANGUAGE=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_MULTI_TIER_CACHE=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_STREAMING_JSON=true
+      - COLLABOPS_PERFORMANCE_FEATURES_ENABLE_AI_PREFETCH=true
+      - LOG_LEVEL=info
+    ports:
+      - "8090:8090"
+    volumes:
+      - collabops-repos:/repos
+      - collabops-logs:/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Redis for CollabOps caching
+  redis:
+    image: redis:7-alpine
+    container_name: benchmark-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Benchmark Runner
+  benchmark-runner:
+    build:
+      context: ./benchmark-runner
+      dockerfile: Dockerfile
+    container_name: benchmark-runner
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITLAB_URL=http://gitlab:80/api/v4
+      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+      - GITEA_URL=http://gitea:3000/api/v1
+      - GITEA_TOKEN=${GITEA_TOKEN:-}
+      - COLLABOPS_URL=http://collabops:8090
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - benchmark-results:/results
+      - benchmark-scripts:/scripts
+      - ./test-repos:/test-repos:ro
+    depends_on:
+      - gitlab
+      - gitea
+      - collabops
+      - redis
+    restart: "no"
+    profiles:
+      - tools
+
+  # Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: benchmark-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: benchmark-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+
+volumes:
+  gitlab-data:
+  gitlab-logs:
+  gitlab-config:
+  gitea-data:
+  gitea-db-data:
+  collabops-repos:
+  collabops-logs:
+  redis-data:
+  benchmark-results:
+  benchmark-scripts:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  default:
+    name: benchmark-network
