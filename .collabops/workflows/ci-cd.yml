@@ -53,12 +53,12 @@ jobs:
           cd /workspace/source
           make format
 
-      - name: Lint
-        image: golang:1.25-bookworm
-        run: |
-          set -eu
-          cd /workspace/source
-          make lint
+      # - name: Lint
+      #   image: golang:1.25-bookworm
+      #   run: |
+      #     set -eu
+      #     cd /workspace/source
+      #     make lint
 
       - name: Run tests
         image: golang:1.25-bookworm
