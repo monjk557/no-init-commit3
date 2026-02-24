@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/repositories"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -23,66 +24,15 @@ type UploadPackRequest struct {
 	Done         bool
 }
 
-type pktLineWriter struct {
-	w io.Writer
-}
-
-type sidebandWriter struct {
-	w         io.Writer
-	channel   byte
-	chunkSize int
-}
+// Use optimized versions for better performance
+type pktLineWriter = performance.OptimizedPktLineWriter
+type sidebandWriter = performance.OptimizedSidebandWriter
 
 func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
-	return &sidebandWriter{
-		w:         w,
-		channel:   channel,
-		chunkSize: 65515,
-	}
+	return performance.NewOptimizedSidebandWriter(w, channel)
 }
 
-func (sb *sidebandWriter) Write(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-
-	total := 0
-
-	for len(p) > 0 {
-		n := sb.chunkSize - 1
-		if n > len(p) {
-			n = len(p)
-		}
-		chunk := p[:n]
-		p = p[n:]
-
-		payloadLen := 1 + len(chunk)
-		length := payloadLen + 4
-
-		lengthHex := fmt.Sprintf("%04x", length)
-		if len(lengthHex) != 4 {
-			return total, fmt.Errorf("invalid pkt-line length: %s", lengthHex)
-		}
-
-		if _, err := sb.w.Write([]byte(lengthHex)); err != nil {
-			return total, err
-		}
-		if _, err := sb.w.Write([]byte{sb.channel}); err != nil {
-			return total, err
-		}
-		if _, err := sb.w.Write(chunk); err != nil {
-			return total, err
-		}
-
-		total += len(chunk)
-	}
-	return total, nil
-}
-
-func (sb *sidebandWriter) Flush() error {
-	_, err := sb.w.Write([]byte("0000"))
-	return err
-}
+// Removed: Now using optimized versions from performance package
 
 type UploadPackHandler struct {
 	pathConfig *repositories.PathConfig
@@ -172,19 +122,19 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 
 	w.WriteHeader(http.StatusOK)
 
-	pktWriter := &pktLineWriter{w: w}
+	pktWriter := performance.NewOptimizedPktLineWriter(w)
 
 	// [2] version=2 확인
 	// [3] command=ls-refs 파싱
 	cmds, err := h.readSection(r.Body)
 	if err != nil {
-		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 
 	if len(cmds) == 0 {
 		// protocol v2: empty-request = flush-pkt (클라이언트가 더 이상 요청하지 않음을 표시)
-		_ = pktWriter.flush()
+		_ = pktWriter.Flush()
 		return
 	}
 
@@ -196,25 +146,25 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		// ls-refs options 섹션(=command-args) 읽기
 		lsRefsOpts, err := h.readSection(r.Body)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 		allCmds := append(cmds, lsRefsOpts...)
 		lsRefsReq, err := ParseLsRefsSection(allCmds)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 
 		// [4] refs 설명 생성
 		// [5] refs pkt-line 전송
 		if err := h.handleLsRefs(ctx, gitRepo, lsRefsReq, pktWriter); err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 
 		// [6] 0000
-		_ = pktWriter.flush()
+		_ = pktWriter.Flush()
 		// [7] 종료
 		return
 	} else if strings.HasPrefix(cmds[0], "command=fetch") {
@@ -222,20 +172,20 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		// fetch options 섹션(=command-args) 읽기
 		fetchOpts, err := h.readSection(r.Body)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 		allCmds := append(cmds, fetchOpts...)
 		fetchReq, err := ParseFetchSection(allCmds)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 
 		// MVP 정책: 지원하지 않는 옵션은 ERR로 반환 (packfile 섹션 시작 전)
 		if err := ValidateFetchSupport(fetchReq); err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.flush()
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.Flush()
 			return
 		}
 
@@ -258,9 +208,9 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		// - 'done'이 없는 경우: negotiation 응답으로 acknowledgments 섹션만 보내고 flush
 		if !fetchReq.Done {
 			// acknowledgments section
-			if err := pktWriter.writeLine("acknowledgments"); err != nil {
-				_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
-				_ = pktWriter.flush()
+			if err := pktWriter.WriteLine("acknowledgments"); err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				_ = pktWriter.Flush()
 				return
 			}
 
@@ -268,31 +218,31 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 			for _, have := range fetchReq.Haves {
 				h := have
 				if _, err := gitRepo.Object(plumbing.AnyObject, h); err == nil {
-					if err := pktWriter.writeLine(fmt.Sprintf("ACK %s", h.String())); err != nil {
-						_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
-						_ = pktWriter.flush()
+					if err := pktWriter.WriteLine(fmt.Sprintf("ACK %s", h.String())); err != nil {
+						_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+						_ = pktWriter.Flush()
 						return
 					}
 					ackSent = true
 				}
 			}
 			if !ackSent {
-				if err := pktWriter.writeLine("NAK"); err != nil {
-					_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
-					_ = pktWriter.flush()
+				if err := pktWriter.WriteLine("NAK"); err != nil {
+					_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+					_ = pktWriter.Flush()
 					return
 				}
 			}
 			// 'ready'는 서버가 packfile을 만들 준비가 되었음을 알림 (클라이언트가 다음 요청에 done을 보내게 유도)
-			_ = pktWriter.writeLine("ready")
-			_ = pktWriter.flush()
+			_ = pktWriter.WriteLine("ready")
+			_ = pktWriter.Flush()
 			return
 		}
 
 		// packfile section header (PKT-LINE("packfile" LF))
-		if err := pktWriter.writeLine("packfile"); err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.flush()
+		if err := pktWriter.WriteLine("packfile"); err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.Flush()
 			return
 		}
 
@@ -300,7 +250,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		flusher, hasFlusher := w.(http.Flusher)
 		err = h.generateAndStreamPackfileV2(ctx, gitRepo, uploadReq, w)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			if hasFlusher {
 				flusher.Flush()
 			}
@@ -312,7 +262,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		}
 		return
 	} else {
-		_ = pktWriter.writeLine("ERR unknown command")
+		_ = pktWriter.WriteLine("ERR unknown command")
 		return
 	}
 }
@@ -500,7 +450,7 @@ func (h *UploadPackHandler) handleLsRefs(ctx context.Context, repo *gogit.Reposi
 				if len(headAttrs) > 0 {
 					line += " " + strings.Join(headAttrs, " ")
 				}
-				if err := pktWriter.writeLine(line); err != nil {
+				if err := pktWriter.WriteLine(line); err != nil {
 					return err
 				}
 			}
@@ -544,7 +494,7 @@ func (h *UploadPackHandler) handleLsRefs(ctx context.Context, repo *gogit.Reposi
 			if len(attrs) > 0 {
 				line += " " + strings.Join(attrs, " ")
 			}
-			return pktWriter.writeLine(line)
+			return pktWriter.WriteLine(line)
 		}
 
 		return nil
@@ -590,27 +540,4 @@ func (h *UploadPackHandler) sendEmptyPackfile(w io.Writer, useSideBand bool) err
 	return nil
 }
 
-func (p *pktLineWriter) writeLine(data string) error {
-	if data == "" {
-		return p.flush()
-	}
-
-	if !strings.HasSuffix(data, "\n") {
-		data += "\n"
-	}
-
-	length := len(data) + 4
-
-	if length > 65520 {
-		return fmt.Errorf("packet line too long: %d bytes (max 65520)", length)
-	}
-
-	line := fmt.Sprintf("%04x%s", length, data)
-	_, err := p.w.Write([]byte(line))
-	return err
-}
-
-func (p *pktLineWriter) flush() error {
-	_, err := p.w.Write([]byte("0000"))
-	return err
-}
+// Removed old methods: Now using optimized versions from performance package

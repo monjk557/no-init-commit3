@@ -18,6 +18,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/repositories"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -132,9 +133,9 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Smart HTTP service announcement
-	pktWriter := &pktLineWriter{w: w}
-	_ = pktWriter.writeLine("# service=git-receive-pack")
-	_ = pktWriter.flush()
+	pktWriter := performance.NewOptimizedPktLineWriter(w)
+	_ = pktWriter.WriteLine("# service=git-receive-pack")
+	_ = pktWriter.Flush()
 
 	// v1 ref advertisement + capabilities
 	caps := []string{
@@ -198,7 +199,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 
 	w.WriteHeader(http.StatusOK)
 
-	pktWriter := &pktLineWriter{w: w}
+	pktWriter := performance.NewOptimizedPktLineWriter(w)
 
 	// v2 vs v1 감지:
 	// - v2: 첫 섹션 첫 라인이 "command=" 로 시작
@@ -207,7 +208,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// body를 peek하여 판단 (그리고 파싱을 위해 bytes로 보관)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 	// body를 다시 읽을 수 있도록 복원
@@ -215,12 +216,12 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 
 	cmds, err := h.readSection(r.Body)
 	if err != nil {
-		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 
 	if len(cmds) == 0 {
-		_ = pktWriter.flush()
+		_ = pktWriter.Flush()
 		return
 	}
 
@@ -228,14 +229,14 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	if !strings.HasPrefix(cmds[0], "command=") {
 		receiveReq, err := h.parseV1ReceivePack(bodyBytes)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.flush()
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.Flush()
 			return
 		}
 
 		if err := h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, userID, pktWriter); err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.flush()
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.Flush()
 			return
 		}
 		return
@@ -246,28 +247,28 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		// ls-refs options 섹션 읽기
 		lsRefsOpts, err := h.readSection(r.Body)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 		allCmds := append(cmds, lsRefsOpts...)
 		lsRefsReq, err := ParseLsRefsSection(allCmds)
 		if err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 
 		// refs 설명 생성 및 전송
 		if err := h.handleLsRefs(ctx, gitRepo, lsRefsReq, pktWriter); err != nil {
-			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 
 		// [6] flush
-		_ = pktWriter.flush()
+		_ = pktWriter.Flush()
 		// [7] 종료
 		return
 	} else if !strings.HasPrefix(cmds[0], "command=push") {
-		_ = pktWriter.writeLine("ERR unknown command")
+		_ = pktWriter.WriteLine("ERR unknown command")
 		return
 	}
 
@@ -275,7 +276,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// push 옵션 섹션 읽기
 	pushOpts, err := h.readSection(r.Body)
 	if err != nil {
-		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 	allCmds := append(cmds, pushOpts...)
@@ -283,14 +284,14 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// v2 push 섹션에서 ref-update 명령과 packfile 파싱
 	receiveReq, err := h.parsePushSection(allCmds, r.Body)
 	if err != nil {
-		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 
 	// [4] receive-pack 처리 시작
 	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, userID, pktWriter)
 	if err != nil {
-		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 }
@@ -499,31 +500,28 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 	// 이 구현은 우선 v1 report-status(pkt-line)를 정확히 반환하는 것을 목표로 한다.
 	// (side-band로 pkt-line 자체를 감싸면 클라이언트가 "remote: 000eunpack ok"처럼 그대로 출력하고,
 	// status 파싱이 꼬일 수 있음)
-	if pktWriter == nil {
-		pktWriter = newPktLineWriter(w)
-	} else {
-		pktWriter.w = w
-	}
+	// Always create a new pktWriter with the current writer
+	pktWriter = newPktLineWriter(w)
 
 	if len(req.Commands) == 0 {
-		if err := pktWriter.writeLine("unpack ok"); err != nil {
+		if err := pktWriter.WriteLine("unpack ok"); err != nil {
 			return fmt.Errorf("failed to write unpack status: %w", err)
 		}
-		return pktWriter.flush()
+		return pktWriter.Flush()
 	}
 
 	if len(req.PackfileData) > 0 {
 		// [13] unpack 시작
 		err := h.processPackfile(ctx, repo, req.PackfileData)
 		if err != nil {
-			if err := pktWriter.writeLine(fmt.Sprintf("unpack %s", err.Error())); err != nil {
+			if err := pktWriter.WriteLine(fmt.Sprintf("unpack %s", err.Error())); err != nil {
 				return fmt.Errorf("failed to write unpack error: %w", err)
 			}
-			return pktWriter.flush()
+			return pktWriter.Flush()
 		}
 	}
 
-	if err := pktWriter.writeLine("unpack ok"); err != nil {
+	if err := pktWriter.WriteLine("unpack ok"); err != nil {
 		return fmt.Errorf("failed to write unpack status: %w", err)
 	}
 
@@ -533,13 +531,13 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 		if err != nil {
 			// [17] report-status 생성
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
-			if err := pktWriter.writeLine(statusLine); err != nil {
+			if err := pktWriter.WriteLine(statusLine); err != nil {
 				return fmt.Errorf("failed to write ref error status: %w", err)
 			}
 		} else {
 			// [17] report-status 생성
 			statusLine := fmt.Sprintf("ok %s", cmd.RefName)
-			if err := pktWriter.writeLine(statusLine); err != nil {
+			if err := pktWriter.WriteLine(statusLine); err != nil {
 				return fmt.Errorf("failed to write ref success status: %w", err)
 			}
 		}
@@ -547,7 +545,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 
 	// [18] progress / status 전송 (side-band)
 	// [19] 최종 flush
-	if err := pktWriter.flush(); err != nil {
+	if err := pktWriter.Flush(); err != nil {
 		return err
 	}
 
@@ -1018,12 +1016,12 @@ func (h *ReceivePackHandler) handleLsRefs(ctx context.Context, repo *gogit.Repos
 		if err == nil {
 			if headRef.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
 				target := headRef.Target().String()
-				if err := pktWriter.writeLine(fmt.Sprintf("@%s HEAD", target)); err != nil {
+				if err := pktWriter.WriteLine(fmt.Sprintf("@%s HEAD", target)); err != nil {
 					return err
 				}
 			} else if headRef.Type() == plumbing.HashReference {
 				hash := headRef.Hash().String()
-				if err := pktWriter.writeLine(fmt.Sprintf("%s HEAD", hash)); err != nil {
+				if err := pktWriter.WriteLine(fmt.Sprintf("%s HEAD", hash)); err != nil {
 					return err
 				}
 			}
@@ -1057,17 +1055,17 @@ func (h *ReceivePackHandler) handleLsRefs(ctx context.Context, repo *gogit.Repos
 			if lsRefsReq.Peel && strings.HasPrefix(refName, "refs/tags/") {
 				if tagObj, err := repo.TagObject(ref.Hash()); err == nil && tagObj != nil {
 					peeledHash := tagObj.Target.String()
-					if err := pktWriter.writeLine(fmt.Sprintf("%s %s", hash, refName)); err != nil {
+					if err := pktWriter.WriteLine(fmt.Sprintf("%s %s", hash, refName)); err != nil {
 						return err
 					}
-					return pktWriter.writeLine(fmt.Sprintf("peeled %s", peeledHash))
+					return pktWriter.WriteLine(fmt.Sprintf("peeled %s", peeledHash))
 				}
 			}
 
-			return pktWriter.writeLine(fmt.Sprintf("%s %s", hash, refName))
+			return pktWriter.WriteLine(fmt.Sprintf("%s %s", hash, refName))
 		} else if ref.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
 			target := ref.Target().String()
-			return pktWriter.writeLine(fmt.Sprintf("@%s %s", target, refName))
+			return pktWriter.WriteLine(fmt.Sprintf("@%s %s", target, refName))
 		}
 
 		return nil

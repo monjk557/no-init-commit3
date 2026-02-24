@@ -155,29 +155,29 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 		}
 	}
 
-	// PERFORMANCE OPTIMIZATION: Use parallel tree processing instead of sequential ForEach
-	// Expected improvement: 50-60% faster through concurrent file processing
+	// PERFORMANCE OPTIMIZATION: Use smart language detection with sampling + parallel processing
+	// Expected improvement: 50-80% faster through intelligent sampling and better parallelism
 
 	var finalLanguages []LanguageStats
 	var totalBytes int64
 	var totalFiles int
 
-	// Try parallel processing first
-	parallelProcessor := performance.NewParallelTreeProcessor(s.logger.Logger)
-	parallelLangStats, pTotalBytes, pTotalFiles, parallelErr := parallelProcessor.ProcessTreeForLanguages(ctx, tree)
+	// Try smart language detection first (optimized with sampling)
+	smartDetector := performance.NewSmartLanguageDetector(s.logger.Logger)
+	smartLangStats, sTotalBytes, sTotalFiles, smartErr := smartDetector.ProcessTreeWithSampling(ctx, tree)
 
-	if parallelErr == nil {
-		// Success! Convert parallel results to final format
-		s.logger.Debug("Parallel tree processing successful",
-			zap.Int("languages", len(parallelLangStats)),
-			zap.Int("total_files", pTotalFiles),
-			zap.Int64("total_bytes", pTotalBytes))
+	if smartErr == nil {
+		// Success! Use smart detection results
+		s.logger.Debug("Smart language detection successful",
+			zap.Int("languages", len(smartLangStats)),
+			zap.Int("total_files", sTotalFiles),
+			zap.Int64("total_bytes", sTotalBytes))
 
-		totalBytes = pTotalBytes
-		totalFiles = pTotalFiles
+		totalBytes = sTotalBytes
+		totalFiles = sTotalFiles
 
-		finalLanguages = make([]LanguageStats, 0, len(parallelLangStats))
-		for _, langStat := range parallelLangStats {
+		finalLanguages = make([]LanguageStats, 0, len(smartLangStats))
+		for _, langStat := range smartLangStats {
 			finalLanguages = append(finalLanguages, LanguageStats{
 				Language:   langStat.Language,
 				Bytes:      langStat.Bytes,
@@ -186,121 +186,144 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 			})
 		}
 	} else {
-		// Fallback to sequential processing
-		s.logger.Warn("Parallel processing failed, falling back to sequential", zap.Error(parallelErr))
+		// Fallback to basic parallel processing, then sequential
+		s.logger.Warn("Smart language detection failed, falling back", zap.Error(smartErr))
 
-		langStats := make(map[string]struct {
-			bytes int64
-			files int
-		})
+		// Try parallel processing as fallback
+		parallelProcessor := performance.NewParallelTreeProcessor(s.logger.Logger)
+		parallelLangStats, pTotalBytes, pTotalFiles, parallelErr := parallelProcessor.ProcessTreeForLanguages(ctx, tree)
 
-		err = tree.Files().ForEach(func(file *object.File) error {
-			// 순회 중 컨텍스트 취소 확인
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
+		if parallelErr == nil {
+			s.logger.Debug("Fallback parallel processing successful")
+			totalBytes = pTotalBytes
+			totalFiles = pTotalFiles
+
+			finalLanguages = make([]LanguageStats, 0, len(parallelLangStats))
+			for _, langStat := range parallelLangStats {
+				finalLanguages = append(finalLanguages, LanguageStats{
+					Language:   langStat.Language,
+					Bytes:      langStat.Bytes,
+					Percentage: langStat.Percentage,
+					Files:      langStat.Files,
+				})
 			}
+		} else {
+			// Final fallback to sequential processing
+			s.logger.Warn("All optimizations failed, using sequential fallback", zap.Error(parallelErr))
 
-			// GitHub/GitLab(linguist) 기준에 맞춰 기본 제외 대상 필터링
-			// - vendored / dotfile / documentation / configuration / generated
-			// (generated는 content 기반이므로 아래에서 처리)
-			if enry.IsVendor(file.Name) {
-				return nil
-			}
-			if enry.IsDotFile(file.Name) {
-				return nil
-			}
-			if enry.IsDocumentation(file.Name) {
-				return nil
-			}
-			if enry.IsConfiguration(file.Name) {
-				return nil
-			}
-
-			// 바이너리 파일과 매우 큰 파일(1MB 이상) 건너뛰기
-			if file.Size > 1024*1024 {
-				return nil
-			}
-
-			// 언어 감지를 위해 파일 내용 가져오기
-			reader, err := file.Reader()
-			if err != nil {
-				// 읽을 수 없는 파일은 건너뛰기
-				return nil
-			}
-
-			content, err := io.ReadAll(reader)
-			_ = reader.Close()
-			if err != nil {
-				// 읽을 수 없는 파일은 건너뛰기
-				return nil
-			}
-
-			// 파일이 바이너리인지 확인
-			if enry.IsBinary(content) {
-				return nil
-			}
-
-			// generated 파일 제외 (content 기반)
-			if enry.IsGenerated(file.Name, content) {
-				return nil
-			}
-
-			// go-enry를 사용하여 언어 감지
-			language := enry.GetLanguage(file.Name, content)
-
-			// 언어가 감지되지 않으면 파일명만으로 감지 시도
-			if language == "" {
-				language, _ = enry.GetLanguageByFilename(file.Name)
-			}
-
-			// 여전히 언어가 없으면 이 파일 건너뛰기
-			if language == "" {
-				return nil
-			}
-
-			// LanguagesGroup을 사용하여 파생 언어를 기본 언어로 매핑
-			// 예: "TSX" -> "TypeScript", "JSX" -> "JavaScript"
-			if baseLanguage, exists := data.LanguagesGroup[language]; exists {
-				language = baseLanguage
-			}
-
-			// 통계 업데이트
-			stats := langStats[language]
-			stats.bytes += file.Size
-			stats.files++
-			langStats[language] = stats
-
-			totalBytes += file.Size
-			totalFiles++
-
-			return nil
-		})
-
-		if err != nil && err != io.EOF {
-			s.logger.Warn("Failed to iterate files for language distribution", zap.Error(err))
-			return LanguageDistribution{
-				Languages:  []LanguageStats{},
-				TotalBytes: 0,
-				TotalFiles: 0,
-			}
-		}
-
-		// Convert sequential results to final format
-		finalLanguages = make([]LanguageStats, 0, len(langStats))
-		for lang, stats := range langStats {
-			percentage := float64(0)
-			if totalBytes > 0 {
-				percentage = (float64(stats.bytes) / float64(totalBytes)) * 100
-			}
-
-			finalLanguages = append(finalLanguages, LanguageStats{
-				Language:   lang,
-				Bytes:      stats.bytes,
-				Percentage: percentage,
-				Files:      stats.files,
+			langStats := make(map[string]struct {
+				bytes int64
+				files int
 			})
+
+			err = tree.Files().ForEach(func(file *object.File) error {
+				// 순회 중 컨텍스트 취소 확인
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
+				// GitHub/GitLab(linguist) 기준에 맞춰 기본 제외 대상 필터링
+				// - vendored / dotfile / documentation / configuration / generated
+				// (generated는 content 기반이므로 아래에서 처리)
+				if enry.IsVendor(file.Name) {
+					return nil
+				}
+				if enry.IsDotFile(file.Name) {
+					return nil
+				}
+				if enry.IsDocumentation(file.Name) {
+					return nil
+				}
+				if enry.IsConfiguration(file.Name) {
+					return nil
+				}
+
+				// 바이너리 파일과 매우 큰 파일(1MB 이상) 건너뛰기
+				if file.Size > 1024*1024 {
+					return nil
+				}
+
+				// 언어 감지를 위해 파일 내용 가져오기
+				reader, err := file.Reader()
+				if err != nil {
+					// 읽을 수 없는 파일은 건너뛰기
+					return nil
+				}
+
+				content, err := io.ReadAll(reader)
+				_ = reader.Close()
+				if err != nil {
+					// 읽을 수 없는 파일은 건너뛰기
+					return nil
+				}
+
+				// 파일이 바이너리인지 확인
+				if enry.IsBinary(content) {
+					return nil
+				}
+
+				// generated 파일 제외 (content 기반)
+				if enry.IsGenerated(file.Name, content) {
+					return nil
+				}
+
+				// go-enry를 사용하여 언어 감지
+				language := enry.GetLanguage(file.Name, content)
+
+				// 언어가 감지되지 않으면 파일명만으로 감지 시도
+				if language == "" {
+					language, _ = enry.GetLanguageByFilename(file.Name)
+				}
+
+				// 여전히 언어가 없으면 이 파일 건너뛰기
+				if language == "" {
+					return nil
+				}
+
+				// LanguagesGroup을 사용하여 파생 언어를 기본 언어로 매핑
+				// 예: "TSX" -> "TypeScript", "JSX" -> "JavaScript"
+				if baseLanguage, exists := data.LanguagesGroup[language]; exists {
+					language = baseLanguage
+				}
+
+				// 통계 업데이트
+				stats := langStats[language]
+				stats.bytes += file.Size
+				stats.files++
+				langStats[language] = stats
+
+				totalBytes += file.Size
+				totalFiles++
+
+				return nil
+			})
+
+			if err != nil && err != io.EOF {
+				s.logger.Warn("Failed to iterate files for language distribution", zap.Error(err))
+				return LanguageDistribution{
+					Languages:  []LanguageStats{},
+					TotalBytes: 0,
+					TotalFiles: 0,
+				}
+			}
+
+			// Convert sequential results to final format
+			finalLanguages = make([]LanguageStats, 0, len(langStats))
+			for lang, stats := range langStats {
+				percentage := float64(0)
+				if totalBytes > 0 {
+					percentage = (float64(stats.bytes) / float64(totalBytes)) * 100
+				}
+
+				finalLanguages = append(finalLanguages, LanguageStats{
+					Language:   lang,
+					Bytes:      stats.bytes,
+					Percentage: percentage,
+					Files:      stats.files,
+				})
+			}
 		}
 	}
 
