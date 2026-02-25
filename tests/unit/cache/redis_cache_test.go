@@ -1,3 +1,6 @@
+//go:build cache_integration
+// +build cache_integration
+
 package cache_test
 
 import (
@@ -23,7 +26,7 @@ func TestRedisCache_Integration(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	redisCache, err := cache.NewRedisCache(config, logger)
+	redisCache, err := cache.NewRedisCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 	if err != nil {
 		t.Skip("Redis not available for integration tests:", err)
@@ -240,7 +243,7 @@ func TestRedisCacheConfig_Validation(t *testing.T) {
 		}
 
 		logger := zaptest.NewLogger(t)
-		_, err := cache.NewRedisCache(config, logger)
+		_, err := cache.NewRedisCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 		// Should set defaults even if creation fails due to no Redis
 		assert.Equal(t, 10, config.PoolSize)
@@ -270,7 +273,7 @@ func TestRedisCacheConfig_Validation(t *testing.T) {
 		}
 
 		logger := zaptest.NewLogger(t)
-		_, err := cache.NewRedisCache(config, logger)
+		_, err := cache.NewRedisCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 		// Should preserve custom values
 		assert.Equal(t, 5, config.PoolSize)

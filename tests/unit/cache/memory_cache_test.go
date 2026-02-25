@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestMemoryCache_BasicOperations(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	memCache := cache.NewMemoryCache(config, logger)
+	memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	defer memCache.Close()
 
 	testResponse := &overview.TreeWithCommitOverviewResponse{
@@ -39,7 +40,7 @@ func TestMemoryCache_BasicOperations(t *testing.T) {
 		key := "test:key:1"
 		memCache.Set(key, testResponse, 1*time.Minute)
 
-		result := memCache.Get(key)
+		result, _ := memCache.Get(key)
 		require.NotNil(t, result)
 		assert.Equal(t, testResponse.Repository, result.Repository)
 		assert.Equal(t, testResponse.Owner, result.Owner)
@@ -47,7 +48,7 @@ func TestMemoryCache_BasicOperations(t *testing.T) {
 	})
 
 	t.Run("Cache Miss", func(t *testing.T) {
-		result := memCache.Get("nonexistent:key")
+		result, _ := memCache.Get("nonexistent:key")
 		assert.Nil(t, result)
 	})
 
@@ -58,14 +59,14 @@ func TestMemoryCache_BasicOperations(t *testing.T) {
 		memCache.Set(key, testResponse, shortTTL)
 
 		// Should exist immediately
-		result := memCache.Get(key)
+		result, _ := memCache.Get(key)
 		require.NotNil(t, result)
 
 		// Wait for expiration
 		time.Sleep(100 * time.Millisecond)
 
 		// Should be expired
-		result = memCache.Get(key)
+		result, _ = memCache.Get(key)
 		assert.Nil(t, result)
 	})
 
@@ -76,7 +77,7 @@ func TestMemoryCache_BasicOperations(t *testing.T) {
 			DefaultTTL:      5 * time.Minute,
 			CleanupInterval: 100 * time.Millisecond,
 		}
-		smallCache := cache.NewMemoryCache(smallConfig, logger)
+		smallCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](smallConfig, logger)
 		defer smallCache.Close()
 
 		// Fill cache to capacity
@@ -88,7 +89,7 @@ func TestMemoryCache_BasicOperations(t *testing.T) {
 		assert.Equal(t, 3, smallCache.Size())
 
 		// Access key:1 to make it recently used
-		result := smallCache.Get("key:1")
+		result, _ := smallCache.Get("key:1")
 		require.NotNil(t, result)
 
 		// Add one more item, should evict key:0 (least recently used)
@@ -97,15 +98,15 @@ func TestMemoryCache_BasicOperations(t *testing.T) {
 		assert.Equal(t, 3, smallCache.Size()) // Still at capacity
 
 		// key:0 should be evicted
-		result = smallCache.Get("key:0")
+		result, _ = smallCache.Get("key:0")
 		assert.Nil(t, result)
 
 		// key:1, key:2, key:3 should still exist
-		result = smallCache.Get("key:1")
+		result, _ = smallCache.Get("key:1")
 		assert.NotNil(t, result)
-		result = smallCache.Get("key:2")
+		result, _ = smallCache.Get("key:2")
 		assert.NotNil(t, result)
-		result = smallCache.Get("key:3")
+		result, _ = smallCache.Get("key:3")
 		assert.NotNil(t, result)
 	})
 }
@@ -119,7 +120,7 @@ func TestMemoryCache_Metrics(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	memCache := cache.NewMemoryCache(config, logger)
+	memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	defer memCache.Close()
 
 	testResponse := &overview.TreeWithCommitOverviewResponse{
@@ -134,7 +135,7 @@ func TestMemoryCache_Metrics(t *testing.T) {
 		key := "metrics:key"
 
 		// Should record miss
-		result := memCache.Get(key)
+		result, _ := memCache.Get(key)
 		assert.Nil(t, result)
 
 		metrics := memCache.GetMetrics()
@@ -149,7 +150,7 @@ func TestMemoryCache_Metrics(t *testing.T) {
 		assert.Equal(t, int64(1), metrics.CurrentEntries)
 
 		// Should record hit
-		result = memCache.Get(key)
+		result, _ = memCache.Get(key)
 		require.NotNil(t, result)
 
 		metrics = memCache.GetMetrics()
@@ -165,7 +166,7 @@ func TestMemoryCache_Metrics(t *testing.T) {
 			DefaultTTL:      5 * time.Minute,
 			CleanupInterval: 100 * time.Millisecond,
 		}
-		smallCache := cache.NewMemoryCache(smallConfig, logger)
+		smallCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](smallConfig, logger)
 		defer smallCache.Close()
 
 		// Fill beyond capacity to trigger eviction
@@ -180,7 +181,7 @@ func TestMemoryCache_Metrics(t *testing.T) {
 	})
 
 	t.Run("Expiration Metrics", func(t *testing.T) {
-		expireCache := cache.NewMemoryCache(&cache.MemoryCacheConfig{
+		expireCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](&cache.MemoryCacheConfig{
 			MaxSize:         10,
 			DefaultTTL:      5 * time.Minute,
 			CleanupInterval: 10 * time.Millisecond, // Very frequent cleanup
@@ -221,7 +222,7 @@ func TestMemoryCache_ConcurrentAccess(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	memCache := cache.NewMemoryCache(config, logger)
+	memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	defer memCache.Close()
 
 	testResponse := &overview.TreeWithCommitOverviewResponse{
@@ -279,7 +280,7 @@ func TestMemoryCache_EdgeCases(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	memCache := cache.NewMemoryCache(config, logger)
+	memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	defer memCache.Close()
 
 	t.Run("Nil Value Handling", func(t *testing.T) {
@@ -295,7 +296,7 @@ func TestMemoryCache_EdgeCases(t *testing.T) {
 		}
 
 		memCache.Set("", testResponse, 1*time.Minute)
-		result := memCache.Get("")
+		result, _ := memCache.Get("")
 		require.NotNil(t, result)
 		assert.Equal(t, testResponse.Repository, result.Repository)
 	})
@@ -322,7 +323,7 @@ func TestMemoryCache_EdgeCases(t *testing.T) {
 		assert.Equal(t, 1, memCache.Size()) // Size shouldn't change
 
 		// Should get updated value
-		result := memCache.Get(key)
+		result, _ := memCache.Get(key)
 		require.NotNil(t, result)
 		assert.Equal(t, "updated", result.Repository)
 	})
@@ -348,7 +349,7 @@ func TestMemoryCache_EdgeCases(t *testing.T) {
 		// All items should be gone
 		for i := 0; i < 3; i++ {
 			key := fmt.Sprintf("clear:key:%d", i)
-			result := memCache.Get(key)
+			result, _ := memCache.Get(key)
 			assert.Nil(t, result)
 		}
 	})
@@ -372,9 +373,9 @@ func TestMemoryCache_EdgeCases(t *testing.T) {
 		assert.Equal(t, 1, memCache.Size())
 
 		// Key1 should be gone, key2 should remain
-		result := memCache.Get(key1)
+		result, _ := memCache.Get(key1)
 		assert.Nil(t, result)
-		result = memCache.Get(key2)
+		result, _ = memCache.Get(key2)
 		assert.NotNil(t, result)
 
 		// Delete non-existent key
@@ -386,7 +387,7 @@ func TestMemoryCache_EdgeCases(t *testing.T) {
 func TestMemoryCacheConfig_Defaults(t *testing.T) {
 	t.Run("Nil Config Uses Defaults", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		memCache := cache.NewMemoryCache(nil, logger)
+		memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](nil, logger)
 		defer memCache.Close()
 
 		// Should create cache with default settings
@@ -398,7 +399,7 @@ func TestMemoryCacheConfig_Defaults(t *testing.T) {
 	t.Run("Zero Values Get Defaults", func(t *testing.T) {
 		config := &cache.MemoryCacheConfig{}
 		logger := zaptest.NewLogger(t)
-		memCache := cache.NewMemoryCache(config, logger)
+		memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 		defer memCache.Close()
 
 		// Should apply defaults for zero values
@@ -413,7 +414,7 @@ func TestMemoryCacheConfig_Defaults(t *testing.T) {
 			CleanupInterval: 30 * time.Second,
 		}
 		logger := zaptest.NewLogger(t)
-		memCache := cache.NewMemoryCache(config, logger)
+		memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 		defer memCache.Close()
 
 		info := memCache.GetCacheInfo()
@@ -430,7 +431,7 @@ func TestMemoryCache_PerformanceCharacteristics(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	memCache := cache.NewMemoryCache(config, logger)
+	memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	defer memCache.Close()
 
 	testResponse := &overview.TreeWithCommitOverviewResponse{
@@ -448,7 +449,7 @@ func TestMemoryCache_PerformanceCharacteristics(t *testing.T) {
 		start := time.Now()
 
 		for i := 0; i < iterations; i++ {
-			result := memCache.Get(key)
+			result, _ := memCache.Get(key)
 			require.NotNil(t, result)
 		}
 

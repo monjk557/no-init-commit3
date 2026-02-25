@@ -1,3 +1,6 @@
+//go:build cache_integration
+// +build cache_integration
+
 package cache_test
 
 import (
@@ -31,7 +34,7 @@ func TestMultiTierCache_Integration(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 	if err != nil {
 		t.Skip("Redis not available for multi-tier cache tests:", err)
@@ -209,7 +212,7 @@ func TestMultiTierCache_PerformanceMetrics(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 	if err != nil {
 		t.Skip("Redis not available for performance metric tests:", err)
@@ -316,7 +319,7 @@ func TestMultiTierCache_HealthCheck(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 	if err != nil {
 		t.Skip("Redis not available for health check tests:", err)
@@ -358,7 +361,7 @@ func TestMultiTierCache_ConcurrentAccess(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 	if err != nil {
 		t.Skip("Redis not available for concurrent access tests:", err)
@@ -439,7 +442,7 @@ func TestMultiTierCache_ErrorHandling(t *testing.T) {
 		}
 
 		logger := zaptest.NewLogger(t)
-		_, err := cache.NewMultiTierCache(config, logger)
+		_, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 		// Should fail to create due to Redis connection failure
 		assert.Error(t, err)
@@ -460,7 +463,7 @@ func TestMultiTierCache_DefaultConfiguration(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 
 	if err != nil {
 		t.Skip("Redis not available for default configuration tests:", err)

@@ -1,3 +1,6 @@
+//go:build security
+// +build security
+
 package security_test
 
 import (

@@ -131,6 +131,11 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 	// (the directory might not exist in source, which is different from explicit deletion).
 	// For recursive/ORT strategies, prefer preserving unchanged files from base/target.
 	if baseExists && !sourceExists && targetExists {
+		h.logger.Debug("DEBUG: Case 4 - File deleted in source but exists in target",
+			zap.String("path", entry.path),
+			zap.Bool("baseExists", baseExists),
+			zap.Bool("sourceExists", sourceExists),
+			zap.Bool("targetExists", targetExists))
 		if entry.baseHash == entry.targetHash {
 			// Target unchanged from base. For recursive/ORT strategies, preserve the file
 			// because the directory might not exist in source (not an explicit deletion).
@@ -141,12 +146,18 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 			}
 
 			// **CRITICAL FIX**: Check feature flag before preserving files
-			if protectionCtx != nil && !protectionCtx.ShouldPreserveFile(entry.path) {
-				h.logger.Info("Feature flag control - allowing environment file deletion",
+			h.logger.Debug("DEBUG: Checking protection for file",
+				zap.String("path", entry.path),
+				zap.Bool("protectionCtx_nil", protectionCtx == nil),
+				zap.Bool("shouldPreserve", protectionCtx != nil && protectionCtx.ShouldPreserveFile(entry.path)))
+
+			if protectionCtx != nil && protectionCtx.ShouldPreserveFile(entry.path) {
+				h.logger.Info("Protection system preserving file from deletion",
 					zap.String("path", entry.path),
 					zap.String("protection_mode", protectionCtx.GetProtectionStatus()),
 					zap.Bool("destructive_mode", protectionCtx.DestructiveMode))
-				return plumbing.ZeroHash, 0, nil // DELETE THE FILE
+				// PRESERVE THE FILE - keep target version
+				return entry.targetHash, entry.targetMode, nil
 			}
 
 			// For recursive/ORT/ours strategies, preserve the file (when protection enabled)

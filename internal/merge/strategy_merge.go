@@ -229,21 +229,31 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 					zap.String("strategy", string(strategy)))
 				return mergedTree, nil
 			} else {
-				// No auto-resolvable conflicts - APPLY PROTECTION HERE
-				fallbackTree := sourceCommit.TreeHash
-				if !isSquash {
-					fallbackTree = targetCommit.TreeHash
+				// No auto-resolvable conflicts - MUST CREATE MERGED TREE WITH PROTECTION
+				h.logger.Info("No auto-resolvable conflicts - creating merged tree with protection",
+					zap.Bool("is_squash", isSquash),
+					zap.String("strategy", string(strategy)))
+
+				// **CRITICAL FIX**: Even with no auto-resolvable conflicts, we need to create merged tree
+				// to apply protection system properly instead of using fallback
+				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
+				if err != nil {
+					// Only fallback on real error, not for protection
+					fallbackTree := sourceCommit.TreeHash
+					if !isSquash {
+						fallbackTree = targetCommit.TreeHash
+					}
+					h.logger.Error("Failed to create merged tree with protection, falling back",
+						zap.Error(err),
+						zap.Bool("is_squash", isSquash),
+						zap.String("fallback_tree", fallbackTree.String()))
+					return fallbackTree, nil
 				}
 
-				// Protection now handled by PolicyEngine in createMergedTree
-				h.logger.Debug("Protection already applied via PolicyEngine",
-					zap.String("fallback_tree", fallbackTree.String()))
-
-				h.logger.Warn("No auto-resolvable conflicts - using fallback tree",
-					zap.Bool("is_squash", isSquash),
-					zap.String("strategy", string(strategy)),
-					zap.String("fallback_tree", fallbackTree.String()))
-				return fallbackTree, nil
+				h.logger.Info("Successfully created merged tree with protection",
+					zap.String("merged_tree", mergedTree.String()),
+					zap.String("strategy", string(strategy)))
+				return mergedTree, nil
 			}
 
 		case MergeStrategySubtree:

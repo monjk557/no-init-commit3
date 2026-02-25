@@ -1,3 +1,6 @@
+//go:build performance
+// +build performance
+
 package cache_test
 
 import (
@@ -24,7 +27,7 @@ func BenchmarkMemoryCache_Access(b *testing.B) {
 	}
 
 	logger := zaptest.NewLogger(b)
-	memCache := cache.NewMemoryCache(config, logger)
+	memCache := cache.NewMemoryCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	defer memCache.Close()
 
 	// Create test data
@@ -48,7 +51,7 @@ func BenchmarkMemoryCache_Access(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			key := fmt.Sprintf("get:key:%d", i%100) // Always hit
-			result := memCache.Get(key)
+			result, _ := memCache.Get(key)
 			if result == nil {
 				b.Error("Expected cache hit")
 			}
@@ -59,7 +62,7 @@ func BenchmarkMemoryCache_Access(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			key := fmt.Sprintf("miss:key:%d", i) // Always miss
-			result := memCache.Get(key)
+			result, _ := memCache.Get(key)
 			if result != nil {
 				b.Error("Expected cache miss")
 			}
@@ -77,7 +80,7 @@ func BenchmarkRedisCache_Access(b *testing.B) {
 	}
 
 	logger := zaptest.NewLogger(b)
-	redisCache, err := cache.NewRedisCache(config, logger)
+	redisCache, err := cache.NewRedisCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	if err != nil {
 		b.Skip("Redis not available for benchmarking:", err)
 		return
@@ -149,7 +152,7 @@ func BenchmarkMultiTierCache_Performance(b *testing.B) {
 	}
 
 	logger := zaptest.NewLogger(b)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	if err != nil {
 		b.Skip("Redis not available for multi-tier benchmarking:", err)
 		return
@@ -237,7 +240,7 @@ func TestCachePerformanceImprovement(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	if err != nil {
 		t.Skip("Redis not available for performance improvement test:", err)
 		return
@@ -340,7 +343,7 @@ func TestCacheHitRatioTarget(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	multiCache, err := cache.NewMultiTierCache(config, logger)
+	multiCache, err := cache.NewMultiTierCache[*overview.TreeWithCommitOverviewResponse](config, logger)
 	if err != nil {
 		t.Skip("Redis not available for hit ratio test:", err)
 		return

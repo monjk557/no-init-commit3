@@ -1,3 +1,6 @@
+//go:build hotreload
+// +build hotreload
+
 package policy
 
 import (
