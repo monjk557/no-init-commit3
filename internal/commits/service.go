@@ -430,7 +430,6 @@ func CountCommitsWithCap(rw *repositories.RepositoryWrapper, ctx context.Context
 	count := 0
 	approximate := false
 	err = commitIter.ForEach(func(c *object.Commit) error {
-		// 컨텍스트 취소 확인
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -445,6 +444,12 @@ func CountCommitsWithCap(rw *repositories.RepositoryWrapper, ctx context.Context
 	})
 
 	if err != nil && err != io.EOF {
+		// context timeout/cancel: 지금까지 센 count를 approximate로 반환 (에러 아님).
+		// 대형 repo에서 go-git이 packfile commit을 1개씩 읽어 O(n)이 되므로
+		// deadline 내에 다 못 세도 partial count를 UI에 표시.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return CommitCountResult{Count: count, Approximate: true}, nil
+		}
 		return CommitCountResult{}, fmt.Errorf("failed to iterate commits: %w", err)
 	}
 
@@ -549,10 +554,32 @@ func repoHasHeads(gitRepo *git.Repository) (bool, error) {
 // 이 메서드는 비즈니스 로직의 핵심을 담당하며, 트랜잭션을 통해 원자적으로 처리합니다.
 // 브랜치/HEAD가 없고 refs/heads가 하나도 없으면 빈 repo로 간주하고 root commit(첫 커밋)을 생성합니다.
 func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository *repositories.RepositoryWrapper, req *MultiFileCommitRequest, branch string, owner, repo, userID string) (*MultiFileCommitResponse, error) {
+	start := time.Now()
+	s.logger.Info("commit: start",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("branch", branch),
+		zap.Int("operations", len(req.Operations)),
+		zap.String("message", req.Message),
+	)
+
 	gitRepo := repository.GetRepo()
 	if gitRepo == nil {
 		return nil, fmt.Errorf("repository is closed")
 	}
+
+	// Serialize pack writes per repo to prevent concurrent DotGit.ObjectPack panics.
+	// Push handler and commit API both write packfiles to the same filesystem.Storage;
+	// without this lock they race on the shared ObjectStorage index.
+	repoLock := repositories.GetRepoRWLock(repository.Path())
+	lockWaitStart := time.Now()
+	repoLock.Lock()
+	s.logger.Info("commit: lock acquired",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Duration("lock_wait", time.Since(lockWaitStart)),
+	)
+	defer repoLock.Unlock()
 
 	// branch 비어 있으면 HEAD가 가리키는 브랜치 사용 (default branch)
 	if branch == "" {
@@ -606,6 +633,14 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		}
 	}
 
+	s.logger.Info("commit: base resolved",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("branch", branch),
+		zap.String("base_hash", baseHash.String()),
+		zap.Duration("elapsed", time.Since(start)),
+	)
+
 	var existingFiles map[string]bool
 	if baseHash != plumbing.ZeroHash {
 		commit, err := gitRepo.CommitObject(baseHash)
@@ -624,6 +659,13 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 	} else {
 		existingFiles = make(map[string]bool)
 	}
+
+	s.logger.Info("commit: existing files scanned",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("file_count", len(existingFiles)),
+		zap.Duration("elapsed", time.Since(start)),
+	)
 
 	for _, op := range req.Operations {
 		switch op.Operation {
@@ -704,11 +746,26 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		Parents: parents,
 	}
 
+	s.logger.Info("commit: ops validated",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("operations", len(req.Operations)),
+		zap.Duration("elapsed", time.Since(start)),
+	)
+
 	// 트랜잭션 시작
+	txnStart := time.Now()
 	transaction, err := s.transactionManager.BeginTransaction(ctx, repository, baseHash, commitInfo, options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
+	s.logger.Info("commit: transaction begun",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("transaction_id", transaction.ID),
+		zap.Duration("txn_begin_dur", time.Since(txnStart)),
+		zap.Duration("elapsed", time.Since(start)),
+	)
 
 	// 트랜잭션 정리 보장
 	defer func() {
@@ -763,6 +820,13 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		}
 	}
 
+	s.logger.Info("commit: all ops added to transaction",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("transaction_id", transaction.ID),
+		zap.Duration("elapsed", time.Since(start)),
+	)
+
 	// 트랜잭션 검증
 	if err := s.transactionManager.ValidateTransaction(ctx, transaction); err != nil {
 		// 부분 커밋의 경우 일부 작업이 검증에 실패해도 계속 진행
@@ -774,22 +838,51 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 			zap.Error(err))
 	}
 
-	// 트랜잭션 커밋
+	s.logger.Info("commit: transaction validated",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("transaction_id", transaction.ID),
+		zap.Duration("elapsed", time.Since(start)),
+	)
+
+	// 트랜잭션 커밋 (tree 생성 + packfile flush - 가장 오래 걸리는 단계)
+	commitTxnStart := time.Now()
+	s.logger.Info("commit: CommitTransaction start",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("transaction_id", transaction.ID),
+	)
 	result, err := s.transactionManager.CommitTransaction(ctx, transaction)
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
+	s.logger.Info("commit: CommitTransaction done",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("transaction_id", transaction.ID),
+		zap.Duration("commit_txn_dur", time.Since(commitTxnStart)),
+		zap.Duration("elapsed", time.Since(start)),
+	)
 
 	// 트랜잭션이 성공한 경우 브랜치 참조 업데이트
 	if result.State == TransactionStateCommitted && result.CommitResult != nil {
 		refName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", branch))
 		newRef := plumbing.NewHashReference(refName, result.CommitResult.Hash)
+		refStart := time.Now()
 		if err := repository.SetReference(newRef); err != nil {
 			s.logger.Error("커밋 성공 후 브랜치 참조 업데이트 실패",
 				zap.String("branch", branch),
 				zap.String("commit_hash", result.CommitResult.Hash.String()),
 				zap.Error(err))
-			// 전체 작업을 실패시키지 않지만 에러를 로깅
+		} else {
+			s.logger.Info("commit: branch ref updated",
+				zap.String("owner", owner),
+				zap.String("repo", repo),
+				zap.String("branch", branch),
+				zap.String("commit_hash", result.CommitResult.Hash.String()),
+				zap.Duration("ref_update_dur", time.Since(refStart)),
+				zap.Duration("elapsed", time.Since(start)),
+			)
 		}
 
 		// Publish commit event if enabled (root commit일 때 oldHash는 빈 문자열)
@@ -826,6 +919,17 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 			"failed_operations": result.FailedOperations,
 		}
 	}
+
+	s.logger.Info("commit: done",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("branch", branch),
+		zap.String("commit_sha", response.CommitSHA),
+		zap.Bool("success", response.Success),
+		zap.Int("successful_ops", response.SuccessfulOps),
+		zap.Int("failed_ops", response.FailedOps),
+		zap.Duration("total", time.Since(start)),
+	)
 
 	return &response, nil
 }

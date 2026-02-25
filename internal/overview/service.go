@@ -490,6 +490,19 @@ func (s *RepositoryOverviewService) GetLatestCommitForPath(ctx context.Context, 
 	}
 
 	normalizedPath := strings.Trim(filePath, "/")
+
+	// Fast-path: root("")의 최신 커밋 = ref가 가리키는 HEAD commit 자체.
+	// GetLatestCommitsForPathsWithMeta → DiffTree는 subtree를 재귀 로드하므로
+	// 디렉터리가 많은 repo에서 첫 번째 iteration만으로 수초 소요.
+	// root는 어떤 변경이든 매칭되므로 DiffTree 없이 HEAD commit을 즉시 반환.
+	if normalizedPath == "" {
+		commit, cerr := repo.CommitObject(commitHash)
+		if cerr != nil {
+			return nil, fmt.Errorf("failed to get commit: %w", cerr)
+		}
+		return s.convertCommit(commit), nil
+	}
+
 	pathInfos := []CommitPathInfo{{Path: normalizedPath, IsTree: isTree}}
 	tb := latestCommitsTimeBudget()
 	mc := latestCommitsMaxCommits()
@@ -585,6 +598,24 @@ func (s *RepositoryOverviewService) GetLatestCommitsForPathsWithMeta(
 			return io.EOF
 		}
 		scanned++
+
+		if len(pending) == 0 {
+			cutReason = "complete"
+			return io.EOF
+		}
+
+		// Fast-path: root("") pending이 있으면 첫 번째 커밋에서 즉시 해결.
+		// DiffTree는 subtree 오브젝트를 재귀 로드하므로 대형 repo에서 수초 소요.
+		// root는 어떤 변경이든 매칭되므로 현재 커밋을 바로 할당.
+		if p, ok := pending[""]; ok && p.info.IsTree {
+			gc := s.convertCommit(c)
+			result[""] = gc
+			delete(pending, "")
+			if len(pending) == 0 {
+				cutReason = "complete"
+				return io.EOF
+			}
+		}
 
 		if len(pending) == 0 {
 			cutReason = "complete"

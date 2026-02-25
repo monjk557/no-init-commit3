@@ -436,6 +436,14 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			zap.Bool("has_environment_conflicts", hasEnvironmentConflicts))
 	}
 
+	// Serialize pack writes: prevent concurrent DotGit.ObjectPack panics.
+	repoPath, _ := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if repoPath != "" {
+		repoLock := repositories.GetRepoRWLock(repoPath)
+		repoLock.Lock()
+		defer repoLock.Unlock()
+	}
+
 	// Perform the actual merge
 	mergeResult, err := h.performMerge(ctx, repository, sourceCommit, targetCommit, &req, conflictAnalysis)
 	if err != nil {

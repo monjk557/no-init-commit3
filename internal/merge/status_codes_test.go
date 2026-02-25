@@ -734,6 +734,10 @@ func Test_Merge_Squash_CreatesSingleCommit(t *testing.T) {
 	// squash merge commit이 생성되었는지 확인
 	require.NotNil(t, result.MergeCommit, "should create squash merge commit")
 
+	// handler가 packfile로 오브젝트를 저장하므로 repo 인스턴스를 새로 열어야 새 pack index가 로드됨
+	repo, err = gogit.PlainOpen(filepath.Join(repoRoot, owner, repoName+".git"))
+	require.NoError(t, err)
+
 	// squash commit은 main의 현재 HEAD를 부모로 가져야 함
 	squashCommit, err := repo.CommitObject(plumbing.NewHash(result.MergeCommit.SHA))
 	require.NoError(t, err)
@@ -1508,6 +1512,10 @@ func Test_Merge_NoFastForward_CreatesMergeCommit(t *testing.T) {
 	require.True(t, result.Success, "merge should succeed")
 	// 현재 구현: merge method는 항상 merge commit 생성 (--no-ff와 동일)
 	require.NotNil(t, result.MergeCommit, "should create merge commit even for fast-forward")
+
+	// handler가 packfile로 오브젝트를 저장하므로 repo 인스턴스를 새로 열어야 새 pack index가 로드됨
+	repo, err = gogit.PlainOpen(filepath.Join(repoRoot, owner, repoName+".git"))
+	require.NoError(t, err)
 
 	// merge commit이 생성되었는지 확인
 	mergeCommit, err := repo.CommitObject(plumbing.NewHash(result.MergeCommit.SHA))

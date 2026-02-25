@@ -12,7 +12,6 @@ import (
 
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
-	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -417,8 +416,8 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		return result, fmt.Errorf("no valid operations to commit")
 	}
 
-	// 변경 사항으로부터 트리 생성
-	treeResult, err := createTreeFromChanges(txn.Repository, txn.BaseTree, validChanges)
+	// 변경 사항으로부터 트리 생성 (flush는 createCommit에서 commit과 함께 단일 packfile로 수행)
+	treeResult, treeCollector, err := createTreeFromChanges(txn.Repository, txn.BaseTree, validChanges)
 	if err != nil {
 		txn.State = TransactionStateFailed
 		result.State = TransactionStateFailed
@@ -427,8 +426,8 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		return result, fmt.Errorf("failed to create tree: %w", err)
 	}
 
-	// 커밋 생성
-	commitResult, err := createCommit(txn.Repository, treeResult.TreeHash, txn.CommitInfo)
+	// 커밋 생성: treeCollector에 commit 추가 후 단일 flush → reloadIndex 1회
+	commitResult, err := createCommit(txn.Repository, treeResult.TreeHash, txn.CommitInfo, treeCollector)
 	if err != nil {
 		txn.State = TransactionStateFailed
 		result.State = TransactionStateFailed
@@ -522,14 +521,17 @@ type TreeManipulationResult struct {
 	DeletedFiles []string
 }
 
-// createTreeFromChanges는 변경 사항으로부터 트리를 생성합니다
+// createTreeFromChanges는 변경 사항으로부터 트리를 생성합니다.
 // 서브디렉토리를 올바르게 처리하기 위해 재귀적으로 트리를 생성합니다.
 // baseTree가 nil이면 root commit으로 빈 트리에서 시작합니다.
-func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, error) {
+// 모든 blob/tree 오브젝트는 packfile로 저장됩니다.
+func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, *objectCollector, error) {
 	gitRepo := repo.GetRepo()
 	if gitRepo == nil {
-		return nil, fmt.Errorf("repository is closed")
+		return nil, nil, fmt.Errorf("repository is closed")
 	}
+
+	c := newObjectCollector()
 
 	// 모든 파일을 경로별로 맵에 저장 (기본 트리에서; root commit이면 빈 맵)
 	files := make(map[string]TreeFileInfo)
@@ -549,10 +551,9 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 	for _, change := range changes {
 		switch change.Operation {
 		case FileOperationCreate, FileOperationUpdate:
-			// 블롭 생성
-			blobHash, err := createBlob(gitRepo, change.Content)
+			blobHash, err := createBlob(change.Content, c)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
+				return nil, nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
 			}
 
 			mode := filemode.Regular
@@ -560,7 +561,6 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 				mode = *change.Mode
 			}
 
-			// 파일 추가 또는 업데이트
 			files[change.Path] = TreeFileInfo{
 				Hash: blobHash,
 				Mode: mode,
@@ -573,31 +573,27 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 			}
 
 		case FileOperationDelete:
-			// 파일 제거
 			delete(files, change.Path)
 			deletedFiles = append(deletedFiles, change.Path)
 
 		case FileOperationMove:
-			// move/rename: original을 삭제하고, 새 path로 추가
 			if strings.TrimSpace(change.OriginalPath) == "" {
-				return nil, fmt.Errorf("original_path is required for move operation")
+				return nil, nil, fmt.Errorf("original_path is required for move operation")
 			}
 
 			srcInfo, ok := files[change.OriginalPath]
 			if !ok {
-				return nil, fmt.Errorf("file '%s' not found in repository", change.OriginalPath)
+				return nil, nil, fmt.Errorf("file '%s' not found in repository", change.OriginalPath)
 			}
-			// 대상이 이미 존재하면 충돌
 			if _, exists := files[change.Path]; exists {
-				return nil, fmt.Errorf("file already exists: %s", change.Path)
+				return nil, nil, fmt.Errorf("file already exists: %s", change.Path)
 			}
 
-			// content가 있으면 새 blob 생성, 없으면 기존 blob 유지
 			newHash := srcInfo.Hash
 			if len(change.Content) > 0 {
-				blobHash, err := createBlob(gitRepo, change.Content)
+				blobHash, err := createBlob(change.Content, c)
 				if err != nil {
-					return nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
+					return nil, nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
 				}
 				newHash = blobHash
 			}
@@ -618,10 +614,9 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 		}
 	}
 
-	// 재귀적으로 트리 빌드
-	treeHash, err := buildTreeRecursive(gitRepo, files, "")
+	treeHash, err := buildTreeRecursive(files, "", c)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build tree: %w", err)
+		return nil, nil, fmt.Errorf("failed to build tree: %w", err)
 	}
 
 	return &TreeManipulationResult{
@@ -629,7 +624,7 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 		ChangedFiles: changedFiles,
 		CreatedFiles: createdFiles,
 		DeletedFiles: deletedFiles,
-	}, nil
+	}, c, nil
 }
 
 // TreeFileInfo는 트리 파일 정보를 나타냅니다
@@ -638,8 +633,8 @@ type TreeFileInfo struct {
 	Mode filemode.FileMode
 }
 
-// buildTreeRecursive는 재귀적으로 트리를 생성합니다
-func buildTreeRecursive(gitRepo *git.Repository, files map[string]TreeFileInfo, dirPath string) (plumbing.Hash, error) {
+// buildTreeRecursive는 재귀적으로 트리를 생성합니다 (collector에 누적).
+func buildTreeRecursive(files map[string]TreeFileInfo, dirPath string, c *objectCollector) (plumbing.Hash, error) {
 	var entries []object.TreeEntry
 	subdirs := make(map[string]bool)
 
@@ -679,7 +674,7 @@ func buildTreeRecursive(gitRepo *git.Repository, files map[string]TreeFileInfo, 
 			subdirPath = dirPath + "/" + subdirName
 		}
 
-		subdirTreeHash, err := buildTreeRecursive(gitRepo, files, subdirPath)
+		subdirTreeHash, err := buildTreeRecursive(files, subdirPath, c)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to build subtree for %s: %w", subdirPath, err)
 		}
@@ -694,37 +689,28 @@ func buildTreeRecursive(gitRepo *git.Repository, files map[string]TreeFileInfo, 
 	// 트리 엔트리 정렬 (Git 요구사항)
 	sortTreeEntries(entries)
 
-	// 트리 객체 생성
-	tree := &object.Tree{Entries: entries}
-
-	// 트리 인코딩 및 저장
-	treeObj := gitRepo.Storer.NewEncodedObject()
-	if err := tree.Encode(treeObj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
-	}
-
-	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
+	treeHash, err := c.encodeTree(&object.Tree{Entries: entries})
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store tree: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
 	}
 
 	return treeHash, nil
 }
 
-// createCommit는 커밋을 생성합니다
-func createCommit(repo *repositories.RepositoryWrapper, treeHash plumbing.Hash, commitInfo CommitInfo) (*CommitResult, error) {
+// createCommit는 커밋을 생성합니다. 오브젝트는 packfile로 저장됩니다.
+// createCommit encodes the commit into c (which may already hold tree/blob objects)
+// and flushes everything as a single packfile, avoiding a second reloadIndex call.
+func createCommit(repo *repositories.RepositoryWrapper, treeHash plumbing.Hash, commitInfo CommitInfo, c *objectCollector) (*CommitResult, error) {
 	gitRepo := repo.GetRepo()
 	if gitRepo == nil {
 		return nil, fmt.Errorf("repository is closed")
 	}
 
-	// 커밋터가 없으면 작성자 사용
 	committer := commitInfo.Author
 	if commitInfo.Committer != nil {
 		committer = *commitInfo.Committer
 	}
 
-	// 커밋 객체 생성
 	commit := &object.Commit{
 		Author:       commitInfo.Author,
 		Committer:    committer,
@@ -733,15 +719,12 @@ func createCommit(repo *repositories.RepositoryWrapper, treeHash plumbing.Hash, 
 		ParentHashes: commitInfo.Parents,
 	}
 
-	// 커밋 인코딩 및 저장
-	commitObj := gitRepo.Storer.NewEncodedObject()
-	if err := commit.Encode(commitObj); err != nil {
+	commitHash, err := c.encodeCommit(commit)
+	if err != nil {
 		return nil, fmt.Errorf("failed to encode commit: %w", err)
 	}
-
-	commitHash, err := gitRepo.Storer.SetEncodedObject(commitObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to store commit: %w", err)
+	if err := c.flush(gitRepo.Storer); err != nil {
+		return nil, fmt.Errorf("failed to persist commit: %w", err)
 	}
 
 	return &CommitResult{
@@ -754,35 +737,13 @@ func createCommit(repo *repositories.RepositoryWrapper, treeHash plumbing.Hash, 
 	}, nil
 }
 
-// createBlob는 블롭을 생성합니다
-func createBlob(repo *git.Repository, content []byte) (plumbing.Hash, error) {
-	// 블롭 객체 생성
-	blobObj := repo.Storer.NewEncodedObject()
-	blobObj.SetType(plumbing.BlobObject)
-	blobObj.SetSize(int64(len(content)))
-
-	// 콘텐츠 작성
-	writer, err := blobObj.Writer()
+// createBlob은 blob을 collector에 추가합니다 (storage에 바로 쓰지 않음).
+func createBlob(content []byte, c *objectCollector) (plumbing.Hash, error) {
+	h, err := c.addBlob(content)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to create blob writer: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("failed to encode blob: %w", err)
 	}
-
-	if _, err := writer.Write(content); err != nil {
-		_ = writer.Close()
-		return plumbing.ZeroHash, fmt.Errorf("failed to write blob content: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to close blob writer: %w", err)
-	}
-
-	// 블롭 저장
-	hash, err := repo.Storer.SetEncodedObject(blobObj)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store blob: %w", err)
-	}
-
-	return hash, nil
+	return h, nil
 }
 
 // sortTreeEntries는 트리 엔트리를 정렬합니다 (Git 요구사항)

@@ -17,7 +17,9 @@ import (
 func createBaseCommitWithFile(t *testing.T, repo *gogit.Repository, filePath string, content []byte) (plumbing.Hash, *object.Tree) {
 	t.Helper()
 
-	blobHash, err := createBlob(repo, content)
+	c := newObjectCollector()
+
+	blobHash, err := createBlob(content, c)
 	require.NoError(t, err)
 
 	files := map[string]TreeFileInfo{
@@ -26,7 +28,7 @@ func createBaseCommitWithFile(t *testing.T, repo *gogit.Repository, filePath str
 			Mode: filemode.Regular,
 		},
 	}
-	treeHash, err := buildTreeRecursive(repo, files, "")
+	treeHash, err := buildTreeRecursive(files, "", c)
 	require.NoError(t, err)
 
 	commit := &object.Commit{
@@ -43,12 +45,10 @@ func createBaseCommitWithFile(t *testing.T, repo *gogit.Repository, filePath str
 		Message:  "init",
 		TreeHash: treeHash,
 	}
-	commitObj := repo.Storer.NewEncodedObject()
-	require.NoError(t, commit.Encode(commitObj))
-	commitHash, err := repo.Storer.SetEncodedObject(commitObj)
+	commitHash, err := c.encodeCommit(commit)
 	require.NoError(t, err)
+	require.NoError(t, c.flush(repo.Storer))
 
-	// refs/heads/main + HEAD
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", commitHash)))
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
 
@@ -74,10 +74,11 @@ func TestCreateTreeFromChanges_Move_Success(t *testing.T) {
 
 	_, baseTree := createBaseCommitWithFile(t, repo, "old.txt", []byte("hello"))
 
-	res, err := createTreeFromChanges(repoWrapper, baseTree, []FileChange{
+	res, c, err := createTreeFromChanges(repoWrapper, baseTree, []FileChange{
 		{Operation: FileOperationMove, OriginalPath: "old.txt", Path: "new.txt"},
 	})
 	require.NoError(t, err)
+	require.NoError(t, c.flush(repo.Storer))
 
 	newTree, err := repo.TreeObject(res.TreeHash)
 	require.NoError(t, err)
@@ -107,10 +108,11 @@ func TestCreateTreeFromChanges_Move_WithContentChange(t *testing.T) {
 
 	_, baseTree := createBaseCommitWithFile(t, repo, "old.txt", []byte("hello"))
 
-	res, err := createTreeFromChanges(repoWrapper, baseTree, []FileChange{
+	res, c, err := createTreeFromChanges(repoWrapper, baseTree, []FileChange{
 		{Operation: FileOperationMove, OriginalPath: "old.txt", Path: "new.txt", Content: []byte("world")},
 	})
 	require.NoError(t, err)
+	require.NoError(t, c.flush(repo.Storer))
 
 	newTree, err := repo.TreeObject(res.TreeHash)
 	require.NoError(t, err)

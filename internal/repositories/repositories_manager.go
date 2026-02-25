@@ -706,6 +706,18 @@ func (c *SimpleRepoCache) Get(path string) (*gogit.Repository, error) {
 	return repo, nil
 }
 
+// Invalidate removes a repository from cache so subsequent opens re-read pack/idx/ref state from disk.
+// Returns true if an entry existed.
+func (c *SimpleRepoCache) Invalidate(path string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	_, existed := c.repos[path]
+	delete(c.repos, path)
+	delete(c.pendingOps, path)
+	return existed
+}
+
 // cleanup removes old entries every 5 minutes
 func (c *SimpleRepoCache) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -742,6 +754,20 @@ func OpenRepositorySimple(path string) (*RepositoryWrapper, error) {
 		return nil, err
 	}
 
+	return &RepositoryWrapper{
+		path: path,
+		repo: gitRepo,
+		mu:   sync.RWMutex{},
+	}, nil
+}
+
+// OpenRepositoryNoCache opens the repository with gogit.PlainOpen only (no cache).
+// Use for read paths that panic or misbehave with cached packfile storer (e.g. overview).
+func OpenRepositoryNoCache(path string) (*RepositoryWrapper, error) {
+	gitRepo, err := gogit.PlainOpen(path)
+	if err != nil {
+		return nil, err
+	}
 	return &RepositoryWrapper{
 		path: path,
 		repo: gitRepo,

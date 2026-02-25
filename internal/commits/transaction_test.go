@@ -39,7 +39,9 @@ func newBareRepoWrapper(t *testing.T) (*repositories.RepositoryWrapper, *gogit.R
 func createCommitWithSingleFile(t *testing.T, gitRepo *gogit.Repository, path string, content []byte, when time.Time) plumbing.Hash {
 	t.Helper()
 
-	blobHash, err := createBlob(gitRepo, content)
+	c := newObjectCollector()
+
+	blobHash, err := createBlob(content, c)
 	require.NoError(t, err)
 
 	files := map[string]TreeFileInfo{
@@ -48,7 +50,7 @@ func createCommitWithSingleFile(t *testing.T, gitRepo *gogit.Repository, path st
 			Mode: filemode.Regular,
 		},
 	}
-	treeHash, err := buildTreeRecursive(gitRepo, files, "")
+	treeHash, err := buildTreeRecursive(files, "", c)
 	require.NoError(t, err)
 
 	commit := &object.Commit{
@@ -66,11 +68,9 @@ func createCommitWithSingleFile(t *testing.T, gitRepo *gogit.Repository, path st
 		TreeHash: treeHash,
 	}
 
-	commitObj := gitRepo.Storer.NewEncodedObject()
-	require.NoError(t, commit.Encode(commitObj))
-
-	commitHash, err := gitRepo.Storer.SetEncodedObject(commitObj)
+	commitHash, err := c.encodeCommit(commit)
 	require.NoError(t, err)
+	require.NoError(t, c.flush(gitRepo.Storer))
 
 	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", commitHash)))
 	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
@@ -196,7 +196,8 @@ func Test_CreateTreeFromChanges_CreateUpdateDelete_AppliesAllChanges(t *testing.
 	require.NoError(t, err)
 
 	// And: also add keep.txt to base tree by creating a new commit (still a deterministic base)
-	blobHash, err := createBlob(gitRepo, []byte("keep"))
+	c2 := newObjectCollector()
+	blobHash, err := createBlob([]byte("keep"), c2)
 	require.NoError(t, err)
 	files := map[string]TreeFileInfo{
 		"old.txt": {
@@ -208,8 +209,9 @@ func Test_CreateTreeFromChanges_CreateUpdateDelete_AppliesAllChanges(t *testing.
 			Mode: filemode.Regular,
 		},
 	}
-	treeHash, err := buildTreeRecursive(gitRepo, files, "")
+	treeHash, err := buildTreeRecursive(files, "", c2)
 	require.NoError(t, err)
+	require.NoError(t, c2.flush(gitRepo.Storer))
 
 	commitHash, err := storeCommitObject(t, gitRepo, treeHash, time.Date(2024, 1, 1, 0, 0, 1, 0, time.UTC), "base2", baseObj.Hash)
 	require.NoError(t, err)
@@ -222,12 +224,13 @@ func Test_CreateTreeFromChanges_CreateUpdateDelete_AppliesAllChanges(t *testing.
 	require.NoError(t, err)
 
 	// When: create new.txt, update keep.txt, delete old.txt
-	res, err := createTreeFromChanges(repoWrapper, baseTree2, []FileChange{
+	res, c, err := createTreeFromChanges(repoWrapper, baseTree2, []FileChange{
 		{Operation: FileOperationCreate, Path: "new.txt", Content: []byte("new")},
 		{Operation: FileOperationUpdate, Path: "keep.txt", Content: []byte("keep2")},
 		{Operation: FileOperationDelete, Path: "old.txt"},
 	})
 	require.NoError(t, err)
+	require.NoError(t, c.flush(gitRepo.Storer))
 
 	// Then: tree contains new.txt and updated keep.txt, and old.txt is gone
 	newTree, err := gitRepo.TreeObject(res.TreeHash)

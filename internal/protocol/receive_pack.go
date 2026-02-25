@@ -12,24 +12,18 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/repositories"
+	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/storer"
-)
-
-// Repository lock manager for preventing concurrent pushes
-// PERFORMANCE OPTIMIZATION: Replace global mutex with concurrent map for better scalability
-var (
-	repoLocks = &sync.Map{} // Lock-free concurrent map - no global contention!
+	gogitfs "github.com/go-git/go-git/v5/storage/filesystem"
 )
 
 // ReceivePackRequest represents a parsed receive-pack request from the client
@@ -133,9 +127,9 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Cache-Control", "no-cache")
 
 	// Smart HTTP service announcement
-	pktWriter := performance.NewOptimizedPktLineWriter(w)
-	_ = pktWriter.WriteLine("# service=git-receive-pack")
-	_ = pktWriter.Flush()
+	pktWriter := &pktLineWriter{w: w}
+	_ = pktWriter.writeLine("# service=git-receive-pack")
+	_ = pktWriter.flush()
 
 	// v1 ref advertisement + capabilities
 	caps := []string{
@@ -179,18 +173,25 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	repoLock := getRepositoryLock(repoPath)
+	// Use GetRepoRWLock to coordinate with read paths (overview, fetch).
+	// All push paths must use the same RWMutex so that RLock holders are excluded
+	// during pack writes, and the cache is invalidated after push completes.
+	repoLock := repositories.GetRepoRWLock(repoPath)
 	repoLock.Lock()
-	defer repoLock.Unlock()
+	defer func() {
+		repositories.GetSimpleCache().Invalidate(repoPath)
+		repoLock.Unlock()
+	}()
 
-	repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
+	// WLock을 잡고 있는 동안 캐시된 공유 객체에 write하면 락 없는 read 경로
+	// (tree/blob/commit API)와 concurrent read+write race → panic 발생.
+	// 캐시를 우회해서 fresh 전용 객체를 열어 write를 격리한다.
+	fs := osfs.New(repoPath)
+	gitRepo, err := gogit.Open(gogitfs.NewStorage(fs, nil), fs)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to open repository: %v", err), http.StatusInternalServerError)
 		return
 	}
-	defer func() { _ = repoWrapper.Close() }()
-
-	gitRepo := repoWrapper.GetRepo()
 
 	w.Header().Del("Content-Encoding")
 	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
@@ -199,7 +200,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 
 	w.WriteHeader(http.StatusOK)
 
-	pktWriter := performance.NewOptimizedPktLineWriter(w)
+	pktWriter := &pktLineWriter{w: w}
 
 	// v2 vs v1 감지:
 	// - v2: 첫 섹션 첫 라인이 "command=" 로 시작
@@ -208,7 +209,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// body를 peek하여 판단 (그리고 파싱을 위해 bytes로 보관)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 	// body를 다시 읽을 수 있도록 복원
@@ -216,12 +217,12 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 
 	cmds, err := h.readSection(r.Body)
 	if err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 
 	if len(cmds) == 0 {
-		_ = pktWriter.Flush()
+		_ = pktWriter.flush()
 		return
 	}
 
@@ -229,14 +230,14 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	if !strings.HasPrefix(cmds[0], "command=") {
 		receiveReq, err := h.parseV1ReceivePack(bodyBytes)
 		if err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.Flush()
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.flush()
 			return
 		}
 
 		if err := h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, userID, pktWriter); err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.Flush()
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.flush()
 			return
 		}
 		return
@@ -247,28 +248,28 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		// ls-refs options 섹션 읽기
 		lsRefsOpts, err := h.readSection(r.Body)
 		if err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 		allCmds := append(cmds, lsRefsOpts...)
 		lsRefsReq, err := ParseLsRefsSection(allCmds)
 		if err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 
 		// refs 설명 생성 및 전송
 		if err := h.handleLsRefs(ctx, gitRepo, lsRefsReq, pktWriter); err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
 
 		// [6] flush
-		_ = pktWriter.Flush()
+		_ = pktWriter.flush()
 		// [7] 종료
 		return
 	} else if !strings.HasPrefix(cmds[0], "command=push") {
-		_ = pktWriter.WriteLine("ERR unknown command")
+		_ = pktWriter.writeLine("ERR unknown command")
 		return
 	}
 
@@ -276,7 +277,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// push 옵션 섹션 읽기
 	pushOpts, err := h.readSection(r.Body)
 	if err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 	allCmds := append(cmds, pushOpts...)
@@ -284,14 +285,14 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// v2 push 섹션에서 ref-update 명령과 packfile 파싱
 	receiveReq, err := h.parsePushSection(allCmds, r.Body)
 	if err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 
 	// [4] receive-pack 처리 시작
 	err = h.processReceivePackRequest(ctx, gitRepo, receiveReq, w, owner, repo, userID, pktWriter)
 	if err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.writeLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 }
@@ -500,28 +501,31 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 	// 이 구현은 우선 v1 report-status(pkt-line)를 정확히 반환하는 것을 목표로 한다.
 	// (side-band로 pkt-line 자체를 감싸면 클라이언트가 "remote: 000eunpack ok"처럼 그대로 출력하고,
 	// status 파싱이 꼬일 수 있음)
-	// Always create a new pktWriter with the current writer
-	pktWriter = newPktLineWriter(w)
+	if pktWriter == nil {
+		pktWriter = newPktLineWriter(w)
+	} else {
+		pktWriter.w = w
+	}
 
 	if len(req.Commands) == 0 {
-		if err := pktWriter.WriteLine("unpack ok"); err != nil {
+		if err := pktWriter.writeLine("unpack ok"); err != nil {
 			return fmt.Errorf("failed to write unpack status: %w", err)
 		}
-		return pktWriter.Flush()
+		return pktWriter.flush()
 	}
 
 	if len(req.PackfileData) > 0 {
 		// [13] unpack 시작
 		err := h.processPackfile(ctx, repo, req.PackfileData)
 		if err != nil {
-			if err := pktWriter.WriteLine(fmt.Sprintf("unpack %s", err.Error())); err != nil {
+			if err := pktWriter.writeLine(fmt.Sprintf("unpack %s", err.Error())); err != nil {
 				return fmt.Errorf("failed to write unpack error: %w", err)
 			}
-			return pktWriter.Flush()
+			return pktWriter.flush()
 		}
 	}
 
-	if err := pktWriter.WriteLine("unpack ok"); err != nil {
+	if err := pktWriter.writeLine("unpack ok"); err != nil {
 		return fmt.Errorf("failed to write unpack status: %w", err)
 	}
 
@@ -531,13 +535,13 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 		if err != nil {
 			// [17] report-status 생성
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
-			if err := pktWriter.WriteLine(statusLine); err != nil {
+			if err := pktWriter.writeLine(statusLine); err != nil {
 				return fmt.Errorf("failed to write ref error status: %w", err)
 			}
 		} else {
 			// [17] report-status 생성
 			statusLine := fmt.Sprintf("ok %s", cmd.RefName)
-			if err := pktWriter.WriteLine(statusLine); err != nil {
+			if err := pktWriter.writeLine(statusLine); err != nil {
 				return fmt.Errorf("failed to write ref success status: %w", err)
 			}
 		}
@@ -545,7 +549,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 
 	// [18] progress / status 전송 (side-band)
 	// [19] 최종 flush
-	if err := pktWriter.Flush(); err != nil {
+	if err := pktWriter.flush(); err != nil {
 		return err
 	}
 
@@ -634,12 +638,25 @@ func (h *ReceivePackHandler) processPackfile(ctx context.Context, repo *gogit.Re
 	return nil
 }
 
+// UnpackThinPackToLooseObjects is the shared thin-pack fallback: given a thin pack
+// (REF_DELTA with base outside the pack), resolves deltas using base objects from
+// the repo and stores results as loose objects. Use this when PackfileWriter.Close()
+// returns ErrReferenceDeltaNotFound (e.g. TCP receive-pack, HTTP receive-pack).
+// Caller may pass packfile data from memory or read from a temp file.
+func UnpackThinPackToLooseObjects(repo *gogit.Repository, packfileData []byte) error {
+	return unpackThinPackToLooseObjectsImpl(repo, packfileData)
+}
+
 // unpackThinPackToLooseObjects는 thin pack(REF_DELTA base가 pack 외부)에 대해
 // repo에 이미 존재하는 base object를 찾아 delta를 적용한 뒤, 결과 객체를 loose object로 저장합니다.
 //
 // - 장점: 외부 git 커맨드 없이도 Apple Git의 thin push를 수용 가능
 // - 단점: pack+idx로 저장하지 않고 loose로 저장(추후 gc/repack 필요)
 func (h *ReceivePackHandler) unpackThinPackToLooseObjects(repo *gogit.Repository, packfileData []byte) error {
+	return unpackThinPackToLooseObjectsImpl(repo, packfileData)
+}
+
+func unpackThinPackToLooseObjectsImpl(repo *gogit.Repository, packfileData []byte) error {
 	reader := bytes.NewReader(packfileData)
 	scanner := packfile.NewScanner(reader)
 
@@ -918,23 +935,6 @@ func isValidRefName(refName string) bool {
 	return true
 }
 
-func getRepositoryLock(repoPath string) *sync.Mutex {
-	// PERFORMANCE OPTIMIZATION: Lock-free repository lock acquisition
-	// No global mutex contention - each repo gets independent access
-
-	// Try to load existing lock (lock-free operation)
-	if value, exists := repoLocks.Load(repoPath); exists {
-		return value.(*sync.Mutex)
-	}
-
-	// Create new lock and try to store it atomically
-	newLock := &sync.Mutex{}
-	actual, _ := repoLocks.LoadOrStore(repoPath, newLock)
-
-	// Return the lock that's actually stored (might be from another goroutine)
-	return actual.(*sync.Mutex)
-}
-
 func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
 	if h.eventsClient == nil {
 		return
@@ -1016,12 +1016,12 @@ func (h *ReceivePackHandler) handleLsRefs(ctx context.Context, repo *gogit.Repos
 		if err == nil {
 			if headRef.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
 				target := headRef.Target().String()
-				if err := pktWriter.WriteLine(fmt.Sprintf("@%s HEAD", target)); err != nil {
+				if err := pktWriter.writeLine(fmt.Sprintf("@%s HEAD", target)); err != nil {
 					return err
 				}
 			} else if headRef.Type() == plumbing.HashReference {
 				hash := headRef.Hash().String()
-				if err := pktWriter.WriteLine(fmt.Sprintf("%s HEAD", hash)); err != nil {
+				if err := pktWriter.writeLine(fmt.Sprintf("%s HEAD", hash)); err != nil {
 					return err
 				}
 			}
@@ -1055,17 +1055,17 @@ func (h *ReceivePackHandler) handleLsRefs(ctx context.Context, repo *gogit.Repos
 			if lsRefsReq.Peel && strings.HasPrefix(refName, "refs/tags/") {
 				if tagObj, err := repo.TagObject(ref.Hash()); err == nil && tagObj != nil {
 					peeledHash := tagObj.Target.String()
-					if err := pktWriter.WriteLine(fmt.Sprintf("%s %s", hash, refName)); err != nil {
+					if err := pktWriter.writeLine(fmt.Sprintf("%s %s", hash, refName)); err != nil {
 						return err
 					}
-					return pktWriter.WriteLine(fmt.Sprintf("peeled %s", peeledHash))
+					return pktWriter.writeLine(fmt.Sprintf("peeled %s", peeledHash))
 				}
 			}
 
-			return pktWriter.WriteLine(fmt.Sprintf("%s %s", hash, refName))
+			return pktWriter.writeLine(fmt.Sprintf("%s %s", hash, refName))
 		} else if ref.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
 			target := ref.Target().String()
-			return pktWriter.WriteLine(fmt.Sprintf("@%s %s", target, refName))
+			return pktWriter.writeLine(fmt.Sprintf("@%s %s", target, refName))
 		}
 
 		return nil
