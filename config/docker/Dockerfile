@@ -46,7 +46,7 @@ WORKDIR /app
 # 빌더에서 빌드된 바이너리 복사
 COPY --from=builder /app/git-executor .
 
-# PolicyEngine 설정 파일 복사 (환경 파일 보호용)
+# PolicyEngine 설정 파일 복사 (환경 파일 보호용; 지우지마시오!)
 COPY --from=builder /app/configs ./configs
 
 EXPOSE 5001 5222
