@@ -152,6 +152,14 @@ func (ctx *MergeProtectionContext) calculateDestructiveMode() bool {
 
 // ShouldPreserveFile determines if a specific file should be preserved using PolicyEngine
 func (ctx *MergeProtectionContext) ShouldPreserveFile(filePath string) bool {
+	// 🚨 MASSIVE DEBUG LOGGING 🚨
+	ctx.Logger.Info("🔍 PROTECTION ANALYSIS START",
+		zap.String("file", filePath),
+		zap.Bool("protection_enabled", ctx.ProtectionEnabled),
+		zap.Bool("env_protection_enabled", ctx.EnvironmentProtection),
+		zap.Bool("destructive_mode", ctx.DestructiveMode),
+		zap.Bool("policy_engine_nil", ctx.PolicyEngine == nil))
+
 	// Always use PolicyEngine (legacy fallback removed)
 	if ctx.PolicyEngine == nil {
 		ctx.Logger.Warn("PolicyEngine not initialized, defaulting to preserve",
@@ -159,31 +167,48 @@ func (ctx *MergeProtectionContext) ShouldPreserveFile(filePath string) bool {
 		return true // Safe default: preserve file
 	}
 
-	return ctx.shouldPreserveFileUsingPolicyEngine(filePath)
+	result := ctx.shouldPreserveFileUsingPolicyEngine(filePath)
+	ctx.Logger.Info("🔍 PROTECTION ANALYSIS RESULT",
+		zap.String("file", filePath),
+		zap.Bool("should_preserve", result))
+
+	return result
 }
 
 // shouldPreserveFileUsingPolicyEngine uses PolicyEngine to determine file preservation
 func (ctx *MergeProtectionContext) shouldPreserveFileUsingPolicyEngine(filePath string) bool {
+	ctx.Logger.Info("🛡️ POLICY ENGINE EVALUATION",
+		zap.String("file", filePath),
+		zap.Bool("destructive_mode", ctx.DestructiveMode))
+
 	// Always preserve in non-destructive mode
 	if !ctx.DestructiveMode {
-		ctx.Logger.Debug("Preserving file (non-destructive mode)",
+		ctx.Logger.Info("✅ PRESERVING (non-destructive mode)",
 			zap.String("file", filePath),
 			zap.Bool("destructive_mode", ctx.DestructiveMode))
 		return true
 	}
 
 	// In destructive mode, consult PolicyEngine
+	ctx.Logger.Info("⚠️ DESTRUCTIVE MODE - consulting PolicyEngine",
+		zap.String("file", filePath))
+
 	decision, err := ctx.PolicyEngine.EvaluateFileProtection(context.Background(), filePath)
 	if err != nil {
-		ctx.Logger.Error("PolicyEngine evaluation failed, defaulting to preserve",
+		ctx.Logger.Error("❌ PolicyEngine evaluation failed, defaulting to preserve",
 			zap.String("file", filePath),
 			zap.Error(err))
 		return true // Safe default: preserve file
 	}
 
+	ctx.Logger.Info("🔍 POLICY ENGINE DECISION",
+		zap.String("file", filePath),
+		zap.Bool("protected", decision.Protected),
+		zap.String("reason", decision.Reason))
+
 	// If file is protected by policy, preserve it
 	if decision.Protected {
-		ctx.Logger.Debug("File protected by policy engine",
+		ctx.Logger.Info("✅ PROTECTED by policy engine",
 			zap.String("file", filePath),
 			zap.String("reason", decision.Reason),
 			zap.Bool("protected", decision.Protected))
@@ -191,7 +216,7 @@ func (ctx *MergeProtectionContext) shouldPreserveFileUsingPolicyEngine(filePath 
 	}
 
 	// File is not protected and we're in destructive mode - allow deletion
-	ctx.Logger.Debug("File not protected, allowing deletion",
+	ctx.Logger.Info("❌ NOT PROTECTED - allowing deletion",
 		zap.String("file", filePath),
 		zap.String("reason", decision.Reason),
 		zap.Bool("destructive_mode", ctx.DestructiveMode))

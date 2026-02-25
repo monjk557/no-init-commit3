@@ -109,6 +109,17 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 	sourceExists := !entry.sourceHash.IsZero()
 	targetExists := !entry.targetHash.IsZero()
 
+	// 🚨 MASSIVE DEBUG LOGGING 🚨
+	h.logger.Info("📋 DETAILED FILE ANALYSIS",
+		zap.String("file", entry.path),
+		zap.Bool("base_exists", baseExists),
+		zap.Bool("source_exists", sourceExists),
+		zap.Bool("target_exists", targetExists),
+		zap.String("strategy", string(strategy)),
+		zap.String("base_hash", entry.baseHash.String()),
+		zap.String("source_hash", entry.sourceHash.String()),
+		zap.String("target_hash", entry.targetHash.String()))
+
 	// Case 1: File doesn't exist in any tree (shouldn't happen)
 	if !baseExists && !sourceExists && !targetExists {
 		return plumbing.ZeroHash, 0, nil
@@ -393,8 +404,34 @@ func (h *MergeOperationsHandler) mergeTreeEntries(
 	strategy MergeStrategy,
 	protectionCtx *MergeProtectionContext,
 ) ([]object.TreeEntry, error) {
+	// 🚨 DEBUG: Tree processing start
+	h.logger.Info("🌳 PROCESSING TREE ENTRIES",
+		zap.String("prefix", prefix),
+		zap.String("strategy", string(strategy)),
+		zap.Bool("base_tree_nil", baseTree == nil),
+		zap.Bool("source_tree_nil", sourceTree == nil),
+		zap.Bool("target_tree_nil", targetTree == nil))
+
 	// Collect all entries from all three trees
 	entryMap := h.collectTreeEntries(baseTree, sourceTree, targetTree)
+
+	// 🚨 DEBUG: Show all collected files
+	h.logger.Info("📂 COLLECTED ENTRIES",
+		zap.String("prefix", prefix),
+		zap.Int("total_entries", len(entryMap)))
+
+	for name := range entryMap {
+		fullPath := name
+		if prefix != "" {
+			fullPath = prefix + "/" + name
+		}
+		entry := entryMap[name]
+		h.logger.Info("📄 ENTRY",
+			zap.String("path", fullPath),
+			zap.Bool("in_base", entry.baseEntry != nil),
+			zap.Bool("in_source", entry.sourceEntry != nil),
+			zap.Bool("in_target", entry.targetEntry != nil))
+	}
 
 	// Resolve each entry
 	var resolvedEntries []object.TreeEntry
