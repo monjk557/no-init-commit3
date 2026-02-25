@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/collabops/git-executor/internal/commits"
@@ -611,10 +610,15 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// 3. Acquire repository lock to prevent concurrent pushes
-	repoLock := getSSHRepositoryLock(sshReq.RepoPath)
+	// 3. Acquire repository write lock to coordinate with read paths (overview, fetch).
+	// All push paths must use GetRepoRWLock so that RLock holders (e.g. overview) are
+	// properly excluded during pack writes, and the cache is invalidated after push.
+	repoLock := repositories.GetRepoRWLock(sshReq.RepoPath)
 	repoLock.Lock()
-	defer repoLock.Unlock()
+	defer func() {
+		repositories.GetSimpleCache().Invalidate(sshReq.RepoPath)
+		repoLock.Unlock()
+	}()
 
 	// 4. Open repository using go-git
 	fs := osfs.New(sshReq.RepoPath)
@@ -875,35 +879,6 @@ func (h *SSHProtocolHandler) handleSSHReceivePackCommand(ctx context.Context, re
 	return fmt.Errorf("handleSSHReceivePackCommand is deprecated, use processSSHReceivePack instead")
 }
 
-// SSH repository lock manager for preventing concurrent pushes
-var (
-	sshRepoLocks  = make(map[string]*sync.Mutex)
-	sshLocksMutex = sync.RWMutex{}
-)
-
-// getSSHRepositoryLock gets or creates a mutex for the specific repository path
-func getSSHRepositoryLock(repoPath string) *sync.Mutex {
-	sshLocksMutex.RLock()
-	lock, exists := sshRepoLocks[repoPath]
-	sshLocksMutex.RUnlock()
-
-	if exists {
-		return lock
-	}
-
-	// Create new lock
-	sshLocksMutex.Lock()
-	defer sshLocksMutex.Unlock()
-
-	// Double-check in case another goroutine created it
-	if lock, exists := sshRepoLocks[repoPath]; exists {
-		return lock
-	}
-
-	lock = &sync.Mutex{}
-	sshRepoLocks[repoPath] = lock
-	return lock
-}
 
 // parseSSHReceivePackRequest parses the receive-pack request body in pkt-line format
 func (h *SSHProtocolHandler) parseSSHReceivePackRequest(body io.Reader) (*ReceivePackRequest, error) {
@@ -1165,25 +1140,48 @@ func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, r
 
 	// Build FetchReq to use BuildFetchObjectList (same as TCP/HTTP)
 	// This provides proper object counting, include-tag support, and sorting
+	// ofs-delta: 클라이언트 대부분 지원. SSH에서는 capability 파싱 없이 기본 사용.
+	useOfsDelta := strings.Contains(requestData["capabilities"], "ofs-delta") || requestData["capabilities"] == ""
 	fetchReq := &FetchReq{
 		Wants:      wantHashes,
 		Haves:      haveHashes,
-		IncludeTag: false, // Can be set based on client capabilities if needed
-		OfsDelta:   false, // Default to ref-delta
+		IncludeTag: false,
+		OfsDelta:   useOfsDelta,
 	}
 
 	// Calculate objects to send using BuildFetchObjectList
 	// This automatically handles commits, trees, blobs recursively,
-	// includes annotated tags if IncludeTag is true, and sorts the result
-	objectHashes, err := BuildFetchObjectList(repo.Storer, repo, fetchReq)
+	// includes annotated tags if IncludeTag is true, and sorts the result.
+	// Supports shallow (deepen N): returns ShallowBoundary for shallow-info section.
+	fetchResult, err := BuildFetchObjectList(repo.Storer, repo, fetchReq)
 	if err != nil {
 		return fmt.Errorf("failed to build fetch object list: %w", err)
 	}
+	objectHashes := fetchResult.Objects
 
 	totalObjects := len(objectHashes)
 	if totalObjects == 0 {
 		// No objects to send, send empty packfile
 		return h.sendEmptyPackfile(output)
+	}
+
+	// shallow-info section (when deepen N was used)
+	if len(fetchResult.ShallowBoundary) > 0 {
+		pw := &PktWriter{W: output, WithLF: true}
+		if err := pw.WriteLine("shallow-info"); err != nil {
+			return fmt.Errorf("failed to write shallow-info header: %w", err)
+		}
+		for _, h := range fetchResult.ShallowBoundary {
+			if err := pw.WriteLine("shallow " + h.String()); err != nil {
+				return fmt.Errorf("failed to write shallow line: %w", err)
+			}
+		}
+		if _, err := output.Write([]byte("0001")); err != nil {
+			return fmt.Errorf("failed to write shallow-info delim: %w", err)
+		}
+		if err := output.Flush(); err != nil {
+			return fmt.Errorf("failed to flush after shallow-info: %w", err)
+		}
 	}
 
 	// Send progress messages before packfile encoding
@@ -1213,10 +1211,8 @@ func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, r
 	// is the compressing process.
 	enc := packfile.NewEncoder(sbWriter, repo.Storer, useRefDelta)
 
-	// Encode packfile with the collected objects
-	// packWindow of 0 disables delta search for simplicity
-	packWindow := uint(0)
-	if _, err := enc.Encode(objectHashes, packWindow); err != nil {
+	// Encode packfile with delta search (DefaultPackWindow) for smaller packs
+	if _, err := enc.Encode(objectHashes, DefaultPackWindow); err != nil {
 		return fmt.Errorf("failed to encode packfile: %w", err)
 	}
 

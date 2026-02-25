@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -108,10 +107,16 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		return nil, false
 	}
 
-	// 저장소 열기 (존재 여부는 OpenRepository에서 확인)
-	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	// Acquire read lock before any repo access so that pack writes (push/commit)
+	// cannot race with our reads. The caller is responsible for releasing via:
+	//   defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
+	repoLock := repositories.GetRepoRWLock(repoPath)
+	repoLock.RLock()
+
+	// 저장소 열기: 캐시 없이 PlainOpen만 사용 (packfile repo에서 캐시된 storer 동시 접근 시 panic 방지).
+	repoWrapper, err := repositories.OpenRepositoryNoCache(repoPath)
 	if err != nil {
-		// repository not found 또는 corrupted
+		repoLock.RUnlock()
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return nil, false
 	}
@@ -121,6 +126,13 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 	// 브랜치 가져오기
 	branchesList, err := branches.GetBranches(gitRepo)
 	if err != nil {
+		h.logger.Error("overview: GetBranches failed",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("repoPath", repoPath),
+			zap.Error(err),
+		)
+		repoLock.RUnlock()
 		_ = repoWrapper.Close()
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return nil, false
@@ -128,9 +140,9 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 
 	// ref가 제공된 경우 검증 (ref를 해석 가능한지 확인)
 	if ref != "" && ref != "HEAD" {
-		// ref를 해석해서 유효한지 확인
 		_, err := repoWrapper.ResolveReference(ref)
 		if err != nil {
+			repoLock.RUnlock()
 			_ = repoWrapper.Close()
 			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
 			return nil, false
@@ -167,10 +179,188 @@ const overviewTimeout = 15 * time.Second
 // Beyond this, the count is approximate (UI should show "100k+").
 const overviewCommitCountCap = 100_000
 
+// overviewResult holds the result of running overview parallel tasks (for retry).
+type overviewResult struct {
+	latestCommit          commits.Commit
+	latestCommitFound     bool
+	commitsCount          int
+	commitsApproximate    bool
+	treeEntriesWithCommit []GitTreeEntryWithCommit
+	treeErr               error
+	tagsList              []tags.Tag
+	remotesList           []RemoteInfo
+	readmeContent         string
+}
+
+// runOverviewTasks runs the parallel overview sub-tasks for the given repoCtx. Caller must hold RLock and ensure repoWrapper is closed.
+// Each goroutine that accesses the object storage opens its own repository instance via OpenRepositoryNoCache,
+// because go-git's ObjectStorage (packfile file handles, index map) is not goroutine-safe for concurrent reads.
+func (h *RepositoryOverviewHandler) runOverviewTasks(ctx context.Context, repoCtx *repositoryContext, owner, repo, path, refHash, repoPath string) overviewResult {
+	// Only config reads (GetRemotes) are safe on the shared instance; all storer reads need isolated instances.
+	sharedGitRepo := repoCtx.repoWrapper.GetRepo()
+	repoCtx.path = path
+
+	var (
+		mu  sync.Mutex
+		res overviewResult
+		wg  sync.WaitGroup
+	)
+
+	// goroutine 1: latest commit — needs isolated storer
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rw, err := repositories.OpenRepositoryNoCache(repoPath)
+		if err != nil {
+			return
+		}
+		defer func() { _ = rw.Close() }()
+		commitsList, err := commits.GetCommits(rw, ctx, repoCtx.ref, 1, 0)
+		mu.Lock()
+		if err == nil && len(commitsList) > 0 {
+			res.latestCommit = commitsList[0]
+			res.latestCommitFound = true
+		}
+		mu.Unlock()
+	}()
+
+	// goroutine 2: commit count — needs isolated storer (skip open on cache hit)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if refHash != "" {
+			if cached, ok := h.overviewCache.GetCommitCount(repoPath, refHash); ok {
+				mu.Lock()
+				res.commitsCount = cached
+				mu.Unlock()
+				return
+			}
+		}
+		rw, err := repositories.OpenRepositoryNoCache(repoPath)
+		if err != nil {
+			mu.Lock()
+			res.commitsCount = 1
+			mu.Unlock()
+			return
+		}
+		defer func() { _ = rw.Close() }()
+		countCtx, countCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer countCancel()
+		r, err := commits.CountCommitsWithCap(rw, countCtx, repoCtx.ref, overviewCommitCountCap)
+		mu.Lock()
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "object not found") {
+				h.logger.Debug("Count commits: object not found, using fallback", zap.Error(err))
+			} else {
+				h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
+			}
+			res.commitsCount = 1
+		} else {
+			res.commitsCount = r.Count
+			res.commitsApproximate = r.Approximate
+			if refHash != "" && !r.Approximate {
+				h.overviewCache.SetCommitCount(repoPath, refHash, r.Count)
+			}
+		}
+		mu.Unlock()
+	}()
+
+	// goroutine 3: tree entries — needs isolated storer
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rw, err := repositories.OpenRepositoryNoCache(repoPath)
+		if err != nil {
+			mu.Lock()
+			res.treeErr = err
+			mu.Unlock()
+			return
+		}
+		defer func() { _ = rw.Close() }()
+		entries, err := h.service.GetTreeOnly(ctx, rw.GetRepo(), repoCtx.ref, repoCtx.path)
+		mu.Lock()
+		res.treeEntriesWithCommit = entries
+		res.treeErr = err
+		mu.Unlock()
+	}()
+
+	// goroutine 4: tags — needs isolated storer
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rw, err := repositories.OpenRepositoryNoCache(repoPath)
+		if err != nil {
+			mu.Lock()
+			res.tagsList = []tags.Tag{}
+			mu.Unlock()
+			return
+		}
+		defer func() { _ = rw.Close() }()
+		tl, _, err := tags.GetTags(rw, 100, 0)
+		mu.Lock()
+		if err != nil {
+			res.tagsList = []tags.Tag{}
+		} else {
+			res.tagsList = tl
+		}
+		mu.Unlock()
+	}()
+
+	// goroutine 5: remotes — config-only, safe on shared instance
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rl, err := h.service.GetRemotes(ctx, sharedGitRepo)
+		mu.Lock()
+		if err != nil {
+			res.remotesList = []RemoteInfo{}
+		} else {
+			res.remotesList = rl
+		}
+		mu.Unlock()
+	}()
+
+	// goroutine 6: README blob — needs isolated storer
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rw, err := repositories.OpenRepositoryNoCache(repoPath)
+		if err != nil {
+			return
+		}
+		defer func() { _ = rw.Close() }()
+		readmeData, _, err := h.blobService.GetBlobContent(ctx, owner, repo, "README.md", repoCtx.ref, rw)
+		mu.Lock()
+		if err == nil {
+			const maxReadmeSize = 100 * 1024
+			if len(readmeData) > maxReadmeSize {
+				res.readmeContent = string(readmeData[:maxReadmeSize])
+			} else {
+				res.readmeContent = string(readmeData)
+			}
+		}
+		mu.Unlock()
+	}()
+
+	wg.Wait()
+	return res
+}
+
+// isObjectNotFoundForPack returns true if the result suggests object-not-found due to pack not yet visible (e.g. after push).
+func isObjectNotFoundForPack(res overviewResult, branchesList []BranchInfo) bool {
+	if res.treeErr != nil && strings.Contains(strings.ToLower(res.treeErr.Error()), "object not found") {
+		return true
+	}
+	if !res.latestCommitFound && len(branchesList) > 0 {
+		return true
+	}
+	return false
+}
+
 // HandleGetRepositoryOverview는 저장소 개요를 위한 GET /api/v1/repository/{owner}/{repo} 요청을 처리합니다.
 // 모든 비동기 작업을 병렬로 실행하여 wall time = max(개별) 로 줄입니다.
+// push 직후 pack 미반영 시 object not found가 나올 수 있으므로, 그때 캐시 무효화 후 한 번 재시도합니다.
 func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) {
-	// Request-level timeout: 어떤 sub-task도 이 시간을 넘기지 못하게 강제합니다.
 	ctx, cancel := context.WithTimeout(c.Request.Context(), overviewTimeout)
 	defer cancel()
 
@@ -179,145 +369,59 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	ref := c.Query("ref")
 	path := c.Query("path")
 
-	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
-	if !ok {
-		return
+	var repoCtx *repositoryContext
+	var branchesList []BranchInfo
+	var res overviewResult
+	repoPath := ""
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt == 1 {
+			repositories.GetSimpleCache().Invalidate(repoPath)
+			h.logger.Debug("Overview retry after cache invalidate (pack visibility)", zap.String("repoPath", repoPath))
+		}
+
+		var ok bool
+		repoCtx, ok = h.validateAndOpenRepository(ctx, c, owner, repo, ref)
+		if !ok {
+			// validateAndOpenRepository already released the lock on error paths.
+			return
+		}
+		repoPath = repoCtx.repoPath
+		branchesList = repoCtx.branchesList
+
+		refHash := ""
+		if resolvedHash, resolveErr := repoCtx.repoWrapper.ResolveReference(repoCtx.ref); resolveErr == nil {
+			refHash = resolvedHash.String()
+		}
+
+		res = h.runOverviewTasks(ctx, repoCtx, owner, repo, path, refHash, repoPath)
+
+		if !isObjectNotFoundForPack(res, branchesList) {
+			break
+		}
+
+		// object-not-found for pack: release this attempt's lock and repo, then retry.
+		repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
+		_ = repoCtx.repoWrapper.Close()
+		repoCtx = nil
 	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	gitRepo := repoCtx.repoWrapper.GetRepo()
-	branchesList := repoCtx.branchesList
-	repoPath := repoCtx.repoPath
-	repoCtx.path = path
-
-	// ------------------------------------------------------------------
-	// Resolve refHash once (fast, no I/O) — used by cache + all sub-tasks.
-	// ------------------------------------------------------------------
-	refHash := ""
-	if resolvedHash, resolveErr := repoCtx.repoWrapper.ResolveReference(repoCtx.ref); resolveErr == nil {
-		refHash = resolvedHash.String()
+	// repoCtx is non-nil only when we broke out with a valid open repo (lock still held).
+	// Release once here regardless of whether attempt 0 or 1 succeeded.
+	if repoCtx != nil {
+		defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
+		defer func() { _ = repoCtx.repoWrapper.Close() }()
 	}
 
-	// ------------------------------------------------------------------
-	// 모든 sub-task를 병렬 실행: wall time = max(개별)
-	// GetCommits(1,0)도 병렬로 포함하여 sequential dependency 제거
-	// ------------------------------------------------------------------
-	var (
-		mu                    sync.Mutex
-		latestCommit          commits.Commit
-		latestCommitFound     bool
-		commitsCount          int
-		commitsApproximate    bool
-		treeEntriesWithCommit []GitTreeEntryWithCommit
-		treeErr               error
-		tagsList              []tags.Tag
-		remotesList           []RemoteInfo
-		readmeContent         string
-	)
-
-	var wg sync.WaitGroup
-
-	// (0) GetCommits(1,0) — 빈 저장소 판별 + latestCommit (이전: sequential blocker)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		commitsList, err := commits.GetCommits(repoCtx.repoWrapper, ctx, repoCtx.ref, 1, 0)
-		mu.Lock()
-		if err == nil && len(commitsList) > 0 {
-			latestCommit = commitsList[0]
-			latestCommitFound = true
-		}
-		mu.Unlock()
-	}()
-
-	// (1) CountCommits — capped + cached
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		// Cache hit?
-		if refHash != "" {
-			if cached, ok := h.overviewCache.GetCommitCount(repoPath, refHash); ok {
-				mu.Lock()
-				commitsCount = cached
-				mu.Unlock()
-				return
-			}
-		}
-
-		r, err := commits.CountCommitsWithCap(repoCtx.repoWrapper, ctx, repoCtx.ref, overviewCommitCountCap)
-		mu.Lock()
-		if err != nil {
-			h.logger.Warn("Failed to count commits, using fallback", zap.Error(err))
-			commitsCount = 1
-		} else {
-			commitsCount = r.Count
-			commitsApproximate = r.Approximate
-			if refHash != "" {
-				h.overviewCache.SetCommitCount(repoPath, refHash, r.Count)
-			}
-		}
-		mu.Unlock()
-	}()
-
-	// (2) GetTreeOnly — 트리 구조만 (커밋 정보 없음)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		entries, err := h.service.GetTreeOnly(ctx, gitRepo, repoCtx.ref, repoCtx.path)
-		mu.Lock()
-		treeEntriesWithCommit = entries
-		treeErr = err
-		mu.Unlock()
-	}()
-
-	// (3) GetTags
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		tl, _, err := tags.GetTags(repoCtx.repoWrapper, 100, 0)
-		mu.Lock()
-		if err != nil {
-			tagsList = []tags.Tag{}
-		} else {
-			tagsList = tl
-		}
-		mu.Unlock()
-	}()
-
-	// (4) GetRemotes
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		rl, err := h.service.GetRemotes(ctx, gitRepo)
-		mu.Lock()
-		if err != nil {
-			remotesList = []RemoteInfo{}
-		} else {
-			remotesList = rl
-		}
-		mu.Unlock()
-	}()
-
-	// (5) README
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		readmeData, _, err := h.blobService.GetBlobContent(ctx, owner, repo, "README.md", repoCtx.ref, repoCtx.repoWrapper)
-		mu.Lock()
-		if err == nil {
-			const maxReadmeSize = 100 * 1024
-			if len(readmeData) > maxReadmeSize {
-				readmeContent = string(readmeData[:maxReadmeSize])
-			} else {
-				readmeContent = string(readmeData)
-			}
-		}
-		mu.Unlock()
-	}()
-
-	wg.Wait()
+	latestCommitFound := res.latestCommitFound
+	latestCommit := res.latestCommit
+	commitsCount := res.commitsCount
+	commitsApproximate := res.commitsApproximate
+	treeEntriesWithCommit := res.treeEntriesWithCommit
+	treeErr := res.treeErr
+	tagsList := res.tagsList
+	remotesList := res.remotesList
+	readmeContent := res.readmeContent
 
 	// 빈 저장소 처리 (latestCommit을 못 찾은 경우)
 	if !latestCommitFound {
@@ -353,6 +457,13 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	// Tree 에러 처리
 	if treeErr != nil {
 		errMsg := strings.ToLower(treeErr.Error())
+		h.logger.Error("overview: GetTreeOnly failed",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("ref", repoCtx.ref),
+			zap.String("path", path),
+			zap.Error(treeErr),
+		)
 		if strings.Contains(errMsg, "failed to find path") ||
 			strings.Contains(errMsg, "path not found") ||
 			strings.Contains(errMsg, "path is not a tree") {
@@ -402,11 +513,12 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 	ref := c.Query("ref")
 	path := c.Query("path")
 
-	// 공통 검증 및 저장소 열기
+	// 공통 검증 및 저장소 열기 (RLock은 내부에서 획득)
 	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
 	if !ok {
 		return
 	}
+	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
 	repoCtx.path = path
@@ -481,11 +593,12 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		return
 	}
 
-	// 공통 검증 및 저장소 열기
+	// 공통 검증 및 저장소 열기 (RLock은 내부에서 획득)
 	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
 	if !ok {
 		return
 	}
+	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
 	// blob 가져오기
@@ -588,8 +701,8 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 		return
 	}
 
-	// 저장소 열기 (존재 여부는 OpenRepository에서 확인)
-	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	// 캐시 없이 열기 (packfile repo panic 방지)
+	repoWrapper, err := repositories.OpenRepositoryNoCache(repoPath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return
@@ -803,40 +916,12 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	ref := c.Query("ref")
 	path := c.Query("path")
 
-	// Phase 2 개선: 페이지네이션 파라미터 파싱
-	pageStr := c.Query("page")
-	perPageStr := c.Query("per_page")
-
-	var page, perPage int
-	var err error
-
-	// 페이지 번호 파싱
-	if pageStr != "" {
-		if page, err = strconv.Atoi(pageStr); err != nil || page < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid page parameter"})
-			return
-		}
-	}
-
-	// 페이지당 항목 수 파싱
-	if perPageStr != "" {
-		if perPage, err = strconv.Atoi(perPageStr); err != nil || perPage < 1 || perPage > 100 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid per_page parameter (must be 1-100)"})
-			return
-		}
-	}
-
-	// 페이지네이션이 요청된 경우 새로운 페이지네이션 핸들러로 처리
-	if pageStr != "" || perPageStr != "" {
-		h.handleTreeWithCommitPaginated(c, ctx, owner, repo, ref, path, page, perPage, start)
-		return
-	}
-
-	// 공통 검증 및 저장소 열기
+	// 공통 검증 및 저장소 열기 (RLock은 내부에서 획득)
 	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
 	if !ok {
 		return
 	}
+	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
 	repoCtx.path = path
@@ -943,116 +1028,6 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	c.JSON(http.StatusOK, response)
 }
 
-// ============================================================================
-// Phase 2 개선: 페이지네이션 핸들러
-// ============================================================================
-
-// handleTreeWithCommitPaginated는 페이지네이션이 적용된 트리 조회를 처리합니다.
-func (h *RepositoryOverviewHandler) handleTreeWithCommitPaginated(
-	c *gin.Context,
-	ctx context.Context,
-	owner, repo, ref, path string,
-	page, perPage int,
-	startTime time.Time,
-) {
-	m := observability.GetApplicationMetrics()
-
-	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, ref)
-	if !ok {
-		return
-	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
-
-	repoCtx.path = path
-	gitRepo := repoCtx.repoWrapper.GetRepo()
-
-	// 요청 구조체 생성
-	req := &TreeDirectoryRequest{
-		Owner:   owner,
-		Repo:    repo,
-		Ref:     repoCtx.ref,
-		Path:    path,
-		Page:    page,
-		PerPage: perPage,
-	}
-
-	// 기본 URL 구성 (페이지네이션 URL 생성용)
-	baseURL := fmt.Sprintf("/api/v1/repository/%s/%s/overview/tree/commits", owner, repo)
-	if ref != "" {
-		baseURL += "?ref=" + ref
-	}
-	if path != "" {
-		if ref != "" {
-			baseURL += "&path=" + path
-		} else {
-			baseURL += "?path=" + path
-		}
-	}
-
-	h.logger.Info("Processing paginated tree request",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("ref", ref),
-		zap.String("path", path),
-		zap.Int("page", page),
-		zap.Int("per_page", perPage),
-	)
-
-	// 페이지네이션이 적용된 서비스 메서드 호출
-	response, err := h.service.GetTreeWithCommitPaginated(ctx, gitRepo, req, baseURL)
-	if err != nil {
-		m.RecordTreeWithCommit("paginated_error", time.Since(startTime), 0)
-
-		h.logger.Error("Failed to get paginated tree", zap.Error(err))
-
-		// 경로 관련 오류인지 확인
-		errMsg := strings.ToLower(err.Error())
-		if strings.Contains(errMsg, "failed to find path") ||
-			strings.Contains(errMsg, "path not found") ||
-			strings.Contains(errMsg, "path is not a tree") {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
-			return
-		}
-
-		// 다른 오류들
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to retrieve directory"})
-		return
-	}
-
-	// 성공 메트릭 기록
-	outcome := "paginated_complete"
-	if response.Meta != nil && response.Meta.Incomplete {
-		outcome = "paginated_incomplete"
-	}
-	m.RecordTreeWithCommit(outcome, time.Since(startTime), len(response.Tree))
-
-	// 응답 헤더 설정 (GitLab 패턴)
-	if response.Pagination != nil {
-		c.Header("X-Total", strconv.Itoa(response.Pagination.TotalFiles))
-		c.Header("X-Total-Pages", strconv.Itoa(response.Pagination.TotalPages))
-		c.Header("X-Page", strconv.Itoa(response.Pagination.Page))
-		c.Header("X-Per-Page", strconv.Itoa(response.Pagination.PerPage))
-
-		if response.Pagination.HasNextPage {
-			c.Header("X-Next-Page", strconv.Itoa(response.Pagination.Page+1))
-		}
-		if response.Pagination.HasPrevPage {
-			c.Header("X-Prev-Page", strconv.Itoa(response.Pagination.Page-1))
-		}
-	}
-
-	h.logger.Info("Completed paginated tree request",
-		zap.Duration("total_time", time.Since(startTime)),
-		zap.Int("returned_files", len(response.Tree)),
-		zap.Int("total_files", response.Pagination.TotalFiles),
-		zap.Int("page", response.Pagination.Page),
-		zap.Int("per_page", response.Pagination.PerPage),
-	)
-
-	c.JSON(http.StatusOK, response)
-}
-
 func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context) {
 	ctx := c.Request.Context()
 	start := time.Now()
@@ -1083,11 +1058,12 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 		}
 	}
 
-	// 공통 검증 및 저장소 열기
+	// 공통 검증 및 저장소 열기 (RLock은 내부에서 획득)
 	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, req.Ref)
 	if !ok {
 		return
 	}
+	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
 	// resolved ref hash (fixed)

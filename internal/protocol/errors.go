@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/collabops/git-executor/internal/performance"
 )
 
 // GitProtocolError represents an error that can be communicated in Git Smart HTTP protocol format
@@ -167,13 +166,13 @@ func (eh *ErrorHandler) writeProtocolError(w http.ResponseWriter, err *GitProtoc
 	// Write error in pkt-line format
 	pktWriter := newPktLineWriter(w)
 	errorLine := fmt.Sprintf("ERR %s\n", err.Message)
-	_ = pktWriter.WriteLine(errorLine)
-	_ = pktWriter.Flush() // Send flush packet to end
+	_ = pktWriter.writeLine(errorLine)
+	_ = pktWriter.flush() // Send flush packet to end
 }
 
-// newPktLineWriter creates a new packet line writer (using existing pktLineWriter type)
+// newPktLineWriter creates a new packet line writer
 func newPktLineWriter(w io.Writer) *pktLineWriter {
-	return performance.NewOptimizedPktLineWriter(w)
+	return &pktLineWriter{w: w}
 }
 
 // ValidateContentType validates that the request has an appropriate content type for Git Smart HTTP

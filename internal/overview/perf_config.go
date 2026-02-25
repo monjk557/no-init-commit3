@@ -32,15 +32,17 @@ func latestCommitsMaxCommits() int {
 }
 
 // timeBudgetForEntryCount returns an N-based (tree entry count) time budget.
-// Larger directories get shorter budgets to ensure UI consistency.
+// Must be long enough for at least one DiffTree + several commit scans so that
+// more than one path gets LatestCommit filled (avoids "only one latest commit").
+// Override with OVERVIEW_TREE_COMMITS_TIME_BUDGET_MS env.
 //
-// Bucket rules (override with OVERVIEW_TREE_COMMITS_TIME_BUDGET_MS env):
+// Bucket rules:
 //
-//	N <=  50  → 500ms  (small dir, almost always complete)
-//	N <= 200  → 400ms
-//	N <= 500  → 300ms
-//	N <= 1000 → 200ms
-//	N > 1000  → 150ms  (huge dir, aggressive partial)
+//	N <=  50  → 5s   (small dir, aim for full resolve)
+//	N <= 200  → 4s
+//	N <= 500  → 3s
+//	N <= 1000 → 2s
+//	N > 1000  → 1.5s (huge dir, partial still possible)
 func timeBudgetForEntryCount(n int) time.Duration {
 	// Allow a global override for ops tuning.
 	if v := strings.TrimSpace(os.Getenv("OVERVIEW_TREE_COMMITS_TIME_BUDGET_MS")); v != "" {
@@ -51,15 +53,15 @@ func timeBudgetForEntryCount(n int) time.Duration {
 
 	switch {
 	case n <= 50:
-		return 500 * time.Millisecond
+		return 5 * time.Second
 	case n <= 200:
-		return 400 * time.Millisecond
+		return 4 * time.Second
 	case n <= 500:
-		return 300 * time.Millisecond
+		return 3 * time.Second
 	case n <= 1000:
-		return 200 * time.Millisecond
+		return 2 * time.Second
 	default:
-		return 150 * time.Millisecond
+		return 1500 * time.Millisecond
 	}
 }
 

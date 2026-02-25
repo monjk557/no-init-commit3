@@ -141,6 +141,10 @@ func (t *TransferProgressTracker) SetPackObjectsPhase(inPhase bool) {
 	t.isPackObjectsPhase = inPhase
 }
 
+// PackObjectsStallThreshold is how long we allow no network read during pack receive.
+// Parser can block on disk write/delta resolution for many seconds; do not treat as stall.
+const PackObjectsStallThreshold = 15 * time.Minute
+
 // IsStalled determines if the transfer is stalled vs just slow
 func (t *TransferProgressTracker) IsStalled() bool {
 	t.mu.RLock()
@@ -149,13 +153,9 @@ func (t *TransferProgressTracker) IsStalled() bool {
 	now := time.Now()
 	timeSinceProgress := now.Sub(t.lastProgressTime)
 
-	// Special handling for pack-objects phase where network silence is normal
 	if t.isPackObjectsPhase {
-		// In pack-objects phase, allow longer silence
-		return timeSinceProgress > (t.stallThreshold * 3)
+		return timeSinceProgress > PackObjectsStallThreshold
 	}
-
-	// Normal stall detection
 	return timeSinceProgress > t.stallThreshold
 }
 
@@ -165,6 +165,52 @@ func (t *TransferProgressTracker) GetProgress() (bytesTransferred int64, rate fl
 	defer t.mu.RUnlock()
 
 	return t.bytesTransferred, t.transferRate.Average(), time.Since(t.startTime)
+}
+
+// GetProgressDebug returns detailed progress for debugging (bytes, last progress time, since last progress, pack phase, stall threshold).
+func (t *TransferProgressTracker) GetProgressDebug() (bytesTransferred int64, lastProgress time.Time, sinceProgress time.Duration, isPackPhase bool, stallThreshold time.Duration) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	now := time.Now()
+	since := now.Sub(t.lastProgressTime)
+	threshold := t.stallThreshold
+	if t.isPackObjectsPhase {
+		threshold = PackObjectsStallThreshold
+	}
+	return t.bytesTransferred, t.lastProgressTime, since, t.isPackObjectsPhase, threshold
+}
+
+// progressRecordingReader wraps io.Reader and records bytes to the tracker so that
+// reads through the connection's bufio.Reader (e.g. packfile) are counted for stall detection.
+type progressRecordingReader struct {
+	conn    net.Conn
+	tracker *TransferProgressTracker
+}
+
+func (r *progressRecordingReader) Read(p []byte) (int, error) {
+	n, err := r.conn.Read(p)
+	if n > 0 {
+		r.tracker.RecordProgress(int64(n))
+	}
+	return n, err
+}
+
+// progressRecordingWriter wraps net.Conn so that every TCP send (bufio flush)
+// updates the progress tracker. Upload-pack writes pack data through
+// conn.GetWriter() (bufio.Writer) which bypasses pac.Write(), so without this
+// wrapper the stall detector would never see writes and would kill long clones.
+type progressRecordingWriter struct {
+	conn    net.Conn
+	tracker *TransferProgressTracker
+}
+
+func (w *progressRecordingWriter) Write(p []byte) (int, error) {
+	n, err := w.conn.Write(p)
+	if n > 0 {
+		w.tracker.RecordProgress(int64(n))
+	}
+	return n, err
 }
 
 // ProgressAwareConnection wraps a TCP connection with progress-aware timeout management
@@ -190,17 +236,31 @@ type ProgressAwareConnection struct {
 	closed   int32
 }
 
+// Default read buffer size for TCP Git protocol (large packfile receive during push).
+// Larger buffer prevents TCP flow control from throttling the client when server is parsing.
+const defaultReadBufferSize = 256 * 1024 // 256KB
+
+// Default write buffer size for TCP Git protocol.
+const defaultWriteBufferSize = 64 * 1024 // 64KB
+
 // NewProgressAwareConnection creates a new progress-aware connection wrapper
 func NewProgressAwareConnection(conn net.Conn, policy *TimeoutPolicy, logger *zap.Logger) *ProgressAwareConnection {
 	if policy == nil {
 		policy = DefaultTimeoutPolicy()
 	}
 
+	tracker := NewTransferProgressTracker(policy.StallThreshold)
+	// bufio.Reader wraps a progress-recording reader so pack receive (push) is counted.
+	readSource := &progressRecordingReader{conn: conn, tracker: tracker}
+	// bufio.Writer wraps a progress-recording writer so pack send (clone/fetch) is also
+	// counted. Without this, writes bypass pac.Write() and the stall detector never sees
+	// upload-pack progress, killing long clones after StallThreshold seconds.
+	writeTarget := &progressRecordingWriter{conn: conn, tracker: tracker}
 	pac := &ProgressAwareConnection{
 		conn:            conn,
-		reader:          bufio.NewReader(conn),
-		writer:          bufio.NewWriter(conn),
-		progressTracker: NewTransferProgressTracker(policy.StallThreshold),
+		reader:          bufio.NewReaderSize(readSource, defaultReadBufferSize),
+		writer:          bufio.NewWriterSize(writeTarget, defaultWriteBufferSize),
+		progressTracker: tracker,
 		timeoutPolicy:   policy,
 		currentPhase:    PhaseHandshake,
 		logger:          logger,
@@ -266,10 +326,15 @@ func (pac *ProgressAwareConnection) monitorProgress() {
 
 			// Check for stall
 			if pac.progressTracker.IsStalled() {
+				bytes, lastProg, since, isPack, threshold := pac.progressTracker.GetProgressDebug()
 				pac.logger.Warn("Connection stalled, closing",
 					zap.String("owner", pac.owner),
 					zap.String("repo", pac.repo),
-					zap.Duration("stall_duration", time.Since(pac.progressTracker.lastProgressTime)))
+					zap.Int64("bytes_transferred", bytes),
+					zap.Time("last_progress_at", lastProg),
+					zap.Duration("since_last_progress", since),
+					zap.Duration("stall_threshold_used", threshold),
+					zap.Bool("pack_objects_phase", isPack))
 				pac.Close()
 				return
 			}
@@ -306,7 +371,9 @@ func (pac *ProgressAwareConnection) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Write wraps the underlying connection write with progress tracking
+// Write wraps the underlying connection write with progress tracking.
+// Progress is recorded by progressRecordingWriter when bufio actually flushes
+// to the TCP connection, so we only update lastUsed here.
 func (pac *ProgressAwareConnection) Write(p []byte) (int, error) {
 	if atomic.LoadInt32(&pac.closed) == 1 {
 		return 0, NewConnectionClosedError("write")
@@ -314,8 +381,6 @@ func (pac *ProgressAwareConnection) Write(p []byte) (int, error) {
 
 	n, err := pac.writer.Write(p)
 	if n > 0 {
-		// Record the actual bytes written (incremental)
-		pac.progressTracker.RecordProgress(int64(n))
 		pac.lastUsed = time.Now()
 	}
 
