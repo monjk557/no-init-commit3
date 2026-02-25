@@ -20,6 +20,7 @@ func (h *MergeOperationsHandler) createMergedTreeWithBase(
 	sourceCommit, targetCommit, baseCommit *object.Commit,
 	analysis *MergeAnalysisResult,
 	strategy MergeStrategy,
+	protectionCtx *MergeProtectionContext,
 ) (plumbing.Hash, error) {
 	if baseCommit == nil {
 		return plumbing.ZeroHash, fmt.Errorf("base commit cannot be nil")
@@ -55,7 +56,7 @@ func (h *MergeOperationsHandler) createMergedTreeWithBase(
 	}
 
 	// Merge trees recursively starting from root
-	treeEntries, err := h.mergeTreeEntries(ctx, repo, baseTree, sourceTree, targetTree, "", conflictMap, strategy)
+	treeEntries, err := h.mergeTreeEntries(ctx, repo, baseTree, sourceTree, targetTree, "", conflictMap, strategy, protectionCtx)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to merge tree entries: %w", err)
 	}
@@ -81,6 +82,7 @@ func (h *MergeOperationsHandler) createMergedTree(
 	sourceCommit, targetCommit *object.Commit,
 	analysis *MergeAnalysisResult,
 	strategy MergeStrategy,
+	protectionCtx *MergeProtectionContext,
 ) (plumbing.Hash, error) {
 	// Find merge base (common ancestor)
 	mergeBases, err := sourceCommit.MergeBase(targetCommit)
@@ -92,7 +94,7 @@ func (h *MergeOperationsHandler) createMergedTree(
 	}
 
 	baseCommit := mergeBases[0]
-	return h.createMergedTreeWithBase(ctx, repo, sourceCommit, targetCommit, baseCommit, analysis, strategy)
+	return h.createMergedTreeWithBase(ctx, repo, sourceCommit, targetCommit, baseCommit, analysis, strategy, protectionCtx)
 }
 
 // resolveFileForMerge determines which version of a file to use in the merged tree
@@ -100,6 +102,7 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 	entry *mergeFileEntry,
 	conflict *FileConflict,
 	strategy MergeStrategy,
+	protectionCtx *MergeProtectionContext, // NEW: Protection context for feature flag control
 ) (plumbing.Hash, filemode.FileMode, error) {
 	baseExists := !entry.baseHash.IsZero()
 	sourceExists := !entry.sourceHash.IsZero()
@@ -136,8 +139,25 @@ func (h *MergeOperationsHandler) resolveFileForMerge(
 				h.logger.Debug("File deleted in source, unchanged in target - respecting deletion (theirs strategy)", zap.String("path", entry.path))
 				return plumbing.ZeroHash, 0, nil
 			}
-			// For recursive/ORT/ours strategies, preserve the file
-			h.logger.Debug("File missing in source but unchanged in target - preserving target (directory may not exist in source)", zap.String("path", entry.path))
+
+			// **CRITICAL FIX**: Check feature flag before preserving files
+			if protectionCtx != nil && !protectionCtx.ShouldPreserveFile(entry.path) {
+				h.logger.Info("Feature flag control - allowing environment file deletion",
+					zap.String("path", entry.path),
+					zap.String("protection_mode", protectionCtx.GetProtectionStatus()),
+					zap.Bool("destructive_mode", protectionCtx.DestructiveMode))
+				return plumbing.ZeroHash, 0, nil // DELETE THE FILE
+			}
+
+			// For recursive/ORT/ours strategies, preserve the file (when protection enabled)
+			h.logger.Debug("File missing in source but unchanged in target - preserving target (protection enabled or non-environment file)",
+				zap.String("path", entry.path),
+				zap.String("protection_status", func() string {
+					if protectionCtx != nil {
+						return protectionCtx.GetProtectionStatus()
+					}
+					return "no_protection_context"
+				}()))
 			return entry.targetHash, entry.targetMode, nil
 		}
 		// Conflict: modified in target, deleted in source
@@ -345,6 +365,7 @@ func (h *MergeOperationsHandler) mergeTreeEntries(
 	prefix string,
 	conflictMap map[string]*FileConflict,
 	strategy MergeStrategy,
+	protectionCtx *MergeProtectionContext,
 ) ([]object.TreeEntry, error) {
 	// Collect all entries from all three trees
 	entryMap := h.collectTreeEntries(baseTree, sourceTree, targetTree)
@@ -360,7 +381,7 @@ func (h *MergeOperationsHandler) mergeTreeEntries(
 		default:
 		}
 
-		resolvedEntry, err := h.resolveTreeEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+		resolvedEntry, err := h.resolveTreeEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy, protectionCtx)
 		if err != nil {
 			h.logger.Warn("Failed to resolve tree entry, skipping",
 				zap.String("name", mergeEntry.name),
@@ -388,6 +409,7 @@ func (h *MergeOperationsHandler) resolveTreeEntry(
 	prefix string,
 	conflictMap map[string]*FileConflict,
 	strategy MergeStrategy,
+	protectionCtx *MergeProtectionContext,
 ) (*object.TreeEntry, error) {
 	baseExists := mergeEntry.baseEntry != nil
 	sourceExists := mergeEntry.sourceEntry != nil
@@ -405,12 +427,12 @@ func (h *MergeOperationsHandler) resolveTreeEntry(
 
 	// Handle type conflicts (directory vs file)
 	if h.hasTypeConflict(baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists) {
-		return h.resolveTypeConflict(ctx, repo, mergeEntry, prefix, conflictMap, strategy, fullPath, baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists)
+		return h.resolveTypeConflict(ctx, repo, mergeEntry, prefix, conflictMap, strategy, fullPath, baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists, protectionCtx)
 	}
 
 	// Handle directory entries (recursive merge)
 	if baseIsDir || sourceIsDir || targetIsDir {
-		return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+		return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy, protectionCtx)
 	}
 
 	// Handle file entries (use existing file merge logic)
@@ -431,7 +453,7 @@ func (h *MergeOperationsHandler) resolveTreeEntry(
 	}
 
 	conflict := conflictMap[fullPath]
-	resolvedHash, resolvedMode, err := h.resolveFileForMerge(fileEntry, conflict, strategy)
+	resolvedHash, resolvedMode, err := h.resolveFileForMerge(fileEntry, conflict, strategy, protectionCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -455,6 +477,7 @@ func (h *MergeOperationsHandler) mergeDirectoryEntry(
 	prefix string,
 	conflictMap map[string]*FileConflict,
 	strategy MergeStrategy,
+	protectionCtx *MergeProtectionContext,
 ) (*object.TreeEntry, error) {
 	// Get sub-trees for base, source, and target (or create empty ones)
 	baseSubTree, err := h.getOrCreateEmptyTree(repo, mergeEntry.baseEntry)
@@ -530,7 +553,7 @@ func (h *MergeOperationsHandler) mergeDirectoryEntry(
 		newPrefix = prefix + "/" + mergeEntry.name
 	}
 
-	mergedEntries, err := h.mergeTreeEntries(ctx, repo, baseSubTree, sourceSubTree, targetSubTree, newPrefix, conflictMap, strategy)
+	mergedEntries, err := h.mergeTreeEntries(ctx, repo, baseSubTree, sourceSubTree, targetSubTree, newPrefix, conflictMap, strategy, protectionCtx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to merge subtree entries: %w", err)
 	}
@@ -600,6 +623,7 @@ func (h *MergeOperationsHandler) resolveTypeConflict(
 	strategy MergeStrategy,
 	fullPath string,
 	baseIsDir, sourceIsDir, targetIsDir, sourceExists, targetExists bool,
+	protectionCtx *MergeProtectionContext,
 ) (*object.TreeEntry, error) {
 	h.logger.Warn("Type conflict: directory vs file",
 		zap.String("path", fullPath),
@@ -611,24 +635,24 @@ func (h *MergeOperationsHandler) resolveTypeConflict(
 	case MergeStrategyTheirs:
 		if sourceExists {
 			if sourceIsDir {
-				return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+				return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy, protectionCtx)
 			}
 			return mergeEntry.sourceEntry, nil
 		}
 	case MergeStrategyOurs:
 		if targetExists {
 			if targetIsDir {
-				return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+				return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy, protectionCtx)
 			}
 			return mergeEntry.targetEntry, nil
 		}
 	default:
 		// Prefer directory over file
 		if sourceIsDir {
-			return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+			return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy, protectionCtx)
 		}
 		if targetIsDir {
-			return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy)
+			return h.mergeDirectoryEntry(ctx, repo, mergeEntry, prefix, conflictMap, strategy, protectionCtx)
 		}
 		// Both are files, use source
 		if sourceExists {

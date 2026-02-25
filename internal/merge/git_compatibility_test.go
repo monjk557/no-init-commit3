@@ -384,11 +384,11 @@ func testRealRepositoryIntegration(t *testing.T) {
 		Logging: config.LoggingConfig{Level: "info", Format: "json", Output: "stdout"},
 	}
 
-	handler, err := NewMergeOperationsHandler(cfg)
+	// Handler creation test (protection verification no longer needed)
+	_, err = NewMergeOperationsHandler(cfg)
 	require.NoError(t, err)
 
-	// Verify protection layer is initialized
-	require.NotNil(t, handler.protectionLayer, "Protection layer should be initialized")
+	// Protection is now always handled by PolicyEngine - no individual layer check needed
 
 	t.Log("✅ Real repository integration successful")
 	t.Logf("   Repository path: %s", tempDir)

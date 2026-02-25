@@ -1,0 +1,626 @@
+package merge
+
+import (
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/collabops/git-executor/internal/config"
+)
+
+// TestConfigurationValidationEdgeCases tests edge cases in configuration validation
+func TestConfigurationValidationEdgeCases(t *testing.T) {
+	t.Run("MalformedEnvironmentVariables", testMalformedEnvironmentVariables)
+	t.Run("BoundaryValues", testBoundaryValues)
+	t.Run("EncodingAndSpecialCharacters", testEncodingAndSpecialCharacters)
+	t.Run("CircularDependencies", testCircularDependencies)
+	t.Run("SystemLimitExceeding", testSystemLimitExceeding)
+	t.Run("ConcurrentConfigurationAccess", testConcurrentConfigurationAccess)
+	t.Run("ConfigurationMigration", testConfigurationMigration)
+}
+
+// Test malformed environment variable handling
+func testMalformedEnvironmentVariables(t *testing.T) {
+	malformedCases := []struct {
+		name        string
+		envVars     map[string]string
+		expectError bool
+		description string
+	}{
+		{
+			name: "NonUTF8Characters",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_SAFETY_MODE": string([]byte{0xFF, 0xFE, 0xFD}), // Invalid UTF-8
+			},
+			expectError: false, // Should handle gracefully with defaults
+			description: "Non-UTF-8 characters in environment variables should be handled",
+		},
+		{
+			name: "ExtremelyLongValues",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_ALLOWED_DELETES": strings.Repeat("very_long_path_name,", 10000),
+			},
+			expectError: false,
+			description: "Extremely long environment variable values should be handled",
+		},
+		{
+			name: "NullBytes",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_SAFETY_MODE": "strict\x00mode",
+			},
+			expectError: true, // Null bytes should be rejected
+			description: "Null bytes in configuration should be rejected",
+		},
+		{
+			name: "ControlCharacters",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_SAFETY_MODE": "strict\r\nmode",
+			},
+			expectError: true,
+			description: "Control characters should be rejected",
+		},
+		{
+			name: "UnicodeEdgeCases",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_SAFETY_MODE":      "严格", // Chinese characters
+				"MERGE_PROTECTION_FALLBACK_STRATEGY": "🔒保护", // Emojis
+			},
+			expectError: true, // Should only accept known values
+			description: "Unicode characters in enum values should be validated",
+		},
+		{
+			name: "NumericOverflow",
+			envVars: map[string]string{
+				"ORCHESTRATOR_TIMEOUT_MS": "999999999999999999999999999999999999999",
+			},
+			expectError: false, // Should handle overflow gracefully
+			description: "Numeric overflow should be handled gracefully",
+		},
+		{
+			name: "FloatingPointInIntegerField",
+			envVars: map[string]string{
+				"ORCHESTRATOR_TIMEOUT_MS": "1500.75",
+			},
+			expectError: false, // Should parse as integer or use default
+			description: "Floating point in integer field should be handled",
+		},
+		{
+			name: "ScientificNotation",
+			envVars: map[string]string{
+				"ORCHESTRATOR_TIMEOUT_MS": "1.5e3", // 1500 in scientific notation
+			},
+			expectError: false,
+			description: "Scientific notation should be parsed correctly",
+		},
+		{
+			name: "NegativeValuesWherePositiveExpected",
+			envVars: map[string]string{
+				"ORCHESTRATOR_TIMEOUT_MS": "-100",
+			},
+			expectError: false, // Should use default or absolute value
+			description: "Negative values where positive expected should be handled",
+		},
+	}
+
+	for _, tc := range malformedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("🔧 Testing malformed environment variable: %s", tc.description)
+
+			// Backup and restore environment
+			originalEnv := backupEnvironment(tc.envVars)
+			defer restoreEnvironment(originalEnv)
+
+			// Set test environment variables
+			for key, value := range tc.envVars {
+				os.Setenv(key, value)
+			}
+
+			// Attempt to load configuration
+			cfg, err := config.Load()
+
+			if tc.expectError {
+				assert.Error(t, err, "Expected error for malformed configuration")
+			} else {
+				assert.NoError(t, err, "Should handle malformed values gracefully")
+				if cfg != nil {
+					// Verify that sensible defaults are used
+					assert.Contains(t, []string{"strict", "permissive", "disabled"}, cfg.MergeProtection.SafetyMode)
+					assert.Contains(t, []string{"preserve_target", "preserve_source", "manual"}, cfg.MergeProtection.FallbackStrategy)
+				}
+			}
+		})
+	}
+}
+
+// Test boundary values for numerical configurations
+func testBoundaryValues(t *testing.T) {
+	boundaryTests := []struct {
+		name        string
+		envVar      string
+		values      []string
+		expectError []bool
+		description string
+	}{
+		{
+			name:   "TimeoutBoundaries",
+			envVar: "ORCHESTRATOR_TIMEOUT_MS",
+			values: []string{
+				"0",           // Zero timeout
+				"1",           // Minimum positive value
+				"2147483647",  // Max int32
+				"2147483648",  // Max int32 + 1
+				"9223372036854775807", // Max int64
+			},
+			expectError: []bool{false, false, false, false, false},
+			description: "Timeout values at system boundaries",
+		},
+		{
+			name:   "PortNumberBoundaries",
+			envVar: "SERVER_PORT",
+			values: []string{
+				"0",     // Invalid port
+				"1",     // Minimum valid port
+				"80",    // Common port
+				"65535", // Maximum valid port
+				"65536", // Invalid port (too high)
+				"99999", // Way too high
+			},
+			expectError: []bool{true, false, false, false, true, true},
+			description: "Port number validation at boundaries",
+		},
+		{
+			name:   "BooleanBoundaries",
+			envVar: "MERGE_PROTECTION_ENABLED",
+			values: []string{
+				"true",
+				"false",
+				"TRUE",
+				"False",
+				"1",
+				"0",
+				"yes",
+				"no",
+				"on",
+				"off",
+				"maybe",    // Invalid
+				"true ",    // Trailing space
+				" false",   // Leading space
+				"",         // Empty string
+			},
+			expectError: []bool{
+				false, false, false, false, false, false, false, false, false, false,
+				false, false, false, false, // Should use defaults for invalid values
+			},
+			description: "Boolean parsing edge cases",
+		},
+	}
+
+	for _, tc := range boundaryTests {
+		t.Run(tc.name, func(t *testing.T) {
+			for i, value := range tc.values {
+				t.Run(value, func(t *testing.T) {
+					t.Logf("🎯 Testing boundary value: %s=%s", tc.envVar, value)
+
+					// Set minimal required environment
+					os.Setenv("SERVER_PORT", "8080")
+					os.Setenv("SERVER_TCP_GIT_PORT", "9418")
+					os.Setenv("SERVER_BASE_PATH", "/api")
+					os.Setenv("GIT_REPO_ROOT", "/tmp/repos")
+
+					// Set test value
+					os.Setenv(tc.envVar, value)
+					defer os.Unsetenv(tc.envVar)
+
+					cfg, err := config.Load()
+
+					if i < len(tc.expectError) && tc.expectError[i] {
+						assert.Error(t, err, "Expected error for boundary value %s", value)
+					} else {
+						assert.NoError(t, err, "Should handle boundary value %s gracefully", value)
+						assert.NotNil(t, cfg, "Configuration should be loaded")
+					}
+				})
+			}
+		})
+	}
+}
+
+// Test encoding and special character handling
+func testEncodingAndSpecialCharacters(t *testing.T) {
+	encodingTests := []struct {
+		name        string
+		setup       func()
+		expectError bool
+		description string
+	}{
+		{
+			name: "UTF8BOMInValues",
+			setup: func() {
+				bom := "\xEF\xBB\xBF" // UTF-8 BOM
+				os.Setenv("MERGE_PROTECTION_SAFETY_MODE", bom+"strict")
+			},
+			expectError: true, // BOM should be rejected
+			description: "UTF-8 BOM in environment variable values",
+		},
+		{
+			name: "LeadingTrailingWhitespace",
+			setup: func() {
+				os.Setenv("MERGE_PROTECTION_SAFETY_MODE", "  strict  ")
+				os.Setenv("MERGE_PROTECTION_FALLBACK_STRATEGY", "\tpreserve_target\t")
+			},
+			expectError: false, // Should trim whitespace
+			description: "Leading and trailing whitespace should be handled",
+		},
+		{
+			name: "CaseInsensitivity",
+			setup: func() {
+				os.Setenv("MERGE_PROTECTION_SAFETY_MODE", "STRICT")
+				os.Setenv("MERGE_PROTECTION_FALLBACK_STRATEGY", "Preserve_Target")
+			},
+			expectError: true, // Should be case sensitive for enum values
+			description: "Case sensitivity in enum values",
+		},
+		{
+			name: "SpecialPathCharacters",
+			setup: func() {
+				os.Setenv("GIT_REPO_ROOT", "/path/with spaces/and-dashes/under_scores")
+				os.Setenv("SERVER_BASE_PATH", "/api/v1/with-dashes")
+			},
+			expectError: false,
+			description: "Special characters in path values",
+		},
+	}
+
+	for _, tc := range encodingTests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("🔤 Testing encoding case: %s", tc.description)
+
+			// Set minimal required environment
+			os.Setenv("SERVER_PORT", "8080")
+			os.Setenv("SERVER_TCP_GIT_PORT", "9418")
+			os.Setenv("SERVER_BASE_PATH", "/api")
+			os.Setenv("GIT_REPO_ROOT", "/tmp/repos")
+
+			tc.setup()
+
+			cfg, err := config.Load()
+
+			if tc.expectError {
+				assert.Error(t, err, "Expected error for encoding case")
+			} else {
+				assert.NoError(t, err, "Should handle encoding gracefully")
+				if cfg != nil {
+					// Verify that values are properly trimmed/normalized
+					assert.NotContains(t, cfg.MergeProtection.SafetyMode, " ", "Safety mode should not contain spaces")
+					assert.NotContains(t, cfg.MergeProtection.SafetyMode, "\t", "Safety mode should not contain tabs")
+				}
+			}
+
+			// Clean up
+			os.Unsetenv("MERGE_PROTECTION_SAFETY_MODE")
+			os.Unsetenv("MERGE_PROTECTION_FALLBACK_STRATEGY")
+		})
+	}
+}
+
+// Test configuration with circular dependencies or conflicting values
+func testCircularDependencies(t *testing.T) {
+	circularTests := []struct {
+		name        string
+		envVars     map[string]string
+		expectError bool
+		description string
+	}{
+		{
+			name: "ProtectionEnabledButAllMethodsDisabled",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_ENABLED":     "true",
+				"MERGE_PROTECTION_ENV_ENABLED": "true",
+				"MERGE_PROTECTION_SQUASH":      "false",
+				"MERGE_PROTECTION_REGULAR":     "false",
+				"MERGE_PROTECTION_REBASE":      "false",
+			},
+			expectError: false, // Should work but protection is effectively disabled
+			description: "Protection enabled but all merge methods disabled",
+		},
+		{
+			name: "StrictModeWithPermissiveFallback",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_STRICT":           "true",
+				"MERGE_PROTECTION_FALLBACK_STRATEGY": "preserve_source", // Potentially risky
+			},
+			expectError: false, // Valid but potentially risky combination
+			description: "Strict mode with permissive fallback strategy",
+		},
+		{
+			name: "IntelligentFeaturesWithoutProtection",
+			envVars: map[string]string{
+				"MERGE_PROTECTION_ENABLED":     "false",
+				"MERGE_PROTECTION_INTELLIGENT": "true",
+				"MERGE_PROTECTION_ADAPTIVE":    "true",
+				"MERGE_PROTECTION_PREDICTIVE":  "true",
+			},
+			expectError: false, // Should work - features can work independently
+			description: "Intelligent features enabled without protection",
+		},
+	}
+
+	for _, tc := range circularTests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("🔄 Testing configuration dependency: %s", tc.description)
+
+			// Set minimal required environment
+			os.Setenv("SERVER_PORT", "8080")
+			os.Setenv("SERVER_TCP_GIT_PORT", "9418")
+			os.Setenv("SERVER_BASE_PATH", "/api")
+			os.Setenv("GIT_REPO_ROOT", "/tmp/repos")
+
+			// Set test environment variables
+			originalEnv := backupEnvironment(tc.envVars)
+			defer restoreEnvironment(originalEnv)
+
+			for key, value := range tc.envVars {
+				os.Setenv(key, value)
+			}
+
+			cfg, err := config.Load()
+
+			if tc.expectError {
+				assert.Error(t, err, "Expected error for conflicting configuration")
+			} else {
+				assert.NoError(t, err, "Should handle configuration dependencies")
+				if cfg != nil {
+					// Verify that configuration is internally consistent
+					validateConfigurationConsistency(t, cfg, tc.description)
+				}
+			}
+		})
+	}
+}
+
+// Test system limit exceeding scenarios
+func testSystemLimitExceeding(t *testing.T) {
+	limitTests := []struct {
+		name        string
+		setupLimits func()
+		expectError bool
+		description string
+	}{
+		{
+			name: "ExtremelyLargeCacheSize",
+			setupLimits: func() {
+				os.Setenv("GIT_MAX_CACHE_SIZE", "999999999") // Very large cache
+			},
+			expectError: false, // Should handle gracefully
+			description: "Extremely large cache size configuration",
+		},
+		{
+			name: "TooManyAllowedDeletePaths",
+			setupLimits: func() {
+				// Create a very long list of paths
+				paths := make([]string, 10000)
+				for i := range paths {
+					paths[i] = "path_" + strconv.Itoa(i)
+				}
+				os.Setenv("MERGE_PROTECTION_ALLOWED_DELETES", strings.Join(paths, ","))
+			},
+			expectError: false, // Should handle but may truncate
+			description: "Excessive number of allowed delete paths",
+		},
+		{
+			name: "ZeroTimeouts",
+			setupLimits: func() {
+				os.Setenv("ORCHESTRATOR_TIMEOUT_MS", "0")
+			},
+			expectError: false, // Should use reasonable default
+			description: "Zero timeout values should use defaults",
+		},
+	}
+
+	for _, tc := range limitTests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("📏 Testing system limit: %s", tc.description)
+
+			// Set minimal required environment
+			os.Setenv("SERVER_PORT", "8080")
+			os.Setenv("SERVER_TCP_GIT_PORT", "9418")
+			os.Setenv("SERVER_BASE_PATH", "/api")
+			os.Setenv("GIT_REPO_ROOT", "/tmp/repos")
+
+			tc.setupLimits()
+
+			cfg, err := config.Load()
+
+			if tc.expectError {
+				assert.Error(t, err, "Expected error for system limit exceeded")
+			} else {
+				assert.NoError(t, err, "Should handle system limits gracefully")
+				if cfg != nil {
+					// Verify that reasonable limits are enforced
+					assert.True(t, cfg.Orchestrator.Timeout > 0, "Timeout should be positive")
+					assert.True(t, len(cfg.MergeProtection.EnvironmentProtection.AllowedDeletePaths) < 1000,
+						"Should limit allowed delete paths")
+				}
+			}
+
+			// Cleanup
+			os.Unsetenv("GIT_MAX_CACHE_SIZE")
+			os.Unsetenv("MERGE_PROTECTION_ALLOWED_DELETES")
+			os.Unsetenv("ORCHESTRATOR_TIMEOUT_MS")
+		})
+	}
+}
+
+// Test concurrent configuration access
+func testConcurrentConfigurationAccess(t *testing.T) {
+	t.Run("ConcurrentConfigLoad", func(t *testing.T) {
+		t.Logf("⚡ Testing concurrent configuration loading")
+
+		// Set minimal environment
+		os.Setenv("SERVER_PORT", "8080")
+		os.Setenv("SERVER_TCP_GIT_PORT", "9418")
+		os.Setenv("SERVER_BASE_PATH", "/api")
+		os.Setenv("GIT_REPO_ROOT", "/tmp/repos")
+
+		// Load configuration concurrently
+		const concurrency = 10
+		results := make(chan error, concurrency)
+
+		for i := 0; i < concurrency; i++ {
+			go func() {
+				_, err := config.Load()
+				results <- err
+			}()
+		}
+
+		// Check results
+		var errors []error
+		for i := 0; i < concurrency; i++ {
+			if err := <-results; err != nil {
+				errors = append(errors, err)
+			}
+		}
+
+		assert.Empty(t, errors, "Concurrent configuration loading should not cause errors")
+	})
+
+	t.Run("ConcurrentEnvModification", func(t *testing.T) {
+		t.Logf("🔄 Testing concurrent environment modification")
+
+		// This test verifies that environment modifications during config load don't cause issues
+		os.Setenv("SERVER_PORT", "8080")
+		os.Setenv("SERVER_TCP_GIT_PORT", "9418")
+		os.Setenv("SERVER_BASE_PATH", "/api")
+		os.Setenv("GIT_REPO_ROOT", "/tmp/repos")
+
+		done := make(chan bool)
+
+		// Continuously modify environment in background
+		go func() {
+			for i := 0; i < 100; i++ {
+				os.Setenv("MERGE_PROTECTION_ENABLED", strconv.FormatBool(i%2 == 0))
+				// Brief pause to allow config loading
+			}
+			done <- true
+		}()
+
+		// Load configuration multiple times
+		for i := 0; i < 10; i++ {
+			_, err := config.Load()
+			assert.NoError(t, err, "Configuration loading should succeed despite concurrent modifications")
+		}
+
+		<-done
+	})
+}
+
+// Test configuration migration scenarios
+func testConfigurationMigration(t *testing.T) {
+	migrationTests := []struct {
+		name            string
+		oldConfig       map[string]string
+		newConfig       map[string]string
+		expectCompatible bool
+		description     string
+	}{
+		{
+			name: "LegacyBooleanFormat",
+			oldConfig: map[string]string{
+				"MERGE_PROTECTION_ENABLED": "1", // Legacy format
+			},
+			newConfig: map[string]string{
+				"MERGE_PROTECTION_ENABLED": "true", // New format
+			},
+			expectCompatible: true,
+			description:      "Legacy boolean format should be compatible",
+		},
+		{
+			name: "DefaultValueChanges",
+			oldConfig: map[string]string{
+				// Old defaults (empty means use old defaults)
+			},
+			newConfig: map[string]string{
+				"MERGE_PROTECTION_SAFETY_MODE": "strict", // New default is strict
+			},
+			expectCompatible: true,
+			description:      "Default value changes should be backward compatible",
+		},
+	}
+
+	for _, tc := range migrationTests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("📦 Testing configuration migration: %s", tc.description)
+
+			// Set minimal required environment
+			os.Setenv("SERVER_PORT", "8080")
+			os.Setenv("SERVER_TCP_GIT_PORT", "9418")
+			os.Setenv("SERVER_BASE_PATH", "/api")
+			os.Setenv("GIT_REPO_ROOT", "/tmp/repos")
+
+			// Test old configuration
+			oldEnvBackup := backupEnvironment(tc.oldConfig)
+			for key, value := range tc.oldConfig {
+				os.Setenv(key, value)
+			}
+
+			oldCfg, oldErr := config.Load()
+			restoreEnvironment(oldEnvBackup)
+
+			// Test new configuration
+			newEnvBackup := backupEnvironment(tc.newConfig)
+			for key, value := range tc.newConfig {
+				os.Setenv(key, value)
+			}
+
+			newCfg, newErr := config.Load()
+			restoreEnvironment(newEnvBackup)
+
+			// Both should load successfully
+			assert.NoError(t, oldErr, "Old configuration should load")
+			assert.NoError(t, newErr, "New configuration should load")
+
+			if tc.expectCompatible {
+				// Verify that essential behavior is compatible
+				if oldCfg != nil && newCfg != nil {
+					assert.Equal(t, oldCfg.MergeProtection.Enabled, newCfg.MergeProtection.Enabled,
+						"Protection enabled state should be compatible")
+				}
+			}
+		})
+	}
+}
+
+// Helper function to validate configuration consistency
+func validateConfigurationConsistency(t *testing.T, cfg *config.Config, context string) {
+	// Check for logical inconsistencies
+	if cfg.MergeProtection.Enabled {
+		// If protection is enabled, at least one method should be protected
+		anyMethodProtected := cfg.MergeProtection.EnvironmentProtection.EnableForSquashMerge ||
+			cfg.MergeProtection.EnvironmentProtection.EnableForRegularMerge ||
+			cfg.MergeProtection.EnvironmentProtection.EnableForRebaseMerge
+
+		if !anyMethodProtected {
+			t.Logf("WARNING (%s): Protection enabled but no methods protected", context)
+		}
+	}
+
+	// Verify safety mode and fallback strategy compatibility
+	if cfg.MergeProtection.SafetyMode == "strict" &&
+		cfg.MergeProtection.FallbackStrategy == "preserve_source" {
+		t.Logf("WARNING (%s): Strict mode with preserve_source strategy may be risky", context)
+	}
+
+	// Check for reasonable timeout values
+	if cfg.Orchestrator.Timeout <= 0 {
+		t.Errorf("ERROR (%s): Invalid timeout value: %v", context, cfg.Orchestrator.Timeout)
+	}
+
+	// Verify port values are in valid range
+	if cfg.Server.Port <= 0 || cfg.Server.Port > 65535 {
+		t.Errorf("ERROR (%s): Invalid port: %d", context, cfg.Server.Port)
+	}
+}

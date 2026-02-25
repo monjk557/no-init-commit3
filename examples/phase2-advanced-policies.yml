@@ -1,0 +1,231 @@
+version: "1.0"
+
+metadata:
+  name: "Advanced Policy Configuration - Phase 2"
+  description: "Comprehensive example showcasing all Phase 2 features: templates, hierarchical policies, validation, and hot reload"
+  author: "Platform Engineering Team"
+  version: "1.0"
+
+# Policy Templates for reusable configurations
+templates:
+  - name: "environment-protection"
+    description: "Protect ${env_type} environment files in ${path}"
+    type: "file_protection"
+    rules:
+      - name: "env-files"
+        type: "file_protection"
+        patterns:
+          - "${path}/**/*.env"
+          - "${path}/**/*.${extension}"
+          - "{{custom_pattern}}"
+        action: "block_deletion"
+        enforcement: "strict"
+        scope:
+          branches: ["${target_branch}"]
+        metadata:
+          environment: "${env_type}"
+          criticality: "${criticality}"
+    variables:
+      env_type: "production"
+      path: "config"
+      extension: "environment"
+      target_branch: "main"
+      custom_pattern: "*.secrets"
+      criticality: "high"
+
+  - name: "approval-workflow"
+    description: "Require approval from ${team} for ${file_type} changes"
+    type: "file_protection"
+    rules:
+      - name: "require-approval"
+        type: "file_protection"
+        patterns:
+          - "${pattern}"
+        action: "require_approval"
+        enforcement: "strict"
+        metadata:
+          approver_team: "${team}"
+          min_approvers: "${min_count}"
+          reason: "Critical ${file_type} changes require review"
+    variables:
+      team: "platform-team"
+      file_type: "infrastructure"
+      pattern: "infrastructure/**/*"
+      min_count: 2
+
+# Hierarchical Policies (organized by priority)
+policies:
+  # Critical Security Layer (Priority 1000)
+  - name: "security-critical"
+    description: "Critical security policies - highest priority"
+    enabled: true
+    type: "file_protection"
+    priority: 1000
+    scope:
+      branches: ["main", "master", "production"]
+      repositories: ["*"]
+    rules:
+      - name: "secrets-protection"
+        type: "file_protection"
+        patterns:
+          - "*.pem"
+          - "*.key"
+          - "**/secrets/**"
+          - "**/.env.production"
+        action: "block_deletion"
+        enforcement: "strict"
+        metadata:
+          explicit_override: true  # For ExplicitOverride strategy
+          security_level: "critical"
+    enforcement: "strict"
+
+  # Production Environment Layer (Priority 900)
+  - name: "production-environment"
+    description: "Production environment protection"
+    enabled: true
+    type: "file_protection"
+    priority: 900
+    scope:
+      branches: ["main", "master"]
+      repositories: ["*"]
+    rules:
+      - name: "prod-configs"
+        type: "file_protection"
+        patterns:
+          - "config/production/**/*"
+          - "environments/prod/**/*"
+          - "docker-compose.prod.yml"
+        action: "require_approval"
+        enforcement: "strict"
+        metadata:
+          approvers: ["platform-team", "security-team"]
+          min_required: 2
+    enforcement: "strict"
+
+  # Infrastructure Layer (Priority 800)
+  - name: "infrastructure-protection"
+    description: "Infrastructure and deployment files"
+    enabled: true
+    type: "file_protection"
+    priority: 800
+    scope:
+      branches: ["main", "develop"]
+      repositories: ["*"]
+    rules:
+      - name: "k8s-manifests"
+        type: "file_protection"
+        patterns:
+          - "k8s/**/*.yaml"
+          - "k8s/**/*.yml"
+          - "deployments/**/*"
+        action: "require_approval"
+        enforcement: "strict"
+        metadata:
+          approvers: ["devops-team"]
+
+      - name: "terraform-files"
+        type: "file_protection"
+        patterns:
+          - "**/*.tf"
+          - "**/*.tfvars"
+        action: "block_modification"
+        enforcement: "strict"
+    enforcement: "strict"
+
+  # Development Layer (Priority 500)
+  - name: "development-guidelines"
+    description: "Development environment guidelines"
+    enabled: true
+    type: "file_protection"
+    priority: 500
+    scope:
+      branches: ["develop", "feature/*"]
+      repositories: ["*"]
+    rules:
+      - name: "dev-configs"
+        type: "file_protection"
+        patterns:
+          - "config/development/**/*"
+          - ".env.dev"
+        action: "warn"
+        enforcement: "warn"
+        metadata:
+          message: "Development configs changed - ensure staging environment compatibility"
+    enforcement: "warn"
+
+  # General Guidelines Layer (Priority 100)
+  - name: "general-guidelines"
+    description: "General file protection guidelines"
+    enabled: true
+    type: "file_protection"
+    priority: 100
+    scope:
+      branches: ["*"]
+      repositories: ["*"]
+    rules:
+      - name: "config-files"
+        type: "file_protection"
+        patterns:
+          - "config/**/*.yml"
+          - "config/**/*.yaml"
+          - "**/.env*"
+        action: "warn"
+        enforcement: "warn"
+        metadata:
+          suggestion: "Consider using environment-specific config files"
+    enforcement: "warn"
+
+# Policy Overrides for specific scenarios
+overrides:
+  - policy_name: "security-critical"
+    scope:
+      repositories: ["sandbox-*", "test-*"]
+    enforcement: "warn"  # Relax enforcement for test repositories
+
+  - policy_name: "production-environment"
+    scope:
+      users: ["ci-bot", "deployment-bot"]
+    enabled: false  # Allow automated deployments to bypass some restrictions
+
+  - policy_name: "infrastructure-protection"
+    scope:
+      branches: ["hotfix/*"]
+      teams: ["oncall-team"]
+    enforcement: "warn"  # Allow emergency hotfixes with warnings
+
+# Usage Instructions:
+#
+# 1. Template Instantiation Example:
+#    Use the CLI or API to create policies from templates:
+#
+#    variables = {
+#      "env_type": "staging",
+#      "path": "environments/staging",
+#      "target_branch": "develop",
+#      "criticality": "medium"
+#    }
+#    policy = engine.InstantiateTemplate("environment-protection", "staging-protection", variables)
+#
+# 2. Hierarchical Evaluation:
+#    The system evaluates policies in priority order (1000 → 100)
+#    Conflict resolution strategies:
+#    - HighestPriorityWins: Use highest priority policy decision
+#    - MostRestrictiveWins: Use most restrictive action across all layers
+#    - CompositeDecision: Combine all applicable policies
+#    - ExplicitOverride: Only explicit overrides (explicit_override=true) take precedence
+#
+# 3. Hot Reload:
+#    Changes to this file will be automatically detected and reloaded
+#    when hot reload is enabled (COLLABOPS_POLICY_ENGINE_ENABLED=true)
+#
+# 4. Validation:
+#    The system validates:
+#    - Semantic versioning format
+#    - Required metadata fields
+#    - Policy and rule name formats
+#    - Pattern safety (prevents overly broad patterns)
+#    - Cross-references between policies, templates, and overrides
+#
+# 5. Feature Flags:
+#    Set COLLABOPS_POLICY_ENGINE_ENABLED=true to enable Phase 2 features
+#    Otherwise, the system falls back to legacy protection logic

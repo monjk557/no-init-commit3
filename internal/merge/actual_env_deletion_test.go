@@ -177,8 +177,11 @@ func TestActualEnvDeletionIssue(t *testing.T) {
 			Strategy:     MergeStrategyRecursive,
 		}
 
+		// Create protection context for the test
+		protectionCtx := NewMergeProtectionContext(cfg, false, false) // isSquash=false, isRebase=false
+
 		mergedTreeHash, err := handler.createMergedTreeWithBase(
-			ctx, repo, sourceCommitObj, targetCommitObj, baseCommitObj, analysis, MergeStrategyRecursive)
+			ctx, repo, sourceCommitObj, targetCommitObj, baseCommitObj, analysis, MergeStrategyRecursive, protectionCtx)
 
 		t.Logf("Merge result: tree_hash=%v, err=%v", mergedTreeHash.IsZero(), err)
 

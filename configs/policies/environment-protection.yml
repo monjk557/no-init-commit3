@@ -1,0 +1,139 @@
+version: "1.0"
+metadata:
+  name: "Environment File Protection"
+  description: "Protects critical environment and configuration files from deletion during merge operations"
+  version: "1.0.0"
+  created: "2026-02-25T00:00:00Z"
+  author: "CollabOps Team"
+
+# Default approvers for approval-required actions
+default_approvers:
+  - "platform-team"
+  - "devops-team"
+
+policies:
+  - name: "environment-files-protection"
+    description: "Protect environment configuration files from deletion"
+    enabled: true
+    type: "file_protection"
+    scope:
+      branches: ["main", "master", "staging", "production"]
+      repositories: ["*"] # Apply to all repositories
+    rules:
+      - name: "env-files"
+        type: "file_protection"
+        patterns:
+          - "config/env/**/*"
+          - "*.env"
+          - ".env*"
+        action: "block_deletion"
+        enforcement: "strict"
+
+      - name: "config-files"
+        type: "file_protection"
+        patterns:
+          - "config/**/*.yml"
+          - "config/**/*.yaml"
+          - "config/**/*.json"
+          - "configs/**/*.yml"
+          - "configs/**/*.yaml"
+        action: "block_deletion"
+        enforcement: "strict"
+
+      - name: "docker-compose-files"
+        type: "file_protection"
+        patterns:
+          - "docker-compose*.yml"
+          - "docker-compose*.yaml"
+          - "compose*.yml"
+          - "compose*.yaml"
+        action: "block_deletion"
+        enforcement: "strict"
+
+      - name: "kubernetes-manifests"
+        type: "file_protection"
+        patterns:
+          - "k8s/**/*.yml"
+          - "k8s/**/*.yaml"
+          - "kubernetes/**/*.yml"
+          - "kubernetes/**/*.yaml"
+          - "manifests/**/*.yml"
+          - "manifests/**/*.yaml"
+        action: "block_deletion"
+        enforcement: "strict"
+
+      - name: "secrets-files"
+        type: "file_protection"
+        patterns:
+          - "secrets/**/*"
+          - "*.key"
+          - "*.pem"
+          - "*.p12"
+          - "*.pfx"
+          - "*.crt"
+          - "*.cert"
+        action: "block_deletion"
+        enforcement: "strict"
+
+    enforcement: "strict"
+    priority: 100
+
+  - name: "database-files-protection"
+    description: "Protect database configuration and migration files"
+    enabled: true
+    type: "file_protection"
+    scope:
+      branches: ["main", "master", "production"]
+      repositories: ["*"]
+    rules:
+      - name: "database-configs"
+        type: "file_protection"
+        patterns:
+          - "database.yml"
+          - "database.yaml"
+          - "db.yml"
+          - "db.yaml"
+          - "config/database*"
+        action: "block_deletion"
+        enforcement: "strict"
+
+      - name: "migration-files"
+        type: "file_protection"
+        patterns:
+          - "migrations/**/*"
+          - "db/migrate/**/*"
+          - "database/migrations/**/*"
+        action: "block_deletion"
+        enforcement: "warn"
+
+    enforcement: "strict"
+    priority: 90
+
+templates:
+  - name: "standard-env-protection"
+    description: "Standard template for environment file protection"
+    type: "file_protection"
+    rules:
+      - name: "env-files-template"
+        type: "file_protection"
+        patterns:
+          - "{{.env_path}}/**/*"
+          - "*.env"
+        action: "block_deletion"
+        enforcement: "{{.enforcement_level}}"
+    variables:
+      env_path: "config/env"
+      enforcement_level: "strict"
+
+# Environment-specific overrides
+overrides:
+  - policy_name: "environment-files-protection"
+    scope:
+      branches: ["staging", "development"]
+    overrides:
+      enforcement: "warn" # Less strict for non-production branches
+
+  - policy_name: "database-files-protection"
+    scope:
+      repositories: ["test-*", "*-playground"]
+    enabled: false # Disable for test repositories

@@ -1,5 +1,5 @@
-// logging 패키지는 애플리케이션 전반의 에러 처리와 로깅 기능을 제공합니다.
-// 구조화된 에러 타입, 에러 빌더, 중앙집중식 에러 핸들러를 포함합니다.
+// Package logging provides application-wide error handling and logging functionality.
+// It includes structured error types, error builders, and centralized error handlers.
 package logging
 
 import (
@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// ErrorType은 다양한 에러 유형을 나타내는 열거형입니다.
+// ErrorType represents various error categories as an enumeration.
 type ErrorType string
 
 const (
@@ -26,8 +26,8 @@ const (
 	ErrorTypeRateLimit    ErrorType = "rate_limit"
 )
 
-// AppError는 구조화된 애플리케이션 에러 정보를 담는 구조체입니다.
-// 에러 타입, 메시지, 컨텍스트, HTTP 상태 코드 등을 포함합니다.
+// AppError represents structured application error information.
+// It includes error type, message, context, HTTP status code, and more.
 type AppError struct {
 	Type        ErrorType              `json:"type"`
 	Code        string                 `json:"code"`
@@ -81,7 +81,7 @@ func (e *AppError) WithDetails(details string) *AppError {
 	return e
 }
 
-// ErrorBuilder는 AppError 인스턴스를 빌드하는 헬퍼 구조체입니다.
+// ErrorBuilder is a helper struct for building AppError instances.
 type ErrorBuilder struct {
 	errorType   ErrorType
 	code        string
@@ -94,7 +94,7 @@ type ErrorBuilder struct {
 	userMessage string
 }
 
-// NewErrorBuilder는 새로운 에러 빌더를 생성합니다.
+// NewErrorBuilder creates a new error builder.
 func NewErrorBuilder(errorType ErrorType, code, message string) *ErrorBuilder {
 	return &ErrorBuilder{
 		errorType: errorType,
@@ -223,7 +223,7 @@ func NewExternalError(code, message string) *AppError {
 		Build()
 }
 
-// ErrorHandler는 중앙집중식 에러 처리와 로깅을 제공하는 구조체입니다.
+// ErrorHandler provides centralized error handling and logging.
 type ErrorHandler struct {
 	logger *Logger
 }
@@ -235,7 +235,7 @@ func NewErrorHandler(logger *Logger) *ErrorHandler {
 	}
 }
 
-// Handle은 에러를 처리하고 적절한 HTTP 응답을 반환합니다.
+// Handle processes errors and returns appropriate HTTP responses.
 func (h *ErrorHandler) Handle(ctx context.Context, w http.ResponseWriter, err error) {
 	// Extract request ID from context
 	requestID := ""

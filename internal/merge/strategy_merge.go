@@ -130,6 +130,9 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 	forceConflict bool,
 	isSquash bool,
 ) (plumbing.Hash, error) {
+	// Create protection context for feature flag control
+	protectionCtx := NewMergeProtectionContext(h.config, isSquash, false) // isRebase=false for regular merges
+
 	// If there are conflicts and we're not forcing, we should not call this function
 	// But handle it gracefully anyway
 	if analysis.HasConflicts && !forceConflict {
@@ -173,39 +176,17 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 				h.logger.Debug("Performing 3-way merge - all conflicts auto-resolvable",
 					zap.String("strategy", string(strategy)))
 
-				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy)
+				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
 				if err != nil {
 					fallbackTree := sourceCommit.TreeHash
 					if !isSquash {
 						fallbackTree = targetCommit.TreeHash
 					}
 
-					// **CRITICAL FIX**: Apply tree protection to prevent environment deletion
-					if isSquash && h.protectionLayer != nil {
-						fallbackContext := FallbackContext{
-							SourceCommit:     sourceCommit,
-							TargetCommit:     targetCommit,
-							BaseCommit:       nil, // Will be found automatically
-							Strategy:         strategy,
-							IsSquash:         isSquash,
-							ConflictCount:    analysis.ConflictCount,
-							AutoResolvable:   analysis.AutoResolvable,
-							EnvironmentFiles: h.extractEnvironmentFiles(analysis),
-						}
-
-						protectedTree, protErr := h.protectionLayer.ProtectFallback(ctx, repo, fallbackTree, fallbackContext)
-						if protErr != nil {
-							h.logger.Error("Failed to apply protection during merge failure fallback",
-								zap.Error(protErr),
-								zap.Error(err))
-						} else if protectedTree != fallbackTree {
-							h.logger.Info("Environment protection applied during merge failure fallback",
-								zap.String("original_tree", fallbackTree.String()),
-								zap.String("protected_tree", protectedTree.String()),
-								zap.Error(err))
-							fallbackTree = protectedTree
-						}
-					}
+					// Protection now handled by PolicyEngine in createMergedTree
+					h.logger.Debug("Protection already applied via PolicyEngine",
+						zap.String("fallback_tree", fallbackTree.String()),
+						zap.Error(err))
 
 					h.logger.Error("Failed to create merged tree, falling back",
 						zap.Error(err),
@@ -225,39 +206,17 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 					zap.String("strategy", string(strategy)))
 
 				// Attempt to create merged tree with auto-resolvable conflicts
-				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy)
+				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
 				if err != nil {
 					fallbackTree := sourceCommit.TreeHash
 					if !isSquash {
 						fallbackTree = targetCommit.TreeHash
 					}
 
-					// **CRITICAL FIX**: Apply tree protection to prevent environment deletion
-					if isSquash && h.protectionLayer != nil {
-						fallbackContext := FallbackContext{
-							SourceCommit:     sourceCommit,
-							TargetCommit:     targetCommit,
-							BaseCommit:       nil, // Will be found automatically
-							Strategy:         strategy,
-							IsSquash:         isSquash,
-							ConflictCount:    analysis.ConflictCount,
-							AutoResolvable:   analysis.AutoResolvable,
-							EnvironmentFiles: h.extractEnvironmentFiles(analysis),
-						}
-
-						protectedTree, protErr := h.protectionLayer.ProtectFallback(ctx, repo, fallbackTree, fallbackContext)
-						if protErr != nil {
-							h.logger.Error("Failed to apply protection during partial merge fallback",
-								zap.Error(protErr),
-								zap.Error(err))
-						} else if protectedTree != fallbackTree {
-							h.logger.Info("Environment protection applied during partial merge fallback",
-								zap.String("original_tree", fallbackTree.String()),
-								zap.String("protected_tree", protectedTree.String()),
-								zap.Error(err))
-							fallbackTree = protectedTree
-						}
-					}
+					// Protection now handled by PolicyEngine in createMergedTree
+					h.logger.Debug("Protection already applied via PolicyEngine",
+						zap.String("fallback_tree", fallbackTree.String()),
+						zap.Error(err))
 
 					h.logger.Error("Failed to create partially merged tree, falling back",
 						zap.Error(err),
@@ -276,32 +235,9 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 					fallbackTree = targetCommit.TreeHash
 				}
 
-				// **CRITICAL FIX**: Apply tree protection to prevent environment deletion
-				if isSquash && h.protectionLayer != nil {
-					fallbackContext := FallbackContext{
-						SourceCommit:     sourceCommit,
-						TargetCommit:     targetCommit,
-						BaseCommit:       nil, // Will be found automatically
-						Strategy:         strategy,
-						IsSquash:         isSquash,
-						ConflictCount:    analysis.ConflictCount,
-						AutoResolvable:   analysis.AutoResolvable,
-						EnvironmentFiles: h.extractEnvironmentFiles(analysis),
-					}
-
-					protectedTree, err := h.protectionLayer.ProtectFallback(ctx, repo, fallbackTree, fallbackContext)
-					if err != nil {
-						h.logger.Error("Failed to apply protection during fallback, using unprotected tree",
-							zap.Error(err),
-							zap.String("fallback_tree", fallbackTree.String()))
-					} else if protectedTree != fallbackTree {
-						h.logger.Info("Environment protection applied during squash fallback",
-							zap.String("original_tree", fallbackTree.String()),
-							zap.String("protected_tree", protectedTree.String()),
-							zap.Strings("protected_files", fallbackContext.EnvironmentFiles))
-						fallbackTree = protectedTree
-					}
-				}
+				// Protection now handled by PolicyEngine in createMergedTree
+				h.logger.Debug("Protection already applied via PolicyEngine",
+					zap.String("fallback_tree", fallbackTree.String()))
 
 				h.logger.Warn("No auto-resolvable conflicts - using fallback tree",
 					zap.Bool("is_squash", isSquash),
@@ -334,7 +270,7 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 		zap.String("strategy", string(strategy)),
 		zap.Bool("is_squash", isSquash))
 
-	mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy)
+	mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
 	if err != nil {
 		// Fallback based on merge method
 		fallbackTree := sourceCommit.TreeHash
@@ -346,6 +282,10 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 			zap.Bool("is_squash", isSquash))
 		return fallbackTree, nil
 	}
+
+	// Protection now handled by PolicyEngine in createMergedTree
+	h.logger.Debug("Protection already applied via PolicyEngine",
+		zap.String("merged_tree", mergedTree.String()))
 
 	h.logger.Debug("Successfully created merged tree for clean merge",
 		zap.String("merged_tree", mergedTree.String()),

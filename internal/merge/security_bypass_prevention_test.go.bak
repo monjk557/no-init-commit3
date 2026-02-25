@@ -1,0 +1,909 @@
+package merge
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.uber.org/zap"
+
+	"github.com/collabops/git-executor/internal/config"
+)
+
+// TestSecurityBypassPrevention tests various attempts to bypass merge protection
+func TestSecurityBypassPrevention(t *testing.T) {
+	suite := setupSecurityTestSuite(t)
+	defer suite.cleanup()
+
+	t.Run("DirectObjectManipulation", suite.testDirectObjectManipulation)
+	t.Run("ReflectionBasedAttacks", suite.testReflectionBasedAttacks)
+	t.Run("MemoryManipulationAttempts", suite.testMemoryManipulationAttempts)
+	t.Run("ConfigurationOverrideAttempts", suite.testConfigurationOverrideAttempts)
+	t.Run("MiddlewareBypassAttempts", suite.testMiddlewareBypassAttempts)
+	t.Run("TimingBasedAttacks", suite.testTimingBasedAttacks)
+	t.Run("ResourceExhaustionAttacks", suite.testResourceExhaustionAttacks)
+	t.Run("StateCorruptionAttempts", suite.testStateCorruptionAttempts)
+}
+
+type SecurityTestSuite struct {
+	t           *testing.T
+	testRepoDir string
+	repository  *gogit.Repository
+	worktree    *gogit.Worktree
+	cleanup     func()
+}
+
+func setupSecurityTestSuite(t *testing.T) *SecurityTestSuite {
+	testDir, err := os.MkdirTemp("", "security-test-*")
+	require.NoError(t, err)
+
+	repoDir := filepath.Join(testDir, "test-repo.git")
+	repo, err := gogit.PlainInit(repoDir, true)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+
+	return &SecurityTestSuite{
+		t:           t,
+		testRepoDir: testDir,
+		repository:  repo,
+		worktree:    wt,
+		cleanup: func() {
+			os.RemoveAll(testDir)
+		},
+	}
+}
+
+// Test direct object manipulation attempts
+func (s *SecurityTestSuite) testDirectObjectManipulation(t *testing.T) {
+	manipulationAttempts := []struct {
+		name                 string
+		attemptManipulation  func(*MergeOperationsHandler) error
+		shouldPreventBypass  bool
+		description          string
+	}{
+		{
+			name: "NullifyProtectionLayer",
+			attemptManipulation: func(handler *MergeOperationsHandler) error {
+				// Direct attempt to disable protection
+				handler.protectionLayer = nil
+				return nil
+			},
+			shouldPreventBypass: false, // This would succeed - vulnerability!
+			description:         "Attempt to nullify protection layer directly",
+		},
+		{
+			name: "ModifyConfigurationFlags",
+			attemptManipulation: func(handler *MergeOperationsHandler) error {
+				// Try to modify configuration at runtime
+				if handler.config != nil {
+					handler.config.MergeProtection.Enabled = false
+					handler.config.MergeProtection.EnvironmentProtection.Enabled = false
+				}
+				return nil
+			},
+			shouldPreventBypass: true, // Protection should be immutable after initialization
+			description:         "Attempt to modify configuration flags at runtime",
+		},
+		{
+			name: "ReplaceProtectionLayer",
+			attemptManipulation: func(handler *MergeOperationsHandler) error {
+				// Replace with a fake protection layer
+				handler.protectionLayer = &MaliciousProtectionLayer{}
+				return nil
+			},
+			shouldPreventBypass: false, // This would succeed - vulnerability!
+			description:         "Attempt to replace protection layer with malicious implementation",
+		},
+		{
+			name: "ModifyOrchestratorConfig",
+			attemptManipulation: func(handler *MergeOperationsHandler) error {
+				// Try to disable orchestrator protection
+				if handler.orchestrator != nil && handler.orchestrator.config != nil {
+					handler.orchestrator.config.SafetyChecksEnabled = false
+				}
+				return nil
+			},
+			shouldPreventBypass: true, // Should be protected
+			description:         "Attempt to disable orchestrator safety checks",
+		},
+	}
+
+	for _, attempt := range manipulationAttempts {
+		t.Run(attempt.name, func(t *testing.T) {
+			t.Logf("🔒 Testing object manipulation: %s", attempt.description)
+
+			// Create handler with protection enabled
+			cfg := s.createSecureConfig()
+			handler, err := NewMergeOperationsHandler(cfg)
+			require.NoError(t, err)
+
+			// Verify protection is initially enabled
+			assert.NotNil(t, handler.protectionLayer, "Protection layer should be present initially")
+			assert.True(t, handler.config.MergeProtection.Enabled, "Protection should be enabled initially")
+
+			// Attempt manipulation
+			err = attempt.attemptManipulation(handler)
+			assert.NoError(t, err, "Manipulation attempt should not error")
+
+			// Test if manipulation was successful by attempting risky merge
+			envFilesLost := s.attemptEnvironmentFileDeletion(t, handler)
+
+			if attempt.shouldPreventBypass {
+				assert.False(t, envFilesLost, "🔒 Protection should prevent environment file loss despite manipulation: %s", attempt.name)
+			} else {
+				if envFilesLost {
+					t.Errorf("🚨 SECURITY VULNERABILITY: %s successfully bypassed protection!", attempt.name)
+					t.Errorf("Environment files were deleted despite protection being initially enabled")
+					t.Errorf("This indicates a critical security flaw that needs immediate attention")
+				} else {
+					t.Logf("✅ Manipulation attempt was unsuccessful (good): %s", attempt.name)
+				}
+			}
+		})
+	}
+}
+
+// Test reflection-based attacks
+func (s *SecurityTestSuite) testReflectionBasedAttacks(t *testing.T) {
+	reflectionAttacks := []struct {
+		name               string
+		performAttack      func(*MergeOperationsHandler) error
+		shouldBePreventable bool
+		description        string
+	}{
+		{
+			name: "ReflectiveFieldModification",
+			performAttack: func(handler *MergeOperationsHandler) error {
+				// Use reflection to modify private fields
+				handlerValue := reflect.ValueOf(handler).Elem()
+				protectionField := handlerValue.FieldByName("protectionLayer")
+
+				if protectionField.IsValid() && protectionField.CanSet() {
+					protectionField.Set(reflect.Zero(protectionField.Type()))
+					return nil
+				}
+
+				// Try unsafe manipulation if direct reflection fails
+				if protectionField.IsValid() {
+					protectionFieldPtr := unsafe.Pointer(protectionField.UnsafeAddr())
+					*(**TreeProtectionLayer)(protectionFieldPtr) = nil
+				}
+
+				return nil
+			},
+			shouldBePreventable: false, // Go reflection can bypass protection
+			description:         "Use reflection to modify private protection fields",
+		},
+		{
+			name: "ReflectiveConfigModification",
+			performAttack: func(handler *MergeOperationsHandler) error {
+				// Try to modify config via reflection
+				handlerValue := reflect.ValueOf(handler).Elem()
+				configField := handlerValue.FieldByName("config")
+
+				if configField.IsValid() {
+					configValue := configField.Elem()
+					mergeProtectionField := configValue.FieldByName("MergeProtection")
+
+					if mergeProtectionField.IsValid() {
+						enabledField := mergeProtectionField.FieldByName("Enabled")
+						if enabledField.IsValid() && enabledField.CanSet() {
+							enabledField.SetBool(false)
+						}
+					}
+				}
+
+				return nil
+			},
+			shouldBePreventable: true, // Should be immutable after creation
+			description:         "Use reflection to modify configuration",
+		},
+		{
+			name: "ReflectiveMethodInvocation",
+			performAttack: func(handler *MergeOperationsHandler) error {
+				// Try to invoke private methods that might bypass protection
+				handlerValue := reflect.ValueOf(handler)
+
+				// Look for methods that might bypass protection
+				methodNames := []string{
+					"performMerge",
+					"createStandardMergeTree",
+					"analyzeRebase",
+				}
+
+				for _, methodName := range methodNames {
+					method := handlerValue.MethodByName(methodName)
+					if method.IsValid() {
+						// In a real attack, would call with crafted parameters
+						t.Logf("Found potentially accessible method: %s", methodName)
+					}
+				}
+
+				return nil
+			},
+			shouldBePreventable: true, // Private methods should not be accessible
+			description:         "Attempt to invoke private methods via reflection",
+		},
+	}
+
+	for _, attack := range reflectionAttacks {
+		t.Run(attack.name, func(t *testing.T) {
+			t.Logf("🪞 Testing reflection attack: %s", attack.description)
+
+			cfg := s.createSecureConfig()
+			handler, err := NewMergeOperationsHandler(cfg)
+			require.NoError(t, err)
+
+			// Verify initial state
+			initialProtectionPresent := (handler.protectionLayer != nil)
+			initialProtectionEnabled := handler.config.MergeProtection.Enabled
+
+			// Perform attack
+			err = attack.performAttack(handler)
+			assert.NoError(t, err, "Attack attempt should not cause errors")
+
+			// Test if attack was successful
+			finalProtectionPresent := (handler.protectionLayer != nil)
+			finalProtectionEnabled := handler.config.MergeProtection.Enabled
+
+			if attack.shouldBePreventable {
+				assert.Equal(t, initialProtectionPresent, finalProtectionPresent,
+					"Protection layer state should be immutable")
+				assert.Equal(t, initialProtectionEnabled, finalProtectionEnabled,
+					"Protection configuration should be immutable")
+			} else {
+				if !finalProtectionPresent || !finalProtectionEnabled {
+					t.Logf("⚠️  Reflection attack succeeded (expected vulnerability): %s", attack.name)
+					t.Logf("Initial protection: present=%v enabled=%v", initialProtectionPresent, initialProtectionEnabled)
+					t.Logf("Final protection: present=%v enabled=%v", finalProtectionPresent, finalProtectionEnabled)
+
+					// Test if this actually leads to environment file loss
+					envFilesLost := s.attemptEnvironmentFileDeletion(t, handler)
+					if envFilesLost {
+						t.Errorf("🚨 REFLECTION ATTACK SUCCESSFUL: Environment files can be deleted!")
+					}
+				}
+			}
+		})
+	}
+}
+
+// Test memory manipulation attempts
+func (s *SecurityTestSuite) testMemoryManipulationAttempts(t *testing.T) {
+	memoryAttacks := []struct {
+		name        string
+		performAttack func(*MergeOperationsHandler)
+		description string
+	}{
+		{
+			name: "UnsafePointerManipulation",
+			performAttack: func(handler *MergeOperationsHandler) {
+				// Attempt to manipulate memory directly using unsafe pointers
+				handlerPtr := unsafe.Pointer(handler)
+
+				// Calculate offset to protectionLayer field (this is highly system-dependent)
+				// In a real attack, would use reverse engineering to find correct offset
+				protectionLayerOffset := unsafe.Offsetof(handler.protectionLayer)
+				protectionLayerPtr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(handlerPtr) + protectionLayerOffset))
+
+				// Try to nullify the protection layer
+				*protectionLayerPtr = nil
+			},
+			description: "Direct memory manipulation using unsafe pointers",
+		},
+		{
+			name: "BufferOverflowSimulation",
+			performAttack: func(handler *MergeOperationsHandler) {
+				// Simulate buffer overflow by creating large data structures
+				// that might overwrite adjacent memory
+				largeData := make([]byte, 1024*1024) // 1MB
+
+				// Fill with pattern that might overwrite protection flags
+				for i := range largeData {
+					largeData[i] = 0x00 // Try to zero out memory
+				}
+
+				// In a real attack, would try to overflow specific structures
+				_ = largeData
+			},
+			description: "Simulate buffer overflow to overwrite protection structures",
+		},
+	}
+
+	for _, attack := range memoryAttacks {
+		t.Run(attack.name, func(t *testing.T) {
+			t.Logf("🧠 Testing memory manipulation: %s", attack.description)
+
+			cfg := s.createSecureConfig()
+			handler, err := NewMergeOperationsHandler(cfg)
+			require.NoError(t, err)
+
+			// Capture initial state
+			initiallyProtected := (handler.protectionLayer != nil)
+
+			// Perform memory attack
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Logf("Memory attack caused panic (expected): %v", r)
+					}
+				}()
+				attack.performAttack(handler)
+			}()
+
+			// Check if attack succeeded
+			finallyProtected := (handler.protectionLayer != nil)
+
+			if initiallyProtected && !finallyProtected {
+				t.Errorf("🚨 MEMORY ATTACK SUCCESSFUL: %s bypassed protection!", attack.name)
+
+				// Verify that this actually leads to vulnerability
+				envFilesLost := s.attemptEnvironmentFileDeletion(t, handler)
+				if envFilesLost {
+					t.Errorf("🚨 CONFIRMED: Memory attack leads to environment file deletion!")
+				}
+			} else {
+				t.Logf("✅ Memory attack failed (good): %s", attack.name)
+			}
+		})
+	}
+}
+
+// Test configuration override attempts
+func (s *SecurityTestSuite) testConfigurationOverrideAttempts(t *testing.T) {
+	configAttacks := []struct {
+		name                string
+		setupAttack         func()
+		attemptDuringRuntime bool
+		description         string
+	}{
+		{
+			name: "RuntimeEnvironmentOverride",
+			setupAttack: func() {
+				// Try to override environment variables at runtime
+				os.Setenv("MERGE_PROTECTION_ENABLED", "false")
+				os.Setenv("MERGE_PROTECTION_ENV_ENABLED", "false")
+			},
+			attemptDuringRuntime: true,
+			description:          "Runtime environment variable override",
+		},
+		{
+			name: "ConfigFileManipulation",
+			setupAttack: func() {
+				// In systems that use config files, try to manipulate them
+				// This is a placeholder for file-based config manipulation
+			},
+			attemptDuringRuntime: false,
+			description:          "Configuration file manipulation",
+		},
+		{
+			name: "ProcessEnvironmentInjection",
+			setupAttack: func() {
+				// Try to inject malicious environment variables
+				maliciousVars := map[string]string{
+					"MERGE_PROTECTION_ENABLED":         "0",
+					"MERGE_PROTECTION_STRICT":          "false",
+					"MERGE_PROTECTION_FALLBACK_STRATEGY": "preserve_source",
+				}
+
+				for key, value := range maliciousVars {
+					os.Setenv(key, value)
+				}
+			},
+			attemptDuringRuntime: true,
+			description:          "Injection of malicious environment variables",
+		},
+	}
+
+	for _, attack := range configAttacks {
+		t.Run(attack.name, func(t *testing.T) {
+			t.Logf("⚙️  Testing configuration attack: %s", attack.description)
+
+			// Create initial configuration with protection enabled
+			cfg := s.createSecureConfig()
+			handler, err := NewMergeOperationsHandler(cfg)
+			require.NoError(t, err)
+
+			initialProtectionState := handler.config.MergeProtection.Enabled
+
+			if attack.attemptDuringRuntime {
+				// Perform attack after handler creation
+				attack.setupAttack()
+
+				// Try to reload configuration (if the system supports it)
+				newCfg, err := config.Load()
+				if err == nil {
+					// In vulnerable systems, this might affect the running handler
+					_ = newCfg
+				}
+			} else {
+				// Perform attack before handler creation
+				attack.setupAttack()
+				defer func() {
+					// Cleanup malicious environment
+					os.Unsetenv("MERGE_PROTECTION_ENABLED")
+					os.Unsetenv("MERGE_PROTECTION_ENV_ENABLED")
+					os.Unsetenv("MERGE_PROTECTION_STRICT")
+					os.Unsetenv("MERGE_PROTECTION_FALLBACK_STRATEGY")
+				}()
+
+				// Create new handler with manipulated environment
+				newCfg, err := config.Load()
+				if err == nil {
+					newHandler, err := NewMergeOperationsHandler(newCfg)
+					if err == nil {
+						handler = newHandler
+					}
+				}
+			}
+
+			// Test if attack affected protection
+			currentProtectionState := handler.config.MergeProtection.Enabled
+
+			if attack.attemptDuringRuntime {
+				// Runtime attacks should not affect existing handlers
+				assert.Equal(t, initialProtectionState, currentProtectionState,
+					"Runtime configuration changes should not affect existing handlers")
+			}
+
+			// Test actual protection effectiveness
+			envFilesLost := s.attemptEnvironmentFileDeletion(t, handler)
+
+			if initialProtectionState && envFilesLost {
+				t.Errorf("🚨 CONFIGURATION ATTACK SUCCESSFUL: %s bypassed protection!", attack.name)
+			} else {
+				t.Logf("✅ Configuration attack failed (good): %s", attack.name)
+			}
+		})
+	}
+}
+
+// Test middleware bypass attempts
+func (s *SecurityTestSuite) testMiddlewareBypassAttempts(t *testing.T) {
+	bypassAttempts := []struct {
+		name        string
+		attempt     func(*MergeOperationsHandler) (*MergeResult, error)
+		description string
+	}{
+		{
+			name: "DirectMergeExecution",
+			attempt: func(handler *MergeOperationsHandler) (*MergeResult, error) {
+				// Try to call merge functions directly, bypassing validation
+				sourceCommit := s.createCommitWithoutEnvFiles(t)
+				targetCommit := s.createCommitWithEnvFiles(t)
+
+				request := &MergeRequest{
+					SourceRef:     sourceCommit.Hash.String(),
+					TargetRef:     targetCommit.Hash.String(),
+					Method:        MergeMethodSquash,
+					Strategy:      MergeStrategyRecursive,
+					ForceConflict: true,
+				}
+
+				ctx := context.Background()
+				analysis := &MergeAnalysisResult{
+					HasConflicts:  true,
+					ConflictCount: 1,
+					CanMerge:      true,
+				}
+
+				// Directly call performMerge, bypassing HandleMerge validation
+				return handler.performMerge(ctx, s.repository, sourceCommit, targetCommit, request, analysis)
+			},
+			description: "Direct merge execution bypassing API validation",
+		},
+		{
+			name: "OrchestrationBypass",
+			attempt: func(handler *MergeOperationsHandler) (*MergeResult, error) {
+				// Try to bypass orchestration layer
+				sourceCommit := s.createCommitWithoutEnvFiles(t)
+				targetCommit := s.createCommitWithEnvFiles(t)
+
+				// Create minimal merge that might bypass orchestration
+				ctx := context.Background()
+
+				// Simulate what a malicious client might send
+				request := &MergeRequest{
+					SourceRef:     sourceCommit.Hash.String(),
+					TargetRef:     targetCommit.Hash.String(),
+					Method:        MergeMethodSquash,
+					Strategy:      MergeStrategyRecursive,
+					ForceConflict: true,
+					DryRun:        false,
+				}
+
+				analysis, err := handler.analyzeMerge(ctx, s.repository, sourceCommit, targetCommit, request)
+				if err != nil {
+					return nil, err
+				}
+
+				return handler.performMerge(ctx, s.repository, sourceCommit, targetCommit, request, analysis)
+			},
+			description: "Attempt to bypass orchestration layer",
+		},
+	}
+
+	for _, attempt := range bypassAttempts {
+		t.Run(attempt.name, func(t *testing.T) {
+			t.Logf("🚪 Testing middleware bypass: %s", attempt.description)
+
+			cfg := s.createSecureConfig()
+			handler, err := NewMergeOperationsHandler(cfg)
+			require.NoError(t, err)
+
+			// Attempt bypass
+			result, err := attempt.attempt(handler)
+
+			if err != nil {
+				t.Logf("✅ Bypass attempt failed with error (good): %v", err)
+				return
+			}
+
+			if result == nil {
+				t.Logf("✅ Bypass attempt returned no result (good)")
+				return
+			}
+
+			// Check if environment files were lost
+			envFilesLost := !s.verifyEnvironmentFilesInTreeSilent(result.TreeHash)
+
+			if envFilesLost {
+				t.Errorf("🚨 MIDDLEWARE BYPASS SUCCESSFUL: %s led to environment file deletion!", attempt.name)
+			} else {
+				t.Logf("✅ Bypass attempt failed to delete environment files (good): %s", attempt.name)
+			}
+		})
+	}
+}
+
+// Test timing-based attacks
+func (s *SecurityTestSuite) testTimingBasedAttacks(t *testing.T) {
+	t.Run("RaceConditionExploitation", func(t *testing.T) {
+		t.Logf("⏱️  Testing race condition exploitation")
+
+		cfg := s.createSecureConfig()
+
+		// Try to exploit race conditions in handler initialization
+		const concurrency = 20
+		results := make(chan *MergeOperationsHandler, concurrency)
+		errors := make(chan error, concurrency)
+
+		for i := 0; i < concurrency; i++ {
+			go func() {
+				handler, err := NewMergeOperationsHandler(cfg)
+				if err != nil {
+					errors <- err
+					return
+				}
+				results <- handler
+			}()
+		}
+
+		// Collect results
+		var handlers []*MergeOperationsHandler
+		var initErrors []error
+
+		for i := 0; i < concurrency; i++ {
+			select {
+			case handler := <-results:
+				handlers = append(handlers, handler)
+			case err := <-errors:
+				initErrors = append(initErrors, err)
+			}
+		}
+
+		// Verify all handlers have consistent protection state
+		if len(handlers) > 0 {
+			firstHandlerProtected := handlers[0].config.MergeProtection.Enabled
+
+			for i, handler := range handlers {
+				assert.Equal(t, firstHandlerProtected, handler.config.MergeProtection.Enabled,
+					"Handler %d should have consistent protection state", i)
+			}
+		}
+
+		t.Logf("Created %d handlers with %d errors", len(handlers), len(initErrors))
+	})
+
+	t.Run("TimeBasedConfigurationRace", func(t *testing.T) {
+		t.Logf("🏁 Testing time-based configuration race conditions")
+
+		cfg := s.createSecureConfig()
+		handler, err := NewMergeOperationsHandler(cfg)
+		require.NoError(t, err)
+
+		// Rapidly toggle environment variables while performing operations
+		done := make(chan bool)
+		go func() {
+			for i := 0; i < 100; i++ {
+				os.Setenv("MERGE_PROTECTION_ENABLED", "false")
+				time.Sleep(1 * time.Millisecond)
+				os.Setenv("MERGE_PROTECTION_ENABLED", "true")
+			}
+			done <- true
+		}()
+
+		// Perform multiple merge operations during the race
+		var envFileLossCount int
+		for i := 0; i < 5; i++ {
+			envFilesLost := s.attemptEnvironmentFileDeletion(t, handler)
+			if envFilesLost {
+				envFileLossCount++
+			}
+		}
+
+		<-done
+
+		assert.Equal(t, 0, envFileLossCount, "Race conditions should not cause environment file loss")
+	})
+}
+
+// Test resource exhaustion attacks
+func (s *SecurityTestSuite) testResourceExhaustionAttacks(t *testing.T) {
+	exhaustionAttacks := []struct {
+		name        string
+		performAttack func(*MergeOperationsHandler)
+		description string
+	}{
+		{
+			name: "MemoryExhaustionAttack",
+			performAttack: func(handler *MergeOperationsHandler) {
+				// Try to exhaust memory to cause protection layer failure
+				var memoryHog [][]byte
+				for i := 0; i < 1000; i++ {
+					memoryHog = append(memoryHog, make([]byte, 1024*1024)) // 1MB each
+				}
+				_ = memoryHog // Keep reference to prevent GC
+			},
+			description: "Memory exhaustion to cause protection failure",
+		},
+		{
+			name: "ConcurrentOperationFlood",
+			performAttack: func(handler *MergeOperationsHandler) {
+				// Launch many concurrent operations to overwhelm the system
+				const floodSize = 100
+				for i := 0; i < floodSize; i++ {
+					go func() {
+						s.attemptEnvironmentFileDeletion(t, handler)
+					}()
+				}
+				time.Sleep(100 * time.Millisecond) // Let operations run
+			},
+			description: "Concurrent operation flood",
+		},
+	}
+
+	for _, attack := range exhaustionAttacks {
+		t.Run(attack.name, func(t *testing.T) {
+			t.Logf("💣 Testing resource exhaustion: %s", attack.description)
+
+			cfg := s.createSecureConfig()
+			handler, err := NewMergeOperationsHandler(cfg)
+			require.NoError(t, err)
+
+			// Perform exhaustion attack
+			attack.performAttack(handler)
+
+			// Test if protection still works under stress
+			envFilesLost := s.attemptEnvironmentFileDeletion(t, handler)
+
+			assert.False(t, envFilesLost, "Protection should work even under resource stress: %s", attack.name)
+		})
+	}
+}
+
+// Test state corruption attempts
+func (s *SecurityTestSuite) testStateCorruptionAttempts(t *testing.T) {
+	t.Run("ProtectionLayerStateCorruption", func(t *testing.T) {
+		t.Logf("🔄 Testing protection layer state corruption")
+
+		cfg := s.createSecureConfig()
+		handler, err := NewMergeOperationsHandler(cfg)
+		require.NoError(t, err)
+
+		// Try to corrupt protection layer state
+		if handler.protectionLayer != nil {
+			// Corrupt protection rules
+			handler.protectionLayer.protectionRules = []ProtectionRule{}
+
+			// Corrupt environment detector
+			handler.protectionLayer.environmentDetector = nil
+
+			// Corrupt fallback policy
+			handler.protectionLayer.fallbackPolicy = nil
+		}
+
+		// Test if protection still works with corrupted state
+		envFilesLost := s.attemptEnvironmentFileDeletion(t, handler)
+
+		if envFilesLost {
+			t.Errorf("🚨 STATE CORRUPTION SUCCESSFUL: Protection failed after state corruption!")
+		} else {
+			t.Logf("✅ Protection survived state corruption attempt")
+		}
+	})
+}
+
+// Helper functions
+func (s *SecurityTestSuite) createSecureConfig() *config.Config {
+	return &config.Config{
+		Server: config.ServerConfig{
+			Port:     8080,
+			BasePath: "/api",
+			Host:     "localhost",
+		},
+		Git: config.GitConfig{
+			RepoRoot: s.testRepoDir,
+		},
+		Logging: config.LoggingConfig{
+			Level:  "info",
+			Format: "json",
+		},
+		MergeProtection: config.MergeProtectionConfig{
+			Enabled: true,
+			EnvironmentProtection: config.EnvironmentProtectionConfig{
+				Enabled:               true,
+				EnableForSquashMerge:  true,
+				EnableForRegularMerge: true,
+				EnableForRebaseMerge:  true,
+				StrictMode:            true,
+			},
+			SafetyMode:       "strict",
+			FallbackStrategy: "preserve_target",
+		},
+	}
+}
+
+func (s *SecurityTestSuite) attemptEnvironmentFileDeletion(t *testing.T, handler *MergeOperationsHandler) bool {
+	sourceCommit := s.createCommitWithoutEnvFiles(t)
+	targetCommit := s.createCommitWithEnvFiles(t)
+
+	request := &MergeRequest{
+		SourceRef:     sourceCommit.Hash.String(),
+		TargetRef:     targetCommit.Hash.String(),
+		Method:        MergeMethodSquash,
+		Strategy:      MergeStrategyRecursive,
+		ForceConflict: true,
+	}
+
+	ctx := context.Background()
+	analysis, err := handler.analyzeMerge(ctx, s.repository, sourceCommit, targetCommit, request)
+	if err != nil {
+		return false
+	}
+
+	result, err := handler.performMerge(ctx, s.repository, sourceCommit, targetCommit, request, analysis)
+	if err != nil {
+		return false
+	}
+
+	// Check if environment files were lost
+	return !s.verifyEnvironmentFilesInTreeSilent(result.TreeHash)
+}
+
+func (s *SecurityTestSuite) createCommitWithEnvFiles(t *testing.T) *object.Commit {
+	files := map[string]string{
+		"config/env/production.yml": "database:\n  host: prod-db\n  password: secret123",
+		".env":                      "SECRET_KEY=abcd1234",
+		"app.go":                    "package main\n\nfunc main() {}",
+	}
+
+	for filename, content := range files {
+		dir := filepath.Dir(filename)
+		if dir != "." {
+			err := os.MkdirAll(filepath.Join(s.worktree.Filesystem.Root(), dir), 0755)
+			require.NoError(t, err)
+		}
+
+		file, err := s.worktree.Filesystem.Create(filename)
+		require.NoError(t, err)
+
+		_, err = file.Write([]byte(content))
+		require.NoError(t, err)
+		file.Close()
+
+		_, err = s.worktree.Add(filename)
+		require.NoError(t, err)
+	}
+
+	commit, err := s.worktree.Commit("Commit with env files", &gogit.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	commitObj, err := s.repository.CommitObject(commit)
+	require.NoError(t, err)
+
+	return commitObj
+}
+
+func (s *SecurityTestSuite) createCommitWithoutEnvFiles(t *testing.T) *object.Commit {
+	files := map[string]string{
+		"app.go":    "package main\n\nfunc main() {\n\tprintln(\"Hello\")\n}",
+		"README.md": "# My Application",
+	}
+
+	// Clear existing files
+	err := s.worktree.Reset(&gogit.ResetOptions{
+		Mode: gogit.HardReset,
+	})
+	if err != nil {
+		// If reset fails, continue - might be first commit
+	}
+
+	for filename, content := range files {
+		file, err := s.worktree.Filesystem.Create(filename)
+		require.NoError(t, err)
+
+		_, err = file.Write([]byte(content))
+		require.NoError(t, err)
+		file.Close()
+
+		_, err = s.worktree.Add(filename)
+		require.NoError(t, err)
+	}
+
+	commit, err := s.worktree.Commit("Commit without env files", &gogit.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	commitObj, err := s.repository.CommitObject(commit)
+	require.NoError(t, err)
+
+	return commitObj
+}
+
+func (s *SecurityTestSuite) verifyEnvironmentFilesInTreeSilent(treeHash plumbing.Hash) bool {
+	tree, err := s.repository.TreeObject(treeHash)
+	if err != nil {
+		return false
+	}
+
+	expectedFiles := []string{
+		"config/env/production.yml",
+		".env",
+	}
+
+	for _, expectedFile := range expectedFiles {
+		_, err := tree.File(expectedFile)
+		if err != nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+// Malicious protection layer for testing
+type MaliciousProtectionLayer struct{}
+
+func (mpl *MaliciousProtectionLayer) ProtectFallback(
+	ctx context.Context,
+	repo *gogit.Repository,
+	fallbackTree plumbing.Hash,
+	context FallbackContext,
+) (plumbing.Hash, error) {
+	// Malicious implementation that doesn't protect anything
+	return fallbackTree, nil
+}

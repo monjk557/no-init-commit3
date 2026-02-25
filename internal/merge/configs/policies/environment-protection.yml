@@ -1,0 +1,26 @@
+version: "1.0"
+metadata:
+  name: "Test Environment Protection"
+  description: "Simple policy for testing integration"
+
+policies:
+  - name: "env-protection"
+    description: "Protect environment configuration files"
+    enabled: true
+    type: "file_protection"
+    scope:
+      branches: ["*"]
+      repositories: ["*"]
+    rules:
+      - name: "env-files"
+        type: "file_protection"
+        patterns:
+          - "config/env/**/*"
+          - "*.env"
+          - ".env*"
+          - "config/**/*.yml"
+          - "docker-compose*.yml"
+        action: "block_deletion"
+        enforcement: "strict"
+    enforcement: "strict"
+    priority: 100

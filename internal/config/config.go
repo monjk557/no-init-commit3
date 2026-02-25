@@ -8,20 +8,21 @@ import (
 	"time"
 )
 
-// Config는 전체 애플리케이션 설정을 나타냅니다
+// Config represents the complete application configuration
 type Config struct {
-	Server        ServerConfig
-	Git           GitConfig
-	Logging       LoggingConfig
-	Observability ObservabilityConfig
-	Security      SecurityConfig
-	Permissions   PermissionsConfig
-	Performance   PerformanceConfig
-	Events        EventsConfig
-	Orchestrator  OrchestratorConfig
+	Server          ServerConfig
+	Git             GitConfig
+	Logging         LoggingConfig
+	Observability   ObservabilityConfig
+	Security        SecurityConfig
+	Permissions     PermissionsConfig
+	Performance     PerformanceConfig
+	Events          EventsConfig
+	Orchestrator    OrchestratorConfig
+	MergeProtection MergeProtectionConfig
 }
 
-// ServerConfig는 HTTP 서버 설정을 저장합니다
+// ServerConfig stores HTTP server configuration
 type ServerConfig struct {
 	Port            int
 	TCPGitPort      int
@@ -36,7 +37,7 @@ type ServerConfig struct {
 	DocsPath        string
 }
 
-// GitConfig는 Git 저장소 설정을 저장합니다
+// GitConfig stores Git repository configuration
 type GitConfig struct {
 	RepoRoot       string
 	EnablePackfile bool
@@ -44,7 +45,7 @@ type GitConfig struct {
 	CacheTTL       time.Duration
 }
 
-// LoggingConfig는 로깅 설정을 저장합니다
+// LoggingConfig stores logging configuration
 type LoggingConfig struct {
 	Level       string
 	Format      string
@@ -127,6 +128,47 @@ type OrchestratorConfig struct {
 	ForwardAuthHeader  bool          `json:"forward_auth_header"`
 }
 
+// MergeProtectionConfig holds merge protection feature flags and configuration
+type MergeProtectionConfig struct {
+	// Global protection enable/disable
+	Enabled bool `json:"enabled"`
+
+	// Environment file protection features
+	EnvironmentProtection EnvironmentProtectionConfig `json:"environment_protection"`
+
+	// Advanced protection features
+	IntelligentMerging       bool `json:"intelligent_merging"`
+	AdaptiveFallback         bool `json:"adaptive_fallback"`
+	PredictiveConflictDetect bool `json:"predictive_conflict_detect"`
+
+	// Observability and safety
+	EnableMetrics    bool   `json:"enable_metrics"`
+	EnableAuditLogs  bool   `json:"enable_audit_logs"`
+	SafetyMode       string `json:"safety_mode"`       // "strict", "permissive", "disabled"
+	FallbackStrategy string `json:"fallback_strategy"` // "preserve_target", "preserve_source", "manual"
+}
+
+// EnvironmentProtectionConfig holds environment-specific protection settings
+type EnvironmentProtectionConfig struct {
+	Enabled bool `json:"enabled"`
+
+	// File pattern protection
+	ProtectConfigFiles   bool `json:"protect_config_files"`
+	ProtectEnvFiles      bool `json:"protect_env_files"`
+	ProtectDockerFiles   bool `json:"protect_docker_files"`
+	ProtectDatabaseFiles bool `json:"protect_database_files"`
+
+	// Merge method specific protection
+	EnableForSquashMerge  bool `json:"enable_for_squash_merge"`
+	EnableForRegularMerge bool `json:"enable_for_regular_merge"`
+	EnableForRebaseMerge  bool `json:"enable_for_rebase_merge"`
+
+	// Protection strength
+	StrictMode         bool     `json:"strict_mode"`          // Fail merge if protection can't be applied
+	AllowedDeletePaths []string `json:"allowed_delete_paths"` // Paths that are safe to delete
+	CriticalPaths      []string `json:"critical_paths"`       // Paths that must never be deleted
+}
+
 // Load는 환경변수에서 설정을 로드합니다
 func Load() (*Config, error) {
 
@@ -149,14 +191,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse events config: %w", err)
 	}
 	orchestratorConfig := parseOrchestratorConfig()
+	mergeProtectionConfig := parseMergeProtectionConfig()
 
 	config := &Config{
-		Server:        serverConfig,
-		Git:           gitConfig,
-		Logging:       loggingConfig,
-		Observability: observabilityConfig,
-		Events:        eventsConfig,
-		Orchestrator:  orchestratorConfig,
+		Server:          serverConfig,
+		Git:             gitConfig,
+		Logging:         loggingConfig,
+		Observability:   observabilityConfig,
+		Events:          eventsConfig,
+		Orchestrator:    orchestratorConfig,
+		MergeProtection: mergeProtectionConfig,
 	}
 
 	// 설정 유효성 검사
@@ -354,6 +398,106 @@ func parseOrchestratorConfig() OrchestratorConfig {
 	}
 }
 
+// ------------------------------------------------------------
+// MergeProtectionConfig 파싱 (환경변수 + 하드코딩)
+// ------------------------------------------------------------
+func parseMergeProtectionConfig() MergeProtectionConfig {
+	// Parse main protection flags
+	enabled := parseBoolFromEnv("MERGE_PROTECTION_ENABLED", true) // Default enabled
+	intelligentMerging := parseBoolFromEnv("MERGE_PROTECTION_INTELLIGENT", true)
+	adaptiveFallback := parseBoolFromEnv("MERGE_PROTECTION_ADAPTIVE", true)
+	predictiveConflict := parseBoolFromEnv("MERGE_PROTECTION_PREDICTIVE", true)
+
+	// Parse observability flags
+	enableMetrics := parseBoolFromEnv("MERGE_PROTECTION_METRICS", true)
+	enableAuditLogs := parseBoolFromEnv("MERGE_PROTECTION_AUDIT_LOGS", true)
+
+	// Parse safety configuration
+	safetyMode := os.Getenv("MERGE_PROTECTION_SAFETY_MODE")
+	if safetyMode == "" {
+		safetyMode = "strict" // Default to strict for production safety
+	}
+
+	fallbackStrategy := os.Getenv("MERGE_PROTECTION_FALLBACK_STRATEGY")
+	if fallbackStrategy == "" {
+		fallbackStrategy = "preserve_target" // Default to preserve target
+	}
+
+	// Parse environment protection config
+	envProtectionConfig := EnvironmentProtectionConfig{
+		Enabled: parseBoolFromEnv("MERGE_PROTECTION_ENV_ENABLED", true),
+
+		// File type protection
+		ProtectConfigFiles:   parseBoolFromEnv("MERGE_PROTECTION_CONFIG_FILES", true),
+		ProtectEnvFiles:      parseBoolFromEnv("MERGE_PROTECTION_ENV_FILES", true),
+		ProtectDockerFiles:   parseBoolFromEnv("MERGE_PROTECTION_DOCKER_FILES", true),
+		ProtectDatabaseFiles: parseBoolFromEnv("MERGE_PROTECTION_DB_FILES", true),
+
+		// Merge method protection
+		EnableForSquashMerge:  parseBoolFromEnv("MERGE_PROTECTION_SQUASH", true),
+		EnableForRegularMerge: parseBoolFromEnv("MERGE_PROTECTION_REGULAR", true),
+		EnableForRebaseMerge:  parseBoolFromEnv("MERGE_PROTECTION_REBASE", true),
+
+		// Protection strength
+		StrictMode: parseBoolFromEnv("MERGE_PROTECTION_STRICT", true),
+
+		// Parse allowed delete paths from environment
+		AllowedDeletePaths: parseStringSliceFromEnv("MERGE_PROTECTION_ALLOWED_DELETES", []string{
+			"tmp/**",
+			"*.tmp",
+			"build/**",
+			"dist/**",
+		}),
+
+		// Parse critical paths from environment
+		CriticalPaths: parseStringSliceFromEnv("MERGE_PROTECTION_CRITICAL_PATHS", []string{
+			"config/env/**",
+			"config/**/*.yml",
+			"config/**/*.yaml",
+			"docker-compose*.yml",
+			"*.env",
+		}),
+	}
+
+	return MergeProtectionConfig{
+		Enabled:                  enabled,
+		EnvironmentProtection:    envProtectionConfig,
+		IntelligentMerging:       intelligentMerging,
+		AdaptiveFallback:         adaptiveFallback,
+		PredictiveConflictDetect: predictiveConflict,
+		EnableMetrics:            enableMetrics,
+		EnableAuditLogs:          enableAuditLogs,
+		SafetyMode:               safetyMode,
+		FallbackStrategy:         fallbackStrategy,
+	}
+}
+
+// Helper function to parse boolean from environment with default
+func parseBoolFromEnv(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return defaultValue
+	}
+	return value == "true" || value == "1" || value == "yes" || value == "on"
+}
+
+// Helper function to parse string slice from environment with default
+func parseStringSliceFromEnv(key string, defaultValue []string) []string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	// Split by comma and trim spaces
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
 // validate는 설정 유효성 검사를 수행합니다
 func validate(config *Config) error {
 	var errors []string
@@ -408,6 +552,31 @@ func validate(config *Config) error {
 	}
 	if !logFormatValid {
 		errors = append(errors, fmt.Sprintf("logging.format must be one of: %v", validLogFormats))
+	}
+
+	// Merge protection configuration validation
+	validSafetyModes := []string{"strict", "permissive", "disabled"}
+	safetyModeValid := false
+	for _, mode := range validSafetyModes {
+		if config.MergeProtection.SafetyMode == mode {
+			safetyModeValid = true
+			break
+		}
+	}
+	if !safetyModeValid {
+		errors = append(errors, fmt.Sprintf("merge_protection.safety_mode must be one of: %v", validSafetyModes))
+	}
+
+	validFallbackStrategies := []string{"preserve_target", "preserve_source", "manual"}
+	fallbackStrategyValid := false
+	for _, strategy := range validFallbackStrategies {
+		if config.MergeProtection.FallbackStrategy == strategy {
+			fallbackStrategyValid = true
+			break
+		}
+	}
+	if !fallbackStrategyValid {
+		errors = append(errors, fmt.Sprintf("merge_protection.fallback_strategy must be one of: %v", validFallbackStrategies))
 	}
 
 	if len(errors) > 0 {

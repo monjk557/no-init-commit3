@@ -115,8 +115,9 @@ func (h *MergeOperationsHandler) performRebase(ctx context.Context, repo *gogit.
 				return nil, fmt.Errorf("rebase conflict at commit %s: %d conflicts. Use force_conflict=true to override", commitToRebase.Hash.String(), singleCommitAnalysis.ConflictCount)
 			}
 
-			// Use createMergedTreeWithBase for rebase (using parentCommit as base)
-			rebasedTreeHash, err = h.createMergedTreeWithBase(ctx, repo, commitToRebase, currentBase, parentCommit, singleCommitAnalysis, req.Strategy)
+			// **CRITICAL FIX**: Use resolveMergeTree with protection system for rebase
+			// Protection is controlled by feature flags and applied in resolveMergeTree
+			rebasedTreeHash, err = h.resolveMergeTree(ctx, repo, commitToRebase, currentBase, singleCommitAnalysis, req.Strategy, req.ForceConflict, false)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve tree for rebase commit %s: %w", commitToRebase.Hash.String(), err)
 			}

@@ -28,9 +28,8 @@ type MergeOperationsHandler struct {
 	conflictDetector *ConflictDetector
 	eventsClient     events.RedisStreamClient
 	config           *config.Config
-	// PHASE 1 & 2: Centralized tree protection system
-	protectionLayer *TreeProtectionLayer
-	orchestrator    *UniversalMergeOrchestrator
+	// Policy Engine Integration (TreeProtectionLayer removed)
+	orchestrator *UniversalMergeOrchestrator
 	// hooks is only set in tests for deterministic concurrent testing
 	// In production, this is always nil and has no effect
 	hooks *MergeHooks
@@ -68,21 +67,40 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		}
 	}
 
-	// Initialize centralized protection and orchestration systems
-	protectionLayer := NewTreeProtectionLayer(logger.Logger)
+	// Initialize SECURE centralized protection and orchestration systems based on feature flags
+	protectionController := NewSecureProtectionController(
+		cfg.MergeProtection.Enabled,
+		cfg.MergeProtection.EnvironmentProtection.Enabled,
+		cfg.MergeProtection.EnvironmentProtection.EnableForSquashMerge,
+		cfg.MergeProtection.EnvironmentProtection.EnableForRegularMerge,
+		cfg.MergeProtection.EnvironmentProtection.EnableForRebaseMerge,
+	)
+
+	// Create secure protection layer that cannot be tampered with
+	_ = NewSecureTreeProtectionLayer(protectionController, logger.Logger)
+
+	logger.Info("Secure merge protection system initialized",
+		zap.String("protection_status", protectionController.String()),
+		zap.String("safety_mode", cfg.MergeProtection.SafetyMode),
+		zap.String("fallback_strategy", cfg.MergeProtection.FallbackStrategy))
+
+	// TreeProtectionLayer removed - now using PolicyEngine through MergeProtectionContext
+
 	orchestratorConfig := &OrchestratorConfig{
-		EnableIntelligentMerging:   true,
-		EnablePredictiveAnalysis:   true,
-		EnableAdaptiveFallback:     true,
-		EnableComprehensiveLogging: true,
-		SafetyChecksEnabled:        true,
-		LearningEnabled:            true,
+		EnableIntelligentMerging:   cfg.MergeProtection.IntelligentMerging,
+		EnablePredictiveAnalysis:   cfg.MergeProtection.PredictiveConflictDetect,
+		EnableAdaptiveFallback:     cfg.MergeProtection.AdaptiveFallback,
+		EnableComprehensiveLogging: cfg.MergeProtection.EnableAuditLogs,
+		SafetyChecksEnabled:        cfg.MergeProtection.SafetyMode == "strict",
+		LearningEnabled:            cfg.MergeProtection.IntelligentMerging,
 	}
 	orchestrator := NewUniversalMergeOrchestrator(logger.Logger, orchestratorConfig)
 
-	logger.Info("Centralized merge protection enabled",
-		zap.Bool("tree_protection", true),
-		zap.Bool("intelligent_orchestration", true))
+	logger.Info("Universal merge orchestrator configured",
+		zap.Bool("intelligent_merging", orchestratorConfig.EnableIntelligentMerging),
+		zap.Bool("predictive_analysis", orchestratorConfig.EnablePredictiveAnalysis),
+		zap.Bool("adaptive_fallback", orchestratorConfig.EnableAdaptiveFallback),
+		zap.Bool("safety_checks", orchestratorConfig.SafetyChecksEnabled))
 
 	return &MergeOperationsHandler{
 		pathConfig:       pathConfig,
@@ -91,22 +109,71 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		conflictDetector: conflictDetector,
 		eventsClient:     eventsClient,
 		config:           cfg,
-		protectionLayer:  protectionLayer,
 		orchestrator:     orchestrator,
 	}, nil
 }
 
-// extractEnvironmentFiles extracts environment file paths from merge analysis
-// This helper method supports the centralized protection system
-func (h *MergeOperationsHandler) extractEnvironmentFiles(analysis *MergeAnalysisResult) []string {
+// shouldApplyProtection checks feature flags to determine if protection should be applied
+func (h *MergeOperationsHandler) shouldApplyProtection(isSquash bool) bool {
+	if !h.config.MergeProtection.Enabled {
+		h.logger.Debug("Protection disabled globally via MERGE_PROTECTION_ENABLED=false")
+		return false
+	}
+
+	if !h.config.MergeProtection.EnvironmentProtection.Enabled {
+		h.logger.Debug("Environment protection disabled via MERGE_PROTECTION_ENV_ENABLED=false")
+		return false
+	}
+
+	// Check merge-method specific flags
+	if isSquash && !h.config.MergeProtection.EnvironmentProtection.EnableForSquashMerge {
+		h.logger.Debug("Squash merge protection disabled via MERGE_PROTECTION_SQUASH=false")
+		return false
+	}
+
+	if !isSquash && !h.config.MergeProtection.EnvironmentProtection.EnableForRegularMerge {
+		h.logger.Debug("Regular merge protection disabled via MERGE_PROTECTION_REGULAR=false")
+		return false
+	}
+
+	h.logger.Debug("Protection enabled via feature flags",
+		zap.Bool("is_squash", isSquash),
+		zap.String("safety_mode", h.config.MergeProtection.SafetyMode))
+	return true
+}
+
+// shouldApplyRebaseProtection checks if protection should be applied for rebase operations
+func (h *MergeOperationsHandler) shouldApplyRebaseProtection() bool {
+	if !h.config.MergeProtection.Enabled {
+		return false
+	}
+
+	if !h.config.MergeProtection.EnvironmentProtection.Enabled {
+		return false
+	}
+
+	return h.config.MergeProtection.EnvironmentProtection.EnableForRebaseMerge
+}
+
+// extractEnvironmentFiles extracts environment file paths using PolicyEngine
+func (h *MergeOperationsHandler) extractEnvironmentFiles(ctx context.Context, analysis *MergeAnalysisResult, protectionCtx *MergeProtectionContext) []string {
 	var envFiles []string
 
-	if analysis == nil {
+	if analysis == nil || protectionCtx == nil || protectionCtx.PolicyEngine == nil {
 		return envFiles
 	}
 
 	for _, conflict := range analysis.FileConflicts {
-		if h.protectionLayer != nil && h.protectionLayer.environmentDetector.IsEnvironmentFile(conflict.FilePath) {
+		// Use PolicyEngine to determine if file is protected (environment file)
+		decision, err := protectionCtx.PolicyEngine.EvaluateFileProtection(ctx, conflict.FilePath)
+		if err != nil {
+			h.logger.Debug("Failed to evaluate file protection, skipping",
+				zap.String("file", conflict.FilePath),
+				zap.Error(err))
+			continue
+		}
+
+		if decision.Protected {
 			envFiles = append(envFiles, conflict.FilePath)
 		}
 	}
