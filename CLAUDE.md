@@ -47,6 +47,85 @@ Every solution should include:
 - Migration strategy from current state
 - Risk mitigation approaches
 
+## Code Quality Standards
+
+### MANDATORY: Quality Checks After Every Code Change
+
+**CRITICAL REQUIREMENT**: After ANY code modification (Edit, Write, or creation), you MUST immediately run:
+
+```bash
+# 1. Format code first
+make format
+
+# 2. Run go vet check
+go vet ./...
+
+# 3. Fix any errors before proceeding
+```
+
+**Workflow for EVERY code change:**
+
+1. **Make code change** (Edit/Write file)
+2. **IMMEDIATELY run `make format`** - fixes formatting issues
+3. **IMMEDIATELY run `go vet ./...`** - catches compilation errors, unused variables, etc.
+4. **If errors exist**: Fix them immediately, don't proceed to next change
+5. **If clean**: Continue with next change or commit
+
+**Before ANY commit:**
+```bash
+# Final verification
+make format
+go vet ./...
+go test ./internal/merge
+```
+
+**Never ignore or defer go vet errors** - they indicate real issues that can cause:
+- Compilation failures in CI
+- Runtime bugs
+- Unused variables masking real problems
+- Import cycles
+- Dead code
+
+### Quality Gates
+
+- ✅ **`go vet ./...` must pass** - zero errors allowed
+- ✅ **`make format` must run clean** - consistent formatting
+- ✅ **Core tests must pass** - `go test ./internal/merge`
+- ✅ **No unused imports or variables** - clean code only
+
+**This is non-negotiable for production-quality code.**
+
+### Automated Quality Enforcement
+
+**Integration with Development Workflow:**
+
+Every response that includes code changes should follow this pattern:
+
+1. **Make the code change**
+2. **Auto-run quality checks:**
+   ```bash
+   make format && go vet ./...
+   ```
+3. **Report status**: "✅ Code quality checks passed" or "🔧 Fixed formatting/vet issues"
+4. **If issues found**: Fix immediately and re-run checks
+5. **Only then proceed** to next change or completion
+
+**Error Response Template:**
+When go vet fails, immediately:
+```bash
+# Fix the specific issues
+# Re-run: make format && go vet ./...
+# Verify: echo "✅ All quality checks now pass"
+```
+
+**Commit Readiness Checklist:**
+```bash
+make format              # ✅ Formatting standardized
+go vet ./...            # ✅ No vet errors
+go test ./internal/merge # ✅ Core functionality works
+git status              # ✅ Ready to commit
+```
+
 ## Examples
 
 **Bad (Short-term):**

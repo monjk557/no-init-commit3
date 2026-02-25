@@ -7,10 +7,16 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.uber.org/zap"
 )
 
 // performMerge performs the actual Git merge operation
 func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *MergeAnalysisResult) (*MergeResult, error) {
+	h.logger.Info("🚨 DEBUG: performMerge called",
+		zap.String("method", string(req.Method)),
+		zap.String("strategy", string(req.Strategy)),
+		zap.String("source", sourceHash.String()),
+		zap.String("target", targetHash.String()))
 	result := &MergeResult{
 		IsFastForward:    analysis.IsFastForward,
 		HasConflicts:     analysis.HasConflicts,
@@ -20,6 +26,7 @@ func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.R
 	// Route to appropriate merge method
 	switch req.Method {
 	case MergeMethodSquash:
+		h.logger.Info("🚨 DEBUG: Executing SQUASH merge with protection")
 		// Perform squash merge
 		mergeCommit, err := h.performSquashMerge(ctx, repo, sourceHash, targetHash, req, analysis)
 		if err != nil {
@@ -29,6 +36,7 @@ func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.R
 		return result, nil
 
 	case MergeMethodRebase:
+		h.logger.Info("🚨 DEBUG: Executing REBASE merge with protection")
 		// Perform rebase
 		rebaseCommit, err := h.performRebase(ctx, repo, sourceHash, targetHash, req, analysis)
 		if err != nil {
@@ -40,6 +48,7 @@ func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.R
 	case MergeMethodMerge:
 		fallthrough
 	default:
+		h.logger.Info("🚨 DEBUG: Executing REGULAR merge with protection")
 		// For merge method, always create a merge commit (even for fast-forward)
 		// This is equivalent to git merge --no-ff
 		// Perform three-way merge (which will create a merge commit)

@@ -45,6 +45,12 @@ func NewMergeProtectionContext(cfg *config.Config, isSquash, isRebase bool) *Mer
 		}
 	}
 
+	logger.Info("🚨 DEBUG: NewMergeProtectionContext called",
+		zap.Bool("isSquash", isSquash),
+		zap.Bool("isRebase", isRebase),
+		zap.Bool("global_protection_enabled", cfg.MergeProtection.Enabled),
+		zap.Bool("env_protection_enabled", cfg.MergeProtection.EnvironmentProtection.Enabled))
+
 	ctx := &MergeProtectionContext{
 		ProtectionEnabled:     cfg.MergeProtection.Enabled,
 		EnvironmentProtection: cfg.MergeProtection.EnvironmentProtection.Enabled,
