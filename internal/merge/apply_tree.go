@@ -3,6 +3,7 @@ package merge
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"go.uber.org/zap"
 
@@ -318,15 +319,29 @@ func (h *MergeOperationsHandler) collectTreeEntries(baseTree, sourceTree, target
 	return entryMap
 }
 
-// sortTreeEntries sorts tree entries by name (required by Git)
+// sortTreeEntries sorts tree entries using Git's specific sorting algorithm
+// Git requires directories to be sorted as if they have a trailing "/"
 func sortTreeEntries(entries []object.TreeEntry) {
-	for i := 0; i < len(entries); i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[i].Name > entries[j].Name {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
-		}
+	sort.Slice(entries, func(i, j int) bool {
+		return compareTreeEntries(entries[i], entries[j])
+	})
+}
+
+// compareTreeEntries implements Git's tree entry comparison algorithm
+// This is critical for Git tree encoding to work properly
+func compareTreeEntries(a, b object.TreeEntry) bool {
+	nameA := a.Name
+	nameB := b.Name
+
+	// For directories, append "/" for comparison purposes (Git standard)
+	if a.Mode == filemode.Dir {
+		nameA += "/"
 	}
+	if b.Mode == filemode.Dir {
+		nameB += "/"
+	}
+
+	return nameA < nameB
 }
 
 // createAndStoreTree creates and stores a tree object in the repository
