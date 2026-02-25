@@ -109,21 +109,8 @@ policies:
     enforcement: "strict"
     priority: 90
 
-templates:
-  - name: "standard-env-protection"
-    description: "Standard template for environment file protection"
-    type: "file_protection"
-    rules:
-      - name: "env-files-template"
-        type: "file_protection"
-        patterns:
-          - "{{.env_path}}/**/*"
-          - "*.env"
-        action: "block_deletion"
-        enforcement: "{{.enforcement_level}}"
-    variables:
-      env_path: "config/env"
-      enforcement_level: "strict"
+# Templates removed - causing PolicyEngine initialization failure
+# with unresolved template variables like {{.enforcement_level}}
 
 # Environment-specific overrides
 overrides:
