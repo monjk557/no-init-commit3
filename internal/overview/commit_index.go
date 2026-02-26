@@ -158,6 +158,78 @@ func (idx *CommitIndex) Store(repoPath, refHash, dirPath string, commits map[str
 	idx.mu.Unlock()
 }
 
+// MergeStore merges new commits into an existing index entry.
+// If the existing entry is complete and the new data is incomplete,
+// it preserves the existing complete entry (no downgrade).
+// If the existing entry is incomplete, it merges new commits into it.
+func (idx *CommitIndex) MergeStore(repoPath, refHash, dirPath string, commits map[string]*GitCommit, meta LatestCommitsMeta) {
+	m := observability.GetApplicationMetrics()
+	key := indexKey(repoPath, refHash, dirPath)
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	existing, hasExisting := idx.cache.Get(key)
+
+	// Case 1: No existing entry — just store.
+	if !hasExisting || existing == nil {
+		cost := len(commits)
+		idx.cache.Add(key, &indexEntry{
+			commits:   commits,
+			meta:      meta,
+			cost:      cost,
+			createdAt: time.Now(),
+		})
+		idx.totalCost.Add(int64(cost))
+		m.RecordCommitIndexOp("merge_store")
+		m.SetCommitIndexEntries(idx.cache.Len())
+		return
+	}
+
+	// Case 2: Existing is complete, new is incomplete — no downgrade.
+	if !existing.meta.Incomplete && meta.Incomplete {
+		// Only merge in new commits that are missing from the existing complete entry.
+		for path, commit := range commits {
+			if commit != nil {
+				if _, exists := existing.commits[path]; !exists {
+					existing.commits[path] = commit
+				}
+			}
+		}
+		// Keep existing meta (complete), update cost.
+		oldCost := existing.cost
+		existing.cost = len(existing.commits)
+		idx.totalCost.Add(int64(existing.cost - oldCost))
+		m.RecordCommitIndexOp("merge_store")
+		m.SetCommitIndexEntries(idx.cache.Len())
+		return
+	}
+
+	// Case 3: Both incomplete or new is complete — merge and update meta.
+	oldCost := existing.cost
+	for path, commit := range commits {
+		if commit != nil {
+			existing.commits[path] = commit
+		}
+	}
+	existing.cost = len(existing.commits)
+	idx.totalCost.Add(int64(existing.cost - oldCost))
+
+	// If new data is complete, upgrade meta.
+	if !meta.Incomplete {
+		existing.meta = meta
+		existing.meta.Incomplete = false
+	} else {
+		// Both incomplete — keep whichever scanned more.
+		if meta.ScannedCommits > existing.meta.ScannedCommits {
+			existing.meta = meta
+		}
+	}
+
+	m.RecordCommitIndexOp("merge_store")
+	m.SetCommitIndexEntries(idx.cache.Len())
+}
+
 // ---------------------------------------------------------------------------
 // Hotness tracking
 // ---------------------------------------------------------------------------
@@ -283,6 +355,90 @@ func (idx *CommitIndex) ScheduleBackgroundPopulation(
 
 		if idx.logger != nil {
 			idx.logger.Debug("commit index populated",
+				zap.String("repoPath", repoPath),
+				zap.String("refHash", refHash[:min(8, len(refHash))]),
+				zap.String("dirPath", dirPath),
+				zap.Int("paths", len(commits)),
+				zap.Bool("incomplete", meta.Incomplete),
+				zap.String("cutReason", meta.CutReason),
+			)
+		}
+	}()
+}
+
+// ForceScheduleBackgroundPopulation is like ScheduleBackgroundPopulation but
+// skips the hotness gate. All other safety features (dedup, per-repo lock,
+// worker pool, queue cap) are preserved.
+// Use this when incomplete results are detected and immediate background
+// population is needed regardless of request frequency.
+func (idx *CommitIndex) ForceScheduleBackgroundPopulation(
+	repoPath, refHash, dirPath string,
+	repo *gogit.Repository,
+	pathInfos []CommitPathInfo,
+) {
+	key := indexKey(repoPath, refHash, dirPath)
+	m := observability.GetApplicationMetrics()
+	m.RecordCommitIndexOp("force_populate")
+
+	// Dedup: already inflight for this exact key?
+	if _, loaded := idx.inflight.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+
+	// Queue length cap: drop if full.
+	if idx.queueLen.Load() >= int32(idx.maxQueueLen) {
+		idx.inflight.Delete(key)
+		m.RecordCommitIndexOp("drop")
+		return
+	}
+
+	// Per-repo rate limit: only 1 concurrent populate per repo.
+	repoKey := repoPath
+	if _, loaded := idx.repoInflight.LoadOrStore(repoKey, struct{}{}); loaded {
+		idx.inflight.Delete(key)
+		return
+	}
+
+	// Try to acquire a worker slot (non-blocking).
+	select {
+	case idx.workerSem <- struct{}{}:
+		// Got a slot.
+	default:
+		// All workers busy — drop.
+		idx.inflight.Delete(key)
+		idx.repoInflight.Delete(repoKey)
+		m.RecordCommitIndexOp("drop")
+		return
+	}
+
+	idx.queueLen.Add(1)
+
+	go func() {
+		defer func() {
+			<-idx.workerSem
+			idx.inflight.Delete(key)
+			idx.repoInflight.Delete(repoKey)
+			idx.queueLen.Add(-1)
+		}()
+
+		m := observability.GetApplicationMetrics()
+		m.RecordCommitIndexOp("populate")
+
+		hash := plumbing.NewHash(refHash)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		commits, meta := idx.service.GetLatestCommitsForPathsWithMeta(
+			ctx, repo, hash, pathInfos,
+			5*time.Second, // generous time budget for background
+			100_000,       // generous max commits for background
+		)
+
+		idx.MergeStore(repoPath, refHash, dirPath, commits, meta)
+
+		if idx.logger != nil {
+			idx.logger.Debug("commit index force-populated",
 				zap.String("repoPath", repoPath),
 				zap.String("refHash", refHash[:min(8, len(refHash))]),
 				zap.String("dirPath", dirPath),

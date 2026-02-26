@@ -5,7 +5,6 @@ package cache_test
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 

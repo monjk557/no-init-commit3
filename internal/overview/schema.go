@@ -2,9 +2,6 @@ package overview
 
 import (
 	"time"
-
-	"github.com/collabops/git-executor/internal/commits"
-	"github.com/collabops/git-executor/internal/tags"
 )
 
 // OverviewResponse is the response type for repository overview API
@@ -92,28 +89,9 @@ type GitTreeEntryWithCommit struct {
 	LatestCommit *GitCommit `json:"latest_commit,omitempty"` // 최신 커밋 정보
 }
 
-// 변환 함수들 - 다른 패키지의 타입을 overview 패키지 타입으로 변환
-func convertCommitToGitCommit(c commits.Commit) GitCommit {
-	return GitCommit{
-		SHA:          c.Sha,
-		Message:      c.Message,
-		Author:       convertAuthorToGitAuthor(c.Author),
-		Committer:    convertAuthorToGitAuthor(c.Committer),
-		ParentHashes: c.ParentHashes,
-		TreeHash:     c.TreeHash,
-	}
-}
-
-func convertAuthorToGitAuthor(a commits.CommitAuthor) GitAuthor {
-	return GitAuthor{
-		Name:  a.Name,
-		Email: a.Email,
-		Date:  a.Date,
-	}
-}
+// 변환 함수들
 
 func convertBranchesToGitBranches(branches []BranchInfo) []GitBranch {
-	// 인덱스 접근 방식이 더 효율적
 	result := make([]GitBranch, len(branches))
 	for i := range branches {
 		result[i] = GitBranch{
@@ -122,28 +100,6 @@ func convertBranchesToGitBranches(branches []BranchInfo) []GitBranch {
 			IsRemote:  branches[i].IsRemote,
 			IsCurrent: branches[i].IsCurrent,
 		}
-	}
-	return result
-}
-
-func convertTagsToGitTags(tags []tags.Tag) []GitTag {
-	// 인덱스 접근 방식이 더 효율적
-	result := make([]GitTag, len(tags))
-	for i := range tags {
-		result[i] = GitTag{
-			Name:        tags[i].Name,
-			Hash:        tags[i].Hash,
-			IsAnnotated: tags[i].IsAnnotated,
-		}
-	}
-	return result
-}
-
-func convertCommitsToGitCommits(commitsList []commits.Commit) []GitCommit {
-	// 인덱스 접근 방식이 더 효율적
-	result := make([]GitCommit, len(commitsList))
-	for i := range commitsList {
-		result[i] = convertCommitToGitCommit(commitsList[i])
 	}
 	return result
 }
