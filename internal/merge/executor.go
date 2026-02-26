@@ -17,6 +17,20 @@ func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.R
 		zap.String("strategy", string(req.Strategy)),
 		zap.String("source", sourceHash.String()),
 		zap.String("target", targetHash.String()))
+
+	// Use migration adapter if available (native Git + go-git with feature flags)
+	if h.migrationAdapter != nil {
+		h.logger.Debug("Using migration adapter for merge operation")
+		return h.migrationAdapter.PerformMerge(ctx, repo, sourceHash, targetHash, req, analysis)
+	}
+
+	// Fallback to legacy go-git implementation
+	h.logger.Debug("Using legacy go-git implementation")
+	return h.performLegacyMerge(ctx, repo, sourceHash, targetHash, req, analysis)
+}
+
+// performLegacyMerge performs merge using the original go-git implementation
+func (h *MergeOperationsHandler) performLegacyMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *MergeAnalysisResult) (*MergeResult, error) {
 	result := &MergeResult{
 		IsFastForward:    analysis.IsFastForward,
 		HasConflicts:     analysis.HasConflicts,

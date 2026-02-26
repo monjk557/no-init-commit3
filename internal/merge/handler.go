@@ -30,6 +30,8 @@ type MergeOperationsHandler struct {
 	config           *config.Config
 	// Policy Engine Integration (TreeProtectionLayer removed)
 	orchestrator *UniversalMergeOrchestrator
+	// Native Git Migration Support
+	migrationAdapter *MigrationAdapter
 	// hooks is only set in tests for deterministic concurrent testing
 	// In production, this is always nil and has no effect
 	hooks *MergeHooks
@@ -102,7 +104,8 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		zap.Bool("adaptive_fallback", orchestratorConfig.EnableAdaptiveFallback),
 		zap.Bool("safety_checks", orchestratorConfig.SafetyChecksEnabled))
 
-	return &MergeOperationsHandler{
+	// Create the handler first (needed for migration adapter initialization)
+	handler := &MergeOperationsHandler{
 		pathConfig:       pathConfig,
 		logger:           logger,
 		objectManager:    objectManager,
@@ -110,7 +113,20 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		eventsClient:     eventsClient,
 		config:           cfg,
 		orchestrator:     orchestrator,
-	}, nil
+	}
+
+	// Initialize migration adapter for native Git support
+	migrationAdapter, err := NewMigrationAdapter(handler, cfg, logger.Logger)
+	if err != nil {
+		logger.Warn("Failed to initialize native Git migration adapter, continuing with go-git only",
+			zap.Error(err))
+		// Continue without migration adapter - pure go-git mode
+	} else {
+		handler.migrationAdapter = migrationAdapter
+		logger.Info("Native Git migration adapter initialized successfully")
+	}
+
+	return handler, nil
 }
 
 // shouldApplyProtection checks feature flags to determine if protection should be applied
