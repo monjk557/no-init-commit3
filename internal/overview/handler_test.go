@@ -1705,3 +1705,185 @@ func Test_Overview_CommitCountApproximate_FlagExposedInResponse(t *testing.T) {
 		require.Equal(t, false, v, "small repo should not be approximate")
 	}
 }
+
+// =============================================================================
+// Tree entry sort order: trees (directories) must always appear before blobs (files)
+// =============================================================================
+
+// createTestRepoWithMixedTreeBlob creates a bare repository whose root tree
+// contains interleaved directories and files when sorted alphabetically:
+//
+//	alpha.txt  (blob)   ← would come 1st alphabetically
+//	beta/      (tree)   ← would come 2nd
+//	gamma.txt  (blob)   ← would come 3rd
+//	delta/     (tree)   ← would come 4th
+//
+// Correct tree-first sort: beta/, delta/, alpha.txt, gamma.txt
+func createTestRepoWithMixedTreeBlob(t *testing.T, repoPath string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	// helper: store a blob and return its hash
+	storeBlob := func(content string) plumbing.Hash {
+		obj := repo.Storer.NewEncodedObject()
+		obj.SetType(plumbing.BlobObject)
+		obj.SetSize(int64(len(content)))
+		w, err := obj.Writer()
+		require.NoError(t, err)
+		_, err = w.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		h, err := repo.Storer.SetEncodedObject(obj)
+		require.NoError(t, err)
+		return h
+	}
+
+	// helper: store a tree and return its hash
+	storeTree := func(entries []object.TreeEntry) plumbing.Hash {
+		tree := &object.Tree{Entries: entries}
+		enc := repo.Storer.NewEncodedObject()
+		require.NoError(t, tree.Encode(enc))
+		h, err := repo.Storer.SetEncodedObject(enc)
+		require.NoError(t, err)
+		return h
+	}
+
+	// Create blobs
+	alphaBlob := storeBlob("alpha content\n")
+	gammaBlob := storeBlob("gamma content\n")
+	betaChildBlob := storeBlob("beta child\n")
+	deltaChildBlob := storeBlob("delta child\n")
+
+	// Create sub-trees: beta/ and delta/
+	betaTree := storeTree([]object.TreeEntry{
+		{Name: "file.txt", Mode: filemode.Regular, Hash: betaChildBlob},
+	})
+	deltaTree := storeTree([]object.TreeEntry{
+		{Name: "file.txt", Mode: filemode.Regular, Hash: deltaChildBlob},
+	})
+
+	// Root tree: entries must be in git's internal sort order (dirs get trailing '/' for comparison).
+	// Git order: alpha.txt, beta/, delta/, gamma.txt — blobs and trees are interleaved.
+	rootTree := storeTree([]object.TreeEntry{
+		{Name: "alpha.txt", Mode: filemode.Regular, Hash: alphaBlob},
+		{Name: "beta", Mode: filemode.Dir, Hash: betaTree},
+		{Name: "delta", Mode: filemode.Dir, Hash: deltaTree},
+		{Name: "gamma.txt", Mode: filemode.Regular, Hash: gammaBlob},
+	})
+
+	// Create commit
+	when := fixedBaseTime()
+	commit := &object.Commit{
+		Message:   "mixed tree and blob entries",
+		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		TreeHash:  rootTree,
+	}
+	enc := repo.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(enc))
+	commitHash, err := repo.Storer.SetEncodedObject(enc)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)))
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
+}
+
+// assertTreesBeforeBlobs verifies that every "tree" entry appears before every "blob" entry.
+func assertTreesBeforeBlobs(t *testing.T, entries []GitTreeEntryWithCommit) {
+	t.Helper()
+
+	lastTreeIdx := -1
+	firstBlobIdx := -1
+	for i, e := range entries {
+		switch e.Type {
+		case "tree":
+			lastTreeIdx = i
+		case "blob":
+			if firstBlobIdx == -1 {
+				firstBlobIdx = i
+			}
+		}
+	}
+
+	if lastTreeIdx == -1 || firstBlobIdx == -1 {
+		return // only trees or only blobs — nothing to check
+	}
+	require.Less(t, lastTreeIdx, firstBlobIdx,
+		"all tree entries must appear before blob entries, got tree at index %d but blob started at index %d.\nentries: %v",
+		lastTreeIdx, firstBlobIdx, entryNames(entries))
+}
+
+func entryNames(entries []GitTreeEntryWithCommit) []string {
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = fmt.Sprintf("%s(%s)", e.Name, e.Type)
+	}
+	return names
+}
+
+func Test_NativeGetTreeEntries_TreesBeforeBlobs(t *testing.T) {
+	t.Parallel()
+
+	repoPath := filepath.Join(t.TempDir(), "owner", "mixed.git")
+	createTestRepoWithMixedTreeBlob(t, repoPath)
+
+	entries, err := NativeGetTreeEntries(context.Background(), repoPath, "main", "")
+	require.NoError(t, err)
+	require.Len(t, entries, 4, "expected 4 entries (2 trees + 2 blobs)")
+
+	// Trees must come first
+	assertTreesBeforeBlobs(t, entries)
+
+	// Within each group, names should be sorted alphabetically
+	require.Equal(t, "beta", entries[0].Name)
+	require.Equal(t, "tree", entries[0].Type)
+	require.Equal(t, "delta", entries[1].Name)
+	require.Equal(t, "tree", entries[1].Type)
+	require.Equal(t, "alpha.txt", entries[2].Name)
+	require.Equal(t, "blob", entries[2].Type)
+	require.Equal(t, "gamma.txt", entries[3].Name)
+	require.Equal(t, "blob", entries[3].Type)
+}
+
+func Test_OverviewEndpoints_TreesBeforeBlobs(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "o"
+	repo := "mixed"
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+	createTestRepoWithMixedTreeBlob(t, repoPath)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview/tree", handler.HandleGetTreeOverview)
+
+	t.Run("overview_tree_field", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+		var resp RepositoryOverviewResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.True(t, resp.Success)
+		assertTreesBeforeBlobs(t, resp.Tree)
+	})
+
+	t.Run("overview_tree_endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree?ref=main&path=", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+		var resp TreeOverviewResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.True(t, resp.Success)
+		assertTreesBeforeBlobs(t, resp.Tree)
+	})
+}

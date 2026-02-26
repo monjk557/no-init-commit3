@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -281,6 +282,15 @@ func NativeGetTreeEntries(ctx context.Context, repoPath, ref, path string) ([]Gi
 		}
 		entries = append(entries, entry)
 	}
+
+	// Sort: trees (directories) first, then blobs (files), alphabetical within each group.
+	sort.Slice(entries, func(i, j int) bool {
+		ti, tj := entries[i].Type, entries[j].Type
+		if ti != tj {
+			return ti == "tree"
+		}
+		return entries[i].Name < entries[j].Name
+	})
 
 	return entries, nil
 }
