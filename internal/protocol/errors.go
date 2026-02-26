@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
 )
 
 // GitProtocolError represents an error that can be communicated in Git Smart HTTP protocol format
