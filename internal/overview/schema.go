@@ -8,6 +8,7 @@ import (
 type RepositoryOverviewResponse struct {
 	Success              bool                     `json:"success"`
 	Message              string                   `json:"message"`
+	IsEmpty              bool                     `json:"is_empty"`
 	Repository           string                   `json:"repository"`
 	Owner                string                   `json:"owner"`
 	Name                 string                   `json:"name"`

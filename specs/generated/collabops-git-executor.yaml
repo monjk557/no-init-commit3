@@ -2152,6 +2152,8 @@ components:
           type: boolean
         message:
           type: string
+        is_empty:
+          type: boolean
         repository:
           type: string
         owner:
@@ -2183,6 +2185,7 @@ components:
       required:
         - branches
         - count
+        - is_empty
         - language_distribution
         - latest_commits
         - message

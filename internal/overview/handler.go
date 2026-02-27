@@ -381,6 +381,7 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		response := RepositoryOverviewResponse{
 			Success:       true,
 			Message:       "Repository overview fetched successfully",
+			IsEmpty:       true,
 			Repository:    fmt.Sprintf("%s/%s", owner, repo),
 			Owner:         owner,
 			Name:          repo,
