@@ -380,7 +380,7 @@ func TestAtomicPushHandler_TimeoutHandling(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
 	// Create a handler (without real repo for this test)
-	handler := NewAtomicPushHandler(nil, "test-timeout-123", logger)
+	handler := NewAtomicPushHandler("", "test-timeout-123", logger)
 
 	// Test timeout handling
 	err := handler.HandlePushTimeout()

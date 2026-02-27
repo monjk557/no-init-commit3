@@ -206,28 +206,28 @@ func (cn *CapabilityNegotiator) WriteRefsWithCapabilities(w io.Writer, refs []Re
 	if len(refs) == 0 {
 		// No refs available - write capabilities on null ref
 		capLine := fmt.Sprintf("0000000000000000000000000000000000000000 capabilities^{}\x00%s\n", cn.serverCaps.String())
-		if err := pktWriter.writeLine(capLine); err != nil {
+		if err := pktWriter.WriteLine(capLine); err != nil {
 			return fmt.Errorf("failed to write capabilities: %w", err)
 		}
 	} else {
 		// Write first ref with capabilities
 		firstRef := refs[0]
 		capLine := fmt.Sprintf("%s %s\x00%s\n", firstRef.Hash, firstRef.Name, cn.serverCaps.String())
-		if err := pktWriter.writeLine(capLine); err != nil {
+		if err := pktWriter.WriteLine(capLine); err != nil {
 			return fmt.Errorf("failed to write first ref with capabilities: %w", err)
 		}
 
 		// Write remaining refs without capabilities
 		for _, ref := range refs[1:] {
 			refLine := fmt.Sprintf("%s %s\n", ref.Hash, ref.Name)
-			if err := pktWriter.writeLine(refLine); err != nil {
+			if err := pktWriter.WriteLine(refLine); err != nil {
 				return fmt.Errorf("failed to write ref %s: %w", ref.Name, err)
 			}
 		}
 	}
 
 	// End with flush packet
-	if err := pktWriter.flush(); err != nil {
+	if err := pktWriter.Flush(); err != nil {
 		return fmt.Errorf("failed to write flush packet: %w", err)
 	}
 

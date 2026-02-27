@@ -544,8 +544,20 @@ func TestTCPGitServerReceivePack(t *testing.T) {
 		err = writer.Flush()
 		require.NoError(t, err)
 
+		// Read server response (report-status)
+		for i := 0; i < 20; i++ {
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			_, isFlush, err := readPktLine(reader)
+			if err != nil {
+				break
+			}
+			if isFlush {
+				break
+			}
+		}
+
 		// Wait a bit for server to process
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 
 		// Verify the push succeeded by checking the repository
 		targetRepo, err := gogit.PlainOpen(suite.testRepoPath)

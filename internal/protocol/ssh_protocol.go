@@ -13,16 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/orchestrator"
+	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
-	"github.com/go-git/go-billy/v5/osfs"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/packfile"
-	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
 // SSHProtocolHandler handles SSH-forwarded Git operations
@@ -579,16 +574,8 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	defer func() { _ = writer.Flush() }()
 
 	// 1. Send v1 advertisement (SSH receive-pack uses v1 protocol)
-	// Get the underlying go-git repository for advertisement
-	cache := repositories.GetSimpleCache()
-	goGitRepo, err := cache.Get(sshReq.RepoPath)
-	if err != nil {
-		_ = writer.WriteSSHError(fmt.Sprintf("failed to open repository: %v", err))
-		return
-	}
-
-	// Send v1 advertisement
-	if err := WriteV1Advert(writer, *goGitRepo); err != nil {
+	caps := []string{"report-status", "delete-refs", "thin-pack", "atomic"}
+	if err := WriteV1Advert(writer, sshReq.RepoPath, caps...); err != nil {
 		_ = writer.WriteSSHError(fmt.Sprintf("failed to send advertisement: %v", err))
 		return
 	}
@@ -620,39 +607,24 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 		repoLock.Unlock()
 	}()
 
-	// 4. Open repository using go-git
-	fs := osfs.New(sshReq.RepoPath)
-	storage := filesystem.NewStorage(fs, nil)
-	gitRepo, err := gogit.Open(storage, fs)
-	if err != nil {
-		_ = writer.WriteSSHError(fmt.Sprintf("failed to open repository: %v", err))
-		return
-	}
-
-	// 5. Process packfile if present
+	// 4. Process packfile if present using native git index-pack
 	if len(receiveReq.PackfileData) > 0 {
-		// Check if packfile starts with "PACK"
 		if bytes.HasPrefix(receiveReq.PackfileData, []byte("PACK")) {
-			// Use packfile parser to process the packfile
-			reader := bytes.NewReader(receiveReq.PackfileData)
-			scanner := packfile.NewScanner(reader)
-			parser, err := packfile.NewParserWithStorage(scanner, gitRepo.Storer)
-			if err != nil {
+			packReader := bytes.NewReader(receiveReq.PackfileData)
+			indexCtx, indexCancel := context.WithTimeout(ctx, 10*time.Minute)
+			_, indexErr := gitcmd.IndexPackFromReader(indexCtx, sshReq.RepoPath, packReader)
+			indexCancel()
+			if indexErr != nil {
 				pw := &PktWriter{W: writer, WithLF: false}
-				_ = pw.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
+				_ = pw.WriteLine(fmt.Sprintf("unpack %s", indexErr.Error()))
+				// V1 report-status requires ng lines for each ref; without them
+				// the client reports "remote failed to report status".
+				for _, cmd := range receiveReq.Commands {
+					_ = pw.WriteLine(fmt.Sprintf("ng %s unpack failed", cmd.RefName))
+				}
 				_ = pw.Flush()
 				return
 			}
-
-			if _, err := parser.Parse(); err != nil {
-				pw := &PktWriter{W: writer, WithLF: false}
-				_ = pw.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
-				_ = pw.Flush()
-				return
-			}
-
-			// Ensure packfile objects are fully persisted before accessing commits
-			// This ensures commit objects are available when we try to read them later
 		}
 	}
 
@@ -662,20 +634,36 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// 7. Process each reference update command
-	for _, cmd := range receiveReq.Commands {
-		err := h.processSSHRefUpdate(ctx, gitRepo, cmd, sshReq.Owner, sshReq.Repo, sshReq.UserID)
-		if err != nil {
-			// Report failure for this reference
-			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
-			if err := pw.WriteLine(statusLine); err != nil {
-				return
-			}
-		} else {
-			// Report success for this reference
-			statusLine := fmt.Sprintf("ok %s", cmd.RefName)
-			if err := pw.WriteLine(statusLine); err != nil {
-				return
+	// 7. Process reference updates atomically via native git update-ref
+	if len(receiveReq.Commands) > 0 {
+		var updates []gitcmd.RefUpdateCmd
+		for _, cmd := range receiveReq.Commands {
+			updates = append(updates, gitcmd.RefUpdateCmd{
+				RefName: cmd.RefName,
+				OldOID:  cmd.OldHash,
+				NewOID:  cmd.NewHash,
+			})
+		}
+		atomicErr := gitcmd.AtomicRefUpdate(ctx, sshReq.RepoPath, updates)
+		for _, cmd := range receiveReq.Commands {
+			if atomicErr != nil {
+				statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, atomicErr.Error())
+				if err := pw.WriteLine(statusLine); err != nil {
+					return
+				}
+			} else {
+				statusLine := fmt.Sprintf("ok %s", cmd.RefName)
+				if err := pw.WriteLine(statusLine); err != nil {
+					return
+				}
+				// Publish commit events for successful branch updates
+				if h.eventsClient != nil && cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
+					oldHashStr := ""
+					if cmd.OldHash != zeroHash {
+						oldHashStr = cmd.OldHash
+					}
+					h.addSSHCommitEventToStream(ctx, sshReq.RepoPath, oldHashStr, cmd.NewHash, cmd.RefName, sshReq.Owner, sshReq.Repo, sshReq.UserID)
+				}
 			}
 		}
 	}
@@ -684,32 +672,15 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	_ = pw.Flush()
 }
 
-// addSSHCommitEventToStream adds a commit event to Redis Stream for SSH operations
-func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string) {
+// addSSHCommitEventToStream adds a commit event to Redis Stream for SSH operations using native git.
+func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repoPath, oldHash, commitHash, refName, owner, repoName, userID string) {
 	if h.eventsClient == nil {
 		return
 	}
 
-	// Get commit object to verify it exists
-	// Note: commitHash should be available after packfile processing
-	commit, err := repo.CommitObject(commitHash)
+	// Get commit info using native git cat-file
+	commitInfo, err := gitcmd.GetCommitInfo(ctx, repoPath, commitHash)
 	if err != nil {
-		// Not a commit or commit not yet available, skip
-		// This can happen if packfile processing hasn't fully completed
-		return
-	}
-
-	// Extract commit message - ensure it's not nil
-	commitMessage := commit.Message
-	if commitMessage == "" {
-		// Commit message is empty, but we still want to include it in the event
-		commitMessage = ""
-	}
-
-	// Get full filesystem path for the repository
-	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
-	if err != nil {
-		// Skip if we can't get the path
 		return
 	}
 
@@ -720,22 +691,21 @@ func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo
 	event := &events.CommitEvent{
 		RepoPath:      relativePath,
 		EventType:     events.EventTypePush,
-		CommitHash:    commitHash.String(),
+		CommitHash:    commitHash,
 		OldRev:        oldHash,
 		RefName:       refName,
-		Pusher:        "git", // Default pusher identifier
+		Pusher:        "git",
 		UserID:        userID,
-		CommitMessage: commitMessage,
-		Timestamp:     commit.Committer.When,
+		CommitMessage: commitInfo.Message,
+		Timestamp:     commitInfo.CommitterDate,
 	}
 
 	// Publish asynchronously to avoid blocking
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pubCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
-			// Log error but don't fail the operation
+		if err := h.eventsClient.AddCommitEventToStream(pubCtx, event); err != nil {
 			_ = err
 		}
 	}()
@@ -842,33 +812,13 @@ func (h *SSHProtocolHandler) parseGitProtocolRequest(ctx context.Context, input 
 
 // handleSSHUploadPackCommand handles git-upload-pack commands for SSH
 func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
-	// Open repository with simple caching
-	gitRepo, err := repositories.OpenRepositorySimple(repoPath)
-	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
-	}
-	if gitRepo == nil {
-		return fmt.Errorf("repository is nil after opening")
-	}
-	defer func() { _ = gitRepo.Close() }()
-
-	// Get the underlying go-git repository for operations that need it
-	cache := repositories.GetSimpleCache()
-	goGitRepo, err := cache.Get(repoPath)
-	if err != nil {
-		return fmt.Errorf("failed to get go-git repository: %w", err)
-	}
-	if goGitRepo == nil {
-		return fmt.Errorf("go-git repository is nil after opening")
-	}
 	// Handle ls-refs command
 	if requestData["command"] == "ls-refs" {
-		return h.handleLsRefs(ctx, gitRepo, output)
+		return h.handleLsRefs(ctx, repoPath, output)
 	}
 
-	// For SSH upload-pack, we need to handle want/have negotiation
-	// This is similar to HTTP upload-pack but without the HTTP-specific parts
-	return h.handleSSHWantHaveNegotiation(ctx, goGitRepo, requestData, output)
+	// For SSH upload-pack, handle want/have negotiation using native git
+	return h.handleSSHWantHaveNegotiation(ctx, repoPath, requestData, output)
 }
 
 // handleSSHReceivePackCommand handles git-receive-pack commands for SSH
@@ -939,15 +889,11 @@ func (h *SSHProtocolHandler) parseSSHReceivePackRequest(body io.Reader) (*Receiv
 			capabilities = parts[3:]
 		}
 
-		// Parse hashes
-		oldHash := plumbing.NewHash(oldHashStr)
-		newHash := plumbing.NewHash(newHashStr)
-
-		// Create command
+		// Create command with string hashes
 		cmd := RefUpdateCommand{
 			RefName: refName,
-			OldHash: oldHash,
-			NewHash: newHash,
+			OldHash: oldHashStr,
+			NewHash: newHashStr,
 		}
 
 		req.Commands = append(req.Commands, cmd)
@@ -1012,115 +958,40 @@ func readPktLineFromReader(reader *bufio.Reader) ([]byte, bool, error) {
 	return payload, false, nil
 }
 
-// processSSHRefUpdate processes a single reference update command for SSH
-func (h *SSHProtocolHandler) processSSHRefUpdate(ctx context.Context, repo *gogit.Repository, cmd RefUpdateCommand, owner, repoName, userID string) error {
-	// Validate the reference name
-	if !isValidRefName(cmd.RefName) {
-		return fmt.Errorf("invalid reference name: %s", cmd.RefName)
-	}
-
-	// Get current reference (if it exists)
-	ref, err := repo.Reference(plumbing.ReferenceName(cmd.RefName), true)
-	if err != nil && err != plumbing.ErrReferenceNotFound {
-		return fmt.Errorf("failed to get reference %s: %w", cmd.RefName, err)
-	}
-
-	// Check if this is a create, update, or delete operation
-	isCreate := cmd.OldHash == plumbing.ZeroHash
-	isDelete := cmd.NewHash == plumbing.ZeroHash
-
-	// Validate the old hash matches current state (for updates and deletes)
-	if !isCreate {
-		if ref == nil {
-			return fmt.Errorf("reference %s does not exist", cmd.RefName)
-		}
-		if ref.Hash() != cmd.OldHash {
-			return fmt.Errorf("reference %s has been modified (expected %s, got %s)", cmd.RefName, cmd.OldHash, ref.Hash())
-		}
-	}
-
-	// Validate the new object exists (for creates and updates)
-	if !isDelete {
-		_, err := repo.CommitObject(cmd.NewHash)
-		if err != nil {
-			// Try as a tag object
-			_, err = repo.TagObject(cmd.NewHash)
-			if err != nil {
-				// Try as any object
-				_, err = repo.Object(plumbing.AnyObject, cmd.NewHash)
-				if err != nil {
-					return fmt.Errorf("object %s not found in repository", cmd.NewHash)
-				}
-			}
-		}
-	}
-
-	// Perform the reference update
-	if isDelete {
-		// Delete the reference
-		err = repo.Storer.RemoveReference(plumbing.ReferenceName(cmd.RefName))
-		if err != nil {
-			return fmt.Errorf("failed to delete reference %s: %w", cmd.RefName, err)
-		}
-	} else {
-		// Create or update the reference
-		newRef := plumbing.NewHashReference(plumbing.ReferenceName(cmd.RefName), cmd.NewHash)
-		err = repo.Storer.SetReference(newRef)
-		if err != nil {
-			return fmt.Errorf("failed to update reference %s: %w", cmd.RefName, err)
-		}
-
-		// Publish commit event if enabled (only for branches, not tags, and only if hash changed)
-		if h.eventsClient != nil && cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
-			oldHashStr := ""
-			if cmd.OldHash != plumbing.ZeroHash {
-				oldHashStr = cmd.OldHash.String()
-			}
-			h.addSSHCommitEventToStream(ctx, repo, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID)
-		}
-	}
-
-	return nil
-}
+// processSSHRefUpdate is no longer used — ref updates are handled atomically
+// in processSSHReceivePack via gitcmd.AtomicRefUpdate.
 
 // handleSSHWantHaveNegotiation handles want/have negotiation for SSH upload-pack
-func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, repo *gogit.Repository, requestData map[string]string, output *SSHProtocolWriter) error {
+// using native git pack-objects.
+func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
 	// Parse wants from request data
-	var wantHashes []plumbing.Hash
-	if wants, exists := requestData["wants"]; exists && wants != "" {
-		// Parse wants (comma-separated hashes)
-		wantStrs := strings.Split(wants, ",")
-		for _, wantStr := range wantStrs {
-			wantStr = strings.TrimSpace(wantStr)
-			if wantStr == "" {
-				continue
+	var wants []string
+	if wantStr, exists := requestData["wants"]; exists && wantStr != "" {
+		for _, w := range strings.Split(wantStr, ",") {
+			w = strings.TrimSpace(w)
+			if w != "" {
+				wants = append(wants, w)
 			}
-			wantHashes = append(wantHashes, plumbing.NewHash(wantStr))
 		}
 	}
 
-	if len(wantHashes) == 0 {
-		// No wants specified, send empty packfile
+	if len(wants) == 0 {
 		return h.sendEmptyPackfile(output)
 	}
 
 	// Parse haves (if any)
-	var haveHashes []plumbing.Hash
-	if haves, exists := requestData["haves"]; exists && haves != "" {
-		haveStrs := strings.Split(haves, ",")
-		for _, haveStr := range haveStrs {
-			haveStr = strings.TrimSpace(haveStr)
-			if haveStr == "" {
-				continue
+	var haves []string
+	if haveStr, exists := requestData["haves"]; exists && haveStr != "" {
+		for _, h := range strings.Split(haveStr, ",") {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				haves = append(haves, h)
 			}
-			haveHashes = append(haveHashes, plumbing.NewHash(haveStr))
 		}
 	}
 
 	// Send NAK (no common ancestor) if no haves
-	// NAK is part of negotiation phase, so it must be sent as regular pkt-line,
-	// NOT in side-band format. Side-band is only used for packfile data.
-	if len(haveHashes) == 0 {
+	if len(haves) == 0 {
 		nakLine := "NAK\n"
 		pktLine := fmt.Sprintf("%04x%s", len(nakLine)+4, nakLine)
 		if _, err := output.Write([]byte(pktLine)); err != nil {
@@ -1129,150 +1000,59 @@ func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, r
 	}
 
 	// Flush to end negotiation phase
-	flushPkt := []byte("0000")
-	if _, err := output.Write(flushPkt); err != nil {
+	if _, err := output.Write([]byte("0000")); err != nil {
 		return fmt.Errorf("failed to flush negotiation: %w", err)
 	}
 	if err := output.Flush(); err != nil {
 		return fmt.Errorf("failed to flush buffer: %w", err)
 	}
 
-	// Build FetchReq to use BuildFetchObjectList (same as TCP/HTTP)
-	// This provides proper object counting, include-tag support, and sorting
-	// ofs-delta: 클라이언트 대부분 지원. SSH에서는 capability 파싱 없이 기본 사용.
+	// Use native git pack-objects for packfile generation
 	useOfsDelta := strings.Contains(requestData["capabilities"], "ofs-delta") || requestData["capabilities"] == ""
-	fetchReq := &FetchReq{
-		Wants:      wantHashes,
-		Haves:      haveHashes,
-		IncludeTag: false,
-		OfsDelta:   useOfsDelta,
-	}
 
-	// Calculate objects to send using BuildFetchObjectList
-	// This automatically handles commits, trees, blobs recursively,
-	// includes annotated tags if IncludeTag is true, and sorts the result.
-	// Supports shallow (deepen N): returns ShallowBoundary for shallow-info section.
-	fetchResult, err := BuildFetchObjectList(repo.Storer, repo, fetchReq)
-	if err != nil {
-		return fmt.Errorf("failed to build fetch object list: %w", err)
-	}
-	objectHashes := fetchResult.Objects
-
-	totalObjects := len(objectHashes)
-	if totalObjects == 0 {
-		// No objects to send, send empty packfile
-		return h.sendEmptyPackfile(output)
-	}
-
-	// shallow-info section (when deepen N was used)
-	if len(fetchResult.ShallowBoundary) > 0 {
-		pw := &PktWriter{W: output, WithLF: true}
-		if err := pw.WriteLine("shallow-info"); err != nil {
-			return fmt.Errorf("failed to write shallow-info header: %w", err)
-		}
-		for _, h := range fetchResult.ShallowBoundary {
-			if err := pw.WriteLine("shallow " + h.String()); err != nil {
-				return fmt.Errorf("failed to write shallow line: %w", err)
-			}
-		}
-		if _, err := output.Write([]byte("0001")); err != nil {
-			return fmt.Errorf("failed to write shallow-info delim: %w", err)
-		}
-		if err := output.Flush(); err != nil {
-			return fmt.Errorf("failed to flush after shallow-info: %w", err)
-		}
-	}
-
-	// Send progress messages before packfile encoding
-	// These are sent as sideband channel 2 (progress) messages
-	if err := writeProgressMessage(output, fmt.Sprintf("Enumerating objects: %d, done.\n", totalObjects)); err != nil {
-		return fmt.Errorf("failed to write enumerating message: %w", err)
-	}
-	if err := writeProgressMessage(output, fmt.Sprintf("Counting objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
-		return fmt.Errorf("failed to write counting completion: %w", err)
-	}
-
-	// Flush progress messages before starting packfile transmission
-	// This ensures progress messages are sent before packfile data
-	if err := output.Flush(); err != nil {
-		return fmt.Errorf("failed to flush progress messages: %w", err)
+	opts := &gitcmd.PackObjectsOpts{
+		Wants:    wants,
+		Haves:    haves,
+		OfsDelta: useOfsDelta,
 	}
 
 	// Create sideband writer for packfile transmission
-	sbWriter := newSSHSidebandWriter(output, 0x01) // channel 1 = pack data
+	sbWriter := newSSHSidebandWriter(output, 0x01)
 
-	// Determine if we should use ref-delta or ofs-delta
-	useRefDelta := !fetchReq.OfsDelta
-
-	// Use go-git's packfile encoder
-	// Note: go-git's encoder doesn't provide progress callbacks, so we can't
-	// send compressing progress during encoding. The packfile encoding itself
-	// is the compressing process.
-	enc := packfile.NewEncoder(sbWriter, repo.Storer, useRefDelta)
-
-	// Encode packfile with delta search (DefaultPackWindow) for smaller packs
-	if _, err := enc.Encode(objectHashes, DefaultPackWindow); err != nil {
-		return fmt.Errorf("failed to encode packfile: %w", err)
+	_, err := gitcmd.RunPackObjects(ctx, repoPath, opts, sbWriter)
+	if err != nil {
+		return fmt.Errorf("git pack-objects: %w", err)
 	}
 
-	// Send compressing completion and summary after packfile encoding
-	// Since we can't track progress during encoding, we send completion message after encoding finishes
-	if err := writeProgressMessage(output, fmt.Sprintf("Compressing objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
-		return fmt.Errorf("failed to write compressing completion: %w", err)
-	}
-
-	// Calculate delta count (simplified: assume some objects are deltas)
-	deltaCount := totalObjects / 8 // Rough estimate: ~12% are deltas
-	summary := fmt.Sprintf("Total %d (delta %d), reused %d (delta %d), pack-reused 0 (from 0)\n",
-		totalObjects, deltaCount, totalObjects, deltaCount)
-	if err := writeProgressMessage(output, summary); err != nil {
-		return fmt.Errorf("failed to write summary: %w", err)
-	}
-
-	// Flush sideband stream (sends "0000" flush packet)
+	// Flush sideband stream
 	if err := sbWriter.Flush(); err != nil {
 		return fmt.Errorf("failed to flush sideband stream: %w", err)
 	}
 
-	// Flush the underlying buffer
 	return output.Flush()
 }
 
-// handleLsRefs handles the ls-refs command for SSH upload-pack
-func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repo *repositories.RepositoryWrapper, output *SSHProtocolWriter) error {
-	// Check for nil repository to prevent panic
-	if repo == nil {
-		// Write empty response for nil repository
-		_, err := output.Write([]byte("0000"))
-		return err
-	}
-
-	// Get commits to find HEAD reference
-	commits, err := commits.GetCommits(repo, ctx, "HEAD", 1, 0)
-	if err != nil {
-		// Repository might be empty or HEAD might not exist - write empty response
-		_, err := output.Write([]byte("0000"))
-		return err
-	}
-
-	if len(commits) > 0 {
-		// Write HEAD reference
-		headHash := commits[0].Sha
-		refLine := fmt.Sprintf("%s HEAD\n", headHash)
+// handleLsRefs handles the ls-refs command for SSH upload-pack using native git.
+func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repoPath string, output *SSHProtocolWriter) error {
+	// Resolve HEAD
+	headInfo, err := gitcmd.ResolveHEAD(ctx, repoPath)
+	if err == nil && headInfo.OID != "" {
+		refLine := fmt.Sprintf("%s HEAD\n", headInfo.OID)
 		pktLine := fmt.Sprintf("%04x%s", len(refLine)+4, refLine)
-
-		_, err := output.Write([]byte(pktLine))
-		if err != nil {
+		if _, err := output.Write([]byte(pktLine)); err != nil {
 			return err
 		}
+	}
 
-		// Write main branch reference
-		refLine = fmt.Sprintf("%s refs/heads/main\n", headHash)
-		pktLine = fmt.Sprintf("%04x%s", len(refLine)+4, refLine)
-
-		_, err = output.Write([]byte(pktLine))
-		if err != nil {
-			return err
+	// List refs
+	refs, err := gitcmd.ListRefs(ctx, repoPath, "refs/heads/", "refs/tags/")
+	if err == nil {
+		for _, ref := range refs {
+			refLine := fmt.Sprintf("%s %s\n", ref.ObjectName, ref.RefName)
+			pktLine := fmt.Sprintf("%04x%s", len(refLine)+4, refLine)
+			if _, err := output.Write([]byte(pktLine)); err != nil {
+				return err
+			}
 		}
 	}
 

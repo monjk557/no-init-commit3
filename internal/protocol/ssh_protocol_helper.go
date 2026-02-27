@@ -1,24 +1,15 @@
 package protocol
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"io"
 	"sort"
 	"strconv"
 	"strings"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 )
-
-// packfile 프로토콜 작성을 위한 라이브러리
-type HashIter struct {
-	St     storer.EncodedObjectStorer
-	Hashes []plumbing.Hash
-}
 
 type PktWriter struct {
 	W      io.Writer
@@ -35,15 +26,15 @@ type LsRefsReq struct {
 
 type FetchReq struct {
 	Agent      string
-	Wants      []plumbing.Hash
-	Haves      []plumbing.Hash
+	Wants      []string
+	Haves      []string
 	Done       bool
 	ThinPack   bool
 	OfsDelta   bool
 	IncludeTag bool
 	NoProgress bool
 	// Shallow/Deepen
-	Shallow     []plumbing.Hash
+	Shallow     []string
 	Deepen      int
 	DeepenSince int64
 	DeepenNot   []string
@@ -110,64 +101,62 @@ func WriteV2Advert(w io.Writer, agent string, caps ...string) error {
 	return pw.Flush()
 }
 
-// Git V1 프로토콜 광고 작성을 위한 펑션
-func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
+// WriteV1Advert writes v1 protocol ref advertisement using native git commands.
+// repoPath is the filesystem path to the bare repository.
+func WriteV1Advert(w io.Writer, repoPath string, caps ...string) error {
 	pw := &PktWriter{W: w, WithLF: false}
+	ctx := context.Background()
 
-	// refs 수집 (루스 + packed 모두 포함)
-	it, err := repo.References()
+	// List refs using native git
+	refs, err := gitcmd.ListRefs(ctx, repoPath, "refs/heads/", "refs/tags/")
 	if err != nil {
-		return fmt.Errorf("iter refs: %w", err)
+		return fmt.Errorf("list refs: %w", err)
 	}
-	defer it.Close()
+
+	// Resolve HEAD
+	var headTarget string
+	headInfo, err := gitcmd.ResolveHEAD(ctx, repoPath)
+	if err == nil && headInfo.IsSymbolic {
+		headTarget = headInfo.Target
+	}
 
 	type advRef struct {
 		name string
-		oid  plumbing.Hash
-		kind int // 0=heads, 1=tags, 2=others
+		oid  string
+		kind int // 0=heads, 1=tags
 	}
 	var lst []advRef
 
-	var headTarget string
-	// HEAD 심볼릭 대상
-	if headRef, err := repo.Storer.Reference(plumbing.HEAD); err == nil && headRef.Type() == plumbing.SymbolicReference {
-		headTarget = headRef.Target().String()
-	}
-
-	// 로직설명:
-	// 1. 모든 ref를 순회하며, ref의 타입에 따라 분류
-	// 2. ref의 타입이 head 이면 0
-	// 3. ref의 타입이 tag 이면 1
-	// 4. ref의 타입이 나머지 이면 2
-	err = it.ForEach(func(r *plumbing.Reference) error {
-		switch r.Type() {
-		case plumbing.HashReference:
-			n := r.Name().String()
-			var k int
-			if strings.HasPrefix(n, "refs/heads/") {
-				k = 0
-			} else if strings.HasPrefix(n, "refs/tags/") {
-				k = 1
-			} else {
-				// receive-pack 광고에서 remotes/*는 보통 제외
-				return nil
-			}
-			lst = append(lst, advRef{name: n, oid: r.Hash(), kind: k})
-		case plumbing.SymbolicReference:
-			// 심볼릭 라인은 광고 리스트에 넣지 않음 (HEAD는 capability로만 알림)
+	for _, ref := range refs {
+		var k int
+		if strings.HasPrefix(ref.RefName, "refs/heads/") {
+			k = 0
+		} else if strings.HasPrefix(ref.RefName, "refs/tags/") {
+			k = 1
+		} else {
+			continue
 		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("foreach refs: %w", err)
+		lst = append(lst, advRef{name: ref.RefName, oid: ref.ObjectName, kind: k})
 	}
 
-	// 빈 저장소: 그냥 flush
+	// Empty repo: send zero-id capabilities line + flush.
+	// Git v1 protocol requires at least one pkt-line with capabilities
+	// even when there are no refs. Without this, the client can't negotiate
+	// report-status and the push appears to fail (SSH exit code 1).
 	if len(lst) == 0 {
+		var capStr string
+		if len(caps) > 0 {
+			capStr = strings.Join(caps, " ")
+		}
+		zeroOID := "0000000000000000000000000000000000000000"
+		firstLine := fmt.Sprintf("%s capabilities^{}\x00%s\n", zeroOID, capStr)
+		if err := pw.WriteLine(firstLine); err != nil {
+			return fmt.Errorf("write empty-repo advert: %w", err)
+		}
 		return pw.Flush()
 	}
 
-	// HEAD 타깃(refs/heads/main 등)을 첫 줄로 오게 정렬 (없으면 heads 우선)
+	// Sort: HEAD target first, then heads before tags, then alphabetically
 	sort.SliceStable(lst, func(i, j int) bool {
 		if headTarget != "" {
 			if lst[i].name == headTarget && lst[j].name != headTarget {
@@ -183,7 +172,7 @@ func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
 		return lst[i].name < lst[j].name
 	})
 
-	// capabilities 구성: 호출자가 준 caps + symref=HEAD:<target>(가능하면) 중복 제거
+	// Build capabilities: caller caps + symref=HEAD:<target>
 	cset := make(map[string]struct{}, len(caps)+2)
 	var merged []string
 	for _, c := range caps {
@@ -204,16 +193,16 @@ func WriteV1Advert(w io.Writer, repo gogit.Repository, caps ...string) error {
 		}
 	}
 
-	// 첫 줄: "<oid> <ref>\x00cap1 cap2 ...\n"
+	// First line: "<oid> <ref>\x00cap1 cap2 ...\n"
 	first := lst[0]
-	firstLine := fmt.Sprintf("%s %s\x00%s\n", first.oid.String(), first.name, strings.Join(merged, " "))
+	firstLine := fmt.Sprintf("%s %s\x00%s\n", first.oid, first.name, strings.Join(merged, " "))
 	if err := pw.WriteLine(firstLine); err != nil {
 		return fmt.Errorf("write first advert: %w", err)
 	}
 
-	// 나머지 라인
+	// Remaining lines
 	for _, r := range lst[1:] {
-		if err := pw.WriteLine(fmt.Sprintf("%s %s\n", r.oid.String(), r.name)); err != nil {
+		if err := pw.WriteLine(fmt.Sprintf("%s %s\n", r.oid, r.name)); err != nil {
 			return fmt.Errorf("write advert line: %w", err)
 		}
 	}
@@ -274,9 +263,9 @@ func ParseFetchSection(cmds []string) (*FetchReq, error) {
 			r.Agent = strings.TrimPrefix(c, "agent=")
 
 		case strings.HasPrefix(c, "want "):
-			r.Wants = append(r.Wants, plumbing.NewHash(strings.TrimSpace(c[5:])))
+			r.Wants = append(r.Wants, strings.TrimSpace(c[5:]))
 		case strings.HasPrefix(c, "have "):
-			r.Haves = append(r.Haves, plumbing.NewHash(strings.TrimSpace(c[5:])))
+			r.Haves = append(r.Haves, strings.TrimSpace(c[5:]))
 		case c == "done":
 			r.Done = true
 		case c == "thin-pack":
@@ -289,7 +278,7 @@ func ParseFetchSection(cmds []string) (*FetchReq, error) {
 			r.NoProgress = true
 
 		case strings.HasPrefix(c, "shallow "):
-			r.Shallow = append(r.Shallow, plumbing.NewHash(strings.TrimSpace(c[8:])))
+			r.Shallow = append(r.Shallow, strings.TrimSpace(c[8:]))
 		case strings.HasPrefix(c, "deepen "):
 			n, _ := strconv.Atoi(strings.TrimSpace(c[7:]))
 			r.Deepen = n
@@ -314,364 +303,24 @@ func ParseFetchSection(cmds []string) (*FetchReq, error) {
 	return r, nil
 }
 
-// 옵션 검증/정책: 지원 불가 옵션 앞단에서 차단(섹션 헤더 전 ERR)
-// 사용처: fetch 처리 진입 직전에 호출
+// ValidateFetchSupport validates that the fetch request uses supported options.
+// With native git, we now support deepen-since, deepen-not, shallow, and filter.
+// Only sideband-all and packfile-uris remain unsupported.
 func ValidateFetchSupport(r *FetchReq) error {
-	// 예: MVP에서는 filter/shallow/deepen/sideband-all/packfile-uris 미지원
-	if r.Filter != "" {
-		return errors.New("filter not supported")
-	}
-	// deepen-since, deepen-not, client shallow: 미지원. deepen N만 지원.
-	if r.DeepenSince > 0 || len(r.DeepenNot) > 0 || len(r.Shallow) > 0 {
-		return errors.New("deepen-since/deepen-not/shallow not supported")
-	}
 	if r.SidebandAll {
-		return errors.New("sideband-all not supported")
+		return fmt.Errorf("sideband-all not supported")
 	}
 	if r.PackfileURIs {
-		return errors.New("packfile-uris not supported")
+		return fmt.Errorf("packfile-uris not supported")
 	}
 	return nil
 }
 
-// GetShallowBoundary returns shallow boundary hashes when FetchReq has Deepen > 0, without
-// enumerating the full object list. Used by TCP upload-pack to avoid BuildFetchObjectList
-// on the pack-objects success path.
-func GetShallowBoundary(repo *gogit.Repository, r *FetchReq) ([]plumbing.Hash, error) {
+// GetShallowBoundary computes shallow boundary using native git rev-list --boundary.
+func GetShallowBoundary(repoPath string, r *FetchReq) ([]string, error) {
 	if r == nil || r.Deepen <= 0 {
 		return nil, nil
 	}
-	_, boundary, err := depthLimitedCommits(repo, r.Wants, r.Deepen)
-	return boundary, err
-}
-
-// depthLimitedCommits returns commits to include (depth 0..maxDepth-1) and shallow boundary (commits at maxDepth-1).
-// Git "deepen N" = N levels of history: level 0 = wants, level 1 = parents, ...; we include levels 0..N-1.
-func depthLimitedCommits(repo *gogit.Repository, wants []plumbing.Hash, maxDepth int) (included, boundary []plumbing.Hash, err error) {
-	if maxDepth <= 0 || len(wants) == 0 {
-		return wants, nil, nil
-	}
-	type item struct {
-		hash  plumbing.Hash
-		depth int
-	}
-	queue := make([]item, 0, len(wants)+64)
-	for _, w := range wants {
-		queue = append(queue, item{w, 0})
-	}
-	seen := make(map[plumbing.Hash]struct{})
-	included = make([]plumbing.Hash, 0, len(wants)*2)
-	boundary = make([]plumbing.Hash, 0, len(wants))
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if _, ok := seen[cur.hash]; ok {
-			continue
-		}
-		seen[cur.hash] = struct{}{}
-		if cur.depth >= maxDepth {
-			continue
-		}
-		included = append(included, cur.hash)
-		if cur.depth == maxDepth-1 {
-			boundary = append(boundary, cur.hash)
-		}
-		commit, err := repo.CommitObject(cur.hash)
-		if err != nil {
-			continue
-		}
-		for _, p := range commit.ParentHashes {
-			queue = append(queue, item{p, cur.depth + 1})
-		}
-	}
-	return included, boundary, nil
-}
-
-// BuildFetchObjectListResult holds the object list and optional shallow boundary for fetch.
-type BuildFetchObjectListResult struct {
-	Objects         []plumbing.Hash
-	ShallowBoundary []plumbing.Hash
-}
-
-// fetch 대상 해시 집합 계산 (revlist)
-// - wants/haves 기반으로 전송해야 할 객체 목록을 만든다
-// - deepen N 이면 depth 제한 후 boundary를 ShallowBoundary로 반환
-// - include-tag 지원: wants와 연관된 annotated tag를 찾아 추가(선택)
-func BuildFetchObjectList(_ storer.EncodedObjectStorer, repo *gogit.Repository, r *FetchReq) (*BuildFetchObjectListResult, error) {
-	var wantCommits []plumbing.Hash
-	var shallowBoundary []plumbing.Hash
-	haveExclusions := append([]plumbing.Hash(nil), r.Haves...)
-
-	// Clone (no haves, no deepen): enumerate all objects via sequential iterator.
-	// BFS 방식은 object 수만큼 random pack read → Docker volume에서 매우 느림.
-	// storer iterator는 pack 파일을 순차 읽어 훨씬 빠름.
-	if len(haveExclusions) == 0 && r.Deepen == 0 {
-		objs, err := collectAllObjectsViaIterator(repo)
-		if err != nil {
-			return nil, fmt.Errorf("collectAllObjectsViaIterator: %w", err)
-		}
-		return &BuildFetchObjectListResult{Objects: objs}, nil
-	}
-
-	if r.Deepen > 0 {
-		included, boundary, err := depthLimitedCommits(repo, r.Wants, r.Deepen)
-		if err != nil {
-			return nil, fmt.Errorf("depthLimitedCommits: %w", err)
-		}
-		wantCommits = included
-		shallowBoundary = boundary
-
-		// shallow clone: revlist.Objects는 repo 전체를 이터레이션하므로 직접 tree walk.
-		objs, err := collectShallowObjects(repo, wantCommits)
-		if err != nil {
-			return nil, fmt.Errorf("collectShallowObjects: %w", err)
-		}
-
-		sort.Slice(objs, func(i, j int) bool { return objs[i].String() < objs[j].String() })
-		return &BuildFetchObjectListResult{Objects: objs, ShallowBoundary: shallowBoundary}, nil
-	}
-
-	wantCommits = r.Wants
-
-	// revlist.Objects 는 go-git 내부 filesystem 레이어(DotGit.ObjectPack)에서
-	// push 직후 stale packfile 상태 시 panic 발생. repo.CommitObject/TreeObject를
-	// 직접 순회하는 collectAllObjects 로 대체.
-	objs, err := collectAllObjects(repo, wantCommits, haveExclusions)
-	if err != nil {
-		return nil, fmt.Errorf("collectAllObjects failed: %w", err)
-	}
-
-	if r.IncludeTag {
-		tagHashes, _ := collectRelatedTags(repo, wantCommits)
-		if len(tagHashes) > 0 {
-			set := map[plumbing.Hash]struct{}{}
-			for _, h := range objs {
-				set[h] = struct{}{}
-			}
-			for _, th := range tagHashes {
-				set[th] = struct{}{}
-			}
-			merged := make([]plumbing.Hash, 0, len(set))
-			for h := range set {
-				merged = append(merged, h)
-			}
-			objs = merged
-		}
-	}
-
-	sort.Slice(objs, func(i, j int) bool { return objs[i].String() < objs[j].String() })
-	return &BuildFetchObjectListResult{Objects: objs, ShallowBoundary: shallowBoundary}, nil
-}
-
-// collectAllObjectsViaIterator enumerates every object in the repository using
-// the storer's sequential iterator. Clone(have 없음) 전용 최적화 경로.
-// BFS 기반 collectAllObjects 는 object 수만큼 random pack seek 이 필요하지만
-// storer.IterEncodedObjects 는 pack 을 순차로 읽어 Docker volume 에서 훨씬 빠름.
-func collectAllObjectsViaIterator(repo *gogit.Repository) ([]plumbing.Hash, error) {
-	iter, err := repo.Storer.IterEncodedObjects(plumbing.AnyObject)
-	if err != nil {
-		return nil, fmt.Errorf("failed to iter objects: %w", err)
-	}
-	defer iter.Close()
-
-	var result []plumbing.Hash
-	err = iter.ForEach(func(obj plumbing.EncodedObject) error {
-		result = append(result, obj.Hash())
-		return nil
-	})
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("iter objects: %w", err)
-	}
-	return result, nil
-}
-
-// collectAllObjects walks all commits reachable from wants (following parents),
-// excluding commits reachable from excludes. revlist.Objects 대신 사용.
-// revlist.Objects 는 go-git DotGit.ObjectPack 에서 push 직후 panic 가능.
-func collectAllObjects(repo *gogit.Repository, wants []plumbing.Hash, excludes []plumbing.Hash) ([]plumbing.Hash, error) {
-	// Step 1: exclude 측 commit 집합 구축 (BFS).
-	// 클라이언트가 이미 가진 커밋에서 도달 가능한 커밋은 전송 불필요.
-	excludedCommits := make(map[plumbing.Hash]struct{}, len(excludes)*8)
-	if len(excludes) > 0 {
-		eq := make([]plumbing.Hash, 0, len(excludes))
-		for _, h := range excludes {
-			if _, ok := excludedCommits[h]; !ok {
-				excludedCommits[h] = struct{}{}
-				eq = append(eq, h)
-			}
-		}
-		for len(eq) > 0 {
-			h := eq[0]
-			eq = eq[1:]
-			c, err := repo.CommitObject(h)
-			if err != nil {
-				continue
-			}
-			for _, p := range c.ParentHashes {
-				if _, ok := excludedCommits[p]; !ok {
-					excludedCommits[p] = struct{}{}
-					eq = append(eq, p)
-				}
-			}
-		}
-	}
-
-	seen := make(map[plumbing.Hash]struct{})
-	result := make([]plumbing.Hash, 0, 256)
-
-	add := func(h plumbing.Hash) bool {
-		if _, ok := seen[h]; ok {
-			return false
-		}
-		seen[h] = struct{}{}
-		result = append(result, h)
-		return true
-	}
-
-	var walkTree func(treeHash plumbing.Hash) error
-	walkTree = func(treeHash plumbing.Hash) error {
-		if !add(treeHash) {
-			return nil
-		}
-		tree, err := repo.TreeObject(treeHash)
-		if err != nil {
-			return fmt.Errorf("tree %s: %w", treeHash, err)
-		}
-		for _, entry := range tree.Entries {
-			switch entry.Mode {
-			case filemode.Dir:
-				if err := walkTree(entry.Hash); err != nil {
-					return err
-				}
-			default:
-				add(entry.Hash)
-			}
-		}
-		return nil
-	}
-
-	// Step 2: want 측 커밋 BFS.
-	cq := make([]plumbing.Hash, 0, len(wants))
-	for _, w := range wants {
-		if _, excl := excludedCommits[w]; excl {
-			continue
-		}
-		if add(w) {
-			cq = append(cq, w)
-		}
-	}
-
-	for len(cq) > 0 {
-		h := cq[0]
-		cq = cq[1:]
-		c, err := repo.CommitObject(h)
-		if err != nil {
-			return nil, fmt.Errorf("commit %s: %w", h, err)
-		}
-		if err := walkTree(c.TreeHash); err != nil {
-			return nil, err
-		}
-		for _, p := range c.ParentHashes {
-			if _, excl := excludedCommits[p]; excl {
-				continue
-			}
-			if add(p) {
-				cq = append(cq, p)
-			}
-		}
-	}
-
-	return result, nil
-}
-
-// collectShallowObjects walks only the direct tree of each commit (no parent traversal).
-// revlist.Objects는 repo 전체 object를 스캔하므로 shallow clone에서 사용 불가.
-func collectShallowObjects(repo *gogit.Repository, commits []plumbing.Hash) ([]plumbing.Hash, error) {
-	seen := make(map[plumbing.Hash]struct{})
-	result := make([]plumbing.Hash, 0, len(commits)*64)
-
-	add := func(h plumbing.Hash) bool {
-		if _, ok := seen[h]; ok {
-			return false
-		}
-		seen[h] = struct{}{}
-		result = append(result, h)
-		return true
-	}
-
-	var walkTree func(treeHash plumbing.Hash) error
-	walkTree = func(treeHash plumbing.Hash) error {
-		if !add(treeHash) {
-			// 이미 방문한 tree → 내용도 이미 처리됨
-			return nil
-		}
-		tree, err := repo.TreeObject(treeHash)
-		if err != nil {
-			return fmt.Errorf("tree %s: %w", treeHash, err)
-		}
-		for _, entry := range tree.Entries {
-			switch entry.Mode {
-			case filemode.Dir:
-				// subtree: walkTree가 add + 재귀를 담당. 여기서 pre-add하면
-				// walkTree 진입시 already-seen으로 early return해서 내용이 누락됨.
-				if err := walkTree(entry.Hash); err != nil {
-					return err
-				}
-			default:
-				// blob, symlink, executable, submodule(gitlink) - 해시만 추가
-				add(entry.Hash)
-			}
-		}
-		return nil
-	}
-
-	for _, commitHash := range commits {
-		if !add(commitHash) {
-			continue
-		}
-		commit, err := repo.CommitObject(commitHash)
-		if err != nil {
-			return nil, fmt.Errorf("commit %s: %w", commitHash, err)
-		}
-		if err := walkTree(commit.TreeHash); err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
-}
-
-// wants와 연결된 annotated tags 찾아 추가 (간단 구현)
-func collectRelatedTags(repo *gogit.Repository, wants []plumbing.Hash) ([]plumbing.Hash, error) {
-	if len(wants) == 0 {
-		return nil, nil
-	}
-	wantSet := map[plumbing.Hash]struct{}{}
-	for _, w := range wants {
-		wantSet[w] = struct{}{} // ✅ 올바른 구문
-	}
-
-	// Get the underlying go-git repository
-	underlyingRepo := repo
-	refs, err := underlyingRepo.References()
-	if err != nil {
-		return nil, err
-	}
-	defer refs.Close()
-
-	var out []plumbing.Hash
-	_ = refs.ForEach(func(ref *plumbing.Reference) error {
-		if !strings.HasPrefix(ref.Name().String(), "refs/tags/") {
-			return nil
-		}
-		tagObj, e := repo.TagObject(ref.Hash())
-		if e != nil || tagObj == nil {
-			return nil // lightweight tag
-		}
-		if _, ok := wantSet[tagObj.Target]; ok {
-			out = append(out, ref.Hash())
-		}
-		return nil
-	})
-	return out, nil
+	ctx := context.Background()
+	return gitcmd.GetShallowBoundary(ctx, repoPath, r.Wants, r.Haves, r.Deepen)
 }

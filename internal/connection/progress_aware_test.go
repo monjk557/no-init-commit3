@@ -214,7 +214,7 @@ func TestAtomicPushHandler_RefUpdatePreparation(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
 	// This is a basic test - in real scenario you'd need a proper git repository
-	handler := NewAtomicPushHandler(nil, "test-op-123", logger)
+	handler := NewAtomicPushHandler("", "test-op-123", logger)
 
 	// Test ref update parsing
 	refUpdates := []string{
@@ -222,10 +222,16 @@ func TestAtomicPushHandler_RefUpdatePreparation(t *testing.T) {
 		"abcd1234567890abcd1234567890abcd12345678 efgh1234567890efgh1234567890efgh12345678 refs/heads/feature",
 	}
 
-	// This would fail without a real repository, but tests the parsing logic
+	// PreparePushOperation only parses ref updates; it should succeed
 	err := handler.PreparePushOperation(refUpdates)
+	if err != nil {
+		t.Errorf("PreparePushOperation should succeed for parsing: %v", err)
+	}
+
+	// ExecutePushOperation would fail without a real repository
+	err = handler.ExecutePushOperation()
 	if err == nil {
-		t.Error("Should fail without a real repository")
+		t.Error("ExecutePushOperation should fail without a real repository")
 	}
 
 	// Test the error handling

@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,11 +18,8 @@ import (
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/protocol"
+	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/packfile"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"go.uber.org/zap"
 )
 
@@ -451,46 +445,60 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 			}
 
 			// === 협상 라운드 (done 없음) ===
-			// NAK: 클라이언트가 done 포함 fetch를 재전송할 때까지 대기.
-			// ready: 클라이언트(Apple Git 등)는 ready 직후 곧바로 "packfile" 섹션 시작을 기대함(수 ms 이내).
-			// 0000 직후 즉시 "packfile" pkt-line을 보내지 않으면 클라이언트가 "expected packfile to be sent after 'ready'"로 종료함.
-			packfileHeaderSent := false
+			// Git protocol v2 spec:
+			// - haves 없음 (NAK): flush(0000) 보내고 다음 라운드(done 포함) 대기
+			// - haves 있음 (ready): delim(0001) 보내고 바로 packfile 전송
+			//   "ready"는 "공통 조상 찾았으니 packfile 바로 보내겠다"는 의미.
+			//   delim 후 같은 스트림에서 packfile 섹션이 이어져야 한다.
 			if !fetchReq.Done {
 				if err := s.writePktLine(conn, "acknowledgments"); err != nil {
 					return fmt.Errorf("failed to write acknowledgments header: %w", err)
 				}
 				if len(fetchReq.Haves) == 0 {
+					// No common objects — send NAK + flush, wait for client to retry with done
 					if err := s.writePktLine(conn, "NAK"); err != nil {
 						return fmt.Errorf("failed to write NAK: %w", err)
 					}
-					// flush-pkt(0000): 클라이언트가 done 포함 fetch 재전송할 때까지 대기.
 					if _, err := writer.WriteString("0000"); err != nil {
 						return fmt.Errorf("failed to write flush-pkt: %w", err)
 					}
 					if err := conn.Flush(); err != nil {
-						return fmt.Errorf("failed to flush after acknowledgments: %w", err)
+						return fmt.Errorf("failed to flush after NAK: %w", err)
 					}
-					continue
+					continue // 다음 라운드(done 포함)를 기다림
+				}
+				// Haves present — ACK common objects then send ready + delim, fall through to packfile
+				repoPathForACK, ackPathErr := func() (string, error) {
+					pc, pcErr := repositories.NewPathConfig(s.config.Git.RepoRoot)
+					if pcErr != nil {
+						return "", pcErr
+					}
+					return repositories.GetRepoPath(pc, owner, repo)
+				}()
+				if ackPathErr == nil {
+					ackCtx := context.Background()
+					for _, have := range fetchReq.Haves {
+						if _, err := gitcmd.ObjectExists(ackCtx, repoPathForACK, have); err == nil {
+							if err := s.writePktLine(conn, fmt.Sprintf("ACK %s", have)); err != nil {
+								return fmt.Errorf("failed to write ACK: %w", err)
+							}
+						}
+					}
 				}
 				if err := s.writePktLine(conn, "ready"); err != nil {
 					return fmt.Errorf("failed to write ready: %w", err)
 				}
-				if _, err := writer.WriteString("0000"); err != nil {
-					return fmt.Errorf("failed to write flush-pkt: %w", err)
-				}
-				// 스펙: packfile = PKT-LINE("packfile" LF). ready 직후 0000만 보내면 클라이언트가
-				// "expected packfile to be sent after 'ready'"로 종료하므로, 같은 writePktLine 경로로
-				// "packfile\n"을 쓴 뒤 한 번만 Flush (0000과 packfile을 한 번에 전송).
-				if err := s.writePktLine(conn, "packfile\n"); err != nil {
-					return fmt.Errorf("failed to write packfile section header after ready: %w", err)
+				// Delimiter (0001): "다음 섹션(packfile)이 이어진다"
+				if _, err := writer.WriteString("0001"); err != nil {
+					return fmt.Errorf("failed to write delim-pkt: %w", err)
 				}
 				if err := conn.Flush(); err != nil {
-					return fmt.Errorf("failed to flush after acknowledgments and packfile header: %w", err)
+					return fmt.Errorf("failed to flush after ready: %w", err)
 				}
-				packfileHeaderSent = true
+				// Fall through to packfile transmission below
 			}
 
-			// === packfile 전송 라운드 (done 수신 또는 ready 직후) ===
+			// === packfile 전송 ===
 			pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
 			if err != nil {
 				return fmt.Errorf("failed to create path config: %w", err)
@@ -500,57 +508,35 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 				return fmt.Errorf("failed to get repository path: %w", err)
 			}
 
-			// Shared ObjectStorage 접근 전에 read lock 획득.
-			// commit/push/merge 가 Lock() 으로 pack 쓰는 동안 concurrent read 방지.
+			// Read lock to prevent concurrent writes during pack generation
 			repoLock := repositories.GetRepoRWLock(repoPath)
 			repoLock.RLock()
 			defer repoLock.RUnlock()
 
-			repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
-			if err != nil {
-				pw := &protocol.PktWriter{W: writer, WithLF: false}
-				if err := pw.Err("repository not found"); err != nil {
-					return fmt.Errorf("failed to write error response: %w", err)
-				}
-				_ = conn.Flush()
-				return nil
-			}
-			defer func() { _ = repoWrapper.Close() }()
-
-			underlyingRepo := repoWrapper.GetRepo()
-
-			// Light path: get shallow boundary and object count without full go-git enumeration.
-			// BuildFetchObjectList is only used when count fails or when pack-objects fails (fallback).
-			var shallowBoundary []plumbing.Hash
+			// Compute shallow graft commits for deepen requests.
+			// These OIDs are sent in shallow-info AND passed as --shallow to pack-objects.
+			var shallowGrafts []string
 			if fetchReq.Deepen > 0 {
-				shallowBoundary, err = protocol.GetShallowBoundary(underlyingRepo, fetchReq)
+				shallowGrafts, err = protocol.GetShallowBoundary(repoPath, fetchReq)
 				if err != nil {
 					return fmt.Errorf("failed to get shallow boundary: %w", err)
 				}
 			}
-			totalObjects, countErr := s.getFetchObjectCount(repoPath, fetchReq)
-			var objectHashes []plumbing.Hash
+
+			// Get object count for progress messages
+			ctx := context.Background()
+			totalObjects, countErr := gitcmd.CountObjects(ctx, repoPath, fetchReq.Wants, fetchReq.Haves, fetchReq.Deepen)
 			if countErr != nil {
-				// Fallback: need full list for progress and for writePackfileWithSideband.
-				var fetchResult *protocol.BuildFetchObjectListResult
-				fetchResult, err = protocol.BuildFetchObjectList(underlyingRepo.Storer, underlyingRepo, fetchReq)
-				if err != nil {
-					return fmt.Errorf("failed to build fetch object list: %w", err)
-				}
-				objectHashes = fetchResult.Objects
-				shallowBoundary = fetchResult.ShallowBoundary
-				totalObjects = len(objectHashes)
+				totalObjects = 0 // Will still work, just no pre-progress
 			}
 
-			// done=true: acknowledgments 섹션 생략 (스펙 §6.4)
-
-			// === shallow-info 섹션 (deepen N 사용 시) ===
-			if len(shallowBoundary) > 0 {
+			// === shallow-info section ===
+			if len(shallowGrafts) > 0 {
 				if err := s.writePktLine(conn, "shallow-info"); err != nil {
 					return fmt.Errorf("failed to write shallow-info header: %w", err)
 				}
-				for _, h := range shallowBoundary {
-					if err := s.writePktLine(conn, "shallow "+h.String()); err != nil {
+				for _, h := range shallowGrafts {
+					if err := s.writePktLine(conn, "shallow "+h); err != nil {
 						return fmt.Errorf("failed to write shallow line: %w", err)
 					}
 				}
@@ -562,18 +548,22 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 				}
 			}
 
-			// === packfile 섹션 ===
-			if totalObjects > 0 {
-				if !packfileHeaderSent {
-					if err := protocol.WritePackfileSectionHeader(writer); err != nil {
-						return fmt.Errorf("failed to write packfile section header: %w", err)
-					}
-					if err := conn.Flush(); err != nil {
-						return fmt.Errorf("failed to flush packfile section header: %w", err)
-					}
-				}
+			// Merge shallow grafts into fetchReq.Shallow so pack-objects
+			// receives --shallow <OID> lines and limits traversal correctly.
+			if len(shallowGrafts) > 0 {
+				fetchReq.Shallow = append(fetchReq.Shallow, shallowGrafts...)
+			}
 
-				// sideband ch2: pre-pack progress
+			// === packfile section ===
+			if err := protocol.WritePackfileSectionHeader(writer); err != nil {
+				return fmt.Errorf("failed to write packfile section header: %w", err)
+			}
+			if err := conn.Flush(); err != nil {
+				return fmt.Errorf("failed to flush packfile section header: %w", err)
+			}
+
+			// sideband ch2: pre-pack progress
+			if totalObjects > 0 {
 				if err := writeProgressMessage(writer, fmt.Sprintf("Enumerating objects: %d, done.\n", totalObjects)); err != nil {
 					return fmt.Errorf("failed to write enumerating message: %w", err)
 				}
@@ -583,30 +573,20 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 				if err := conn.Flush(); err != nil {
 					return fmt.Errorf("failed to flush progress messages: %w", err)
 				}
+			}
 
-				// sideband ch1: pack data. git pack-objects 우선(순차 읽기로 수십 초 단축), 실패 시 go-git 인코더 폴백.
-				conn.GetProgressTracker().SetPackObjectsPhase(true)
-				packCtx, packCancel := context.WithTimeout(context.Background(), 15*time.Minute)
-				encErr := s.writePackfileViaGitPackObjects(packCtx, conn, repoPath, fetchReq)
-				packCancel()
-				if encErr != nil {
-					// Fallback: need full object list from go-git (only when pack-objects failed).
-					if len(objectHashes) == 0 {
-						var fetchResult *protocol.BuildFetchObjectListResult
-						fetchResult, err = protocol.BuildFetchObjectList(underlyingRepo.Storer, underlyingRepo, fetchReq)
-						if err != nil {
-							return fmt.Errorf("failed to build fetch object list: %w", err)
-						}
-						objectHashes = fetchResult.Objects
-					}
-					encErr = s.writePackfileWithSideband(conn, underlyingRepo.Storer, objectHashes, fetchReq)
-				}
-				conn.GetProgressTracker().SetPackObjectsPhase(false)
-				if encErr != nil {
-					return fmt.Errorf("failed to write packfile: %w", encErr)
-				}
+			// sideband ch1: pack data via native git pack-objects (sole path, no go-git fallback)
+			conn.GetProgressTracker().SetPackObjectsPhase(true)
+			packCtx, packCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			encErr := s.writePackfileViaGitPackObjects(packCtx, conn, repoPath, fetchReq)
+			packCancel()
+			conn.GetProgressTracker().SetPackObjectsPhase(false)
+			if encErr != nil {
+				return fmt.Errorf("failed to write packfile: %w", encErr)
+			}
 
-				// sideband ch2: post-pack progress
+			// sideband ch2: post-pack progress
+			if totalObjects > 0 {
 				deltaCount := totalObjects / 8
 				if err := writeProgressMessage(writer, fmt.Sprintf("Compressing objects: 100%% (%d/%d), done.\n", totalObjects, totalObjects)); err != nil {
 					return fmt.Errorf("failed to write compressing completion: %w", err)
@@ -621,7 +601,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 				}
 			}
 
-			// 0000 하나로 packfile 섹션 + fetch 응답 전체 종료
+			// Final flush to end packfile section + fetch response
 			if _, err := writer.WriteString("0000"); err != nil {
 				return fmt.Errorf("failed to write final flush: %w", err)
 			}
@@ -673,6 +653,13 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 		return fmt.Errorf("failed to get repo path: %w", err)
 	}
 
+	// Validate repository exists (consistent with HTTP/SSH handlers).
+	// Without this, index-pack may fail with "Bad file descriptor" if
+	// the repo structure is incomplete or missing.
+	if err := repositories.EnsureRepoExists(pathConfig, repoPath); err != nil {
+		return fmt.Errorf("repository not found: %w", err)
+	}
+
 	// Serialize pack/idx writes (push) vs reads (overview) per repo to avoid transient corruption.
 	repoLock := repositories.GetRepoRWLock(repoPath)
 	s.logger.Info("repo_write_lock_acquire", zap.String("repo_path", repoPath))
@@ -684,24 +671,18 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	}()
 
 	s.logger.Info("Opening repository", zap.String("repo_path", repoPath))
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	if err != nil {
-		s.logger.Error("Failed to open repository",
-			zap.String("repo_path", repoPath),
-			zap.Error(err))
-		return fmt.Errorf("failed to open repository: %w", err)
-	}
 
-	// Initialize atomic push handler
+	// Initialize atomic push handler using native git
 	operationID := fmt.Sprintf("push-%s-%s-%d", owner, repo, time.Now().UnixNano())
-	atomicPushHandler := connection.NewAtomicPushHandler(gitRepo, operationID, s.logger.Logger)
+	atomicPushHandler := connection.NewAtomicPushHandler(repoPath, operationID, s.logger.Logger)
 
 	// Get connection components
 	reader := conn.GetReader()
 	writer := conn.GetWriter()
 
-	// 2) V1 광고 전송
-	if err := protocol.WriteV1Advert(writer, *gitRepo); err != nil {
+	// 2) V1 advertisement using native git
+	caps := []string{"report-status", "delete-refs", "thin-pack", "atomic"}
+	if err := protocol.WriteV1Advert(writer, repoPath, caps...); err != nil {
 		return fmt.Errorf("failed to send advert: %w", err)
 	}
 	if err := conn.Flush(); err != nil {
@@ -757,16 +738,6 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 		return nil
 	}
 
-	// 4) 실제 ref 업데이트 수행
-	workTree, err := gitRepo.Worktree()
-	if err != nil {
-		s.logger.Info("Repository is bare (no worktree)", zap.String("repo_path", repoPath))
-	} else {
-		s.logger.Info("Repository has worktree",
-			zap.String("repo_path", repoPath),
-			zap.String("worktree_path", workTree.Filesystem.Root()))
-	}
-
 	// Prepare atomic push operation with collected ref updates
 	if len(refUpdates) > 0 {
 		if err := atomicPushHandler.PreparePushOperation(refUpdates); err != nil {
@@ -775,9 +746,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 		}
 	}
 
-	// 5) packfile 데이터 읽기 및 unpack with progress tracking
-	// 참고: ref updates 섹션 이후에 packfile이 raw binary로 전송됨
-	// packfile이 있는지 확인 (peek으로 "PACK" 시그니처 확인)
+	// Packfile processing using native git index-pack --stdin --fix-thin
 	hasPackfile := false
 	if peekData, err := reader.Peek(4); err == nil && len(peekData) == 4 {
 		if string(peekData) == "PACK" {
@@ -792,188 +761,31 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 		progressTracker.SetPackObjectsPhase(true)
 		defer progressTracker.SetPackObjectsPhase(false)
 
-		// NOTE: do NOT wait for EOF to detect packfile end.
-		// In receive-pack, client typically keeps the connection open waiting for server response,
-		// so EOF may never arrive. Instead, parse the streaming packfile; parser stops at pack end.
-		s.logger.Info("Waiting for packfile data from client (client may be compressing objects)")
 		packfileReadStart := time.Now()
-		firstByteReader := &firstByteLogReader{reader: reader, logger: s.logger, start: packfileReadStart}
 
-		// Real-time debug: log read progress every 2s until Parse() returns
-		done := make(chan struct{})
-		defer close(done)
-		go func() {
-			tick := time.NewTicker(2 * time.Second)
-			defer tick.Stop()
-			for {
-				select {
-				case <-done:
-					return
-				case <-tick.C:
-					bytes, lastProg, since, isPack, threshold := progressTracker.GetProgressDebug()
-					fields := []zap.Field{
-						zap.Int64("bytes_read", bytes),
-						zap.Duration("since_last_read", since),
-						zap.Duration("stall_threshold", threshold),
-						zap.Bool("pack_phase", isPack),
-						zap.Time("last_progress", lastProg),
-					}
-					if since > threshold/2 {
-						s.logger.Warn("packfile_read_progress_approaching_stall", fields...)
-					} else {
-						s.logger.Info("packfile_read_progress", fields...)
-					}
-				}
-			}
-		}()
+		// Use native git index-pack to process the incoming packfile stream.
+		// --fix-thin automatically resolves thin pack deltas using repo objects.
+		// This replaces ~190 lines of go-git packfile parsing + thin-pack fallback.
+		indexCtx, indexCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		_, indexErr := gitcmd.IndexPackFromReader(indexCtx, repoPath, reader)
+		indexCancel()
 
-		// Fast path: persist received pack as pack+idx (not loose objects).
-		// We still need to consume exactly one pack from the stream (no EOF); parse without storage
-		// to determine pack end while teeing raw bytes into a temp file for persistence.
-		tmpPack, err := os.CreateTemp("", "git-receive-pack-*.pack")
-		if err != nil {
-			return fmt.Errorf("failed to create temp pack file: %w", err)
-		}
-		tmpPath := tmpPack.Name()
-		defer func() {
-			_ = tmpPack.Close()
-			_ = os.Remove(tmpPath)
-		}()
-
-		tee := io.TeeReader(firstByteReader, tmpPack)
-		scanner := packfile.NewScanner(tee)
-		sendUnpackError := func(e error) error {
-			s.logger.Error("Failed to process packfile", zap.Error(e))
+		if indexErr != nil {
+			s.logger.Error("Failed to process packfile via git index-pack", zap.Error(indexErr))
 			if err := atomicPushHandler.HandlePushTimeout(); err != nil {
 				s.logger.Error("Failed to handle push timeout", zap.Error(err))
 			}
-			_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", e.Error()))
+			// V1 report-status: unpack-status + 1*(command-status) + flush.
+			// Without ng lines, clients report "failed to report status".
+			_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", indexErr.Error()))
+			s.writeNgForAllRefs(conn, refUpdates, "unpack failed")
 			_, _ = writer.WriteString("0000")
 			_ = conn.Flush()
-			return e
+			return indexErr
 		}
 
-		// Consume exactly one PACK from the stream (no EOF required).
-		// We can't use packfile.Parser here (requires seekable source when storage isn't provided).
-		version, objCount, err := scanner.Header()
-		if err != nil {
-			return sendUnpackError(fmt.Errorf("read pack header: %w", err))
-		}
-		s.logger.Info("Packfile header received",
-			zap.Uint32("version", version),
-			zap.Uint32("objects", objCount))
-
-		parseStart := time.Now()
-		for i := uint32(0); i < objCount; i++ {
-			if _, err := scanner.NextObjectHeader(); err != nil {
-				return sendUnpackError(fmt.Errorf("read pack object header[%d/%d]: %w", i+1, objCount, err))
-			}
-			if _, _, err := scanner.NextObject(io.Discard); err != nil {
-				return sendUnpackError(fmt.Errorf("read pack object[%d/%d]: %w", i+1, objCount, err))
-			}
-			// Periodic progress for decoding/consuming stage (avoid per-object spam)
-			if (i+1)%1000 == 0 {
-				bytes, _, _, _, _ := progressTracker.GetProgressDebug()
-				s.logger.Info("Packfile consume progress",
-					zap.Uint32("objects_consumed", i+1),
-					zap.Uint32("objects_total", objCount),
-					zap.Int64("bytes_read", bytes),
-					zap.Duration("elapsed", time.Since(parseStart)))
-			}
-		}
-		if _, err := scanner.Checksum(); err != nil {
-			return sendUnpackError(fmt.Errorf("read/validate pack checksum: %w", err))
-		}
-
-		bytes, _, _, _, _ := progressTracker.GetProgressDebug()
-		s.logger.Info("Packfile stream consumed",
-			zap.Int64("bytes_read", bytes),
-			zap.Uint32("objects", objCount),
-			zap.Duration("duration", time.Since(parseStart)))
-
-		// Persist: write raw pack into storer.PackfileWriter (pack+idx)
-		if err := tmpPack.Close(); err != nil {
-			return fmt.Errorf("failed to close temp pack file: %w", err)
-		}
-
-		f, err := os.Open(tmpPath)
-		if err != nil {
-			return fmt.Errorf("failed to open temp pack for persist: %w", err)
-		}
-		defer func() { _ = f.Close() }()
-
-		pw, ok := gitRepo.Storer.(storer.PackfileWriter)
-		if !ok {
-			persistErr := fmt.Errorf("storer does not support PackfileWriter (cannot persist pack+idx)")
-			_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", persistErr.Error()))
-			_, _ = writer.WriteString("0000")
-			_ = conn.Flush()
-			return persistErr
-		}
-		w, err := pw.PackfileWriter()
-		if err != nil {
-			persistErr := fmt.Errorf("failed to open packfile writer: %w", err)
-			_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", persistErr.Error()))
-			_, _ = writer.WriteString("0000")
-			_ = conn.Flush()
-			return persistErr
-		}
-
-		persistStart := time.Now()
-		copied, err := io.Copy(w, f)
-		if err != nil {
-			_ = w.Close()
-			persistErr := fmt.Errorf("failed to write packfile: %w", err)
-			_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", persistErr.Error()))
-			_, _ = writer.WriteString("0000")
-			_ = conn.Flush()
-			return persistErr
-		}
-		s.logger.Info("Packfile writer copy completed",
-			zap.Int64("bytes_copied", copied),
-			zap.Duration("elapsed", time.Since(persistStart)))
-
-		closeStart := time.Now()
-		if err := w.Close(); err != nil {
-			if errors.Is(err, packfile.ErrReferenceDeltaNotFound) {
-				// Thin pack: client sent REF_DELTA whose base is outside the pack.
-				// Fallback: resolve deltas using repo base objects and store as loose (same as HTTP receive-pack).
-				packfileData, readErr := os.ReadFile(tmpPath)
-				if readErr != nil {
-					persistErr := fmt.Errorf("thin pack fallback read temp file: %w", readErr)
-					_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", persistErr.Error()))
-					_, _ = writer.WriteString("0000")
-					_ = conn.Flush()
-					return persistErr
-				}
-				if thinErr := protocol.UnpackThinPackToLooseObjects(gitRepo, packfileData); thinErr != nil {
-					persistErr := fmt.Errorf("thin pack not supported: %w", err)
-					_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", persistErr.Error()))
-					_, _ = writer.WriteString("0000")
-					_ = conn.Flush()
-					return persistErr
-				}
-				s.logger.Info("Thin pack resolved via loose-object fallback",
-					zap.Int("packfile_bytes", len(packfileData)))
-				// Fallback succeeded; continue to atomic ref update below.
-			} else {
-				persistErr := fmt.Errorf("failed to persist packfile: %w", err)
-				_ = s.writePktLine(conn, fmt.Sprintf("unpack %s", persistErr.Error()))
-				_, _ = writer.WriteString("0000")
-				_ = conn.Flush()
-				return persistErr
-			}
-		} else {
-			s.logger.Info("Packfile writer closed",
-				zap.Duration("elapsed", time.Since(closeStart)))
-			s.logger.Info("Packfile persisted as pack+idx",
-				zap.Int64("bytes_copied", copied),
-				zap.Duration("duration", time.Since(persistStart)))
-		}
-		s.logger.Info("Successfully unpacked packfile",
-			zap.Int64("bytes_read", bytes),
+		s.logger.Info("Successfully unpacked packfile via native git index-pack",
 			zap.Duration("duration", time.Since(packfileReadStart)))
-
 	} else {
 		s.logger.Info("No packfile detected, skipping unpack")
 	}
@@ -983,15 +795,14 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 		s.logger.Info("Executing atomic push operation", zap.String("operation_id", operationID))
 		if err := atomicPushHandler.ExecutePushOperation(); err != nil {
 			s.logger.Error("Failed to execute atomic push operation", zap.Error(err))
-			// Send unpack error response for atomic failure
-			if err := s.writePktLine(conn, fmt.Sprintf("unpack atomic push failed: %s", err.Error())); err != nil {
-				return fmt.Errorf("failed to write atomic push error: %w", err)
+			// V1 report-status: unpack-status + 1*(command-status) + flush.
+			_ = s.writePktLine(conn, fmt.Sprintf("unpack atomic push failed: %s", err.Error()))
+			s.writeNgForAllRefs(conn, refUpdates, "atomic push failed")
+			if _, wErr := writer.WriteString("0000"); wErr != nil {
+				return fmt.Errorf("failed to write flush: %w", wErr)
 			}
-			if _, err := writer.WriteString("0000"); err != nil {
-				return fmt.Errorf("failed to write flush: %w", err)
-			}
-			if err := conn.Flush(); err != nil {
-				return fmt.Errorf("failed to flush: %w", err)
+			if fErr := conn.Flush(); fErr != nil {
+				return fmt.Errorf("failed to flush: %w", fErr)
 			}
 			return err
 		}
@@ -1028,24 +839,16 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 				attempt := 0
 				for time.Now().Before(deadline) {
 					attempt++
-					rw, err := repositories.OpenRepositorySimple(repoPath)
-					if err == nil && rw != nil {
-						repo := rw.GetRepo()
-						if repo != nil {
-							_, cerr := repo.CommitObject(plumbing.NewHash(newHash))
-							if cerr == nil {
-								s.logger.Info("Repository readable after push",
-									zap.String("operation_id", operationID),
-									zap.String("ref", refName),
-									zap.String("commit", newHash),
-									zap.Int("attempt", attempt),
-									zap.Duration("duration", time.Since(start)))
-								return
-							}
-							err = cerr
-						} else {
-							err = fmt.Errorf("nil repo")
-						}
+					ctx := context.Background()
+					_, err := gitcmd.ObjectExists(ctx, repoPath, newHash)
+					if err == nil {
+						s.logger.Info("Repository readable after push",
+							zap.String("operation_id", operationID),
+							zap.String("ref", refName),
+							zap.String("commit", newHash),
+							zap.Int("attempt", attempt),
+							zap.Duration("duration", time.Since(start)))
+						return
 					}
 					s.logger.Debug("Repository not yet readable after push",
 						zap.String("operation_id", operationID),
@@ -1132,7 +935,7 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 				}
 
 				if oldHash != "" && newHash != "" {
-					s.addCommitEventToStream(gitRepo, oldHash, newHash, refName, owner, repo, userID, events.EventTypePush)
+					s.addCommitEventToStream(repoPath, oldHash, newHash, refName, owner, repo, userID, events.EventTypePush)
 				}
 			}
 		}
@@ -1155,129 +958,32 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	return nil
 }
 
-// updateRef updates a Git reference
-func (s *DuplexTCPServer) updateRef(repo *gogit.Repository, oldHash, newHash, refName, owner, repoName, userID string) error {
-	// Parse hashes
-	oldHashObj := plumbing.NewHash(oldHash)
-	newHashObj := plumbing.NewHash(newHash)
-	// Check if this is a delete operation (newHash is all zeros)
-	if newHash == "0000000000000000000000000000000000000000" {
-		// Delete the reference
-		ref := plumbing.ReferenceName(refName)
-		if err := repo.Storer.RemoveReference(ref); err != nil {
-			return fmt.Errorf("failed to delete reference %s: %w", refName, err)
-		}
-		s.logger.Info("Deleted reference", zap.String("ref_name", refName))
-		return nil
-	}
-
-	// Check if this is a create operation (oldHash is all zeros)
-	if oldHash == "0000000000000000000000000000000000000000" {
-		// Create new reference
-		s.logger.Info("Creating new reference",
-			zap.String("ref_name", refName),
-			zap.String("new_hash", newHash),
-			zap.String("new_hash_obj", newHashObj.String()))
-
-		ref := plumbing.NewHashReference(plumbing.ReferenceName(refName), newHashObj)
-		s.logger.Info("Created reference object",
-			zap.String("ref_name", ref.Name().String()),
-			zap.String("ref_target", ref.Target().String()))
-
-		if err := repo.Storer.SetReference(ref); err != nil {
-			s.logger.Error("Failed to set reference in storer",
-				zap.String("ref_name", refName),
-				zap.String("error", err.Error()),
-				zap.String("error_type", fmt.Sprintf("%T", err)))
-			return fmt.Errorf("failed to create reference %s: %w", refName, err)
-		}
-		s.logger.Info("Successfully created reference", zap.String("ref_name", refName), zap.String("hash", newHash))
-
-		// Publish commit event if enabled (only for branches, not tags)
-		if s.eventsClient != nil && strings.HasPrefix(refName, "refs/heads/") {
-			s.addCommitEventToStream(repo, "", newHash, refName, owner, repoName, userID, events.EventTypePush)
-		}
-		return nil
-	}
-
-	// Update existing reference
-	// First check if the old hash matches the current reference
-	currentRef, err := repo.Reference(plumbing.ReferenceName(refName), true)
-	if err != nil {
-		// Ref가 존재하지 않는 경우, oldHash가 zero hash가 아니면 에러
-		if err == plumbing.ErrReferenceNotFound {
-			if oldHash != "0000000000000000000000000000000000000000" {
-				return fmt.Errorf("reference %s does not exist (non-zero old hash provided)", refName)
-			}
-			// oldHash가 zero hash이고 ref가 없으면 생성으로 처리 (이미 위에서 처리됨)
-			// 여기서는 실제로는 도달하지 않아야 함
-			return fmt.Errorf("reference %s does not exist", refName)
-		}
-		return fmt.Errorf("failed to get current reference %s: %w", refName, err)
-	}
-
-	if currentRef.Hash() != oldHashObj {
-		// Hash mismatch - 클라이언트가 최신 상태가 아님
-		return fmt.Errorf("non-fast-forward: reference %s is at %s but expected %s",
-			refName, currentRef.Hash().String(), oldHash)
-	}
-
-	// Update the reference
-	ref := plumbing.NewHashReference(plumbing.ReferenceName(refName), newHashObj)
-	if err := repo.Storer.SetReference(ref); err != nil {
-		return fmt.Errorf("failed to update reference %s: %w", refName, err)
-	}
-
-	s.logger.Info("Updated reference",
-		zap.String("ref_name", refName),
-		zap.String("old_hash", oldHash),
-		zap.String("new_hash", newHash))
-
-	// Publish commit event if enabled (only for branches, not tags, and only if hash changed)
-	if s.eventsClient != nil && oldHash != newHash && strings.HasPrefix(refName, "refs/heads/") {
-		s.addCommitEventToStream(repo, oldHash, newHash, refName, owner, repoName, userID, events.EventTypePush)
-	}
-
-	return nil
-}
+// updateRef is no longer needed — all ref updates are handled atomically
+// via gitcmd.AtomicRefUpdate in AtomicPushHandler.ExecutePushOperation.
 
 // handleLsRefs : ls-refs 명령 처리 (info/refs) with progress-aware connection
+// Uses native git commands via gitcmd package.
 func (s *DuplexTCPServer) handleLsRefs(conn *connection.ProgressAwareConnection, owner, repo string, lsRefsReq *protocol.LsRefsReq) error {
 	writer := conn.GetWriter()
 
-	// ls-refs 응답 형식 (Git protocol v2):
-	// 1. 직접 refs 목록만 전송 (capabilities는 보내지 않음)
-	// 2. flush packet
-	//
-	// 각 ref 형식:
-	// - 일반 ref: <hash> <refname>
-	// - peeled tag (peel 옵션): <tag-hash> <refname>
-	//                            peeled <commit-hash>
-	// - symbolic ref (symrefs 옵션): @<target> <refname>
-
-	// 실제 repository에서 refs 가져오기
-	// Create path config
+	// Create path config and get repository path
 	pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
 	if err != nil {
 		return fmt.Errorf("failed to create path config: %w", err)
 	}
 
-	// Get repository path
 	repoPath, err := repositories.GetAndValidateRepoPath(pathConfig, owner, repo)
 	if err != nil {
 		return fmt.Errorf("failed to get repository path: %w", err)
 	}
 
-	// Open repository via cache so the subsequent fetch command gets a cache hit.
-	repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
-	if err != nil {
-		pw := &protocol.PktWriter{W: writer, WithLF: false}
-		if err := pw.Err("repository not found"); err != nil {
-			return fmt.Errorf("failed to write error response: %w", err)
-		}
-		return err
+	ctx := context.Background()
+
+	// Determine ref patterns to list
+	patterns := lsRefsReq.RefPrefix
+	if len(patterns) == 0 {
+		patterns = []string{"refs/heads/", "refs/tags/"}
 	}
-	gitRepo := repoWrapper.GetRepo()
 
 	// Check if HEAD is requested
 	headRequested := false
@@ -1289,84 +995,42 @@ func (s *DuplexTCPServer) handleLsRefs(conn *connection.ProgressAwareConnection,
 			}
 		}
 	} else {
-		// If no ref-prefix filter, include HEAD
 		headRequested = true
 	}
-	// Handle HEAD separately if requested
+
+	// Handle HEAD using native git
 	if headRequested {
-		headRef, err := gitRepo.Storer.Reference(plumbing.HEAD)
-
-		// 첫 번째 시도: storer에서 HEAD 가져오기
+		headInfo, err := gitcmd.ResolveHEAD(ctx, repoPath)
 		if err == nil {
-			if headRef.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
-				// symbolic HEAD 처리
-				targetBranch := headRef.Target().String()
-				targetRef, err := gitRepo.Reference(plumbing.ReferenceName(targetBranch), true)
-				if err != nil {
-					return fmt.Errorf("failed to resolve symbolic HEAD target: %w", err)
-				}
-
-				refLine := fmt.Sprintf("%s HEAD symref-target:%s", targetRef.Hash(), targetBranch)
+			if headInfo.IsSymbolic && lsRefsReq.Symrefs {
+				refLine := fmt.Sprintf("%s HEAD symref-target:%s", headInfo.OID, headInfo.Target)
 				if err := s.writePktLine(conn, refLine); err != nil {
 					return fmt.Errorf("failed to write HEAD symref: %w", err)
 				}
-
-			} else {
-				// detached HEAD 또는 symref 요청이 없는 경우
-				if resolved, err := gitRepo.Head(); err == nil {
-					refLine := fmt.Sprintf("%s HEAD", resolved.Hash())
-					if err := s.writePktLine(conn, refLine); err != nil {
-						return fmt.Errorf("failed to write HEAD hash: %w", err)
-					}
+			} else if headInfo.OID != "" {
+				refLine := fmt.Sprintf("%s HEAD", headInfo.OID)
+				if err := s.writePktLine(conn, refLine); err != nil {
+					return fmt.Errorf("failed to write HEAD hash: %w", err)
 				}
 			}
-			// HEAD를 보낸 후에도 다른 refs를 계속 보내기 위해 return하지 않음
-		} else {
-			// 두 번째 시도: HEAD 파일 직접 읽기 (bare repo에서만 문제 생길 경우)
-			headPath := filepath.Join(repoPath, "HEAD")
-			data, err := os.ReadFile(headPath)
-			if err == nil {
-				headStr := strings.TrimSpace(string(data))
-
-				// symbolic HEAD: "ref: refs/heads/main"
-				if strings.HasPrefix(headStr, "ref: ") && lsRefsReq.Symrefs {
-					targetBranch := strings.TrimPrefix(headStr, "ref: ")
-					targetRef, err := gitRepo.Reference(plumbing.ReferenceName(targetBranch), true)
-					if err != nil {
-						return fmt.Errorf("failed to resolve symbolic HEAD file target: %w", err)
-					}
-
-					refLine := fmt.Sprintf("%s HEAD symref-target:%s", targetRef.Hash(), targetBranch)
-					if err := s.writePktLine(conn, refLine); err != nil {
-						return fmt.Errorf("failed to write HEAD symref: %w", err)
-					}
-				} else {
-					// detached HEAD
-					if resolved, err := gitRepo.Head(); err == nil {
-						refLine := fmt.Sprintf("%s HEAD", resolved.Hash())
-						if err := s.writePktLine(conn, refLine); err != nil {
-							return fmt.Errorf("failed to write HEAD hash: %w", err)
-						}
-					}
-				}
-			}
-			// HEAD가 없어도 다른 refs는 보내야 하므로 계속 진행
 		}
+		// HEAD not found is not an error — continue listing refs
 	}
 
-	// Get repository references
-	refs, err := gitRepo.References()
+	// List refs using native git for-each-ref
+	refs, err := gitcmd.ListRefs(ctx, repoPath, patterns...)
 	if err != nil {
-		return fmt.Errorf("failed to get repository references: %w", err)
+		// Treat as empty repo
+		pw := &protocol.PktWriter{W: writer, WithLF: false}
+		return pw.Flush()
 	}
 
-	// List references in ls-refs format with filtering
-	err = refs.ForEach(func(ref *plumbing.Reference) error {
-		refName := ref.Name().String()
+	for _, ref := range refs {
+		refName := ref.RefName
 
-		// Skip HEAD as it's already handled separately above
+		// Skip HEAD (already handled above)
 		if refName == "HEAD" {
-			return nil
+			continue
 		}
 
 		// Apply ref-prefix filtering if specified
@@ -1379,49 +1043,41 @@ func (s *DuplexTCPServer) handleLsRefs(conn *connection.ProgressAwareConnection,
 				}
 			}
 			if !matched {
-				return nil // Skip this ref
+				continue
 			}
 		}
 
-		// Handle different reference types
-		if ref.Type() == plumbing.HashReference {
-			// Regular hash reference
-			tagHash := ref.Hash().String()
-
-			if lsRefsReq.Peel && strings.HasPrefix(refName, "refs/tags/") {
-				// For tags with peel option, send tag hash first, then peeled hash
-				if tagObj, err := gitRepo.TagObject(ref.Hash()); err == nil && tagObj != nil {
-					peeledHash := tagObj.Target.String()
-
-					// 형식: <tag-hash> <refname>
-					refLine := fmt.Sprintf("%s %s", tagHash, refName)
-					if err := s.writePktLine(conn, refLine); err != nil {
-						return err
-					}
-
-					// 형식: peeled <commit-hash>
-					peeledLine := fmt.Sprintf("peeled %s", peeledHash)
-					return s.writePktLine(conn, peeledLine)
-				}
+		// Handle peel for tags
+		if lsRefsReq.Peel && strings.HasPrefix(refName, "refs/tags/") && ref.PeeledOID != "" {
+			// Send tag hash
+			refLine := fmt.Sprintf("%s %s", ref.ObjectName, refName)
+			if err := s.writePktLine(conn, refLine); err != nil {
+				return err
 			}
-
-			// 형식: <hash> <refname>
-			refLine := fmt.Sprintf("%s %s", tagHash, refName)
-			return s.writePktLine(conn, refLine)
-
-		} else if ref.Type() == plumbing.SymbolicReference && lsRefsReq.Symrefs {
-			// 심볼릭 참조 (예: HEAD -> refs/heads/main)
-			target := ref.Target().String()
-			refLine := fmt.Sprintf("@%s %s", target, refName)
-			return s.writePktLine(conn, refLine)
+			// Send peeled hash
+			peeledLine := fmt.Sprintf("peeled %s", ref.PeeledOID)
+			if err := s.writePktLine(conn, peeledLine); err != nil {
+				return err
+			}
+			continue
 		}
 
-		return nil
-	})
+		// Handle symbolic refs
+		if ref.SymRef != "" && lsRefsReq.Symrefs {
+			refLine := fmt.Sprintf("@%s %s", ref.SymRef, refName)
+			if err := s.writePktLine(conn, refLine); err != nil {
+				return err
+			}
+			continue
+		}
 
-	if err != nil {
-		return fmt.Errorf("failed to list references: %w", err)
+		// Regular hash reference
+		refLine := fmt.Sprintf("%s %s", ref.ObjectName, refName)
+		if err := s.writePktLine(conn, refLine); err != nil {
+			return err
+		}
 	}
+
 	pw := &protocol.PktWriter{W: writer, WithLF: false}
 	if err := pw.Flush(); err != nil {
 		return fmt.Errorf("failed to write flush packet: %w", err)
@@ -1507,104 +1163,17 @@ func writeProgressMessage(w io.Writer, message string) error {
 	return nil
 }
 
-// --- main: v2 side-band-64k로 PACK 전송 ---
-func (s *DuplexTCPServer) writePackfileWithSideband(
-	conn *connection.ProgressAwareConnection,
-	st storer.EncodedObjectStorer,
-	hashes []plumbing.Hash,
-	fetchReq *protocol.FetchReq,
-) error {
-	writer := conn.GetWriter()
-	// v2 packfile 스트림은 항상 side-band-64k.
-	// OfsDelta 요청 시 보통 ref-delta를 끔.
-	useRefDelta := !fetchReq.OfsDelta
+// writePackfileWithSideband is removed — all packfile encoding is now done via
+// native git pack-objects (writePackfileViaGitPackObjects).
 
-	totalObjects := len(hashes)
-	if totalObjects == 0 {
-		return nil
-	}
-
-	// 채널 1(sideband=pack data) writer
-	// 참고: Git protocol v2에서 "packfile" 섹션 헤더 이후에 packfile 데이터가
-	// 즉시 시작되어야 합니다. Progress 메시지는 packfile 전송 중에 sideband channel 2로
-	// 보낼 수 있지만, go-git의 encoder는 progress callback을 제공하지 않으므로
-	// 프로토콜 오류를 피하기 위해 progress 메시지를 건너뜁니다.
-	// [17-1] sideband writer 생성
-	sbw := newSidebandWriter(writer, 0x01)
-
-	// [17-2] packfile encoder 생성
-	enc := packfile.NewEncoder(sbw, st, useRefDelta)
-
-	// go-git v5: Encode(hashes []plumbing.Hash, packWindow uint)
-	// 참고: go-git의 encoder는 progress callback을 제공하지 않으므로 인코딩 중에
-	// compressing progress를 보낼 수 없습니다. packfile 인코딩 자체가 compressing 과정입니다.
-	// packWindow=0: delta 압축 비활성화.
-	// Docker volume 환경에서 window=N이면 object당 N회 random pack seek 발생.
-	// 8149 objects × window=10 → 81490 seeks ≈ 30초 이상 → StallThreshold 초과.
-	// delta 없이 보내면 pack 크기는 커지지만 인코딩 시간이 O(N)으로 줄어든다.
-	packWindow := uint(0)
-	// [17-3] packfile 인코딩 실행
-
-	// Encode 실행 (panic recovery 포함)
-	var encodeErr error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				encodeErr = fmt.Errorf("panic in packfile encoding: %v", r)
-			}
-		}()
-		_, encodeErr = enc.Encode(hashes, packWindow)
-	}()
-
-	if encodeErr != nil {
-		return fmt.Errorf("encode pack (sideband): %w", encodeErr)
-	}
-
-	// 인코딩 완료 후 버퍼에 남은 pack 데이터를 전송.
-	// 섹션 종료(0000)는 호출자(handleUploadPack)가 담당.
-	// sbw.Flush()를 여기서 호출하면 0000이 먼저 나가고 이후 progress 메시지가
-	// 섹션 외부로 전송돼 클라이언트 hang 발생.
-	if err := conn.Flush(); err != nil {
-		return fmt.Errorf("socket flush after encoding: %w", err)
-	}
-	return nil
-}
-
-// getFetchObjectCount returns the number of commits to send (git rev-list --count --stdin)
-// with the same wants/haves as pack-objects. Used for progress on the pack-objects path
-// to avoid BuildFetchObjectList enumeration; count is commit count, not full object count.
+// getFetchObjectCount returns the number of commits to send using gitcmd.CountObjects.
 func (s *DuplexTCPServer) getFetchObjectCount(repoPath string, fetchReq *protocol.FetchReq) (int, error) {
-	args := []string{"rev-list", "--count", "--stdin"}
-	if fetchReq.Deepen > 0 {
-		args = append(args, "--depth="+strconv.Itoa(fetchReq.Deepen))
-	}
-	var stdinBuf bytes.Buffer
-	for _, w := range fetchReq.Wants {
-		stdinBuf.WriteString(w.String())
-		stdinBuf.WriteByte('\n')
-	}
-	for _, h := range fetchReq.Haves {
-		stdinBuf.WriteString("^")
-		stdinBuf.WriteString(h.String())
-		stdinBuf.WriteByte('\n')
-	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = repoPath
-	cmd.Stdin = &stdinBuf
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, err
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0, fmt.Errorf("parse rev-list --count output: %w", err)
-	}
-	return n, nil
+	ctx := context.Background()
+	return gitcmd.CountObjects(ctx, repoPath, fetchReq.Wants, fetchReq.Haves, fetchReq.Deepen)
 }
 
-// writePackfileViaGitPackObjects runs `git pack-objects --stdout --revs`, streams
-// stdout into sideband (channel 0x01). want/have를 stdin에 rev-list 형식으로 넘김.
-// --depth=N 지원(shallow). 실패 시 호출자가 writePackfileWithSideband로 폴백.
+// writePackfileViaGitPackObjects runs native git pack-objects via gitcmd.RunPackObjects,
+// streaming stdout into sideband (channel 0x01).
 func (s *DuplexTCPServer) writePackfileViaGitPackObjects(
 	ctx context.Context,
 	conn *connection.ProgressAwareConnection,
@@ -1614,48 +1183,28 @@ func (s *DuplexTCPServer) writePackfileViaGitPackObjects(
 	if len(fetchReq.Wants) == 0 {
 		return fmt.Errorf("no wants")
 	}
-	args := []string{"pack-objects", "--stdout", "--revs"}
-	if fetchReq.Deepen > 0 {
-		args = append(args, "--depth="+strconv.Itoa(fetchReq.Deepen))
-	}
-	if fetchReq.ThinPack {
-		args = append(args, "--thin")
-	}
-	if fetchReq.OfsDelta {
-		args = append(args, "--delta-base-offset")
-	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoPath
-
-	var stdinBuf bytes.Buffer
-	for _, w := range fetchReq.Wants {
-		stdinBuf.WriteString(w.String())
-		stdinBuf.WriteByte('\n')
-	}
-	for _, h := range fetchReq.Haves {
-		stdinBuf.WriteString("^")
-		stdinBuf.WriteString(h.String())
-		stdinBuf.WriteByte('\n')
-	}
-	cmd.Stdin = &stdinBuf
 
 	sbw := newSidebandWriter(conn.GetWriter(), 0x01)
-	cmd.Stdout = sbw
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
 
-	if err := cmd.Start(); err != nil {
-		return err
+	opts := &gitcmd.PackObjectsOpts{
+		Wants:         fetchReq.Wants,
+		Haves:         fetchReq.Haves,
+		ThinPack:      fetchReq.ThinPack,
+		OfsDelta:      fetchReq.OfsDelta,
+		IncludeTag:    fetchReq.IncludeTag,
+		Deepen:        fetchReq.Deepen,
+		Shallow:       fetchReq.Shallow,
+		Filter:        fetchReq.Filter,
+		DeepenSince:   fetchReq.DeepenSince,
+		DeepenExclude: fetchReq.DeepenNot,
 	}
-	if err := cmd.Wait(); err != nil {
-		stderr := stderrBuf.String()
-		if stderr != "" {
-			s.logger.Error("pack-objects failed", zap.String("stderr", stderr), zap.Error(err))
-			return fmt.Errorf("%w (stderr: %s)", err, stderr)
-		}
-		return err
+
+	_, err := gitcmd.RunPackObjects(ctx, repoPath, opts, sbw)
+	if err != nil {
+		return fmt.Errorf("git pack-objects: %w", err)
 	}
-	// 섹션 종료(0000)는 호출자가 progress 후 전송. sbw.Flush() 미호출로 writePackfileWithSideband와 동일.
+
+	// 섹션 종료(0000)는 호출자가 progress 후 전송.
 	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("flush after pack-objects: %w", err)
 	}
@@ -1742,13 +1291,39 @@ func readPktLine(r *bufio.Reader) ([]byte, bool, error) {
 }
 
 // writePktLine : pkt-line 전송 with progress-aware connection
+// Payload includes trailing LF per Git protocol spec (both v1 and v2).
 func (s *DuplexTCPServer) writePktLine(conn *connection.ProgressAwareConnection, data string) error {
-	// pkt-line 형식: [4자리 hex 길이][데이터]\n
 	writer := conn.GetWriter()
-	length := len(data) + 4
-	line := fmt.Sprintf("%04x%s", length, data)
+	// pkt-line format: [4-hex-len][data]\n — length includes the 4-byte header + data + LF
+	length := len(data) + 5 // 4 (header) + len(data) + 1 (LF)
+	line := fmt.Sprintf("%04x%s\n", length, data)
 	_, err := writer.WriteString(line)
 	return err
+}
+
+// writeNgForAllRefs sends "ng <ref> <reason>" for every ref update command.
+// Required by V1 report-status protocol: the response must include at least
+// one command-status line after the unpack-status line. Without this, the
+// client reports "remote failed to report status".
+func (s *DuplexTCPServer) writeNgForAllRefs(conn *connection.ProgressAwareConnection, refUpdates []string, reason string) {
+	for _, refUpdate := range refUpdates {
+		var refName string
+		if strings.Contains(refUpdate, "\x00") {
+			parts := strings.SplitN(refUpdate, "\x00", 2)
+			hashParts := strings.Fields(parts[0])
+			if len(hashParts) >= 3 {
+				refName = hashParts[2]
+			}
+		} else {
+			parts := strings.Fields(refUpdate)
+			if len(parts) >= 3 {
+				refName = parts[2]
+			}
+		}
+		if refName != "" {
+			_ = s.writePktLine(conn, fmt.Sprintf("ng %s %s", refName, reason))
+		}
+	}
 }
 
 // cleanupConnections : 유휴 연결 정리 with progress-aware monitoring
@@ -1771,32 +1346,19 @@ func (s *DuplexTCPServer) cleanupConnections() {
 	}
 }
 
-// addCommitEventToStream adds a commit event to Redis Stream
-func (s *DuplexTCPServer) addCommitEventToStream(repo *gogit.Repository, oldHash, commitHash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
+// addCommitEventToStream adds a commit event to Redis Stream using native git.
+func (s *DuplexTCPServer) addCommitEventToStream(repoPath, oldHash, commitHash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
 	if s.eventsClient == nil {
 		return
 	}
 
-	// Get commit object to verify it exists
-	commit, err := repo.CommitObject(plumbing.NewHash(commitHash))
+	ctx := context.Background()
+
+	// Get commit info using native git cat-file
+	commitInfo, err := gitcmd.GetCommitInfo(ctx, repoPath, commitHash)
 	if err != nil {
 		s.logger.Debug("Skipping event publish; commit not found",
 			zap.String("commit_hash", commitHash),
-			zap.Error(err))
-		return
-	}
-
-	// Get full filesystem path for the repository
-	pathConfig, err := repositories.NewPathConfig(s.config.Git.RepoRoot)
-	if err != nil {
-		s.logger.Debug("Failed to create path config for event",
-			zap.Error(err))
-		return
-	}
-
-	repoPath, err := repositories.GetRepoPath(pathConfig, owner, repoName)
-	if err != nil {
-		s.logger.Debug("Failed to get repo path for event",
 			zap.Error(err))
 		return
 	}
@@ -1811,18 +1373,18 @@ func (s *DuplexTCPServer) addCommitEventToStream(repo *gogit.Repository, oldHash
 		CommitHash:    commitHash,
 		OldRev:        oldHash,
 		RefName:       refName,
-		Pusher:        "git", // Default pusher identifier
+		Pusher:        "git",
 		UserID:        userID,
-		CommitMessage: commit.Message,
-		Timestamp:     commit.Committer.When,
+		CommitMessage: commitInfo.Message,
+		Timestamp:     commitInfo.CommitterDate,
 	}
 
 	// Publish asynchronously to avoid blocking
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pubCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := s.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
+		if err := s.eventsClient.AddCommitEventToStream(pubCtx, event); err != nil {
 			s.logger.Warn("Failed to publish commit event",
 				zap.String("repo_path", repoPath),
 				zap.String("commit_hash", commitHash),

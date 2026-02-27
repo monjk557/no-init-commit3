@@ -5,13 +5,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"os/exec"
+
 	"github.com/collabops/git-executor/internal/config"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -230,11 +229,15 @@ func Test_SSH_RevokedKey_RejectsAuth(t *testing.T) {
 func createTestRepoForProtocol(t *testing.T, tempDir, owner, repo string) string {
 	repoPath := filepath.Join(tempDir, owner, repo+".git")
 	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
-	gitRepo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
-	emptyHash := plumbing.NewHash(strings.Repeat("0", 40))
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", emptyHash)))
+
+	// Initialize bare repo with native git
+	out, err := exec.Command("git", "init", "--bare", repoPath).CombinedOutput()
+	require.NoError(t, err, "git init --bare failed: %s", string(out))
+
+	// Set HEAD to point to refs/heads/main
+	out, err = exec.Command("git", "-C", repoPath, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput()
+	require.NoError(t, err, "git symbolic-ref HEAD failed: %s", string(out))
+
 	return repoPath
 }
 

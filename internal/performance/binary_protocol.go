@@ -162,6 +162,12 @@ func (oplw *OptimizedPktLineWriter) Flush() error {
 	return err
 }
 
+// WriteDelim writes a delimiter packet (0001) for Git protocol v2 sections
+func (oplw *OptimizedPktLineWriter) WriteDelim() error {
+	_, err := oplw.w.Write([]byte{48, 48, 48, 49}) // ASCII "0001"
+	return err
+}
+
 // BenchmarkStats tracks protocol optimization performance
 type BenchmarkStats struct {
 	OriginalWriteNs    int64   `json:"original_write_ns"`
