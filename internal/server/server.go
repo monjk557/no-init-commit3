@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -48,6 +49,7 @@ type Server struct {
 	config               *config.Config         // 애플리케이션 설정
 	logger               *logging.Logger        // 로거
 	observabilityManager *observability.Manager // 모니터링 매니저 (메트릭, 추적, 헬스체크)
+	shuttingDown         atomic.Bool            // SIGTERM 수신 시 true, /ready가 503 반환하여 신규 요청 제한
 }
 
 // New - 모니터링 기능을 갖춘 새 HTTP 서버 인스턴스 생성
@@ -98,6 +100,7 @@ func (s *Server) Start() error {
 	<-quit
 
 	s.logger.Info("Received shutdown signal, shutting down gracefully")
+	s.shuttingDown.Store(true) // /ready가 503을 반환하여 신규 요청 제한
 	return nil
 }
 
@@ -138,6 +141,8 @@ func (s *Server) SetupRouter() *gin.Engine {
 	if s.config.Server.HealthCheckPath != "" {
 		router.GET(s.config.Server.HealthCheckPath, s.healthCheck)
 	}
+	// /ready: SIGTERM 수신 시 503 반환하여 LB/오케스트레이터가 신규 트래픽을 끊도록 함
+	router.GET("/ready", s.readyCheck)
 
 	// Setup Swagger documentation routes
 	s.setupSwaggerRoutes(router)
@@ -402,6 +407,19 @@ func (s *Server) healthCheck(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	c.Status(http.StatusOK)
 	_, _ = fmt.Fprintf(c.Writer, `{"status": "healthy", "timestamp": "%s"}`, time.Now().UTC().Format(time.RFC3339))
+}
+
+// readyCheck handles GET /ready. SIGTERM 수신 후에는 503을 반환하여 신규 트래픽 수신을 제한한다.
+func (s *Server) readyCheck(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+	if s.shuttingDown.Load() {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"ready":  false,
+			"reason": "shutting_down",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ready": true})
 }
 
 // setupProtocolRoutes configures Git Smart HTTP protocol routes
