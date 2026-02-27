@@ -303,10 +303,10 @@ func isHTTPMethod(name string) bool {
 // routeToSpecPath converts Gin route path (ownerRepoGroup) to OpenAPI spec path.
 // - Gin uses :param and *param; OpenAPI uses {param}
 // - ownerRepoGroup paths are relative to /repos/:owner/:repo
-// - docs routes (/openapi.yaml etc.) return skip=true (스펙에 정의 안 함)
+// - docs routes (/openapi.yaml etc.) and /ready return skip=true (스펙에 정의 안 함)
 func routeToSpecPath(routePath string) (specPath string, skip bool) {
 	switch routePath {
-	case "/openapi.yaml", "/openapi.yml", "/swagger.yaml", "/swagger.yml":
+	case "/openapi.yaml", "/openapi.yml", "/swagger.yaml", "/swagger.yml", "/ready":
 		return "", true
 	}
 	specPath = "/repos/{owner}/{repo}" + routePath
