@@ -1,18 +1,21 @@
 package state
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/collabops/git-executor/internal/logging"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
+
+const nativeGitTimeout = 5 * time.Second
 
 // StateService provides repository state calculation
 type StateService struct {
@@ -30,17 +33,20 @@ func NewStateService(logger *logging.Logger) (*StateService, error) {
 	}, nil
 }
 
-// GetRepositoryState calculates and returns repository state
+// GetRepositoryState calculates and returns repository state using native git.
 func (s *StateService) GetRepositoryState(owner, repo, repoPath string) (*RepositoryStateData, error) {
 	// Check if repository exists
 	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("repository does not exist: %s/%s", owner, repo)
 	}
 
-	// Open repository
-	gitRepo, err := gogit.PlainOpen(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open repository: %w", err)
+	ctx := context.Background()
+
+	// Determine git dir: if repoPath has .git subdir, it's non-bare
+	gitDir := repoPath
+	isBare := s.isBareRepository(repoPath)
+	if !isBare {
+		gitDir = filepath.Join(repoPath, ".git")
 	}
 
 	// Get file info for timestamps
@@ -51,12 +57,8 @@ func (s *StateService) GetRepositoryState(owner, repo, repoPath string) (*Reposi
 			zap.Error(err))
 	}
 
-	// Get HEAD to determine current branch
-	head, err := gitRepo.Head()
-	var currentBranchName string
-	if err == nil && head != nil && head.Type() == plumbing.SymbolicReference {
-		currentBranchName = head.Target().Short()
-	}
+	// Get HEAD info
+	headBranch, headHash := s.nativeGetHeadInfo(ctx, gitDir)
 
 	// Initialize response
 	stateData := &RepositoryStateData{
@@ -67,91 +69,128 @@ func (s *StateService) GetRepositoryState(owner, repo, repoPath string) (*Reposi
 		Details: Details{
 			RequestPath: fmt.Sprintf("/repos/%s/%s/stats", owner, repo),
 			Method:      "GET",
-			Includes:    make(map[string]bool), // Empty dictionary by default
+			Includes:    make(map[string]bool),
 			RequestType: "stats",
 		},
 	}
 
-	// Get HEAD information
-	if head != nil && err == nil {
-		headInfo, err := s.buildHeadInfo(gitRepo, head, currentBranchName)
-		if err == nil {
-			stateData.Head = *headInfo
-		}
+	// Build HEAD information
+	if headHash != "" {
+		headInfo := s.buildHeadInfo(ctx, gitDir, headBranch, headHash)
+		stateData.Head = *headInfo
 	}
 
-	// Get references (branches and tags)
-	references, err := s.buildReferences(gitRepo, currentBranchName)
-	if err == nil {
-		stateData.References = *references
-	}
+	// Build references
+	references := s.buildReferences(ctx, gitDir, headBranch)
+	stateData.References = *references
 
-	// Get repository info
-	repoInfo, err := s.buildRepositoryInfo(gitRepo, repoPath, fileInfo)
-	if err == nil {
-		stateData.RepositoryInfo = *repoInfo
-	}
+	// Build repository info
+	repoInfo := s.buildRepositoryInfo(ctx, gitDir, repoPath, isBare, fileInfo, headBranch, headHash)
+	stateData.RepositoryInfo = *repoInfo
 
 	return stateData, nil
 }
 
-// buildHeadInfo builds HeadInfo from HEAD reference
-func (s *StateService) buildHeadInfo(gitRepo *gogit.Repository, head *plumbing.Reference, currentBranchName string) (*HeadInfo, error) {
-	headInfo := &HeadInfo{
-		Reference:  head.Name().String(),
-		IsDetached: head.Type() == plumbing.HashReference,
+// nativeGetHeadInfo returns the HEAD branch (symbolic ref) and its commit hash.
+func (s *StateService) nativeGetHeadInfo(ctx context.Context, gitDir string) (string, string) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	// Get symbolic ref (branch name)
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "symbolic-ref", "-q", "HEAD")
+	out, err := cmd.Output()
+	branch := ""
+	if err == nil {
+		branch = strings.TrimSpace(string(out))
 	}
 
-	// Determine type and name
-	if head.Type() == plumbing.SymbolicReference {
+	// Get HEAD commit hash
+	cmdCtx2, cancel2 := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel2()
+	cmd2 := exec.CommandContext(cmdCtx2, "git", "--git-dir", gitDir, "rev-parse", "HEAD")
+	out2, err2 := cmd2.Output()
+	hash := ""
+	if err2 == nil {
+		hash = strings.TrimSpace(string(out2))
+	}
+
+	return branch, hash
+}
+
+// buildHeadInfo builds HeadInfo using native git.
+func (s *StateService) buildHeadInfo(ctx context.Context, gitDir, headBranch, headHash string) *HeadInfo {
+	isDetached := headBranch == ""
+
+	headInfo := &HeadInfo{
+		IsDetached: isDetached,
+	}
+
+	if !isDetached {
+		// Symbolic ref → branch
+		shortName := strings.TrimPrefix(headBranch, "refs/heads/")
 		headInfo.Type = "branch"
-		headInfo.Name = head.Target().Short()
-		headInfo.Target = head.Target().String()
+		headInfo.Name = shortName
+		headInfo.Target = headBranch
 		headInfo.IsBranch = true
+		headInfo.Reference = "HEAD"
 	} else {
 		headInfo.Type = "commit"
-		headInfo.Name = head.Hash().String()[:7] // Short hash
-		headInfo.Target = head.Hash().String()
+		if len(headHash) >= 7 {
+			headInfo.Name = headHash[:7]
+		}
+		headInfo.Target = headHash
 		headInfo.IsBranch = false
+		headInfo.Reference = "HEAD"
 	}
 
-	// Get commit information
-	commit, err := gitRepo.CommitObject(head.Hash())
-	if err != nil {
-		return headInfo, fmt.Errorf("failed to get commit: %w", err)
-	}
-
-	commitInfo := s.buildCommitInfo(commit)
+	// Get commit info
+	commitInfo := s.nativeGetCommitInfo(ctx, gitDir, headHash)
 	headInfo.Commit = commitInfo
 	headInfo.CommitInfo = commitInfo
-	headInfo.CommitSHA = commit.Hash.String()
+	headInfo.CommitSHA = headHash
 
-	return headInfo, nil
+	return headInfo
 }
 
-// buildCommitInfo builds CommitInfo from commit object
-func (s *StateService) buildCommitInfo(commit *object.Commit) CommitInfo {
-	commitInfo := CommitInfo{
-		SHA:       commit.Hash.String(),
-		Message:   commit.Message,
-		CreatedAt: commit.Author.When.Format(time.RFC3339),
-		Author: AuthorInfo{
-			Name:  commit.Author.Name,
-			Email: commit.Author.Email,
-			Date:  commit.Author.When.Format(time.RFC3339),
-		},
-		Committer: AuthorInfo{
-			Name:  commit.Committer.Name,
-			Email: commit.Committer.Email,
-			Date:  commit.Committer.When.Format(time.RFC3339),
-		},
+// nativeGetCommitInfo returns CommitInfo for a given hash using native git log.
+func (s *StateService) nativeGetCommitInfo(ctx context.Context, gitDir, hash string) CommitInfo {
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	// format: hash\tauthor_name\tauthor_email\tauthor_date\tcommitter_name\tcommitter_email\tcommitter_date\tsubject
+	format := "%H\t%an\t%ae\t%aI\t%cn\t%ce\t%cI\t%s"
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "log", "-1", "--format="+format, hash)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return CommitInfo{SHA: hash}
 	}
 
-	return commitInfo
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 8)
+	if len(parts) < 8 {
+		return CommitInfo{SHA: hash}
+	}
+
+	return CommitInfo{
+		SHA:     parts[0],
+		Message: parts[7],
+		Author: AuthorInfo{
+			Name:  parts[1],
+			Email: parts[2],
+			Date:  parts[3],
+		},
+		Committer: AuthorInfo{
+			Name:  parts[4],
+			Email: parts[5],
+			Date:  parts[6],
+		},
+		CreatedAt: parts[3],
+	}
 }
 
-// buildReferences builds References from repository
-func (s *StateService) buildReferences(gitRepo *gogit.Repository, currentBranchName string) (*References, error) {
+// buildReferences builds References from repository using native git for-each-ref.
+func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch string) *References {
 	refs := &References{
 		Branches: []ReferenceInfo{},
 		Tags:     []ReferenceInfo{},
@@ -163,66 +202,94 @@ func (s *StateService) buildReferences(gitRepo *gogit.Repository, currentBranchN
 		},
 	}
 
-	// Get HEAD to determine which branch is current
-	head, err := gitRepo.Head()
-	var headTarget string
-	if err == nil && head != nil && head.Type() == plumbing.SymbolicReference {
-		headTarget = head.Target().String()
-	}
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
 
-	iter, err := gitRepo.References()
+	// Get all refs with commit info
+	format := "%(refname)\t%(refname:short)\t%(objectname)\t%(*objectname)\t%(authordate:iso8601-strict)\t%(authorname)\t%(authoremail)\t%(subject)"
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir,
+		"for-each-ref", "refs/heads/", "refs/tags/", "refs/remotes/",
+		"--format="+format)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get references: %w", err)
+		return refs
 	}
 
-	err = iter.ForEach(func(ref *plumbing.Reference) error {
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return refs
+	}
+
+	for _, line := range strings.Split(raw, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 8)
+		if len(parts) < 8 {
+			continue
+		}
+
+		fullName := parts[0]
+		shortName := parts[1]
+		hash := parts[2]
+		derefHash := parts[3]
+		dateStr := parts[4]
+		// authorName := parts[5] (available if needed)
+		// authorEmail := parts[6] (available if needed)
+		subject := parts[7]
+
+		// For annotated tags, use deref hash
+		commitHash := hash
+		if derefHash != "" {
+			commitHash = derefHash
+		}
+
+		isHead := fullName == headBranch
+
+		lastMod := dateStr
+		if lastMod == "" {
+			lastMod = time.Now().Format(time.RFC3339)
+		}
+
 		refInfo := ReferenceInfo{
-			Name:        ref.Name().Short(),
-			FullName:    ref.Name().String(),
-			CommitSHA:   ref.Hash().String(),
-			IsHead:      ref.Name().String() == headTarget,
-			IsProtected: false, // Default to false, can be enhanced later
+			Name:         shortName,
+			FullName:     fullName,
+			CommitSHA:    commitHash,
+			IsHead:       isHead,
+			IsProtected:  false,
+			LastModified: lastMod,
 		}
 
-		// Get commit information if available
-		commit, err := gitRepo.CommitObject(ref.Hash())
-		if err == nil {
-			commitInfo := s.buildCommitInfo(commit)
-			refInfo.Commit = &commitInfo
-			refInfo.LastModified = commit.Author.When.Format(time.RFC3339)
-		} else {
-			// If commit not found, use current time as fallback
-			refInfo.LastModified = time.Now().Format(time.RFC3339)
+		// Build commit info if we have enough data
+		if hash != "" && subject != "" {
+			ci := s.nativeGetCommitInfo(ctx, gitDir, commitHash)
+			refInfo.Commit = &ci
 		}
 
-		if ref.Name().IsBranch() {
+		if strings.HasPrefix(fullName, "refs/heads/") {
 			refs.Branches = append(refs.Branches, refInfo)
 			refs.Count.Branches++
 			refs.Count.Total++
-		} else if ref.Name().IsTag() {
+		} else if strings.HasPrefix(fullName, "refs/tags/") {
 			refs.Tags = append(refs.Tags, refInfo)
 			refs.Count.Tags++
 			refs.Count.Total++
-		} else if ref.Name().IsRemote() {
-			// Count remotes but don't add to branches/tags list
+		} else if strings.HasPrefix(fullName, "refs/remotes/") {
 			refs.Count.Remotes++
 			refs.Count.Total++
 		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to iterate references: %w", err)
 	}
 
-	return refs, nil
+	return refs
 }
 
-// buildRepositoryInfo builds RepositoryInfo from repository
-func (s *StateService) buildRepositoryInfo(gitRepo *gogit.Repository, repoPath string, fileInfo os.FileInfo) (*RepositoryInfo, error) {
+// buildRepositoryInfo builds RepositoryInfo using native git.
+func (s *StateService) buildRepositoryInfo(ctx context.Context, gitDir, repoPath string, isBare bool, fileInfo os.FileInfo, headBranch, headHash string) *RepositoryInfo {
 	repoInfo := &RepositoryInfo{
-		Path: repoPath,
+		Path:   repoPath,
+		IsBare: isBare,
 	}
 
 	// Set timestamps
@@ -236,10 +303,6 @@ func (s *StateService) buildRepositoryInfo(gitRepo *gogit.Repository, repoPath s
 		repoInfo.Size = size
 	}
 
-	// Check if bare
-	isBare := s.isBareRepository(repoPath)
-	repoInfo.IsBare = isBare
-
 	// Set git directory path
 	if isBare {
 		repoInfo.GitDirectory = repoPath
@@ -247,66 +310,66 @@ func (s *StateService) buildRepositoryInfo(gitRepo *gogit.Repository, repoPath s
 		repoInfo.GitDirectory = filepath.Join(repoPath, ".git")
 	}
 
-	// Check for worktree (simplified - can be enhanced)
-	repoInfo.HasWorktree = false // Default to false, can be enhanced later
+	repoInfo.HasWorktree = false
 
 	// Get default branch from HEAD
-	head, err := gitRepo.Head()
-	if err == nil && head.Type() == plumbing.SymbolicReference {
-		targetBranch := head.Target().String()
-		if strings.HasPrefix(targetBranch, "refs/heads/") {
-			repoInfo.DefaultBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
-		}
+	if headBranch != "" && strings.HasPrefix(headBranch, "refs/heads/") {
+		repoInfo.DefaultBranch = strings.TrimPrefix(headBranch, "refs/heads/")
 	}
 
-	// Count references
-	refs, err := gitRepo.References()
-	if err == nil {
-		branchCount := 0
-		tagCount := 0
+	// Count branches and tags using for-each-ref (fast)
+	repoInfo.BranchCount = s.nativeCountRefs(ctx, gitDir, "refs/heads/")
+	repoInfo.TagCount = s.nativeCountRefs(ctx, gitDir, "refs/tags/")
 
-		err = refs.ForEach(func(ref *plumbing.Reference) error {
-			if ref.Name().IsBranch() {
-				branchCount++
-			} else if ref.Name().IsTag() {
-				tagCount++
-			}
-			return nil
-		})
-
-		if err == nil {
-			repoInfo.BranchCount = branchCount
-			repoInfo.TagCount = tagCount
-		}
+	// Count commits using rev-list --count
+	if headHash != "" {
+		repoInfo.CommitCount = s.nativeCountCommits(ctx, gitDir, headHash)
 	}
 
-	// Count commits (this can be expensive for large repos)
-	if head != nil {
-		commitIter, err := gitRepo.Log(&gogit.LogOptions{From: head.Hash()})
-		if err == nil {
-			commitCount := 0
-			err = commitIter.ForEach(func(c *object.Commit) error {
-				commitCount++
-				return nil
-			})
-			if err == nil {
-				repoInfo.CommitCount = commitCount
-			}
-		}
-	}
+	return repoInfo
+}
 
-	return repoInfo, nil
+// nativeCountRefs counts refs under a prefix using for-each-ref.
+func (s *StateService) nativeCountRefs(ctx context.Context, gitDir, prefix string) int {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "for-each-ref", prefix, "--format=x")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return 0
+	}
+	return len(strings.Split(raw, "\n"))
+}
+
+// nativeCountCommits counts commits reachable from a ref using rev-list --count.
+func (s *StateService) nativeCountCommits(ctx context.Context, gitDir, ref string) int {
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "rev-list", "--count", ref)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return count
 }
 
 // isBareRepository checks if a repository is bare
 func (s *StateService) isBareRepository(path string) bool {
-	// Check for presence of .git directory (indicates non-bare)
 	gitDir := filepath.Join(path, ".git")
 	if _, err := os.Stat(gitDir); err == nil {
 		return false
 	}
 
-	// Check for typical bare repository files
 	configPath := filepath.Join(path, "config")
 	headPath := filepath.Join(path, "HEAD")
 
@@ -322,7 +385,7 @@ func (s *StateService) getDirectorySize(path string) (int64, error) {
 
 	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip files that cause errors
+			return nil
 		}
 		if !info.IsDir() {
 			size += info.Size()

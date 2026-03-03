@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -28,8 +29,6 @@ type MergeOperationsHandler struct {
 	conflictDetector *ConflictDetector
 	eventsClient     events.RedisStreamClient
 	config           *config.Config
-	// Policy Engine Integration (TreeProtectionLayer removed)
-	orchestrator *UniversalMergeOrchestrator
 	// hooks is only set in tests for deterministic concurrent testing
 	// In production, this is always nil and has no effect
 	hooks *MergeHooks
@@ -67,41 +66,6 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		}
 	}
 
-	// Initialize SECURE centralized protection and orchestration systems based on feature flags
-	protectionController := NewSecureProtectionController(
-		cfg.MergeProtection.Enabled,
-		cfg.MergeProtection.EnvironmentProtection.Enabled,
-		cfg.MergeProtection.EnvironmentProtection.EnableForSquashMerge,
-		cfg.MergeProtection.EnvironmentProtection.EnableForRegularMerge,
-		cfg.MergeProtection.EnvironmentProtection.EnableForRebaseMerge,
-	)
-
-	// Create secure protection layer that cannot be tampered with
-	_ = NewSecureTreeProtectionLayer(protectionController, logger.Logger)
-
-	logger.Info("Secure merge protection system initialized",
-		zap.String("protection_status", protectionController.String()),
-		zap.String("safety_mode", cfg.MergeProtection.SafetyMode),
-		zap.String("fallback_strategy", cfg.MergeProtection.FallbackStrategy))
-
-	// TreeProtectionLayer removed - now using PolicyEngine through MergeProtectionContext
-
-	orchestratorConfig := &OrchestratorConfig{
-		EnableIntelligentMerging:   cfg.MergeProtection.IntelligentMerging,
-		EnablePredictiveAnalysis:   cfg.MergeProtection.PredictiveConflictDetect,
-		EnableAdaptiveFallback:     cfg.MergeProtection.AdaptiveFallback,
-		EnableComprehensiveLogging: cfg.MergeProtection.EnableAuditLogs,
-		SafetyChecksEnabled:        cfg.MergeProtection.SafetyMode == "strict",
-		LearningEnabled:            cfg.MergeProtection.IntelligentMerging,
-	}
-	orchestrator := NewUniversalMergeOrchestrator(logger.Logger, orchestratorConfig)
-
-	logger.Info("Universal merge orchestrator configured",
-		zap.Bool("intelligent_merging", orchestratorConfig.EnableIntelligentMerging),
-		zap.Bool("predictive_analysis", orchestratorConfig.EnablePredictiveAnalysis),
-		zap.Bool("adaptive_fallback", orchestratorConfig.EnableAdaptiveFallback),
-		zap.Bool("safety_checks", orchestratorConfig.SafetyChecksEnabled))
-
 	return &MergeOperationsHandler{
 		pathConfig:       pathConfig,
 		logger:           logger,
@@ -109,7 +73,6 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		conflictDetector: conflictDetector,
 		eventsClient:     eventsClient,
 		config:           cfg,
-		orchestrator:     orchestrator,
 	}, nil
 }
 
@@ -266,8 +229,19 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		return
 	}
 
-	// Open repository
-	repository, err := h.objectManager.OpenRepository(owner, repo)
+	// Open repository — use NoCache to get a dedicated instance per request.
+	// go-git's *Repository internal maps are NOT thread-safe; sharing a cached
+	// instance across concurrent merge requests causes "concurrent map read and
+	// map write" fatal panics.
+	mergeRepoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "repository not found",
+		})
+		return
+	}
+	repoWrapper, err := repositories.OpenRepositoryNoCache(mergeRepoPath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
@@ -275,6 +249,8 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		})
 		return
 	}
+	defer func() { _ = repoWrapper.Close() }()
+	repository := repoWrapper.GetRepo()
 
 	// Resolve source and target commits
 	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)
@@ -517,6 +493,18 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		}
 	}
 
+	// Loose object 누적 방지: merge 성공 시 git gc --auto 비동기 실행.
+	if repoPath != "" {
+		go func() {
+			gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer gcCancel()
+			cmd := exec.CommandContext(gcCtx, "git", "--git-dir", repoPath, "gc", "--auto")
+			if gcErr := cmd.Run(); gcErr != nil {
+				h.logger.Debug("git gc --auto failed (non-critical)", zap.String("repo", repoPath), zap.Error(gcErr))
+			}
+		}()
+	}
+
 	// Send success response
 	c.JSON(http.StatusOK, response)
 }
@@ -573,8 +561,17 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 		return
 	}
 
-	// Open repository
-	repository, err := h.objectManager.OpenRepository(owner, repo)
+	// Open repository — use NoCache (same reason as HandleMerge: avoid
+	// concurrent map panic from shared go-git *Repository instances).
+	previewRepoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "repository not found",
+		})
+		return
+	}
+	previewRepoWrapper, err := repositories.OpenRepositoryNoCache(previewRepoPath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
@@ -582,6 +579,8 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 		})
 		return
 	}
+	defer func() { _ = previewRepoWrapper.Close() }()
+	repository := previewRepoWrapper.GetRepo()
 
 	// Resolve source and target commits
 	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)

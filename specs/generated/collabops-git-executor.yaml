@@ -625,6 +625,8 @@ components:
         - tree
     BlobRequestParams:
       type: object
+    BranchAheadBehind:
+      type: object
     BranchInfo:
       type: object
     BranchListItem:
@@ -2212,6 +2214,8 @@ components:
         - success
         - timestamp
     RequestParams:
+      type: object
+    SimpleBranchInfo:
       type: object
     SingleCommitDiffResponse:
       type: object

@@ -3,9 +3,8 @@ package commits
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"io"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,10 +14,6 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
@@ -38,20 +33,18 @@ func NewCommitsService(logger *logging.Logger, transactionManager *TransactionMa
 	}
 }
 
-// getCommitHistory는 Git 저장소 인터페이스를 사용하여 커밋 히스토리를 조회합니다.
+// getCommitHistory는 커밋 히스토리를 조회합니다.
 // compare mode일 경우 mergeBase SHA를 함께 반환합니다.
-func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoWrapper *repositories.RepositoryWrapper, params *CommitsRequestParams) ([]Commit, int, string, error) {
-	// Git 저장소 인터페이스에서 커밋 조회
-	// 더 많은 페이지가 있는지 확인하기 위해 하나 더 요청
+func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, params *CommitsRequestParams) ([]Commit, int, string, error) {
 	requestLimit := params.Limit + 1
 
-	// Compare mode: source_ref/target_ref가 모두 제공된 경우 merge-base부터 source까지의 history 반환
+	// Compare mode: source_ref/target_ref가 모두 제공된 경우
 	if params.SourceRef != "" || params.TargetRef != "" {
 		if params.SourceRef == "" || params.TargetRef == "" {
 			return nil, 0, "", fmt.Errorf("both source_ref and target_ref must be provided together")
 		}
 
-		commits, mergeBase, err := GetCommitsFromMergeBase(repoWrapper, ctx, params.SourceRef, params.TargetRef, requestLimit, params.Skip)
+		commits, mergeBase, err := GetCommitsFromMergeBase(ctx, repoPath, params.SourceRef, params.TargetRef, requestLimit, params.Skip)
 		if err != nil {
 			return nil, 0, "", fmt.Errorf("failed to get commits (merge-base): %w", err)
 		}
@@ -60,18 +53,16 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoWrapper *repo
 		return commits, totalCount, mergeBase, nil
 	}
 
-	commits, err := GetCommits(repoWrapper, ctx, params.Ref, requestLimit, params.Skip)
+	commits, err := GetCommits(ctx, repoPath, params.Ref, requestLimit, params.Skip)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("failed to get commits: %w", err)
 	}
 
-	// 더 많은 커밋이 있는지 확인 (페이지네이션)
 	totalCount := len(commits)
-
 	return commits, totalCount, "", nil
 }
 
-// convertGitCommitToMetadata는 git.Commit을 CommitMetadata로 변환합니다.
+// convertGitCommitToMetadata는 Commit을 CommitMetadata로 변환합니다.
 func (h *CommitsHandler) convertGitCommitToMetadata(commit Commit) CommitMetadata {
 	return CommitMetadata{
 		SHA:     commit.Sha,
@@ -85,33 +76,27 @@ func (h *CommitsHandler) convertGitCommitToMetadata(commit Commit) CommitMetadat
 
 // validateAndExtractCommitsParams는 커밋 요청에서 파라미터를 추출하고 검증합니다.
 func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*CommitsRequestParams, error) {
-	// 경로 파라미터 추출
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// 쿼리 파라미터 추출
 	ref := c.Query("ref")
 	sourceRef := c.Query("source_ref")
 	targetRef := c.Query("target_ref")
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
 
-	// 필수 파라미터 검증
 	if owner == "" || repo == "" {
 		return nil, fmt.Errorf("missing required parameters: owner or repo")
 	}
 
-	// ref가 제공되지 않은 경우 기본값으로 "HEAD" 설정
 	if ref == "" {
 		ref = "HEAD"
 	}
 
-	// Compare mode 파라미터 검증: 둘 중 하나만 오면 에러
 	if (sourceRef != "" && targetRef == "") || (sourceRef == "" && targetRef != "") {
 		return nil, fmt.Errorf("both source_ref and target_ref must be provided together")
 	}
 
-	// limit 파라미터 파싱 및 검증
 	limit := DefaultCommitsLimit
 	if limitStr != "" {
 		parsedLimit, err := strconv.Atoi(limitStr)
@@ -124,7 +109,6 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 		limit = parsedLimit
 	}
 
-	// skip 파라미터 파싱 및 검증
 	skip := 0
 	if skipStr != "" {
 		parsedSkip, err := strconv.Atoi(skipStr)
@@ -148,131 +132,65 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 	}, nil
 }
 
-var errStopIteration = errors.New("stop iteration")
-
 // GetCommitsFromMergeBase returns commits after merge-base up to source_ref (merge base exclusive).
-// Commits are returned in the same order as go-git Log iterator (typically newest -> oldest).
 func GetCommitsFromMergeBase(
-	rw *repositories.RepositoryWrapper,
 	ctx context.Context,
+	repoPath string,
 	sourceRef string,
 	targetRef string,
 	limit int,
 	skip int,
 ) ([]Commit, string, error) {
-	// 컨텍스트 취소 확인
 	select {
 	case <-ctx.Done():
 		return nil, "", ctx.Err()
 	default:
 	}
 
-	if rw == nil {
-		return nil, "", fmt.Errorf("repository is closed")
-	}
 	if sourceRef == "" || targetRef == "" {
 		return nil, "", fmt.Errorf("source_ref and target_ref are required")
 	}
 
-	sourceHash, err := rw.ResolveReference(sourceRef)
+	// Resolve refs to hashes
+	sourceHash, err := nativeResolveRef(ctx, repoPath, sourceRef)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to resolve source_ref '%s': %w", sourceRef, err)
 	}
-	targetHash, err := rw.ResolveReference(targetRef)
+	targetHash, err := nativeResolveRef(ctx, repoPath, targetRef)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to resolve target_ref '%s': %w", targetRef, err)
 	}
 
-	sourceCommit, err := rw.CommitObject(sourceHash)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to get source commit: %w", err)
-	}
-	targetCommit, err := rw.CommitObject(targetHash)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to get target commit: %w", err)
-	}
-
-	mergeBases, err := sourceCommit.MergeBase(targetCommit)
+	// Find merge base
+	mergeBase, err := nativeMergeBase(ctx, repoPath, sourceHash, targetHash)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to find merge base: %w", err)
 	}
-	if len(mergeBases) == 0 {
-		return nil, "", fmt.Errorf("no common ancestor found between commits")
-	}
-	mergeBaseHash := mergeBases[0].Hash
 
-	gitRepo := rw.GetRepo()
-	if gitRepo == nil {
-		return nil, "", fmt.Errorf("repository is closed")
-	}
-
-	commitIter, err := gitRepo.Log(&git.LogOptions{
-		From: sourceHash,
-	})
+	// Get commits from source excluding ancestors of merge-base
+	// git log source ^mergeBase with limit and skip
+	commits, err := nativeGetCommitLog(ctx, repoPath, sourceHash, limit, skip, mergeBase)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get commit log: %w", err)
 	}
-	defer commitIter.Close()
 
-	var commits []Commit
-	current := 0
-
-	err = commitIter.ForEach(func(c *object.Commit) error {
-		// 반복 중 컨텍스트 취소 확인
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// 범위가 끝났는지 확인 (merge base 제외)
-		if c.Hash == mergeBaseHash {
-			return errStopIteration
-		}
-
-		// pagination: skip 적용
-		if current < skip {
-			current++
-			return nil
-		}
-
-		// limit 적용
-		if limit > 0 && len(commits) >= limit {
-			return io.EOF
-		}
-
-		commits = append(commits, convertCommit(c))
-		current++
-		return nil
-	})
-
-	if err != nil && err != io.EOF && !errors.Is(err, errStopIteration) {
-		return nil, "", fmt.Errorf("failed to iterate commits: %w", err)
-	}
-
-	return commits, mergeBaseHash.String(), nil
+	return commits, mergeBase, nil
 }
 
-// groupCommitsByDate는 커밋을 날짜별로 그룹화합니다 (YYYY-MM-DD 형식).
-// 일관성을 위해 diff.go의 CommitsByDate 타입을 재사용합니다.
-// 커밋은 작성자 날짜를 기준으로 그룹화되며, 날짜 내림차순으로 정렬됩니다.
+// groupCommitsByDate는 커밋을 날짜별로 그룹화합니다.
 func (h *CommitsHandler) groupCommitsByDate(commits []Commit) []CommitsByDate {
 	if len(commits) == 0 {
 		return []CommitsByDate{}
 	}
 
-	// 날짜 문자열별로 커밋을 저장할 맵
 	dateMap := make(map[string][]CommitMetadata)
 
-	// 날짜별로 커밋 그룹화
 	for _, commit := range commits {
-		// 그룹화를 위해 작성자 날짜 사용
 		dateStr := commit.Author.Date.Format("2006-01-02")
 		commitMeta := h.convertGitCommitToMetadata(commit)
 		dateMap[dateStr] = append(dateMap[dateStr], commitMeta)
 	}
 
-	// 맵을 정렬된 슬라이스로 변환
 	var result []CommitsByDate
 	for dateStr, commits := range dateMap {
 		result = append(result, CommitsByDate{
@@ -281,8 +199,6 @@ func (h *CommitsHandler) groupCommitsByDate(commits []Commit) []CommitsByDate {
 		})
 	}
 
-	// 날짜 내림차순으로 정렬 (가장 최근 날짜가 먼저)
-	// 날짜가 YYYY-MM-DD 형식이므로 효율성을 위해 문자열 비교 사용
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Date > result[j].Date
 	})
@@ -314,66 +230,17 @@ func buildPagination(totalCount, currentPage, pageSize int, baseURL string) Pagi
 	}
 }
 
-// GetCommits는 저장소 래퍼로부터 페이지네이션을 사용하여 커밋 히스토리를 조회합니다.
-func GetCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref string, limit, skip int) ([]Commit, error) {
-	// 컨텍스트 취소 확인
+// GetCommits는 페이지네이션을 사용하여 커밋 히스토리를 조회합니다.
+func GetCommits(ctx context.Context, repoPath string, ref string, limit, skip int) ([]Commit, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
 
-	// 참조를 커밋 해시로 변환
-	hash, err := rw.ResolveReference(ref)
+	commits, err := nativeGetCommitLog(ctx, repoPath, ref, limit, skip, "")
 	if err != nil {
 		return nil, err
-	}
-
-	// 내부 저장소 가져오기
-	gitRepo := rw.GetRepo()
-	if gitRepo == nil {
-		return nil, fmt.Errorf("repository is closed")
-	}
-
-	// 변환된 해시부터 시작하는 커밋 반복자 가져오기
-	commitIter, err := gitRepo.Log(&git.LogOptions{
-		From: hash,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commit log: %w", err)
-	}
-	defer commitIter.Close()
-
-	var commits []Commit
-	current := 0
-
-	err = commitIter.ForEach(func(c *object.Commit) error {
-		// 반복 중 컨텍스트 취소 확인
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// 필요한 경우 커밋 건너뛰기
-		if current < skip {
-			current++
-			return nil
-		}
-
-		// 제한에 도달했는지 확인
-		if limit > 0 && len(commits) >= limit {
-			return io.EOF
-		}
-
-		commits = append(commits, convertCommit(c))
-		current++
-
-		return nil
-	})
-
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("failed to iterate commits: %w", err)
 	}
 
 	return commits, nil
@@ -381,15 +248,13 @@ func GetCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref str
 
 // CommitCountResult holds the result of a commit count operation.
 type CommitCountResult struct {
-	Count       int  // number of commits counted
-	Approximate bool // true if count was capped before reaching the end
+	Count       int
+	Approximate bool
 }
 
-// CountCommits는 특정 ref의 전체 커밋 개수를 효율적으로 세는 함수입니다.
-// 커밋 객체를 메모리에 로드하지 않고 iterator를 순회하면서 카운트만 합니다.
-// NOTE: large repo에서 이 함수는 수십 초가 걸릴 수 있습니다. 상한이 필요하면 CountCommitsWithCap을 사용하세요.
-func CountCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref string) (int, error) {
-	r, err := CountCommitsWithCap(rw, ctx, ref, 0)
+// CountCommits는 특정 ref의 전체 커밋 개수를 세는 함수입니다.
+func CountCommits(ctx context.Context, repoPath string, ref string) (int, error) {
+	r, err := CountCommitsWithCap(ctx, repoPath, ref, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -397,94 +262,23 @@ func CountCommits(rw *repositories.RepositoryWrapper, ctx context.Context, ref s
 }
 
 // CountCommitsWithCap counts commits up to maxCount. If maxCount <= 0, no cap is applied.
-// Returns CommitCountResult with Approximate=true if the cap was reached.
-func CountCommitsWithCap(rw *repositories.RepositoryWrapper, ctx context.Context, ref string, maxCount int) (CommitCountResult, error) {
-	// 컨텍스트 취소 확인
+func CountCommitsWithCap(ctx context.Context, repoPath string, ref string, maxCount int) (CommitCountResult, error) {
 	select {
 	case <-ctx.Done():
 		return CommitCountResult{}, ctx.Err()
 	default:
 	}
 
-	// 참조를 커밋 해시로 변환
-	hash, err := rw.ResolveReference(ref)
+	count, err := nativeRevListCount(ctx, repoPath, ref)
 	if err != nil {
 		return CommitCountResult{}, err
 	}
 
-	// 내부 저장소 가져오기
-	gitRepo := rw.GetRepo()
-	if gitRepo == nil {
-		return CommitCountResult{}, fmt.Errorf("repository is closed")
+	if maxCount > 0 && count >= maxCount {
+		return CommitCountResult{Count: maxCount, Approximate: true}, nil
 	}
 
-	// 커밋 반복자 가져오기
-	commitIter, err := gitRepo.Log(&git.LogOptions{
-		From: hash,
-	})
-	if err != nil {
-		return CommitCountResult{}, fmt.Errorf("failed to get commit log: %w", err)
-	}
-	defer commitIter.Close()
-
-	count := 0
-	approximate := false
-	err = commitIter.ForEach(func(c *object.Commit) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		count++
-		if maxCount > 0 && count >= maxCount {
-			approximate = true
-			return io.EOF
-		}
-		return nil
-	})
-
-	if err != nil && err != io.EOF {
-		// context timeout/cancel: 지금까지 센 count를 approximate로 반환 (에러 아님).
-		// 대형 repo에서 go-git이 packfile commit을 1개씩 읽어 O(n)이 되므로
-		// deadline 내에 다 못 세도 partial count를 UI에 표시.
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return CommitCountResult{Count: count, Approximate: true}, nil
-		}
-		return CommitCountResult{}, fmt.Errorf("failed to iterate commits: %w", err)
-	}
-
-	return CommitCountResult{Count: count, Approximate: approximate}, nil
-}
-
-// convertCommit은 go-git 커밋을 내부 Commit 형식으로 변환합니다.
-// 커밋 메시지를 정리하고 작성자/커밋터 정보를 설정합니다.
-func convertCommit(c *object.Commit) Commit {
-	var parentHashes []string
-	for _, parent := range c.ParentHashes {
-		parentHashes = append(parentHashes, parent.String())
-	}
-
-	// 커밋 메시지 정리: 끝의 개행 제거 및 내부 개행을 공백으로 대체
-	message := strings.TrimSpace(c.Message)
-	message = strings.ReplaceAll(message, "\n", " ")
-	message = strings.ReplaceAll(message, "\r", " ")
-
-	return Commit{
-		Sha:     c.Hash.String(),
-		Message: message,
-		Author: CommitAuthor{
-			Name:  c.Author.Name,
-			Email: c.Author.Email,
-			Date:  c.Author.When,
-		},
-		Committer: CommitAuthor{
-			Name:  c.Committer.Name,
-			Email: c.Committer.Email,
-			Date:  c.Committer.When,
-		},
-		ParentHashes: parentHashes,
-		TreeHash:     c.TreeHash.String(),
-	}
+	return CommitCountResult{Count: count, Approximate: false}, nil
 }
 
 // convertToFileChange는 MultiFileOperation을 FileChange로 변환합니다
@@ -495,7 +289,6 @@ func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 		OriginalPath: op.OriginalPath,
 	}
 
-	// 콘텐츠 인코딩 처리
 	if op.Content != "" {
 		encoding := op.Encoding
 		if encoding == "" {
@@ -516,14 +309,13 @@ func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 		}
 	}
 
-	// 파일 모드 처리
 	if op.Mode != "" {
 		switch op.Mode {
 		case "100644", "644":
-			mode := filemode.FileMode(0644)
+			mode := "100644"
 			fileChange.Mode = &mode
 		case "100755", "755":
-			mode := filemode.FileMode(0755)
+			mode := "100755"
 			fileChange.Mode = &mode
 		default:
 			return nil, fmt.Errorf("unsupported file mode: %s", op.Mode)
@@ -533,27 +325,9 @@ func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 	return fileChange, nil
 }
 
-// repoHasHeads returns true if the repository has at least one refs/heads/* reference.
-func repoHasHeads(gitRepo *git.Repository) (bool, error) {
-	refs, err := gitRepo.References()
-	if err != nil {
-		return false, err
-	}
-	defer refs.Close()
-	hasHeads := false
-	err = refs.ForEach(func(r *plumbing.Reference) error {
-		if strings.HasPrefix(r.Name().String(), "refs/heads/") {
-			hasHeads = true
-		}
-		return nil
-	})
-	return hasHeads, err
-}
-
 // ExecuteMultiFileCommit는 다중 파일 커밋 작업을 실행합니다.
-// 이 메서드는 비즈니스 로직의 핵심을 담당하며, 트랜잭션을 통해 원자적으로 처리합니다.
-// 브랜치/HEAD가 없고 refs/heads가 하나도 없으면 빈 repo로 간주하고 root commit(첫 커밋)을 생성합니다.
-func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository *repositories.RepositoryWrapper, req *MultiFileCommitRequest, branch string, owner, repo, userID string) (*MultiFileCommitResponse, error) {
+// 브랜치/HEAD가 없고 refs/heads가 하나도 없으면 빈 repo로 간주하고 root commit을 생성합니다.
+func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath string, req *MultiFileCommitRequest, branch string, owner, repo, userID string) (*MultiFileCommitResponse, error) {
 	start := time.Now()
 	s.logger.Info("commit: start",
 		zap.String("owner", owner),
@@ -563,15 +337,8 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		zap.String("message", req.Message),
 	)
 
-	gitRepo := repository.GetRepo()
-	if gitRepo == nil {
-		return nil, fmt.Errorf("repository is closed")
-	}
-
-	// Serialize pack writes per repo to prevent concurrent DotGit.ObjectPack panics.
-	// Push handler and commit API both write packfiles to the same filesystem.Storage;
-	// without this lock they race on the shared ObjectStorage index.
-	repoLock := repositories.GetRepoRWLock(repository.Path())
+	// Serialize pack writes per repo to prevent concurrent write panics.
+	repoLock := repositories.GetRepoRWLock(repoPath)
 	lockWaitStart := time.Now()
 	repoLock.Lock()
 	s.logger.Info("commit: lock acquired",
@@ -583,11 +350,9 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 
 	// branch 비어 있으면 HEAD가 가리키는 브랜치 사용 (default branch)
 	if branch == "" {
-		if headRef, err := gitRepo.Reference(plumbing.HEAD, false); err == nil && headRef != nil && headRef.Type() == plumbing.SymbolicReference {
-			target := headRef.Target().String()
-			if strings.HasPrefix(target, "refs/heads/") {
-				branch = strings.TrimPrefix(target, "refs/heads/")
-			}
+		symRef, _ := nativeSymbolicRef(ctx, repoPath)
+		if symRef != "" && strings.HasPrefix(symRef, "refs/heads/") {
+			branch = strings.TrimPrefix(symRef, "refs/heads/")
 		}
 		if branch == "" {
 			branch = "main"
@@ -595,26 +360,21 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 	}
 
 	// 기본 커밋 해시 가져오기
-	baseHash, err := repository.ResolveReference(branch)
+	baseHash, err := nativeResolveRef(ctx, repoPath, "refs/heads/"+branch)
 	if err != nil {
-		baseHash, err = repository.ResolveReference("HEAD")
+		baseHash, err = nativeResolveRef(ctx, repoPath, "HEAD")
 		if err != nil {
 			// 브랜치/HEAD 모두 없음 → 빈 repo면 root commit 허용
-			hasHeads, headErr := repoHasHeads(gitRepo)
-			if headErr != nil {
-				return nil, fmt.Errorf("branch '%s' not found", branch)
-			}
+			hasHeads, _ := nativeHasRefs(ctx, repoPath, "refs/heads/")
 			if hasHeads {
 				return nil, fmt.Errorf("branch '%s' not found", branch)
 			}
 
-			// 빈 repo: default branch만 허용 (HEAD symbolic target 기준, 없으면 main)
+			// 빈 repo: default branch만 허용
 			defaultBranch := "main"
-			if headRef, headErr := gitRepo.Reference(plumbing.HEAD, false); headErr == nil && headRef != nil && headRef.Type() == plumbing.SymbolicReference {
-				target := headRef.Target().String()
-				if strings.HasPrefix(target, "refs/heads/") {
-					defaultBranch = strings.TrimPrefix(target, "refs/heads/")
-				}
+			symRef, _ := nativeSymbolicRef(ctx, repoPath)
+			if symRef != "" && strings.HasPrefix(symRef, "refs/heads/") {
+				defaultBranch = strings.TrimPrefix(symRef, "refs/heads/")
 			}
 			if branch != "" && branch != defaultBranch {
 				return nil, fmt.Errorf("first commit must use default branch '%s'", defaultBranch)
@@ -629,7 +389,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 					return nil, fmt.Errorf("repository has no commits; only create operations are allowed for the first commit")
 				}
 			}
-			baseHash = plumbing.ZeroHash
+			baseHash = "" // empty = root commit
 		}
 	}
 
@@ -637,62 +397,67 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		zap.String("owner", owner),
 		zap.String("repo", repo),
 		zap.String("branch", branch),
-		zap.String("base_hash", baseHash.String()),
+		zap.String("base_hash", baseHash),
 		zap.Duration("elapsed", time.Since(start)),
 	)
 
-	var existingFiles map[string]bool
-	if baseHash != plumbing.ZeroHash {
-		commit, err := gitRepo.CommitObject(baseHash)
+	// Per-path lookup으로 파일 존재 여부 확인
+	var baseTreeHash string
+	if baseHash != "" {
+		baseTreeHash, err = nativeGetTreeHash(ctx, repoPath, baseHash)
 		if err != nil {
 			return nil, fmt.Errorf("commit not found")
 		}
-		tree, err := commit.Tree()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get commit tree")
-		}
-		existingFiles = make(map[string]bool)
-		_ = tree.Files().ForEach(func(f *object.File) error {
-			existingFiles[f.Name] = true
-			return nil
-		})
-	} else {
-		existingFiles = make(map[string]bool)
 	}
 
-	s.logger.Info("commit: existing files scanned",
+	// batchState는 현재 배치 내에서 create/delete/move로 인해 변경된 파일 상태를 추적합니다.
+	batchState := make(map[string]bool)
+	fileExists := func(path string) bool {
+		if state, tracked := batchState[path]; tracked {
+			return state
+		}
+		if baseTreeHash == "" {
+			return false
+		}
+		exists, err := nativeLsTreePath(ctx, repoPath, baseTreeHash, path)
+		if err != nil {
+			return false
+		}
+		return exists
+	}
+
+	s.logger.Info("commit: file lookup ready",
 		zap.String("owner", owner),
 		zap.String("repo", repo),
-		zap.Int("file_count", len(existingFiles)),
 		zap.Duration("elapsed", time.Since(start)),
 	)
 
 	for _, op := range req.Operations {
 		switch op.Operation {
 		case "create":
-			if existingFiles[op.Path] {
+			if fileExists(op.Path) {
 				return nil, fmt.Errorf("file already exists: %s", op.Path)
 			}
-			existingFiles[op.Path] = true
+			batchState[op.Path] = true
 
 		case "delete":
-			if !existingFiles[op.Path] {
+			if !fileExists(op.Path) {
 				return nil, fmt.Errorf("file '%s' not found in repository", op.Path)
 			}
-			delete(existingFiles, op.Path)
+			batchState[op.Path] = false
 
 		case "move":
 			if op.OriginalPath == "" {
 				return nil, fmt.Errorf("original_path is required for move operations")
 			}
-			if !existingFiles[op.OriginalPath] {
+			if !fileExists(op.OriginalPath) {
 				return nil, fmt.Errorf("file '%s' not found in repository", op.OriginalPath)
 			}
-			if existingFiles[op.Path] {
+			if fileExists(op.Path) {
 				return nil, fmt.Errorf("file already exists: %s", op.Path)
 			}
-			delete(existingFiles, op.OriginalPath)
-			existingFiles[op.Path] = true
+			batchState[op.OriginalPath] = false
+			batchState[op.Path] = true
 		}
 	}
 
@@ -709,7 +474,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 
 	// 트랜잭션 옵션 준비
 	options := TransactionOptions{
-		Timeout:            30 * time.Minute, // 기본 타임아웃
+		Timeout:            30 * time.Minute,
 		ValidateOnly:       false,
 		AllowPartialCommit: false,
 	}
@@ -726,19 +491,19 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		}
 	}
 
-	// 커밋 정보 생성 (root commit이면 Parents 비움)
-	parents := []plumbing.Hash{}
-	if baseHash != plumbing.ZeroHash {
-		parents = []plumbing.Hash{baseHash}
+	// 커밋 정보 생성
+	var parents []string
+	if baseHash != "" {
+		parents = []string{baseHash}
 	}
 	commitInfo := CommitInfo{
 		Message: req.Message,
-		Author: object.Signature{
+		Author: NativeSignature{
 			Name:  req.Author.Name,
 			Email: req.Author.Email,
 			When:  time.Now(),
 		},
-		Committer: &object.Signature{
+		Committer: &NativeSignature{
 			Name:  req.Committer.Name,
 			Email: req.Committer.Email,
 			When:  time.Now(),
@@ -755,7 +520,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 
 	// 트랜잭션 시작
 	txnStart := time.Now()
-	transaction, err := s.transactionManager.BeginTransaction(ctx, repository, baseHash, commitInfo, options)
+	transaction, err := s.transactionManager.BeginTransaction(ctx, repoPath, baseHash, commitInfo, options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -829,7 +594,6 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 
 	// 트랜잭션 검증
 	if err := s.transactionManager.ValidateTransaction(ctx, transaction); err != nil {
-		// 부분 커밋의 경우 일부 작업이 검증에 실패해도 계속 진행
 		if !options.AllowPartialCommit {
 			return nil, fmt.Errorf("transaction validation failed: %w", err)
 		}
@@ -845,7 +609,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		zap.Duration("elapsed", time.Since(start)),
 	)
 
-	// 트랜잭션 커밋 (tree 생성 + packfile flush - 가장 오래 걸리는 단계)
+	// 트랜잭션 커밋
 	commitTxnStart := time.Now()
 	s.logger.Info("commit: CommitTransaction start",
 		zap.String("owner", owner),
@@ -866,32 +630,28 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 
 	// 트랜잭션이 성공한 경우 브랜치 참조 업데이트
 	if result.State == TransactionStateCommitted && result.CommitResult != nil {
-		refName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", branch))
-		newRef := plumbing.NewHashReference(refName, result.CommitResult.Hash)
+		refName := fmt.Sprintf("refs/heads/%s", branch)
 		refStart := time.Now()
-		if err := repository.SetReference(newRef); err != nil {
+		if err := nativeUpdateRef(ctx, repoPath, refName, result.CommitResult.Hash); err != nil {
 			s.logger.Error("커밋 성공 후 브랜치 참조 업데이트 실패",
 				zap.String("branch", branch),
-				zap.String("commit_hash", result.CommitResult.Hash.String()),
+				zap.String("commit_hash", result.CommitResult.Hash),
 				zap.Error(err))
 		} else {
 			s.logger.Info("commit: branch ref updated",
 				zap.String("owner", owner),
 				zap.String("repo", repo),
 				zap.String("branch", branch),
-				zap.String("commit_hash", result.CommitResult.Hash.String()),
+				zap.String("commit_hash", result.CommitResult.Hash),
 				zap.Duration("ref_update_dur", time.Since(refStart)),
 				zap.Duration("elapsed", time.Since(start)),
 			)
 		}
 
-		// Publish commit event if enabled (root commit일 때 oldHash는 빈 문자열)
+		// Publish commit event if enabled
 		if s.eventsClient != nil && owner != "" && repo != "" {
-			oldHashStr := baseHash.String()
-			if baseHash == plumbing.ZeroHash {
-				oldHashStr = ""
-			}
-			s.addCommitEventToStream(ctx, repository, oldHashStr, result.CommitResult.Hash, branch, owner, repo, userID)
+			oldHashStr := baseHash
+			s.addCommitEventToStream(ctx, repoPath, oldHashStr, result.CommitResult.Hash, branch, owner, repo, userID)
 		}
 	}
 
@@ -909,10 +669,9 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 	}
 
 	if result.CommitResult != nil {
-		response.CommitSHA = result.CommitResult.Hash.String()
+		response.CommitSHA = result.CommitResult.Hash
 	}
 
-	// 문제가 있었던 경우 세부 정보 추가
 	if result.GetFailedOperationCount() > 0 {
 		response.Details = map[string]interface{}{
 			"partial_success":   options.AllowPartialCommit,
@@ -931,25 +690,32 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repository 
 		zap.Duration("total", time.Since(start)),
 	)
 
+	// Loose object 누적 방지: git gc --auto 비동기 실행
+	if response.Success {
+		go func() {
+			gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer gcCancel()
+			cmd := exec.CommandContext(gcCtx, "git", "--git-dir", repoPath, "gc", "--auto")
+			if err := cmd.Run(); err != nil {
+				s.logger.Debug("git gc --auto failed (non-critical)", zap.String("repo", repoPath), zap.Error(err))
+			}
+		}()
+	}
+
 	return &response, nil
 }
 
-// ExecuteMultiFileCommitOrCreateBranch는 create_branch_name이 있으면 (source_branch_name/branch/HEAD 기준) 브랜치를 만든 후 커밋을 생성합니다.
-// 커밋 생성이 실패하면 브랜치 참조 및 HEAD를 best-effort로 롤백합니다.
+// ExecuteMultiFileCommitOrCreateBranch는 create_branch_name이 있으면 브랜치를 만든 후 커밋을 생성합니다.
 func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
 	ctx context.Context,
-	repository *repositories.RepositoryWrapper,
+	repoPath string,
 	req *MultiFileCommitRequest,
 	owner, repo, userID string,
 ) (*MultiFileCommitResponse, error) {
-	if repository == nil {
-		return nil, fmt.Errorf("repository is closed")
-	}
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
 
-	// 기존 동작 유지: branch 미지정이면 main
 	targetBranch := req.Branch
 	if targetBranch == "" {
 		targetBranch = "main"
@@ -957,13 +723,12 @@ func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
 
 	// create_branch_name이 없으면 기존 branch에 커밋 생성
 	if req.CreateBranchName == "" {
-		return s.ExecuteMultiFileCommit(ctx, repository, req, targetBranch, owner, repo, userID)
+		return s.ExecuteMultiFileCommit(ctx, repoPath, req, targetBranch, owner, repo, userID)
 	}
 
 	// create_branch_name이 있으면 source를 결정하고 브랜치 생성 후 그 브랜치로 커밋
 	sourceRef := req.SourceBranchName
 	if sourceRef == "" {
-		// source_branch_name 미지정 시: branch가 있으면 그 branch를 source로, 아니면 HEAD
 		if req.Branch != "" {
 			sourceRef = req.Branch
 		} else {
@@ -971,111 +736,63 @@ func (s *CommitsService) ExecuteMultiFileCommitOrCreateBranch(
 		}
 	}
 
-	gitRepo := repository.GetRepo()
-	if gitRepo == nil {
-		return nil, fmt.Errorf("repository is closed")
+	// Check if branch already exists
+	branchRefName := fmt.Sprintf("refs/heads/%s", req.CreateBranchName)
+	exists, err := nativeCheckRefExists(ctx, repoPath, branchRefName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check branch existence: %w", err)
 	}
-
-	// Capture rollback info (branch ref + HEAD) before mutating refs.
-	branchRefName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", req.CreateBranchName))
-
-	var existedBefore bool
-	var previousBranchHash plumbing.Hash
-	ref, refErr := gitRepo.Reference(branchRefName, false)
-	switch refErr {
-	case nil:
-		existedBefore = true
-		previousBranchHash = ref.Hash()
-	case plumbing.ErrReferenceNotFound:
-		existedBefore = false
-	default:
-		return nil, fmt.Errorf("failed to read branch reference: %w", refErr)
-	}
-
-	// match BranchService.CreateBranch default behavior: existing branch without force -> conflict
-	if existedBefore {
+	if exists {
 		return nil, fmt.Errorf("branch '%s' already exists", req.CreateBranchName)
 	}
 
-	// HEAD rollback info (best-effort)
-	// IMPORTANT: repo.Head() resolves symbolic refs, so use Reference(HEAD, false) to capture the actual HEAD ref state.
-	var previousHEADType plumbing.ReferenceType
-	var previousHEADTarget plumbing.ReferenceName
-	var previousHEADHash plumbing.Hash
-	if headRef, err := gitRepo.Reference(plumbing.HEAD, false); err == nil && headRef != nil {
-		previousHEADType = headRef.Type()
-		if previousHEADType == plumbing.SymbolicReference {
-			previousHEADTarget = headRef.Target()
-		} else {
-			previousHEADHash = headRef.Hash()
-		}
-	}
-
-	err := createBranchFromSource(gitRepo, req.CreateBranchName, sourceRef)
-	if err != nil {
+	// Resolve source and create branch
+	if err := createBranchFromSource(ctx, repoPath, req.CreateBranchName, sourceRef); err != nil {
 		return nil, err
 	}
 
 	commitReq := *req
 	commitReq.Branch = req.CreateBranchName
-	resp, err := s.ExecuteMultiFileCommit(ctx, repository, &commitReq, commitReq.Branch, owner, repo, userID)
+	resp, err := s.ExecuteMultiFileCommit(ctx, repoPath, &commitReq, commitReq.Branch, owner, repo, userID)
 	if err != nil {
-		// Rollback branch + HEAD if commit creation fails.
-		rbErr := s.rollbackBranchAndHEAD(gitRepo, branchRefName, existedBefore, previousBranchHash, previousHEADType, previousHEADTarget, previousHEADHash)
-		if rbErr != nil {
-			s.logger.Warn("Rollback failed after commit error",
-				zap.String("branch", req.CreateBranchName),
-				zap.Bool("branch_existed_before", existedBefore),
-				zap.Error(rbErr),
-			)
-			return nil, fmt.Errorf("commit failed: %w; rollback failed: %v", err, rbErr)
-		}
+		// Rollback: delete the branch we just created
+		_ = nativeDeleteRef(ctx, repoPath, branchRefName)
 		return nil, err
 	}
 
 	return resp, nil
 }
 
-func resolveSourceReference(repo *git.Repository, source string) (plumbing.Hash, error) {
-	// Try as commit hash first
-	if len(source) >= 7 && len(source) <= 40 {
-		if hash := plumbing.NewHash(source); hash != plumbing.ZeroHash {
-			if _, err := repo.CommitObject(hash); err == nil {
-				return hash, nil
-			}
-		}
+// resolveSourceReference resolves a source reference using native git.
+func resolveSourceReference(ctx context.Context, repoPath, source string) (string, error) {
+	// Try direct resolve (handles commit hashes, branch names, tags, HEAD)
+	hash, err := nativeResolveRef(ctx, repoPath, source)
+	if err == nil {
+		return hash, nil
 	}
 
 	// Try as branch reference
-	branchRef := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", source))
-	if ref, err := repo.Reference(branchRef, false); err == nil {
-		return ref.Hash(), nil
+	hash, err = nativeResolveRef(ctx, repoPath, "refs/heads/"+source)
+	if err == nil {
+		return hash, nil
 	}
 
-	// Try as tag reference
-	tagRef := plumbing.ReferenceName(fmt.Sprintf("refs/tags/%s", source))
-	if ref, err := repo.Reference(tagRef, false); err == nil {
-		tagHash := ref.Hash()
-		tagObj, err := repo.TagObject(tagHash)
-		if err == nil {
-			// Annotated tag - return the target commit hash
-			return tagObj.Target, nil
-		}
-		// Lightweight tag - return the hash directly
-		return tagHash, nil
+	// Try as tag reference (dereference annotated tags)
+	hash, err = nativeResolveRef(ctx, repoPath, "refs/tags/"+source+"^{commit}")
+	if err == nil {
+		return hash, nil
 	}
 
-	// Try HEAD
-	if source == "HEAD" {
-		if headRef, err := repo.Head(); err == nil {
-			return headRef.Hash(), nil
-		}
+	// Try plain tag
+	hash, err = nativeResolveRef(ctx, repoPath, "refs/tags/"+source)
+	if err == nil {
+		return hash, nil
 	}
 
-	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference '%s'", source)
+	return "", fmt.Errorf("unable to resolve reference '%s'", source)
 }
 
-func createBranchFromSource(repo *git.Repository, branchName, source string) error {
+func createBranchFromSource(ctx context.Context, repoPath, branchName, source string) error {
 	if branchName == "" {
 		return fmt.Errorf("branch name is required")
 	}
@@ -1083,86 +800,32 @@ func createBranchFromSource(repo *git.Repository, branchName, source string) err
 		source = "HEAD"
 	}
 
-	sourceCommit, err := resolveSourceReference(repo, source)
+	sourceCommit, err := resolveSourceReference(ctx, repoPath, source)
 	if err != nil {
 		return fmt.Errorf("failed to resolve source reference '%s': %w", source, err)
 	}
 
 	refPath := fmt.Sprintf("refs/heads/%s", branchName)
-	ref := plumbing.NewHashReference(plumbing.ReferenceName(refPath), sourceCommit)
-	if err := repo.Storer.SetReference(ref); err != nil {
+	if err := nativeUpdateRef(ctx, repoPath, refPath, sourceCommit); err != nil {
 		return fmt.Errorf("failed to create branch: %w", err)
 	}
 
 	return nil
 }
 
-func (s *CommitsService) rollbackBranchAndHEAD(
-	repo *git.Repository,
-	branchRefName plumbing.ReferenceName,
-	existedBefore bool,
-	previousBranchHash plumbing.Hash,
-	previousHEADType plumbing.ReferenceType,
-	previousHEADTarget plumbing.ReferenceName,
-	previousHEADHash plumbing.Hash,
-) error {
-	// Branch rollback
-	if existedBefore {
-		if previousBranchHash == plumbing.ZeroHash {
-			return fmt.Errorf("previous branch hash is zero")
-		}
-		if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRefName, previousBranchHash)); err != nil {
-			return fmt.Errorf("failed to restore branch ref: %w", err)
-		}
-	} else {
-		if err := repo.Storer.RemoveReference(branchRefName); err != nil {
-			return fmt.Errorf("failed to remove branch ref: %w", err)
-		}
-	}
-
-	// HEAD rollback (best-effort: only if we captured a previous value)
-	switch previousHEADType {
-	case plumbing.SymbolicReference:
-		if previousHEADTarget != "" {
-			if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, previousHEADTarget)); err != nil {
-				return fmt.Errorf("failed to restore HEAD symbolic ref: %w", err)
-			}
-		}
-	case plumbing.HashReference:
-		if previousHEADHash != plumbing.ZeroHash {
-			if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.HEAD, previousHEADHash)); err != nil {
-				return fmt.Errorf("failed to restore HEAD hash ref: %w", err)
-			}
-		}
-	default:
-		// Unknown/zero: skip
-	}
-
-	return nil
-}
-
 // addCommitEventToStream adds a commit event to Redis Stream
-func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repositories.RepositoryWrapper, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string) {
+func (s *CommitsService) addCommitEventToStream(ctx context.Context, repoPath, oldHash, commitHash, refName, owner, repoName, userID string) {
 	if s.eventsClient == nil {
 		return
 	}
 
-	// Get commit object to verify it exists
-	commit, err := repo.CommitObject(commitHash)
+	// Get commit info to verify it exists
+	commit, err := nativeGetCommitInfo(ctx, repoPath, commitHash)
 	if err != nil {
-		// Not a commit, skip
 		return
 	}
 
-	// Get repository path from the wrapper
-	repoPath := repo.Path()
-	if repoPath == "" {
-		// Skip if we can't get the path
-		return
-	}
-
-	// Convert to relative path (work_space_name/uuid.git format)
-	// Use default RepoRoot if not available
+	// Convert to relative path
 	defaultRepoRoot := "/var/lib/git/repos"
 	relativePath := events.GetRelativeRepoPath(repoPath, defaultRepoRoot)
 
@@ -1171,28 +834,25 @@ func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repos
 		refName = "refs/heads/" + refName
 	}
 
-	// Create event
 	event := &events.CommitEvent{
 		RepoPath:      relativePath,
 		EventType:     events.EventTypeCommit,
-		CommitHash:    commitHash.String(),
+		CommitHash:    commitHash,
 		OldRev:        oldHash,
 		RefName:       refName,
-		Pusher:        "git", // Default pusher identifier
+		Pusher:        "git",
 		UserID:        userID,
 		CommitMessage: commit.Message,
-		Timestamp:     commit.Committer.When,
+		Timestamp:     commit.Committer.Date,
 	}
 
-	// Debug log for commit event creation
 	s.logger.Debug("Creating commit event with user context",
 		zap.String("user_id", userID),
-		zap.String("commit_hash", commitHash.String()),
+		zap.String("commit_hash", commitHash),
 		zap.String("ref_name", refName),
 		zap.String("owner", owner),
 		zap.String("repo", repoName))
 
-	// Publish asynchronously to avoid blocking
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -1200,7 +860,7 @@ func (s *CommitsService) addCommitEventToStream(ctx context.Context, repo *repos
 		if err := s.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			s.logger.Error("Failed to publish commit event",
 				zap.String("repo_path", repoPath),
-				zap.String("commit_hash", commitHash.String()),
+				zap.String("commit_hash", commitHash),
 				zap.String("event_type", string(event.EventType)),
 				zap.Error(err))
 		}

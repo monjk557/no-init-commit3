@@ -11,10 +11,6 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/repositories"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
@@ -52,94 +48,60 @@ const (
 
 // TransactionOptions는 트랜잭션 동작을 설정합니다
 type TransactionOptions struct {
-	// Timeout은 트랜잭션의 최대 지속 시간
-	Timeout time.Duration
-	// ValidateOnly는 커밋 없이 검증만 수행
-	ValidateOnly bool
-	// AllowPartialCommit은 일부 작업이 실패해도 커밋을 허용
+	Timeout            time.Duration
+	ValidateOnly       bool
 	AllowPartialCommit bool
-	// MaxRetries는 최대 재시도 횟수
-	MaxRetries int
+	MaxRetries         int
 }
 
 // FileChange는 파일 변경 사항을 나타냅니다
 type FileChange struct {
-	// Path는 저장소 루트 기준 파일 경로
-	Path string
-	// Operation은 수행할 작업 유형
-	Operation FileOperation
-	// Content는 새 파일 내용 (create/update 작업용)
-	Content []byte
-	// Mode는 파일 모드 (선택사항, 기본값은 0644)
-	Mode *filemode.FileMode
-	// OriginalPath는 이름 변경 작업의 원본 경로
+	Path         string
+	Operation    FileOperation
+	Content      []byte
+	Mode         *string // "100644", "100755"
 	OriginalPath string
 }
 
 // CommitInfo는 커밋 메타데이터를 나타냅니다
 type CommitInfo struct {
-	// Message는 커밋 메시지
-	Message string
-	// Author는 작성자 정보
-	Author object.Signature
-	// Committer는 커밋터 정보 (선택사항, 기본값은 Author)
-	Committer *object.Signature
-	// Parents는 부모 커밋 해시들
-	Parents []plumbing.Hash
+	Message   string
+	Author    NativeSignature
+	Committer *NativeSignature
+	Parents   []string
 }
 
 // CommitResult는 커밋 작업의 결과를 나타냅니다
 type CommitResult struct {
-	// Hash는 새 커밋 해시
-	Hash plumbing.Hash
-	// TreeHash는 트리 해시
-	TreeHash plumbing.Hash
-	// Message는 커밋 메시지
-	Message string
-	// Author는 커밋 작성자
-	Author object.Signature
-	// Committer는 커밋 커밋터
-	Committer object.Signature
-	// Parents는 부모 커밋 해시들
-	Parents []plumbing.Hash
+	Hash      string
+	TreeHash  string
+	Message   string
+	Author    NativeSignature
+	Committer NativeSignature
+	Parents   []string
 }
 
 // TransactionOperation은 트랜잭션 내의 단일 작업을 나타냅니다
 type TransactionOperation struct {
-	// ID는 이 작업의 고유 식별자
-	ID string
-	// Type는 작업 유형
-	Type FileOperation
-	// FileChange는 파일 변경 사항
+	ID         string
+	Type       FileOperation
 	FileChange FileChange
-	// State는 이 작업의 현재 상태
-	State TransactionState
-	// Error는 이 작업 중 발생한 오류
-	Error error
-	// Timestamp는 이 작업이 추가된 시간
-	Timestamp time.Time
+	State      TransactionState
+	Error      error
+	Timestamp  time.Time
 }
 
 // TransactionResult는 트랜잭션의 결과를 나타냅니다
 type TransactionResult struct {
-	// TransactionID는 이 트랜잭션의 고유 식별자
-	TransactionID string
-	// State는 트랜잭션의 최종 상태
-	State TransactionState
-	// CommitResult는 성공 시 커밋 정보를 포함
-	CommitResult *CommitResult
-	// Operations는 모든 작업에 대한 세부 정보
-	Operations []*TransactionOperation
-	// SuccessfulOperations는 성공한 작업의 ID 목록
+	TransactionID        string
+	State                TransactionState
+	CommitResult         *CommitResult
+	Operations           []*TransactionOperation
 	SuccessfulOperations []string
-	// FailedOperations는 실패한 작업의 ID와 오류 맵
-	FailedOperations map[string]error
-	// StartTime는 트랜잭션이 시작된 시간
-	StartTime time.Time
-	// EndTime는 트랜잭션이 완료된 시간
-	EndTime time.Time
-	// Duration는 총 트랜잭션 지속 시간
-	Duration time.Duration
+	FailedOperations     map[string]error
+	StartTime            time.Time
+	EndTime              time.Time
+	Duration             time.Duration
 }
 
 // GetSuccessfulOperationCount는 성공한 작업 수를 반환합니다
@@ -154,41 +116,26 @@ func (tr *TransactionResult) GetFailedOperationCount() int {
 
 // Transaction은 원자적 다중 파일 작업을 나타냅니다
 type Transaction struct {
-	// ID는 고유 식별자
-	ID string
-	// State는 현재 트랜잭션 상태
-	State TransactionState
-	// Repository는 대상 Git 저장소
-	Repository *repositories.RepositoryWrapper
-	// BaseCommitHash는 이 트랜잭션의 기본 커밋
-	BaseCommitHash plumbing.Hash
-	// BaseTree는 이 트랜잭션의 기본 트리
-	BaseTree *object.Tree
-	// Operations는 이 트랜잭션의 모든 작업
-	Operations []*TransactionOperation
-	// CommitInfo는 커밋 메타데이터
-	CommitInfo CommitInfo
-	// Options는 트랜잭션 설정
-	Options TransactionOptions
-	// StartTime는 트랜잭션이 생성된 시간
-	StartTime time.Time
-	// TimeoutTimer는 트랜잭션 타임아웃을 추적
-	TimeoutTimer *time.Timer
-	// mutex는 동시 접근을 보호
-	mutex sync.RWMutex
-	// manager는 트랜잭션 매니저 참조
-	manager *TransactionManager
+	ID             string
+	State          TransactionState
+	RepoPath       string
+	BaseCommitHash string // empty string for root commit
+	BaseTreeHash   string // empty string for root commit
+	Operations     []*TransactionOperation
+	CommitInfo     CommitInfo
+	Options        TransactionOptions
+	StartTime      time.Time
+	TimeoutTimer   *time.Timer
+	mutex          sync.RWMutex
+	manager        *TransactionManager
 }
 
 // TransactionManager는 원자적 다중 파일 작업을 위한 Git 트랜잭션을 관리합니다
 type TransactionManager struct {
-	logger *logging.Logger
-	// activeTransactions는 모든 활성 트랜잭션을 추적
+	logger             *logging.Logger
 	activeTransactions map[string]*Transaction
-	// mutex는 activeTransactions에 대한 동시 접근을 보호
-	mutex sync.RWMutex
-	// defaultTimeout는 기본 트랜잭션 타임아웃
-	defaultTimeout time.Duration
+	mutex              sync.RWMutex
+	defaultTimeout     time.Duration
 }
 
 // NewTransactionManager는 새로운 트랜잭션 매니저를 생성합니다
@@ -196,7 +143,7 @@ func NewTransactionManager(logger *logging.Logger) *TransactionManager {
 	return &TransactionManager{
 		logger:             logger,
 		activeTransactions: make(map[string]*Transaction),
-		defaultTimeout:     5 * time.Minute, // 기본 5분 타임아웃
+		defaultTimeout:     5 * time.Minute,
 	}
 }
 
@@ -210,39 +157,29 @@ func generateRandomID(length int) string {
 }
 
 // BeginTransaction은 새 트랜잭션을 시작합니다.
-// baseCommit이 ZeroHash이면 root commit(첫 커밋)용으로 BaseTree 없이 시작합니다.
-func (tm *TransactionManager) BeginTransaction(ctx context.Context, repo *repositories.RepositoryWrapper, baseCommit plumbing.Hash, commitInfo CommitInfo, options TransactionOptions) (*Transaction, error) {
+// baseCommit이 빈 문자열이면 root commit(첫 커밋)용으로 BaseTreeHash 없이 시작합니다.
+func (tm *TransactionManager) BeginTransaction(ctx context.Context, repoPath string, baseCommit string, commitInfo CommitInfo, options TransactionOptions) (*Transaction, error) {
 	txnID := fmt.Sprintf("txn_%d_%s", time.Now().UnixNano(), generateRandomID(8))
 
-	// 타임아웃이 지정되지 않은 경우 기본값 설정
 	if options.Timeout == 0 {
 		options.Timeout = tm.defaultTimeout
 	}
 
-	gitRepo := repo.GetRepo()
-	if gitRepo == nil {
-		return nil, fmt.Errorf("repository is closed")
-	}
-
-	var baseTree *object.Tree
-	if baseCommit != plumbing.ZeroHash {
-		commitObj, err := gitRepo.CommitObject(baseCommit)
+	var baseTreeHash string
+	if baseCommit != "" {
+		var err error
+		baseTreeHash, err = nativeGetTreeHash(ctx, repoPath, baseCommit)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get base commit: %w", err)
-		}
-		baseTree, err = commitObj.Tree()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get base tree: %w", err)
+			return nil, fmt.Errorf("failed to get base commit tree: %w", err)
 		}
 	}
-	// baseCommit == ZeroHash: root commit, BaseTree is nil
 
 	txn := &Transaction{
 		ID:             txnID,
 		State:          TransactionStateActive,
-		Repository:     repo,
+		RepoPath:       repoPath,
 		BaseCommitHash: baseCommit,
-		BaseTree:       baseTree,
+		BaseTreeHash:   baseTreeHash,
 		Operations:     make([]*TransactionOperation, 0),
 		CommitInfo:     commitInfo,
 		Options:        options,
@@ -250,7 +187,6 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, repo *reposi
 		manager:        tm,
 	}
 
-	// 타임아웃 타이머 설정
 	txn.TimeoutTimer = time.AfterFunc(options.Timeout, func() {
 		tm.logger.Warn("트랜잭션 타임아웃",
 			zap.String("transaction_id", txnID),
@@ -262,7 +198,6 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, repo *reposi
 		}
 	})
 
-	// 트랜잭션 저장
 	tm.mutex.Lock()
 	tm.activeTransactions[txnID] = txn
 	tm.mutex.Unlock()
@@ -279,7 +214,6 @@ func (tm *TransactionManager) AddOperation(ctx context.Context, txn *Transaction
 		return fmt.Errorf("cannot add operation to transaction in state: %s", txn.State)
 	}
 
-	// 작업 ID가 제공되지 않은 경우 생성
 	if operation.ID == "" {
 		operation.ID = fmt.Sprintf("op_%d_%s", len(txn.Operations), generateRandomID(6))
 	}
@@ -308,8 +242,8 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 
 	txn.State = TransactionStateValidating
 
-	// root commit(BaseTree nil)인 경우 create 작업만 허용
-	if txn.BaseTree == nil {
+	// root commit(BaseTreeHash empty)인 경우 create 작업만 허용
+	if txn.BaseTreeHash == "" {
 		for _, op := range txn.Operations {
 			op.State = TransactionStateValidating
 			if op.Type != FileOperationCreate {
@@ -329,10 +263,9 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 	for _, op := range txn.Operations {
 		op.State = TransactionStateValidating
 
-		// 필요한 경우 파일 존재 확인
 		if op.Type == FileOperationUpdate || op.Type == FileOperationDelete {
-			_, err := txn.BaseTree.File(op.FileChange.Path)
-			if err != nil {
+			exists, err := nativeLsTreePath(ctx, txn.RepoPath, txn.BaseTreeHash, op.FileChange.Path)
+			if err != nil || !exists {
 				op.State = TransactionStateFailed
 				op.Error = fmt.Errorf("file not found for %s operation: %s", op.Type, op.FileChange.Path)
 				if !txn.Options.AllowPartialCommit {
@@ -342,10 +275,9 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 			}
 		}
 
-		// move의 경우 original_path가 존재해야 함
 		if op.Type == FileOperationMove {
-			_, err := txn.BaseTree.File(op.FileChange.OriginalPath)
-			if err != nil {
+			exists, err := nativeLsTreePath(ctx, txn.RepoPath, txn.BaseTreeHash, op.FileChange.OriginalPath)
+			if err != nil || !exists {
 				op.State = TransactionStateFailed
 				op.Error = fmt.Errorf("file not found for move operation: %s", op.FileChange.OriginalPath)
 				if !txn.Options.AllowPartialCommit {
@@ -356,9 +288,7 @@ func (tm *TransactionManager) ValidateTransaction(ctx context.Context, txn *Tran
 		}
 	}
 
-	// 여기까지 왔다면 검증 통과
 	txn.State = TransactionStateActive
-
 	return nil
 }
 
@@ -381,22 +311,18 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		StartTime:            txn.StartTime,
 	}
 
-	// 타임아웃 타이머 중지
 	if txn.TimeoutTimer != nil {
 		txn.TimeoutTimer.Stop()
 	}
 
-	// 검증 전용 트랜잭션인 경우 커밋 없이 성공 반환
 	if txn.Options.ValidateOnly {
 		result.State = TransactionStateCommitted
 		result.EndTime = time.Now()
 		result.Duration = result.EndTime.Sub(result.StartTime)
 		txn.State = TransactionStateCommitted
-
 		return result, nil
 	}
 
-	// 원자적 커밋을 위한 파일 변경 사항 준비
 	validChanges := make([]FileChange, 0, len(txn.Operations))
 	for _, op := range txn.Operations {
 		if op.State != TransactionStateFailed {
@@ -407,7 +333,6 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		}
 	}
 
-	// 유효한 변경 사항이 없고 부분 커밋을 허용하지 않는 경우 실패
 	if len(validChanges) == 0 && !txn.Options.AllowPartialCommit {
 		txn.State = TransactionStateFailed
 		result.State = TransactionStateFailed
@@ -416,8 +341,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		return result, fmt.Errorf("no valid operations to commit")
 	}
 
-	// 변경 사항으로부터 트리 생성 (flush는 createCommit에서 commit과 함께 단일 packfile로 수행)
-	treeResult, treeCollector, err := createTreeFromChanges(txn.Repository, txn.BaseTree, validChanges)
+	treeResult, err := createTreeFromChanges(ctx, txn.RepoPath, txn.BaseTreeHash, validChanges)
 	if err != nil {
 		txn.State = TransactionStateFailed
 		result.State = TransactionStateFailed
@@ -426,8 +350,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		return result, fmt.Errorf("failed to create tree: %w", err)
 	}
 
-	// 커밋 생성: treeCollector에 commit 추가 후 단일 flush → reloadIndex 1회
-	commitResult, err := createCommit(txn.Repository, treeResult.TreeHash, txn.CommitInfo, treeCollector)
+	commitResult, err := createCommitNative(ctx, txn.RepoPath, treeResult.TreeHash, txn.CommitInfo)
 	if err != nil {
 		txn.State = TransactionStateFailed
 		result.State = TransactionStateFailed
@@ -436,7 +359,6 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context, txn *Transa
 		return result, fmt.Errorf("failed to create commit: %w", err)
 	}
 
-	// 성공!
 	txn.State = TransactionStateCommitted
 	result.State = TransactionStateCommitted
 	result.CommitResult = commitResult
@@ -459,12 +381,10 @@ func (tm *TransactionManager) RollbackTransaction(ctx context.Context, txn *Tran
 		zap.String("transaction_id", txn.ID),
 		zap.String("previous_state", string(txn.State)))
 
-	// 타임아웃 타이머 중지
 	if txn.TimeoutTimer != nil {
 		txn.TimeoutTimer.Stop()
 	}
 
-	// 모든 작업을 롤백됨으로 표시
 	for _, op := range txn.Operations {
 		if op.State != TransactionStateFailed {
 			op.State = TransactionStateRolledBack
@@ -511,52 +431,47 @@ func (tm *TransactionManager) CleanupTransaction(txnID string) {
 
 // TreeManipulationResult는 트리 조작 작업의 결과를 나타냅니다
 type TreeManipulationResult struct {
-	// TreeHash는 결과 트리 해시
-	TreeHash plumbing.Hash
-	// ChangedFiles는 수정된 모든 파일 목록
+	TreeHash     string
 	ChangedFiles []string
-	// CreatedFiles는 생성된 모든 파일 목록
 	CreatedFiles []string
-	// DeletedFiles는 삭제된 모든 파일 목록
 	DeletedFiles []string
 }
 
+// TreeFileInfo는 트리 파일 정보를 나타냅니다
+type TreeFileInfo struct {
+	Hash string
+	Mode string // "100644", "100755"
+}
+
 // createTreeFromChanges는 변경 사항으로부터 트리를 생성합니다.
-// 서브디렉토리를 올바르게 처리하기 위해 재귀적으로 트리를 생성합니다.
-// baseTree가 nil이면 root commit으로 빈 트리에서 시작합니다.
-// 모든 blob/tree 오브젝트는 packfile로 저장됩니다.
-func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *object.Tree, changes []FileChange) (*TreeManipulationResult, *objectCollector, error) {
-	gitRepo := repo.GetRepo()
-	if gitRepo == nil {
-		return nil, nil, fmt.Errorf("repository is closed")
-	}
-
-	c := newObjectCollector()
-
-	// 모든 파일을 경로별로 맵에 저장 (기본 트리에서; root commit이면 빈 맵)
+// baseTreeHash가 빈 문자열이면 root commit으로 빈 트리에서 시작합니다.
+func createTreeFromChanges(ctx context.Context, repoPath, baseTreeHash string, changes []FileChange) (*TreeManipulationResult, error) {
+	// 모든 파일을 경로별로 맵에 저장
 	files := make(map[string]TreeFileInfo)
-	if baseTree != nil {
-		_ = baseTree.Files().ForEach(func(f *object.File) error {
-			files[f.Name] = TreeFileInfo{
-				Hash: f.Hash,
-				Mode: f.Mode,
+	if baseTreeHash != "" {
+		entries, err := nativeLsTree(ctx, repoPath, baseTreeHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list base tree: %w", err)
+		}
+		for _, e := range entries {
+			files[e.Path] = TreeFileInfo{
+				Hash: e.Hash,
+				Mode: e.Mode,
 			}
-			return nil
-		})
+		}
 	}
 
 	var createdFiles, changedFiles, deletedFiles []string
 
-	// 변경 사항 적용
 	for _, change := range changes {
 		switch change.Operation {
 		case FileOperationCreate, FileOperationUpdate:
-			blobHash, err := createBlob(change.Content, c)
+			blobHash, err := nativeHashObject(ctx, repoPath, change.Content)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
+				return nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
 			}
 
-			mode := filemode.Regular
+			mode := "100644"
 			if change.Mode != nil {
 				mode = *change.Mode
 			}
@@ -578,22 +493,22 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 
 		case FileOperationMove:
 			if strings.TrimSpace(change.OriginalPath) == "" {
-				return nil, nil, fmt.Errorf("original_path is required for move operation")
+				return nil, fmt.Errorf("original_path is required for move operation")
 			}
 
 			srcInfo, ok := files[change.OriginalPath]
 			if !ok {
-				return nil, nil, fmt.Errorf("file '%s' not found in repository", change.OriginalPath)
+				return nil, fmt.Errorf("file '%s' not found in repository", change.OriginalPath)
 			}
 			if _, exists := files[change.Path]; exists {
-				return nil, nil, fmt.Errorf("file already exists: %s", change.Path)
+				return nil, fmt.Errorf("file already exists: %s", change.Path)
 			}
 
 			newHash := srcInfo.Hash
 			if len(change.Content) > 0 {
-				blobHash, err := createBlob(change.Content, c)
+				blobHash, err := nativeHashObject(ctx, repoPath, change.Content)
 				if err != nil {
-					return nil, nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
+					return nil, fmt.Errorf("failed to create blob for %s: %w", change.Path, err)
 				}
 				newHash = blobHash
 			}
@@ -614,9 +529,9 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 		}
 	}
 
-	treeHash, err := buildTreeRecursive(files, "", c)
+	treeHash, err := buildTreeRecursive(ctx, repoPath, files, "")
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build tree: %w", err)
+		return nil, fmt.Errorf("failed to build tree: %w", err)
 	}
 
 	return &TreeManipulationResult{
@@ -624,21 +539,14 @@ func createTreeFromChanges(repo *repositories.RepositoryWrapper, baseTree *objec
 		ChangedFiles: changedFiles,
 		CreatedFiles: createdFiles,
 		DeletedFiles: deletedFiles,
-	}, c, nil
+	}, nil
 }
 
-// TreeFileInfo는 트리 파일 정보를 나타냅니다
-type TreeFileInfo struct {
-	Hash plumbing.Hash
-	Mode filemode.FileMode
-}
-
-// buildTreeRecursive는 재귀적으로 트리를 생성합니다 (collector에 누적).
-func buildTreeRecursive(files map[string]TreeFileInfo, dirPath string, c *objectCollector) (plumbing.Hash, error) {
-	var entries []object.TreeEntry
+// buildTreeRecursive는 재귀적으로 트리를 생성합니다.
+func buildTreeRecursive(ctx context.Context, repoPath string, files map[string]TreeFileInfo, dirPath string) (string, error) {
+	var entries []nativeMkTreeEntry
 	subdirs := make(map[string]bool)
 
-	// 현재 디렉토리의 파일과 서브디렉토리 찾기
 	for filePath, fileInfo := range files {
 		var relativePath string
 		if dirPath == "" {
@@ -650,22 +558,20 @@ func buildTreeRecursive(files map[string]TreeFileInfo, dirPath string, c *object
 			relativePath = strings.TrimPrefix(filePath, dirPath+"/")
 		}
 
-		// 서브디렉토리에 있는 파일은 건너뛰기
 		parts := strings.Split(relativePath, "/")
 		if len(parts) > 1 {
 			subdirs[parts[0]] = true
 			continue
 		}
 
-		// 파일 엔트리 추가
-		entries = append(entries, object.TreeEntry{
-			Name: parts[0],
+		entries = append(entries, nativeMkTreeEntry{
 			Mode: fileInfo.Mode,
+			Type: "blob",
 			Hash: fileInfo.Hash,
+			Name: parts[0],
 		})
 	}
 
-	// 서브디렉토리 엔트리 추가
 	for subdirName := range subdirs {
 		var subdirPath string
 		if dirPath == "" {
@@ -674,57 +580,35 @@ func buildTreeRecursive(files map[string]TreeFileInfo, dirPath string, c *object
 			subdirPath = dirPath + "/" + subdirName
 		}
 
-		subdirTreeHash, err := buildTreeRecursive(files, subdirPath, c)
+		subdirTreeHash, err := buildTreeRecursive(ctx, repoPath, files, subdirPath)
 		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("failed to build subtree for %s: %w", subdirPath, err)
+			return "", fmt.Errorf("failed to build subtree for %s: %w", subdirPath, err)
 		}
 
-		entries = append(entries, object.TreeEntry{
-			Name: subdirName,
-			Mode: filemode.Dir,
+		entries = append(entries, nativeMkTreeEntry{
+			Mode: "040000",
+			Type: "tree",
 			Hash: subdirTreeHash,
+			Name: subdirName,
 		})
 	}
 
-	// 트리 엔트리 정렬 (Git 요구사항)
-	sortTreeEntries(entries)
+	// Sort tree entries (Git requirement): directories get "/" appended for comparison
+	sortNativeTreeEntries(entries)
 
-	treeHash, err := c.encodeTree(&object.Tree{Entries: entries})
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
-	}
-
-	return treeHash, nil
+	return nativeMkTree(ctx, repoPath, entries)
 }
 
-// createCommit는 커밋을 생성합니다. 오브젝트는 packfile로 저장됩니다.
-// createCommit encodes the commit into c (which may already hold tree/blob objects)
-// and flushes everything as a single packfile, avoiding a second reloadIndex call.
-func createCommit(repo *repositories.RepositoryWrapper, treeHash plumbing.Hash, commitInfo CommitInfo, c *objectCollector) (*CommitResult, error) {
-	gitRepo := repo.GetRepo()
-	if gitRepo == nil {
-		return nil, fmt.Errorf("repository is closed")
-	}
-
+// createCommitNative creates a commit object using native git.
+func createCommitNative(ctx context.Context, repoPath, treeHash string, commitInfo CommitInfo) (*CommitResult, error) {
 	committer := commitInfo.Author
 	if commitInfo.Committer != nil {
 		committer = *commitInfo.Committer
 	}
 
-	commit := &object.Commit{
-		Author:       commitInfo.Author,
-		Committer:    committer,
-		Message:      commitInfo.Message,
-		TreeHash:     treeHash,
-		ParentHashes: commitInfo.Parents,
-	}
-
-	commitHash, err := c.encodeCommit(commit)
+	commitHash, err := nativeCommitTree(ctx, repoPath, treeHash, commitInfo.Parents, commitInfo.Message, &commitInfo.Author, &committer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode commit: %w", err)
-	}
-	if err := c.flush(gitRepo.Storer); err != nil {
-		return nil, fmt.Errorf("failed to persist commit: %w", err)
+		return nil, fmt.Errorf("failed to create commit: %w", err)
 	}
 
 	return &CommitResult{
@@ -737,31 +621,17 @@ func createCommit(repo *repositories.RepositoryWrapper, treeHash plumbing.Hash, 
 	}, nil
 }
 
-// createBlob은 blob을 collector에 추가합니다 (storage에 바로 쓰지 않음).
-func createBlob(content []byte, c *objectCollector) (plumbing.Hash, error) {
-	h, err := c.addBlob(content)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode blob: %w", err)
-	}
-	return h, nil
-}
-
-// sortTreeEntries는 트리 엔트리를 정렬합니다 (Git 요구사항)
-// Git tree entries must be sorted using the same logic as go-git's TreeEntrySorter:
-// - Directories have "/" appended to their name for comparison
-// - This ensures directories come before files with the same prefix
-// - Then entries are sorted alphabetically by the modified name
-func sortTreeEntries(entries []object.TreeEntry) {
-	// sort.Slice를 사용하여 효율적으로 정렬
+// sortNativeTreeEntries sorts tree entries using Git's sorting convention:
+// directories have "/" appended to their name for comparison.
+func sortNativeTreeEntries(entries []nativeMkTreeEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		name1 := entries[i].Name
 		name2 := entries[j].Name
 
-		// 디렉토리 이름에 "/"를 추가하여 비교 (go-git의 TreeEntrySorter와 동일)
-		if entries[i].Mode == filemode.Dir {
+		if entries[i].Mode == "040000" {
 			name1 += "/"
 		}
-		if entries[j].Mode == filemode.Dir {
+		if entries[j].Mode == "040000" {
 			name2 += "/"
 		}
 

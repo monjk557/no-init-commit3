@@ -157,3 +157,17 @@ type CommitInfo struct {
 	Email   string    `json:"email"`
 	Date    time.Time `json:"date"`
 }
+
+// SimpleBranchInfo는 간단한 브랜치 정보를 나타냅니다.
+type SimpleBranchInfo struct {
+	Name      string
+	Hash      string
+	IsRemote  bool
+	IsCurrent bool
+}
+
+// BranchAheadBehind represents ahead/behind counts for a branch compared to another branch
+type BranchAheadBehind struct {
+	Ahead  int
+	Behind int
+}

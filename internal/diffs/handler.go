@@ -103,7 +103,9 @@ func (h *DiffHandler) HandleCommitDiff(c *gin.Context) {
 		errStr := err.Error()
 		if strings.Contains(errStr, "object not found") ||
 			strings.Contains(errStr, "not found") ||
-			strings.Contains(errStr, "reference not found") {
+			strings.Contains(errStr, "reference not found") ||
+			strings.Contains(errStr, "Invalid revision range") ||
+			strings.Contains(errStr, "bad revision") {
 			h.logger.Warn("Reference or object not found", zap.Error(err))
 			c.JSON(http.StatusNotFound, gin.H{
 				"success": false,
@@ -200,7 +202,9 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 		errStr := err.Error()
 		if strings.Contains(errStr, "object not found") ||
 			strings.Contains(errStr, "not found") ||
-			strings.Contains(errStr, "reference not found") {
+			strings.Contains(errStr, "reference not found") ||
+			strings.Contains(errStr, "Invalid revision range") ||
+			strings.Contains(errStr, "bad revision") {
 			h.logger.Warn("Reference or object not found", zap.Error(err))
 			c.JSON(http.StatusNotFound, gin.H{
 				"success": false,

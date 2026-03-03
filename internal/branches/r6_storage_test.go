@@ -1,6 +1,7 @@
 package branches
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -119,14 +120,9 @@ func Test_ListBranches_PackedRefsOnOff_SameResult(t *testing.T) {
 	copyDirR6(t, looseRoot, packedRoot)
 	makePackedRefsFromLooseR6(t, packedRoot)
 
-	repoLoose, err := gogit.PlainOpen(looseRoot)
+	listLoose, err := GetBranches(context.Background(), looseRoot)
 	require.NoError(t, err)
-	repoPacked, err := gogit.PlainOpen(packedRoot)
-	require.NoError(t, err)
-
-	listLoose, err := GetBranches(repoLoose)
-	require.NoError(t, err)
-	listPacked, err := GetBranches(repoPacked)
+	listPacked, err := GetBranches(context.Background(), packedRoot)
 	require.NoError(t, err)
 
 	sort.Slice(listLoose, func(i, j int) bool { return listLoose[i].Name < listLoose[j].Name })

@@ -26,8 +26,6 @@ type BranchOperationsHandler struct {
 	logger            *logging.Logger
 	pathConfig        *repositories.PathConfig
 	pathValidator     *repositories.GitAPIPathValidator
-	repoManager       *repositories.DefaultRepositoryManager
-	objectManager     *repositories.GitObjectManager
 	branchNamePattern *regexp.Regexp
 	service           *BranchService
 	eventsClient      events.RedisStreamClient
@@ -49,18 +47,6 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 
 	// Create path validator
 	pathValidator := repositories.NewGitAPIPathValidator(pathConfig)
-
-	// Create repository manager
-	repoManager, err := repositories.NewRepositoryManager(pathConfig, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create repository manager: %w", err)
-	}
-
-	// Create object manager
-	objectManager, err := repositories.NewGitObjectManager(pathConfig, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create object manager: %w", err)
-	}
 
 	// Compile branch name pattern following git check-ref-format rules (blocklist approach)
 	// Blocks: control chars (0x00-0x1f, 0x7f), space, ~, ^, :, ?, *, [, \
@@ -87,8 +73,6 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 		logger:            logger,
 		pathConfig:        pathConfig,
 		pathValidator:     pathValidator,
-		repoManager:       repoManager,
-		objectManager:     objectManager,
 		branchNamePattern: branchNamePattern,
 		service:           service,
 		eventsClient:      eventsClient,
@@ -97,15 +81,13 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 
 // repositoryContext는 저장소 관련 공통 컨텍스트를 담는 구조체입니다.
 type repositoryContext struct {
-	owner       string
-	repo        string
-	repoPath    string
-	repoWrapper *repositories.RepositoryWrapper
+	owner    string
+	repo     string
+	repoPath string
 }
 
-// validateAndOpenRepository는 저장소 검증 및 열기를 수행하는 공통 로직입니다.
-func (h *BranchOperationsHandler) validateAndOpenRepository(ctx context.Context, c *gin.Context, owner, repo string) (*repositoryContext, bool) {
-	// 경로 구성 요소 검증
+// validateAndGetRepoPath는 저장소 검증 및 경로를 가져오는 공통 로직입니다.
+func (h *BranchOperationsHandler) validateAndGetRepoPath(ctx context.Context, c *gin.Context, owner, repo string) (*repositoryContext, bool) {
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -114,26 +96,16 @@ func (h *BranchOperationsHandler) validateAndOpenRepository(ctx context.Context,
 		return nil, false
 	}
 
-	// 저장소 경로 가져오기
-	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
-	}
-
-	// 저장소 열기 (존재 여부는 OpenRepository에서 확인)
-	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
-	if err != nil {
-		// repository not found 또는 corrupted
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return nil, false
 	}
 
 	return &repositoryContext{
-		owner:       owner,
-		repo:        repo,
-		repoPath:    repoPath,
-		repoWrapper: repoWrapper,
+		owner:    owner,
+		repo:     repo,
+		repoPath: repoPath,
 	}, true
 }
 
@@ -146,23 +118,15 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
 	repo := c.Param("repo")
 	name := c.Param("name")
 
-	// limit 파라미터 파싱 및 검증
-
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
-	if !ok {
-		// validateAndOpenRepository already sent the response
-		return
-	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
-
-	repository := repoCtx.repoWrapper.GetRepo()
-	if repository == nil {
+	// 저장소 경로 검증
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return
 	}
 
-	// get branches by name
-	isAvailable, _, err := h.service.checkBranchExists(repository, name)
+	// native git으로 브랜치 존재 여부 확인
+	exists, _, err := NativeCheckBranchExists(ctx, repoPath, name)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -170,7 +134,7 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":      true,
-		"is_available": !isAvailable,
+		"is_available": !exists,
 	})
 }
 
@@ -212,16 +176,15 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		skip = parsedSkip
 	}
 
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
-	if !ok {
+	// 저장소 경로 검증
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return
 	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	repository := repoCtx.repoWrapper.GetRepo()
-
-	// 모든 브랜치 가져오기
-	allBranches, err := h.service.GetBranches(repository)
+	// native git으로 모든 브랜치 가져오기
+	allBranches, err := h.service.GetBranches(ctx, repoPath)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -314,14 +277,15 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) {
 		return
 	}
 
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
-	if !ok {
+	// 저장소 경로 검증
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return
 	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	repository := repoCtx.repoWrapper.GetRepo()
-	exists, hash, err := h.service.checkBranchExists(repository, ref)
+	// native git으로 브랜치 존재 여부 확인
+	exists, hash, err := NativeCheckBranchExists(ctx, repoPath, ref)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
@@ -334,7 +298,7 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success":    true,
 		"name":       ref,
-		"commit_sha": hash.String(),
+		"commit_sha": hash,
 		"ref_path":   "refs/heads/" + ref,
 	})
 }
@@ -372,16 +336,13 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	}
 
 	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
 	if !ok {
 		return
 	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	repository := repoCtx.repoWrapper.GetRepo()
-
-	// Call service to create branch
-	result, err := h.service.CreateBranch(c.Request.Context(), repository, req)
+	// Call service to create branch (native git — uses repoPath only)
+	result, err := h.service.CreateBranch(c.Request.Context(), repoCtx.repoPath, req)
 	if err != nil {
 		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
@@ -482,16 +443,13 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 	}
 
 	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
 	if !ok {
 		return
 	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	repository := repoCtx.repoWrapper.GetRepo()
-
-	// Call service to update branch
-	result, err := h.service.UpdateBranch(c.Request.Context(), repository, branchName, req)
+	// Call service to update branch (native git — uses repoPath only)
+	result, err := h.service.UpdateBranch(c.Request.Context(), repoCtx.repoPath, branchName, req)
 	if err != nil {
 		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
@@ -602,16 +560,13 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 	}
 
 	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo)
+	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
 	if !ok {
 		return
 	}
-	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	repository := repoCtx.repoWrapper.GetRepo()
-
-	// Call service to delete branch
-	result, err := h.service.DeleteBranch(c.Request.Context(), repository, branchName)
+	// Call service to delete branch (native git — uses repoPath only)
+	result, err := h.service.DeleteBranch(c.Request.Context(), repoCtx.repoPath, branchName)
 	if err != nil {
 		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError

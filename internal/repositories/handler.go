@@ -1,9 +1,7 @@
 package repositories
 
-// Package protocol은 Git 저장소 생성 작업을 처리합니다.
-// 새로운 Git 저장소를 만들고 초기 커밋을 설정하는 REST API 기능을 제공합니다.
-
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,23 +10,19 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/gin-gonic/gin"
-	gogit "github.com/go-git/go-git/v5"
 	"go.uber.org/zap"
 )
 
 // RepositoryCreationHandler는 저장소 생성 작업을 처리합니다.
-// Git 저장소 초기화, 기본 브랜치 설정, 초기 파일 생성 등을 처리합니다.
 type RepositoryCreationHandler struct {
 	config        *config.Config
 	logger        *logging.Logger
 	pathConfig    PathConfig
 	pathValidator GitAPIPathValidator
-	objectManager *GitObjectManager
 	repoManager   *DefaultRepositoryManager
 }
 
 // NewRepositoryCreationHandler는 새로운 저장소 생성 핸들러를 생성합니다.
-// 설정을 바탕으로 필요한 컴포너트들을 초기화합니다.
 func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandler, error) {
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
@@ -42,12 +36,6 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 
 	pathValidator := NewGitAPIPathValidator(pathConfig)
 
-	objectManager, err := NewGitObjectManager(pathConfig, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create object manager: %w", err)
-	}
-
-	// Create repository manager
 	repoManager, err := NewRepositoryManager(pathConfig, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create repository manager: %w", err)
@@ -58,14 +46,12 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 		logger:        logger,
 		pathConfig:    *pathConfig,
 		pathValidator: *pathValidator,
-		objectManager: objectManager,
 		repoManager:   repoManager,
 	}, nil
 }
 
 // HandleCreateRepository handles POST /repos/{owner}/{repo} for creating new repositories
 func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
@@ -73,7 +59,6 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 		zap.String("owner", owner),
 		zap.String("repo", repo))
 
-	// Validate path components
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -82,22 +67,18 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 		return
 	}
 
-	// Parse and validate JSON request
 	var req CreateRepositoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		// Allow empty body - use defaults
 		req = CreateRepositoryRequest{
 			InitialCommit: true,
 			DefaultBranch: "main",
 		}
 	}
 
-	// Set defaults
 	if req.DefaultBranch == "" {
 		req.DefaultBranch = "main"
 	}
 
-	// Check if repository already exists
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
 	if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
 		c.JSON(http.StatusConflict, gin.H{
@@ -107,7 +88,6 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 		return
 	}
 
-	// Create repository
 	createdRepo, err := h.createRepository(owner, repo, &req)
 	if err != nil {
 		h.logger.Error("Failed to create repository",
@@ -122,7 +102,6 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 		return
 	}
 
-	// Return success response
 	c.JSON(http.StatusCreated, createdRepo)
 }
 
@@ -130,7 +109,6 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 func (h *RepositoryCreationHandler) createRepository(owner, repo string, req *CreateRepositoryRequest) (*CreateRepositoryResponse, error) {
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
 
-	// Prepare author information
 	var author *CommitAuthor
 	if req.Author != nil {
 		author = &CommitAuthor{
@@ -140,17 +118,15 @@ func (h *RepositoryCreationHandler) createRepository(owner, repo string, req *Cr
 		}
 	}
 
-	// Create repository options
 	options := &CreateRepositoryOptions{
 		Path:          repoPath,
-		Bare:          true, // Always create bare repositories for server-side storage
+		Bare:          true,
 		DefaultBranch: req.DefaultBranch,
 		InitialCommit: req.InitialCommit,
 		Author:        author,
 		InitialFiles:  req.InitialFiles,
 	}
 
-	// Use repository manager to create the repository
 	repoInfo, err := h.repoManager.CreateRepository(options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create repository: %w", err)
@@ -167,14 +143,12 @@ func (h *RepositoryCreationHandler) createRepository(owner, repo string, req *Cr
 		Metadata:      req.Metadata,
 	}
 
-	// Set initial commit hash if one was created
+	// Get initial commit hash using native git
 	if req.InitialCommit {
-		// We need to get the commit hash from the repository
-		gitRepo, err := gogit.PlainOpen(repoPath)
+		ctx := context.Background()
+		hash, err := nativeResolveRef(ctx, repoPath, "HEAD")
 		if err == nil {
-			if head, err := gitRepo.Head(); err == nil {
-				response.InitialCommit = head.Hash().String()
-			}
+			response.InitialCommit = hash
 		}
 	}
 

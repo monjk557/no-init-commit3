@@ -1,125 +1,91 @@
 package commits
 
 import (
-	"os"
-	"path/filepath"
+	"context"
+	"os/exec"
 	"testing"
 	"time"
 
-	"github.com/collabops/git-executor/internal/repositories"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
-func createBaseCommitWithFile(t *testing.T, repo *gogit.Repository, filePath string, content []byte) (plumbing.Hash, *object.Tree) {
-	t.Helper()
-
-	c := newObjectCollector()
-
-	blobHash, err := createBlob(content, c)
-	require.NoError(t, err)
-
-	files := map[string]TreeFileInfo{
-		filePath: {
-			Hash: blobHash,
-			Mode: filemode.Regular,
-		},
-	}
-	treeHash, err := buildTreeRecursive(files, "", c)
-	require.NoError(t, err)
-
-	commit := &object.Commit{
-		Author: object.Signature{
-			Name:  "Test",
-			Email: "test@example.com",
-			When:  time.Now(),
-		},
-		Committer: object.Signature{
-			Name:  "Test",
-			Email: "test@example.com",
-			When:  time.Now(),
-		},
-		Message:  "init",
-		TreeHash: treeHash,
-	}
-	commitHash, err := c.encodeCommit(commit)
-	require.NoError(t, err)
-	require.NoError(t, c.flush(repo.Storer))
-
-	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", commitHash)))
-	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
-
-	commitRead, err := repo.CommitObject(commitHash)
-	require.NoError(t, err)
-	baseTree, err := commitRead.Tree()
-	require.NoError(t, err)
-
-	return commitHash, baseTree
-}
-
 func TestCreateTreeFromChanges_Move_Success(t *testing.T) {
-	tempDir := t.TempDir()
-	repoPath := filepath.Join(tempDir, "o", "r.git")
-	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0o755))
+	repoPath := newBareRepoNative(t)
+	ctx := context.Background()
 
-	_, err := gogit.PlainInit(repoPath, true)
+	// Create base with old.txt
+	blobHash, err := nativeHashObject(ctx, repoPath, []byte("hello"))
 	require.NoError(t, err)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
+	treeHash, err := nativeMkTree(ctx, repoPath, []nativeMkTreeEntry{
+		{Mode: "100644", Type: "blob", Hash: blobHash, Name: "old.txt"},
+	})
 	require.NoError(t, err)
-	repo := repoWrapper.GetRepo()
 
-	_, baseTree := createBaseCommitWithFile(t, repo, "old.txt", []byte("hello"))
+	author := &NativeSignature{Name: "Test", Email: "test@example.com", When: time.Now()}
+	commitHash, err := nativeCommitTree(ctx, repoPath, treeHash, nil, "init", author, author)
+	require.NoError(t, err)
+	require.NoError(t, nativeUpdateRef(ctx, repoPath, "refs/heads/main", commitHash))
 
-	res, c, err := createTreeFromChanges(repoWrapper, baseTree, []FileChange{
+	baseTreeHash, err := nativeGetTreeHash(ctx, repoPath, commitHash)
+	require.NoError(t, err)
+
+	// Move old.txt -> new.txt
+	res, err := createTreeFromChanges(ctx, repoPath, baseTreeHash, []FileChange{
 		{Operation: FileOperationMove, OriginalPath: "old.txt", Path: "new.txt"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, c.flush(repo.Storer))
 
-	newTree, err := repo.TreeObject(res.TreeHash)
+	// Verify: old.txt gone, new.txt exists with same content
+	entries, err := nativeLsTree(ctx, repoPath, res.TreeHash)
 	require.NoError(t, err)
 
-	// old 없어야 함, new 있어야 함
-	_, err = newTree.File("old.txt")
-	require.Error(t, err)
+	paths := make(map[string]bool)
+	for _, e := range entries {
+		paths[e.Path] = true
+	}
+	require.False(t, paths["old.txt"], "old.txt should not exist")
+	require.True(t, paths["new.txt"], "new.txt should exist")
 
-	f, err := newTree.File("new.txt")
+	// Check content
+	cmd := exec.Command("git", "--git-dir", repoPath, "cat-file", "-p", findEntryHash(entries, "new.txt"))
+	out, err := cmd.Output()
 	require.NoError(t, err)
-	txt, err := f.Contents()
-	require.NoError(t, err)
-	require.Equal(t, "hello", txt)
+	require.Equal(t, "hello", string(out))
 }
 
 func TestCreateTreeFromChanges_Move_WithContentChange(t *testing.T) {
-	tempDir := t.TempDir()
-	repoPath := filepath.Join(tempDir, "o", "r.git")
-	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0o755))
+	repoPath := newBareRepoNative(t)
+	ctx := context.Background()
 
-	_, err := gogit.PlainInit(repoPath, true)
+	// Create base with old.txt
+	blobHash, err := nativeHashObject(ctx, repoPath, []byte("hello"))
 	require.NoError(t, err)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
+	treeHash, err := nativeMkTree(ctx, repoPath, []nativeMkTreeEntry{
+		{Mode: "100644", Type: "blob", Hash: blobHash, Name: "old.txt"},
+	})
 	require.NoError(t, err)
-	repo := repoWrapper.GetRepo()
 
-	_, baseTree := createBaseCommitWithFile(t, repo, "old.txt", []byte("hello"))
+	author := &NativeSignature{Name: "Test", Email: "test@example.com", When: time.Now()}
+	commitHash, err := nativeCommitTree(ctx, repoPath, treeHash, nil, "init", author, author)
+	require.NoError(t, err)
+	require.NoError(t, nativeUpdateRef(ctx, repoPath, "refs/heads/main", commitHash))
 
-	res, c, err := createTreeFromChanges(repoWrapper, baseTree, []FileChange{
+	baseTreeHash, err := nativeGetTreeHash(ctx, repoPath, commitHash)
+	require.NoError(t, err)
+
+	// Move old.txt -> new.txt with content change
+	res, err := createTreeFromChanges(ctx, repoPath, baseTreeHash, []FileChange{
 		{Operation: FileOperationMove, OriginalPath: "old.txt", Path: "new.txt", Content: []byte("world")},
 	})
 	require.NoError(t, err)
-	require.NoError(t, c.flush(repo.Storer))
 
-	newTree, err := repo.TreeObject(res.TreeHash)
+	entries, err := nativeLsTree(ctx, repoPath, res.TreeHash)
 	require.NoError(t, err)
 
-	f, err := newTree.File("new.txt")
+	cmd := exec.Command("git", "--git-dir", repoPath, "cat-file", "-p", findEntryHash(entries, "new.txt"))
+	out, err := cmd.Output()
 	require.NoError(t, err)
-	txt, err := f.Contents()
-	require.NoError(t, err)
-	require.Equal(t, "world", txt)
+	require.Equal(t, "world", string(out))
 }

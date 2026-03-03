@@ -364,7 +364,9 @@ func NativeGetTags(ctx context.Context, repoPath string, limit int) ([]GitTag, e
 	defer cancel()
 
 	// %(refname:short) = tag name, %(objectname:short) = short hash, %(objecttype) = "commit" or "tag"
-	format := "%(refname:short)%x00%(objectname:short)%x00%(objecttype)"
+	// NOTE: Using tab separator instead of %x00 because Apple Git's for-each-ref/tag -l
+	// does not interpret %x00 as null byte (unlike git log --format).
+	format := "%(refname:short)\t%(objectname:short)\t%(objecttype)"
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"tag", "-l", "--sort=-creatordate", "--format="+format)
 	out, err := cmd.Output()
@@ -384,7 +386,7 @@ func NativeGetTags(ctx context.Context, repoPath string, limit int) ([]GitTag, e
 
 	result := make([]GitTag, 0, len(lines))
 	for _, line := range lines {
-		parts := strings.SplitN(line, "\x00", 3)
+		parts := strings.SplitN(line, "\t", 3)
 		if len(parts) < 3 {
 			continue
 		}
@@ -443,6 +445,98 @@ func NativeGetRemotes(ctx context.Context, repoPath string) ([]RemoteInfo, error
 		return []RemoteInfo{}, nil
 	}
 	return result, nil
+}
+
+// nativeBranchInfo holds per-branch metadata parsed from git for-each-ref.
+type nativeBranchInfo struct {
+	Name          string
+	CommitSHA     string
+	AuthorName    string
+	AuthorEmail   string
+	AuthorDate    time.Time
+	CommitMessage string
+}
+
+// NativeGetBranchesForOverview returns branch metadata using native git for-each-ref.
+// The format includes commit SHA, author name/email, date, and commit subject.
+func NativeGetBranchesForOverview(ctx context.Context, repoPath string) ([]nativeBranchInfo, string, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// Get default branch (HEAD target)
+	defaultBranch := ""
+	headCmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "symbolic-ref", "--short", "HEAD")
+	headOut, err := headCmd.Output()
+	if err == nil {
+		defaultBranch = strings.TrimSpace(string(headOut))
+	}
+
+	// for-each-ref with rich format: name, sha, author name, author email, date, subject
+	// NOTE: Using tab separator instead of %x00 because Apple Git's for-each-ref
+	// does not interpret %x00 as null byte (unlike git log --format).
+	format := "%(refname:short)\t%(objectname:short=8)\t%(authorname)\t%(authoremail)\t%(authordate:iso8601-strict)\t%(subject)"
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
+		"for-each-ref", "refs/heads/",
+		"--format", format,
+		"--sort=-authordate",
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, defaultBranch, fmt.Errorf("git for-each-ref: %s: %w", strings.TrimSpace(stderr.String()), err)
+	}
+
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return []nativeBranchInfo{}, defaultBranch, nil
+	}
+
+	var result []nativeBranchInfo
+	for _, line := range strings.Split(raw, "\n") {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
+			continue
+		}
+
+		authorDate, _ := time.Parse(time.RFC3339, parts[4])
+		email := strings.Trim(parts[3], "<>")
+
+		result = append(result, nativeBranchInfo{
+			Name:          parts[0],
+			CommitSHA:     parts[1],
+			AuthorName:    parts[2],
+			AuthorEmail:   email,
+			AuthorDate:    authorDate,
+			CommitMessage: parts[5],
+		})
+	}
+
+	return result, defaultBranch, nil
+}
+
+// NativeCalculateAheadBehind calculates ahead/behind counts using native git rev-list.
+func NativeCalculateAheadBehind(ctx context.Context, repoPath, branchRef, baseRef string) (ahead, behind int, err error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
+		"rev-list", "--count", "--left-right",
+		fmt.Sprintf("refs/heads/%s...refs/heads/%s", baseRef, branchRef),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("git rev-list --count --left-right: %w", err)
+	}
+
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected rev-list output: %q", string(out))
+	}
+
+	behind, _ = strconv.Atoi(parts[0]) // left = base ahead of branch = branch behind
+	ahead, _ = strconv.Atoi(parts[1])  // right = branch ahead of base
+	return ahead, behind, nil
 }
 
 // NativeGetBlobContent는 native git으로 특정 ref:path의 blob 내용을 조회합니다.

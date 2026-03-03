@@ -18,7 +18,6 @@ import (
 	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
-	"github.com/go-git/go-git/v5/plumbing"
 	"go.uber.org/zap"
 )
 
@@ -52,7 +51,7 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 		return nil, fmt.Errorf("failed to create repository manager: %w", err)
 	}
 
-	blobService := blob.NewBlobService(pathConfig)
+	blobService := blob.NewBlobService()
 	service, err := NewRepositoryOverviewService(logger, pathConfig, repoManager, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create overview service: %w", err)
@@ -119,10 +118,8 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		return nil, false
 	}
 
-	gitRepo := repoWrapper.GetRepo()
-
-	// 브랜치 가져오기
-	branchesList, err := branches.GetBranches(gitRepo)
+	// 브랜치 가져오기 (native git 사용)
+	branchesList, err := branches.GetBranches(ctx, repoPath)
 	if err != nil {
 		h.logger.Error("overview: GetBranches failed",
 			zap.String("owner", owner),
@@ -609,11 +606,12 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// HandleGetBranchesOverview는 브랜치 개요를 위한 GET /api/v1/repository/{owner}/{repo}/overview/branches 요청을 처리합니다
+// HandleGetBranchesOverview는 브랜치 개요를 위한 GET /api/v1/repository/{owner}/{repo}/overview/branches 요청을 처리합니다.
+// native git for-each-ref + rev-list를 사용합니다 (go-git 대체).
 func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
+	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := c.Query("ref")
 	userEmail := c.Query("email")
 
 	// email 파라미터 필수 검증 (v1과 일관성 유지)
@@ -623,11 +621,6 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 			"error":   "Missing required parameter: email",
 		})
 		return
-	}
-
-	// ref가 제공되지 않으면 기본값으로 HEAD 사용
-	if ref == "" {
-		ref = "HEAD"
 	}
 
 	// 경로 구성 요소 검증
@@ -643,145 +636,71 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 		return
 	}
 
-	// 캐시 없이 열기 (packfile repo panic 방지)
-	repoWrapper, err := repositories.OpenRepositoryNoCache(repoPath)
+	// native git for-each-ref로 브랜치 목록 + 메타데이터 조회
+	branchInfos, defaultBranch, err := NativeGetBranchesForOverview(ctx, repoPath)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
-	}
-	defer func() { _ = repoWrapper.Close() }()
-
-	gitRepo := repoWrapper.GetRepo()
-
-	// ref가 제공된 경우 검증 (ref를 해석 가능한지 확인)
-	if ref != "" && ref != "HEAD" {
-		_, err := repoWrapper.ResolveReference(ref)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
-			return
-		}
-	}
-
-	// 모든 참조(브랜치) 조회
-	refs, err := gitRepo.References()
-	if err != nil {
-		h.logger.Error("failed to get references", zap.Error(err))
+		h.logger.Error("failed to get branches", zap.Error(err))
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
 	}
-	defer refs.Close()
 
 	var defaultBranches []BranchListItem
 	var yoursBranches []BranchListItem
 	var activeBranches []BranchListItem
 	var staleBranches []BranchListItem
-	var defaultBranch string
-	allBranchesCount := 0
+	allBranchesCount := len(branchInfos)
 
-	// 기본 브랜치 확인
-	headRef, err := gitRepo.Head()
-	if err == nil {
-		defaultBranch = headRef.Name().Short()
-	}
+	for _, bi := range branchInfos {
+		author := bi.AuthorName
+		if author == "" {
+			author = bi.AuthorEmail
+		}
 
-	// 각 참조 처리
-	err = refs.ForEach(func(ref *plumbing.Reference) error {
-		// 브랜치 참조만 처리
-		if ref.Name().IsBranch() {
-			allBranchesCount++
-			branchName := ref.Name().Short()
+		daysSinceLastCommit := int(time.Since(bi.AuthorDate).Hours() / 24)
 
-			// 커밋 정보 조회
-			commit, err := gitRepo.CommitObject(ref.Hash())
-			if err != nil {
-				h.logger.Warn("Failed to get commit for branch",
-					zap.String("branch", branchName),
-					zap.Error(err))
-				return nil // 다른 브랜치 계속 처리
-			}
+		isStale := daysSinceLastCommit >= 120
+		isYours := false
+		if userEmail != "" {
+			isYours = strings.EqualFold(bi.AuthorEmail, userEmail) ||
+				strings.EqualFold(bi.AuthorName, userEmail)
+		}
 
-			// 커밋 작성자 가져오기
-			author := commit.Author.Name
-			if author == "" {
-				author = commit.Author.Email
-			}
+		branchItem := BranchListItem{
+			Name:                bi.Name,
+			Updated:             bi.AuthorDate.Format("Jan 2, 2006"),
+			UpdatedBy:           author,
+			CommitSHA:           bi.CommitSHA,
+			CommitMessage:       bi.CommitMessage,
+			IsDefault:           bi.Name == defaultBranch,
+			Behind:              0,
+			Ahead:               0,
+			CreatedBy:           bi.AuthorEmail,
+			DaysSinceLastCommit: daysSinceLastCommit,
+			SortTime:            bi.AuthorDate,
+		}
 
-			// 마지막 커밋 이후 경과 일수 계산
-			daysSinceLastCommit := int(time.Since(commit.Author.When).Hours() / 24)
-
-			// 분류 신호 계산
-			isStale := daysSinceLastCommit >= 120
-			isYours := false
-			if userEmail != "" {
-				isYours = strings.EqualFold(commit.Author.Email, userEmail) ||
-					strings.EqualFold(commit.Author.Name, userEmail)
-			}
-
-			// 브랜치 아이템 생성; 정렬/표시는 최신 커밋 시간 기준
-			sortTime := commit.Author.When
-			branchItem := BranchListItem{
-				Name:                branchName,
-				Updated:             sortTime.Format("Jan 2, 2006"),
-				UpdatedBy:           author,
-				CommitSHA:           commit.Hash.String()[:8],
-				CommitMessage:       commit.Message,
-				IsDefault:           branchName == defaultBranch,
-				Behind:              0,
-				Ahead:               0,
-				CreatedBy:           commit.Author.Email,
-				DaysSinceLastCommit: daysSinceLastCommit,
-				SortTime:            sortTime,
-			}
-
-			// 기본 브랜치 대비 앞섬/뒤처짐 계산(GitHub 스타일)
-			if defaultBranch != "" && branchName != defaultBranch {
-				// 기본 브랜치 커밋 해시 조회
-				defaultRefName := plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", defaultBranch))
-				defaultRef, derr := gitRepo.Reference(defaultRefName, false)
-				if derr == nil {
-					defaultCommit, derr := gitRepo.CommitObject(defaultRef.Hash())
-					if derr == nil {
-						// 공통 조상(merge base) 찾기
-						mergeBases, mErr := commit.MergeBase(defaultCommit)
-						if mErr == nil && len(mergeBases) > 0 {
-							mergeBase := mergeBases[0]
-							// 앞선 커밋 수 계산(브랜치→기본)
-							aheadCount, aErr := h.service.CountCommitsBetween(gitRepo, mergeBase, commit)
-							if aErr == nil {
-								branchItem.Ahead = aheadCount
-							}
-							// 뒤처진 커밋 수 계산(기본→브랜치)
-							behindCount, bErr := h.service.CountCommitsBetween(gitRepo, mergeBase, defaultCommit)
-							if bErr == nil {
-								branchItem.Behind = behindCount
-							}
-						}
-					}
-				}
-			}
-
-			// 그룹 분류(기본 제외하고 중복 포함 가능)
-			if branchItem.IsDefault {
-				defaultBranches = append(defaultBranches, branchItem)
-			} else {
-				if isYours {
-					yoursBranches = append(yoursBranches, branchItem)
-				}
-				if isStale {
-					staleBranches = append(staleBranches, branchItem)
-				} else {
-					// Active: 최근 업데이트, 기본 브랜치 아님
-					activeBranches = append(activeBranches, branchItem)
-				}
+		// ahead/behind 계산 (native git rev-list --count --left-right)
+		if defaultBranch != "" && bi.Name != defaultBranch {
+			ahead, behind, abErr := NativeCalculateAheadBehind(ctx, repoPath, bi.Name, defaultBranch)
+			if abErr == nil {
+				branchItem.Ahead = ahead
+				branchItem.Behind = behind
 			}
 		}
-		return nil
-	})
 
-	if err != nil {
-		h.logger.Error("Error processing references", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Error processing references"})
-		return
+		// 그룹 분류
+		if branchItem.IsDefault {
+			defaultBranches = append(defaultBranches, branchItem)
+		} else {
+			if isYours {
+				yoursBranches = append(yoursBranches, branchItem)
+			}
+			if isStale {
+				staleBranches = append(staleBranches, branchItem)
+			} else {
+				activeBranches = append(activeBranches, branchItem)
+			}
+		}
 	}
 
 	// 최신 생성/업데이트 순(내림차순)으로 정렬하고 Yours/Active/Stale는 각 5개로 제한

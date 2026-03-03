@@ -8,30 +8,20 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
-	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
 )
 
 type TagsHandler struct {
-	repoManager *repositories.DefaultRepositoryManager
-	pathConfig  *repositories.PathConfig
+	pathConfig *repositories.PathConfig
 }
 
 func NewTagsHandler(cfg *config.Config) (*TagsHandler, error) {
-	logger, err := logging.NewLogger(cfg.Logging)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create logger: %w", err)
-	}
 	pathConfig, err := repositories.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
-	repoManager, err := repositories.NewRepositoryManager(pathConfig, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create repository manager: %w", err)
-	}
-	return &TagsHandler{repoManager: repoManager, pathConfig: pathConfig}, nil
+	return &TagsHandler{pathConfig: pathConfig}, nil
 }
 
 func (h *TagsHandler) HandleGetTags(c *gin.Context) {
@@ -68,16 +58,13 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context) {
 		skip = parsedSkip
 	}
 
-	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
-
-	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
 		return
 	}
-	defer func() { _ = repoWrapper.Close() }()
 
-	tags, totalCount, err := GetTags(repoWrapper, limit, skip)
+	tags, totalCount, err := GetTags(c.Request.Context(), repoPath, limit, skip)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Failed to get tags", "details": err.Error()})
 		return
@@ -122,14 +109,13 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) {
 		return
 	}
 
-	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
-	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
 		return
 	}
 
-	tag, err := CreateTag(repoWrapper, &req)
+	tag, err := CreateTag(c.Request.Context(), repoPath, &req)
 	if err != nil {
 		// 에러 타입에 따라 적절한 상태 코드 선택
 		if errors.Is(err, ErrTagAlreadyExists) {
@@ -171,14 +157,13 @@ func (h *TagsHandler) HandleDeleteTag(c *gin.Context) {
 	repo := c.Param("repo")
 	tagName := c.Param("tag")
 
-	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
-	repoWrapper, err := h.repoManager.OpenRepository(repoPath)
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
 		return
 	}
 
-	err = DeleteTag(repoWrapper, tagName)
+	err = DeleteTag(c.Request.Context(), repoPath, tagName)
 	if err != nil {
 		// 에러 메시지에 따라 적절한 상태 코드 선택
 		statusCode := http.StatusBadRequest

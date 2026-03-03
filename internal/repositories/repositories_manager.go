@@ -1,9 +1,11 @@
 package repositories
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -11,12 +13,12 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
-// repositoryWrapper wraps go-git repository to implement our Repository interface
+// RepositoryWrapper wraps go-git repository for backward compatibility with overview/merge packages.
+// New code should use repoPath string + native git commands instead.
 type RepositoryWrapper struct {
 	repo *gogit.Repository
 	path string
@@ -30,18 +32,19 @@ func (rw *RepositoryWrapper) Path() string {
 
 // Close releases any resources held by the repository
 func (rw *RepositoryWrapper) Close() error {
-	// go-git repositories don't need explicit closing
 	return nil
 }
 
-// GetRepo returns the underlying go-git repository (thread-safe)
+// GetRepo returns the underlying go-git repository (thread-safe).
+// Deprecated: used by overview/merge only. New code should use native git.
 func (rw *RepositoryWrapper) GetRepo() *gogit.Repository {
 	rw.mu.RLock()
 	defer rw.mu.RUnlock()
 	return rw.repo
 }
 
-// ResolveReference resolves a Git reference to a commit hash (thread-safe)
+// ResolveReference resolves a Git reference to a commit hash (thread-safe).
+// Deprecated: used by overview only. New code should use native git.
 func (rw *RepositoryWrapper) ResolveReference(ref string) (plumbing.Hash, error) {
 	rw.mu.RLock()
 	defer rw.mu.RUnlock()
@@ -61,15 +64,12 @@ func (rw *RepositoryWrapper) ResolveReference(ref string) (plumbing.Hash, error)
 	// Try to resolve as a reference first
 	refObj, err := rw.repo.Reference(plumbing.ReferenceName(ref), false)
 	if err == nil {
-		// Check if it's a tag reference
 		if strings.HasPrefix(ref, "refs/tags/") {
 			tagHash := refObj.Hash()
 			tagObj, err := rw.repo.TagObject(tagHash)
 			if err == nil {
-				// Annotated tag - return the target commit hash
 				return tagObj.Target, nil
 			}
-			// Lightweight tag - return the hash directly
 			return tagHash, nil
 		}
 		return refObj.Hash(), nil
@@ -87,10 +87,8 @@ func (rw *RepositoryWrapper) ResolveReference(ref string) (plumbing.Hash, error)
 		tagHash := refObj.Hash()
 		tagObj, err := rw.repo.TagObject(tagHash)
 		if err == nil {
-			// Annotated tag - return the target commit hash
 			return tagObj.Target, nil
 		}
-		// Lightweight tag - return the hash directly
 		return tagHash, nil
 	}
 
@@ -103,7 +101,8 @@ func (rw *RepositoryWrapper) ResolveReference(ref string) (plumbing.Hash, error)
 	return plumbing.ZeroHash, fmt.Errorf("failed to resolve reference: %s", ref)
 }
 
-// CommitObject returns a commit object from the repository (thread-safe)
+// CommitObject returns a commit object from the repository (thread-safe).
+// Deprecated: used by overview/merge only. New code should use native git.
 func (rw *RepositoryWrapper) CommitObject(hash plumbing.Hash) (*object.Commit, error) {
 	rw.mu.RLock()
 	defer rw.mu.RUnlock()
@@ -115,7 +114,8 @@ func (rw *RepositoryWrapper) CommitObject(hash plumbing.Hash) (*object.Commit, e
 	return rw.repo.CommitObject(hash)
 }
 
-// SetReference sets a reference in the repository (thread-safe)
+// SetReference sets a reference in the repository (thread-safe).
+// Deprecated: used by overview/merge only. New code should use native git.
 func (rw *RepositoryWrapper) SetReference(ref *plumbing.Reference) error {
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
@@ -129,22 +129,15 @@ func (rw *RepositoryWrapper) SetReference(ref *plumbing.Reference) error {
 
 // DefaultRepositoryManager implements the RepositoryManager interface
 type DefaultRepositoryManager struct {
-	pathConfig    PathConfig
-	objectManager *GitObjectManager
-	logger        *logging.Logger
+	pathConfig PathConfig
+	logger     *logging.Logger
 }
 
 // NewRepositoryManager creates a new repository manager
 func NewRepositoryManager(pathConfig *PathConfig, logger *logging.Logger) (*DefaultRepositoryManager, error) {
-	objectManager, err := NewGitObjectManager(pathConfig, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create object manager: %w", err)
-	}
-
 	return &DefaultRepositoryManager{
-		pathConfig:    *pathConfig,
-		objectManager: objectManager,
-		logger:        logger,
+		pathConfig: *pathConfig,
+		logger:     logger,
 	}, nil
 }
 
@@ -154,7 +147,6 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 		return nil, fmt.Errorf("options cannot be nil")
 	}
 
-	// Set defaults
 	if options.DefaultBranch == "" {
 		options.DefaultBranch = "main"
 	}
@@ -184,15 +176,14 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 		return nil, fmt.Errorf("failed to create directory structure: %w", err)
 	}
 
-	// Initialize Git repository
-	gitRepo, err := gogit.PlainInit(options.Path, options.Bare)
-	if err != nil {
+	// Initialize Git repository using native git
+	ctx := context.Background()
+	if err := nativeInitBare(ctx, options.Path); err != nil {
 		return nil, fmt.Errorf("failed to initialize git repository: %w", err)
 	}
 
-	// initial_commit 없어도 HEAD를 default_branch로 설정 (첫 커밋 시 default branch만 허용하기 위함)
-	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/"+options.DefaultBranch))
-	if err := gitRepo.Storer.SetReference(headRef); err != nil {
+	// Set HEAD to default branch
+	if err := nativeSetSymbolicRef(ctx, options.Path, "refs/heads/"+options.DefaultBranch); err != nil {
 		rm.logger.Warn("Failed to set HEAD to default branch",
 			zap.String("path", options.Path),
 			zap.String("default_branch", options.DefaultBranch),
@@ -211,7 +202,7 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 
 	// Create initial commit if requested
 	if options.InitialCommit {
-		commitHash, err := rm.createInitialCommit(gitRepo, options)
+		commitHash, err := rm.createInitialCommit(ctx, options)
 		if err != nil {
 			rm.logger.Warn("Failed to create initial commit",
 				zap.String("path", options.Path),
@@ -219,12 +210,12 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 		} else {
 			rm.logger.Info("Created initial commit",
 				zap.String("path", options.Path),
-				zap.String("commit_hash", commitHash.String()))
+				zap.String("commit_hash", commitHash))
 		}
 	}
 
 	// Update repository statistics
-	if err := rm.updateRepositoryStats(repoInfo); err != nil {
+	if err := rm.updateRepositoryStats(ctx, repoInfo); err != nil {
 		rm.logger.Warn("Failed to update repository statistics",
 			zap.String("path", options.Path),
 			zap.Error(err))
@@ -237,10 +228,9 @@ func (rm *DefaultRepositoryManager) CreateRepository(options *CreateRepositoryOp
 	return repoInfo, nil
 }
 
-// OpenRepository opens an existing Git repository
-// Uses SimpleRepoCache for better performance (same as v1)
+// OpenRepository opens an existing Git repository.
+// Returns a RepositoryWrapper for backward compatibility with overview/merge.
 func (rm *DefaultRepositoryManager) OpenRepository(path string) (*RepositoryWrapper, error) {
-	// Use cached repository opening for better performance
 	return OpenRepositorySimple(path)
 }
 
@@ -257,11 +247,14 @@ func (rm *DefaultRepositoryManager) RepositoryExists(path string) (bool, error) 
 		return false, fmt.Errorf("failed to check path: %w", err)
 	}
 
-	// Check if it's a valid Git repository
-	_, err := gogit.PlainOpen(path)
-	if err != nil {
-		// If it's not a valid git repository, return false without error
-		return false, nil
+	// Check for HEAD file (both bare and non-bare repos have it)
+	headPath := filepath.Join(path, "HEAD")
+	if _, err := os.Stat(headPath); os.IsNotExist(err) {
+		// Also check .git/HEAD for non-bare repos
+		dotGitHead := filepath.Join(path, ".git", "HEAD")
+		if _, err := os.Stat(dotGitHead); os.IsNotExist(err) {
+			return false, nil
+		}
 	}
 
 	return true, nil
@@ -273,15 +266,12 @@ func (rm *DefaultRepositoryManager) DeleteRepository(path string) error {
 		return fmt.Errorf("path cannot be empty")
 	}
 
-	// Validate path to prevent accidental deletion outside repo root
 	if err := ValidateRepoPath(&rm.pathConfig, path); err != nil {
 		return fmt.Errorf("invalid repository path: %w", err)
 	}
 
-	rm.logger.Info("Deleting repository",
-		zap.String("path", path))
+	rm.logger.Info("Deleting repository", zap.String("path", path))
 
-	// Check if repository exists
 	exists, err := rm.RepositoryExists(path)
 	if err != nil {
 		return fmt.Errorf("failed to check repository existence: %w", err)
@@ -290,14 +280,14 @@ func (rm *DefaultRepositoryManager) DeleteRepository(path string) error {
 		return fmt.Errorf("repository does not exist at path: %s", path)
 	}
 
-	// Remove the repository directory
 	if err := os.RemoveAll(path); err != nil {
 		return fmt.Errorf("failed to remove repository directory: %w", err)
 	}
 
-	rm.logger.Info("Repository deleted successfully",
-		zap.String("path", path))
+	// Invalidate cache
+	GetSimpleCache().Invalidate(path)
 
+	rm.logger.Info("Repository deleted successfully", zap.String("path", path))
 	return nil
 }
 
@@ -311,19 +301,14 @@ func (rm *DefaultRepositoryManager) ListRepositories(rootPath string) ([]Reposit
 
 	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			// Skip directories we can't access
 			return nil
 		}
-
-		// Skip if not a directory
 		if !info.IsDir() {
 			return nil
 		}
 
-		// Check if this is a Git repository
 		exists, err := rm.RepositoryExists(path)
 		if err != nil {
-			// Skip directories that cause errors
 			return nil
 		}
 
@@ -336,16 +321,14 @@ func (rm *DefaultRepositoryManager) ListRepositories(rootPath string) ([]Reposit
 				LastModified: info.ModTime(),
 			}
 
-			// Update statistics
-			if err := rm.updateRepositoryStats(repoInfo); err != nil {
+			ctx := context.Background()
+			if err := rm.updateRepositoryStats(ctx, repoInfo); err != nil {
 				rm.logger.Debug("Failed to update repository statistics",
 					zap.String("path", path),
 					zap.Error(err))
 			}
 
 			repositories = append(repositories, *repoInfo)
-
-			// Don't recurse into Git repositories
 			return filepath.SkipDir
 		}
 
@@ -359,70 +342,33 @@ func (rm *DefaultRepositoryManager) ListRepositories(rootPath string) ([]Reposit
 	return repositories, nil
 }
 
-// createInitialCommit creates an initial commit in the repository
-func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repository, options *CreateRepositoryOptions) (plumbing.Hash, error) {
-	storer := gitRepo.Storer
+// createInitialCommit creates an initial commit using native git plumbing.
+func (rm *DefaultRepositoryManager) createInitialCommit(ctx context.Context, options *CreateRepositoryOptions) (string, error) {
+	repoPath := options.Path
 
 	// Prepare initial files
 	initialFiles := options.InitialFiles
 	if len(initialFiles) == 0 {
-		// Create default README
 		initialFiles = map[string]string{
 			"README.md": fmt.Sprintf("# Repository\n\nCreated: %s\n",
 				time.Now().Format(time.RFC3339)),
 		}
 	}
 
-	// Create blobs for initial files
-	var treeEntries []object.TreeEntry
+	// Hash all blobs first
+	blobHashes := make(map[string]string, len(initialFiles))
 	for filename, content := range initialFiles {
-		// Create blob object
-		obj := storer.NewEncodedObject()
-		obj.SetType(plumbing.BlobObject)
-		obj.SetSize(int64(len(content)))
-
-		writer, err := obj.Writer()
+		blobHash, err := nativeHashObject(ctx, repoPath, []byte(content))
 		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("failed to create blob writer for %s: %w", filename, err)
+			return "", fmt.Errorf("failed to hash blob for %s: %w", filename, err)
 		}
-
-		_, err = writer.Write([]byte(content))
-		if err != nil {
-			if closeErr := writer.Close(); closeErr != nil {
-				return plumbing.ZeroHash, fmt.Errorf("failed to close writer: %w", closeErr)
-			}
-			return plumbing.ZeroHash, fmt.Errorf("failed to write blob content for %s: %w", filename, err)
-		}
-
-		err = writer.Close()
-		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("failed to close blob writer for %s: %w", filename, err)
-		}
-
-		blobHash, err := storer.SetEncodedObject(obj)
-		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("failed to store blob for %s: %w", filename, err)
-		}
-
-		// Add to tree entries
-		treeEntries = append(treeEntries, object.TreeEntry{
-			Name: filename,
-			Mode: filemode.Regular,
-			Hash: blobHash,
-		})
+		blobHashes[filename] = blobHash
 	}
 
-	// Create tree object
-	tree := &object.Tree{Entries: treeEntries}
-	treeObj := storer.NewEncodedObject()
-	err := tree.Encode(treeObj)
+	// Build recursive tree structure for nested paths
+	treeHash, err := rm.buildTreeFromFiles(ctx, repoPath, blobHashes)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
-	}
-
-	treeHash, err := storer.SetEncodedObject(treeObj)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store tree: %w", err)
+		return "", fmt.Errorf("failed to create tree: %w", err)
 	}
 
 	// Set default author if not provided
@@ -435,81 +381,106 @@ func (rm *DefaultRepositoryManager) createInitialCommit(gitRepo *gogit.Repositor
 		}
 	}
 
-	// Create initial commit
-	commit := &object.Commit{
-		Message:  "Initial commit",
-		TreeHash: treeHash,
-		Author: object.Signature{
-			Name:  author.Name,
-			Email: author.Email,
-			When:  author.Date,
-		},
-		Committer: object.Signature{
-			Name:  author.Name,
-			Email: author.Email,
-			When:  author.Date,
-		},
+	sig := &nativeSignature{
+		Name:  author.Name,
+		Email: author.Email,
+		When:  author.Date,
 	}
 
-	commitObj := storer.NewEncodedObject()
-	err = commit.Encode(commitObj)
+	// Create commit
+	commitHash, err := nativeCommitTree(ctx, repoPath, treeHash, nil, "Initial commit", sig, sig)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode commit: %w", err)
-	}
-
-	commitHash, err := storer.SetEncodedObject(commitObj)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store commit: %w", err)
+		return "", fmt.Errorf("failed to create commit: %w", err)
 	}
 
 	// Create default branch reference
-	branchRef := plumbing.NewHashReference(
-		plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", options.DefaultBranch)),
-		commitHash,
-	)
-	err = storer.SetReference(branchRef)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to create branch reference: %w", err)
+	branchRef := fmt.Sprintf("refs/heads/%s", options.DefaultBranch)
+	if err := nativeUpdateRef(ctx, repoPath, branchRef, commitHash); err != nil {
+		return "", fmt.Errorf("failed to create branch reference: %w", err)
 	}
 
 	// Set HEAD to point to the default branch
-	headRef := plumbing.NewSymbolicReference(
-		plumbing.HEAD,
-		plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", options.DefaultBranch)),
-	)
-	err = storer.SetReference(headRef)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to set HEAD reference: %w", err)
-	}
-
-	// Ensure HEAD is properly set using the object manager
-	if rm.objectManager != nil {
-		if ensureErr := rm.objectManager.EnsureProperHEAD(gitRepo, options.DefaultBranch); ensureErr != nil {
-			rm.logger.Warn("Failed to ensure proper HEAD state after repository creation",
-				zap.String("branch", options.DefaultBranch),
-				zap.Error(ensureErr))
-		}
+	if err := nativeSetSymbolicRef(ctx, repoPath, branchRef); err != nil {
+		return "", fmt.Errorf("failed to set HEAD reference: %w", err)
 	}
 
 	return commitHash, nil
 }
 
+// buildTreeFromFiles builds a recursive git tree from a flat map of path→blobHash.
+// Handles nested paths (e.g., "dir/file.txt") by creating subtrees.
+func (rm *DefaultRepositoryManager) buildTreeFromFiles(ctx context.Context, repoPath string, blobHashes map[string]string) (string, error) {
+	// Group files by top-level directory
+	type dirEntry struct {
+		subFiles map[string]string // relative path → blob hash (for subdirectory)
+	}
+
+	topLevelBlobs := make(map[string]string) // name → blob hash (files at root)
+	subdirs := make(map[string]*dirEntry)    // dir name → sub-files
+
+	for path, hash := range blobHashes {
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) == 1 {
+			// File at current level
+			topLevelBlobs[parts[0]] = hash
+		} else {
+			// File in subdirectory
+			dirName := parts[0]
+			subPath := parts[1]
+			if subdirs[dirName] == nil {
+				subdirs[dirName] = &dirEntry{subFiles: make(map[string]string)}
+			}
+			subdirs[dirName].subFiles[subPath] = hash
+		}
+	}
+
+	// Recursively build subtrees
+	var entries []nativeMkTreeEntry
+
+	for dirName, de := range subdirs {
+		subTreeHash, err := rm.buildTreeFromFiles(ctx, repoPath, de.subFiles)
+		if err != nil {
+			return "", fmt.Errorf("failed to build subtree for %s: %w", dirName, err)
+		}
+		entries = append(entries, nativeMkTreeEntry{
+			Mode: "040000",
+			Type: "tree",
+			Hash: subTreeHash,
+			Name: dirName,
+		})
+	}
+
+	// Add top-level blob entries
+	for name, hash := range topLevelBlobs {
+		entries = append(entries, nativeMkTreeEntry{
+			Mode: "100644",
+			Type: "blob",
+			Hash: hash,
+			Name: name,
+		})
+	}
+
+	// Sort entries by name (git requirement)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+
+	return nativeMkTree(ctx, repoPath, entries)
+}
+
 // extractRepositoryName extracts the repository name from a path
 func (rm *DefaultRepositoryManager) extractRepositoryName(path string) string {
 	name := filepath.Base(path)
-	// Remove .git suffix if present
 	return strings.TrimSuffix(name, ".git")
 }
 
 // isBareRepository checks if a repository is bare
 func (rm *DefaultRepositoryManager) isBareRepository(path string) bool {
-	// Check for presence of .git directory (indicates non-bare)
 	gitDir := filepath.Join(path, ".git")
 	if _, err := os.Stat(gitDir); err == nil {
 		return false
 	}
 
-	// Check for typical bare repository files
 	configPath := filepath.Join(path, "config")
 	headPath := filepath.Join(path, "HEAD")
 
@@ -519,67 +490,38 @@ func (rm *DefaultRepositoryManager) isBareRepository(path string) bool {
 	return configErr == nil && headErr == nil
 }
 
-// updateRepositoryStats updates repository statistics
-func (rm *DefaultRepositoryManager) updateRepositoryStats(repoInfo *RepositoryInfo) error {
-	// Open repository to get statistics
-	gitRepo, err := gogit.PlainOpen(repoInfo.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open repository for stats: %w", err)
-	}
+// updateRepositoryStats updates repository statistics using native git.
+func (rm *DefaultRepositoryManager) updateRepositoryStats(ctx context.Context, repoInfo *RepositoryInfo) error {
+	repoPath := repoInfo.Path
 
 	// Get repository size
-	if size, err := rm.getDirectorySize(repoInfo.Path); err == nil {
+	if size, err := rm.getDirectorySize(repoPath); err == nil {
 		repoInfo.Size = size
 	}
 
-	// Get default branch from HEAD
-	// Note: HEAD는 파일 작업 등으로 변경될 수 있으므로,
-	// 현재는 HEAD가 symbolic reference일 때만 default branch로 간주
-	head, err := gitRepo.Head()
-	if err == nil && head.Type() == plumbing.SymbolicReference {
-		// HEAD가 브랜치를 가리키는 경우 (symbolic reference)
-		// Target()에서 실제 브랜치 참조를 가져옴 (예: "refs/heads/main")
-		targetBranch := head.Target().String()
-		if strings.HasPrefix(targetBranch, "refs/heads/") {
-			repoInfo.DefaultBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
-		}
+	// Get default branch from HEAD via symbolic-ref
+	symRef, err := nativeSymbolicRef(ctx, repoPath)
+	if err == nil && strings.HasPrefix(symRef, "refs/heads/") {
+		repoInfo.DefaultBranch = strings.TrimPrefix(symRef, "refs/heads/")
 	}
-	// Detached HEAD 상태 (head.Type() == plumbing.HashReference)인 경우
-	// DefaultBranch는 이전에 설정된 값이 유지되거나 빈 값일 수 있음
 
-	// Count references
-	refs, err := gitRepo.References()
+	// Count branches
+	branchCount, err := nativeForEachRefCount(ctx, repoPath, "refs/heads/")
 	if err == nil {
-		branchCount := 0
-		tagCount := 0
-
-		err = refs.ForEach(func(ref *plumbing.Reference) error {
-			if ref.Name().IsBranch() {
-				branchCount++
-			} else if ref.Name().IsTag() {
-				tagCount++
-			}
-			return nil
-		})
-
-		if err == nil {
-			repoInfo.BranchCount = branchCount
-			repoInfo.TagCount = tagCount
-		}
+		repoInfo.BranchCount = branchCount
 	}
 
-	// Count commits (this can be expensive for large repos)
-	if head != nil {
-		commitIter, err := gitRepo.Log(&gogit.LogOptions{From: head.Hash()})
+	// Count tags
+	tagCount, err := nativeForEachRefCount(ctx, repoPath, "refs/tags/")
+	if err == nil {
+		repoInfo.TagCount = tagCount
+	}
+
+	// Count commits (only if HEAD resolves)
+	if _, headExists := nativeRevParseVerify(ctx, repoPath, "HEAD"); headExists {
+		commitCount, err := nativeRevListCount(ctx, repoPath, "HEAD")
 		if err == nil {
-			commitCount := 0
-			err = commitIter.ForEach(func(c *object.Commit) error {
-				commitCount++
-				return nil
-			})
-			if err == nil {
-				repoInfo.CommitCount = commitCount
-			}
+			repoInfo.CommitCount = commitCount
 		}
 	}
 
@@ -592,7 +534,7 @@ func (rm *DefaultRepositoryManager) getDirectorySize(path string) (int64, error)
 
 	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip files that cause errors
+			return nil
 		}
 		if !info.IsDir() {
 			size += info.Size()
@@ -603,11 +545,16 @@ func (rm *DefaultRepositoryManager) getDirectorySize(path string) (int64, error)
 	return size, err
 }
 
+// =============================================
+// Backward compatibility: go-git cache layer
+// Used by overview/merge packages that still need *gogit.Repository
+// =============================================
+
 // SimpleRepoCache는 스레드 안전한 간단한 저장소 캐시입니다.
 type SimpleRepoCache struct {
 	mu         sync.RWMutex
 	repos      map[string]*cachedRepo
-	pendingOps map[string]*sync.Mutex // Prevent race conditions on repository opening
+	pendingOps map[string]*sync.Mutex
 }
 
 type cachedRepo struct {
@@ -628,7 +575,6 @@ func GetSimpleCache() *SimpleRepoCache {
 			repos:      make(map[string]*cachedRepo),
 			pendingOps: make(map[string]*sync.Mutex),
 		}
-		// Start cleanup goroutine
 		go globalSimpleCache.cleanup()
 	})
 	return globalSimpleCache
@@ -641,7 +587,6 @@ func (c *SimpleRepoCache) Get(path string) (*gogit.Repository, error) {
 		repo := cached.repo
 		c.mu.RUnlock()
 
-		// Update lastUsed with a write lock
 		c.mu.Lock()
 		if cached, stillExists := c.repos[path]; stillExists {
 			cached.lastUsed = time.Now()
@@ -652,7 +597,6 @@ func (c *SimpleRepoCache) Get(path string) (*gogit.Repository, error) {
 	}
 	c.mu.RUnlock()
 
-	// Get or create mutex for this path to prevent race conditions
 	c.mu.Lock()
 	pathMutex, exists := c.pendingOps[path]
 	if !exists {
@@ -661,17 +605,14 @@ func (c *SimpleRepoCache) Get(path string) (*gogit.Repository, error) {
 	}
 	c.mu.Unlock()
 
-	// Lock this specific path to prevent concurrent opens
 	pathMutex.Lock()
 	defer pathMutex.Unlock()
 
-	// Double-check after acquiring path lock (another goroutine might have added it)
 	c.mu.RLock()
 	if cached, exists := c.repos[path]; exists {
 		repo := cached.repo
 		c.mu.RUnlock()
 
-		// Update lastUsed
 		c.mu.Lock()
 		if cached, stillExists := c.repos[path]; stillExists {
 			cached.lastUsed = time.Now()
@@ -682,32 +623,27 @@ func (c *SimpleRepoCache) Get(path string) (*gogit.Repository, error) {
 	}
 	c.mu.RUnlock()
 
-	// Open repository
 	repo, err := gogit.PlainOpen(path)
 	if err != nil {
-		// Clean up pending ops mutex on error
 		c.mu.Lock()
 		delete(c.pendingOps, path)
 		c.mu.Unlock()
 		return nil, err
 	}
 
-	// Cache it
 	c.mu.Lock()
 	c.repos[path] = &cachedRepo{
 		repo:     repo,
 		lastUsed: time.Now(),
 		path:     path,
 	}
-	// Clean up pending ops mutex
 	delete(c.pendingOps, path)
 	c.mu.Unlock()
 
 	return repo, nil
 }
 
-// Invalidate removes a repository from cache so subsequent opens re-read pack/idx/ref state from disk.
-// Returns true if an entry existed.
+// Invalidate removes a repository from cache.
 func (c *SimpleRepoCache) Invalidate(path string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -718,14 +654,13 @@ func (c *SimpleRepoCache) Invalidate(path string) bool {
 	return existed
 }
 
-// cleanup removes old entries every 5 minutes
 func (c *SimpleRepoCache) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		c.mu.Lock()
-		cutoff := time.Now().Add(-10 * time.Minute) // Remove after 10 minutes of inactivity
+		cutoff := time.Now().Add(-10 * time.Minute)
 		var toRemove []string
 
 		for path, cached := range c.repos {
@@ -734,19 +669,15 @@ func (c *SimpleRepoCache) cleanup() {
 			}
 		}
 
-		// Remove expired entries
 		for _, path := range toRemove {
-			// Note: go-git repositories don't have an explicit Close() method,
-			// but we remove the reference to allow GC to clean up
 			delete(c.repos, path)
-			// Also clean up any pending ops mutexes
 			delete(c.pendingOps, path)
 		}
 		c.mu.Unlock()
 	}
 }
 
-// OpenRepositorySimple은 간단한 캐싱으로 저장소를 엽니다.
+// OpenRepositorySimple opens a repository with caching (backward compat for overview/merge).
 func OpenRepositorySimple(path string) (*RepositoryWrapper, error) {
 	cache := GetSimpleCache()
 	gitRepo, err := cache.Get(path)
@@ -761,8 +692,7 @@ func OpenRepositorySimple(path string) (*RepositoryWrapper, error) {
 	}, nil
 }
 
-// OpenRepositoryNoCache opens the repository with gogit.PlainOpen only (no cache).
-// Use for read paths that panic or misbehave with cached packfile storer (e.g. overview).
+// OpenRepositoryNoCache opens the repository without cache (backward compat for overview/merge).
 func OpenRepositoryNoCache(path string) (*RepositoryWrapper, error) {
 	gitRepo, err := gogit.PlainOpen(path)
 	if err != nil {

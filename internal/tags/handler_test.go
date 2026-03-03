@@ -2,7 +2,9 @@ package tags_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/tags"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -31,9 +32,7 @@ func Test_CreateTag_Lightweight_ReturnsSuccess(t *testing.T) {
 	tempDir := t.TempDir()
 	_, commitHash := createRepoWithCommit(t, tempDir)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: 경량 태그 생성
 	req := &tags.CreateTagRequest{
@@ -41,7 +40,7 @@ func Test_CreateTag_Lightweight_ReturnsSuccess(t *testing.T) {
 		Hash:      commitHash.String(),
 		Annotated: false,
 	}
-	tag, err := tags.CreateTag(repoWrapper, req)
+	tag, err := tags.CreateTag(context.Background(), gitDir, req)
 
 	// Then: 성공
 	require.NoError(t, err)
@@ -58,9 +57,7 @@ func Test_CreateTag_Annotated_ReturnsSuccess(t *testing.T) {
 	tempDir := t.TempDir()
 	_, commitHash := createRepoWithCommit(t, tempDir)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: 주석 태그 생성
 	req := &tags.CreateTagRequest{
@@ -74,7 +71,7 @@ func Test_CreateTag_Annotated_ReturnsSuccess(t *testing.T) {
 			Date:  time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
-	tag, err := tags.CreateTag(repoWrapper, req)
+	tag, err := tags.CreateTag(context.Background(), gitDir, req)
 
 	// Then: 성공
 	require.NoError(t, err)
@@ -102,16 +99,14 @@ func Test_CreateTag_DuplicateName_Returns409(t *testing.T) {
 	err := repo.Storer.SetReference(tagRef)
 	require.NoError(t, err)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: 동일한 이름으로 태그 생성 시도
 	req := &tags.CreateTagRequest{
 		Name: "v1.0.0",
 		Hash: commitHash.String(),
 	}
-	tag, err := tags.CreateTag(repoWrapper, req)
+	tag, err := tags.CreateTag(context.Background(), gitDir, req)
 
 	// Then: 409 에러 반환
 	require.Error(t, err)
@@ -127,9 +122,7 @@ func Test_CreateTag_InvalidTarget_Returns400(t *testing.T) {
 	tempDir := t.TempDir()
 	createRepoWithCommit(t, tempDir)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: zero hash(형식 오류)에 태그 생성
 	zeroHash := "0000000000000000000000000000000000000000"
@@ -137,12 +130,11 @@ func Test_CreateTag_InvalidTarget_Returns400(t *testing.T) {
 		Name: "v1.0.0",
 		Hash: zeroHash,
 	}
-	tag, err := tags.CreateTag(repoWrapper, req)
+	tag, err := tags.CreateTag(context.Background(), gitDir, req)
 
-	// Then: 에러 반환 (invalid hash)
+	// Then: 에러 반환 (commit not found or invalid)
 	require.Error(t, err)
 	assert.Nil(t, tag)
-	assert.Contains(t, err.Error(), "invalid")
 }
 
 func Test_CreateTag_NonExistentCommit_Returns404(t *testing.T) {
@@ -153,9 +145,7 @@ func Test_CreateTag_NonExistentCommit_Returns404(t *testing.T) {
 	tempDir := t.TempDir()
 	createRepoWithCommit(t, tempDir)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: 존재하지 않는 커밋(valid format but non-existent)에 태그 생성
 	nonExistentHash := "abcd1234567890abcd1234567890abcd12345678"
@@ -163,7 +153,7 @@ func Test_CreateTag_NonExistentCommit_Returns404(t *testing.T) {
 		Name: "v1.0.0",
 		Hash: nonExistentHash,
 	}
-	tag, err := tags.CreateTag(repoWrapper, req)
+	tag, err := tags.CreateTag(context.Background(), gitDir, req)
 
 	// Then: 에러 반환 (not found)
 	require.Error(t, err)
@@ -197,16 +187,14 @@ func Test_CreateTag_FromBranch_ReturnsSuccess(t *testing.T) {
 
 	featureHash := commitFile(t, wt, tempDir, "feature.txt", "feature content", "feature commit")
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: feature 브랜치의 커밋에 태그 생성
 	req := &tags.CreateTagRequest{
 		Name: "feature-v1",
 		Hash: featureHash.String(),
 	}
-	tag, err := tags.CreateTag(repoWrapper, req)
+	tag, err := tags.CreateTag(context.Background(), gitDir, req)
 
 	// Then: 성공
 	require.NoError(t, err)
@@ -227,16 +215,14 @@ func Test_CreateTag_FromCommit_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, err)
 	_ = commitFile(t, wt, tempDir, "second.txt", "second", "second commit")
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: 첫 번째 커밋에 태그 생성 (HEAD가 아닌 과거 커밋)
 	req := &tags.CreateTagRequest{
 		Name: "v0.1.0",
 		Hash: firstHash.String(),
 	}
-	tag, err := tags.CreateTag(repoWrapper, req)
+	tag, err := tags.CreateTag(context.Background(), gitDir, req)
 
 	// Then: 성공
 	require.NoError(t, err)
@@ -264,12 +250,10 @@ func Test_DeleteTag_Existing_ReturnsSuccess(t *testing.T) {
 	err := repo.Storer.SetReference(tagRef)
 	require.NoError(t, err)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: 태그 삭제
-	err = tags.DeleteTag(repoWrapper, "v1.0.0")
+	err = tags.DeleteTag(context.Background(), gitDir, "v1.0.0")
 
 	// Then: 성공
 	require.NoError(t, err)
@@ -287,12 +271,10 @@ func Test_DeleteTag_NonExistent_Returns404(t *testing.T) {
 	tempDir := t.TempDir()
 	createRepoWithCommit(t, tempDir)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
+	gitDir := filepath.Join(tempDir, ".git")
 
 	// When: 존재하지 않는 태그 삭제
-	err = tags.DeleteTag(repoWrapper, "nonexistent")
+	err := tags.DeleteTag(context.Background(), gitDir, "nonexistent")
 
 	// Then: 에러 반환
 	require.Error(t, err)
@@ -322,12 +304,8 @@ func Test_GetTags_ReturnsAll(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
-
 	// When: 태그 목록 조회
-	result, totalCount, err := tags.GetTags(repoWrapper, 100, 0)
+	result, totalCount, err := tags.GetTags(context.Background(), filepath.Join(tempDir, ".git"), 100, 0)
 
 	// Then: 모든 태그 반환
 	require.NoError(t, err)
@@ -343,12 +321,8 @@ func Test_GetTags_EmptyRepo_ReturnsEmptyArray(t *testing.T) {
 	tempDir := t.TempDir()
 	createRepoWithCommit(t, tempDir)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
-
 	// When: 태그 목록 조회
-	result, totalCount, err := tags.GetTags(repoWrapper, 100, 0)
+	result, totalCount, err := tags.GetTags(context.Background(), filepath.Join(tempDir, ".git"), 100, 0)
 
 	// Then: 빈 배열 반환
 	require.NoError(t, err)
@@ -366,19 +340,15 @@ func Test_GetTags_Pagination_ReturnsCorrectPage(t *testing.T) {
 
 	for i := 1; i <= 10; i++ {
 		tagRef := plumbing.NewHashReference(
-			plumbing.ReferenceName("refs/tags/v"+string(rune('0'+i))),
+			plumbing.ReferenceName(fmt.Sprintf("refs/tags/v%d", i)),
 			commitHash,
 		)
 		err := repo.Storer.SetReference(tagRef)
 		require.NoError(t, err)
 	}
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
-
 	// When: limit=3, skip=0으로 조회
-	result, totalCount, err := tags.GetTags(repoWrapper, 3, 0)
+	result, totalCount, err := tags.GetTags(context.Background(), filepath.Join(tempDir, ".git"), 3, 0)
 
 	// Then: 3개만 반환, totalCount는 10
 	require.NoError(t, err)
@@ -386,7 +356,7 @@ func Test_GetTags_Pagination_ReturnsCorrectPage(t *testing.T) {
 	assert.Len(t, result, 3)
 
 	// When: limit=3, skip=3으로 조회 (두 번째 페이지)
-	result2, totalCount2, err := tags.GetTags(repoWrapper, 3, 3)
+	result2, totalCount2, err := tags.GetTags(context.Background(), filepath.Join(tempDir, ".git"), 3, 3)
 
 	// Then: 3개 반환
 	require.NoError(t, err)
@@ -432,12 +402,8 @@ func Test_GetTags_AnnotatedAndLightweight_ReturnsBoth(t *testing.T) {
 	err = repo.Storer.SetReference(annotatedRef)
 	require.NoError(t, err)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
-
 	// When: 태그 목록 조회
-	result, totalCount, err := tags.GetTags(repoWrapper, 100, 0)
+	result, totalCount, err := tags.GetTags(context.Background(), filepath.Join(tempDir, ".git"), 100, 0)
 
 	// Then: 2개 반환
 	require.NoError(t, err)
@@ -480,12 +446,8 @@ func Test_GetTags_SortByName_ReturnsSorted(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
-
 	// When: 이름순 정렬로 태그 목록 조회
-	result, totalCount, err := tags.GetTagsSorted(repoWrapper, 100, 0, tags.SortByName)
+	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.SortByName)
 
 	// Then: 이름순으로 정렬되어 반환
 	require.NoError(t, err)
@@ -535,12 +497,8 @@ func Test_GetTags_SortByDate_ReturnsSorted(t *testing.T) {
 	err = repo.Storer.SetReference(tagRef3)
 	require.NoError(t, err)
 
-	repoWrapper, err := repositories.OpenRepositorySimple(tempDir)
-	require.NoError(t, err)
-	defer func() { _ = repoWrapper.Close() }()
-
 	// When: 날짜순 정렬로 태그 목록 조회
-	result, totalCount, err := tags.GetTagsSorted(repoWrapper, 100, 0, tags.SortByDate)
+	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.SortByDate)
 
 	// Then: 날짜 내림차순으로 정렬 (최신 먼저)
 	require.NoError(t, err)

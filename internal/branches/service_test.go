@@ -2,16 +2,13 @@ package branches
 
 import (
 	"context"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,52 +25,62 @@ func newBranchService(t *testing.T) *BranchService {
 	return NewBranchService(logger)
 }
 
-func newBareRepoWithMain(t *testing.T) (*gogit.Repository, plumbing.Hash) {
+// newBareRepoWithMainNative creates a bare repo with a single commit on "main" using native git.
+func newBareRepoWithMainNative(t *testing.T) (string, string) {
 	t.Helper()
 
 	dir := t.TempDir()
 	repoPath := filepath.Join(dir, "repo.git")
-	repo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
 
-	// blob
-	blobObj := repo.Storer.NewEncodedObject()
-	blobObj.SetType(plumbing.BlobObject)
-	blobObj.SetSize(3)
-	w, err := blobObj.Writer()
-	require.NoError(t, err)
-	_, err = w.Write([]byte("hi\n"))
-	require.NoError(t, err)
-	require.NoError(t, w.Close())
-	blobHash, err := repo.Storer.SetEncodedObject(blobObj)
-	require.NoError(t, err)
+	// git init --bare
+	cmd := exec.Command("git", "init", "--bare", repoPath)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
 
-	// tree
-	tree := &object.Tree{Entries: []object.TreeEntry{
-		{Name: "f", Mode: filemode.Regular, Hash: blobHash},
-	}}
-	treeObj := repo.Storer.NewEncodedObject()
-	require.NoError(t, tree.Encode(treeObj))
-	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	// Create a blob
+	cmd = exec.Command("git", "--git-dir", repoPath, "hash-object", "-w", "--stdin")
+	cmd.Stdin = strings.NewReader("hi\n")
+	out, err = cmd.Output()
 	require.NoError(t, err)
+	blobHash := trimOutput(out)
 
-	when := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	commit := &object.Commit{
-		Author:       object.Signature{Name: "t", Email: "t@t.com", When: when},
-		Committer:    object.Signature{Name: "t", Email: "t@t.com", When: when},
-		Message:      "init",
-		TreeHash:     treeHash,
-		ParentHashes: nil,
+	// Create a tree
+	treeInput := "100644 blob " + blobHash + "\tf\n"
+	cmd = exec.Command("git", "--git-dir", repoPath, "mktree")
+	cmd.Stdin = strings.NewReader(treeInput)
+	out, err = cmd.Output()
+	require.NoError(t, err)
+	treeHash := trimOutput(out)
+
+	// Create a commit
+	cmd = exec.Command("git", "--git-dir", repoPath, "commit-tree", treeHash, "-m", "init")
+	cmd.Env = append(cmd.Environ(),
+		"GIT_AUTHOR_NAME=t",
+		"GIT_AUTHOR_EMAIL=t@t.com",
+		"GIT_AUTHOR_DATE=2024-01-01T00:00:00+00:00",
+		"GIT_COMMITTER_NAME=t",
+		"GIT_COMMITTER_EMAIL=t@t.com",
+		"GIT_COMMITTER_DATE=2024-01-01T00:00:00+00:00",
+	)
+	out, err = cmd.Output()
+	require.NoError(t, err)
+	commitHash := trimOutput(out)
+
+	// Set refs/heads/main and HEAD
+	cmd = exec.Command("git", "--git-dir", repoPath, "update-ref", "refs/heads/main", commitHash)
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command("git", "--git-dir", repoPath, "symbolic-ref", "HEAD", "refs/heads/main")
+	require.NoError(t, cmd.Run())
+
+	return repoPath, commitHash
+}
+
+func trimOutput(b []byte) string {
+	s := string(b)
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
 	}
-	commitObj := repo.Storer.NewEncodedObject()
-	require.NoError(t, commit.Encode(commitObj))
-	commitHash, err := repo.Storer.SetEncodedObject(commitObj)
-	require.NoError(t, err)
-
-	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", commitHash)))
-	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
-
-	return repo, commitHash
+	return s
 }
 
 func Test_BranchService_GetBranches_EmptyRepo_ReturnsEmpty(t *testing.T) {
@@ -81,12 +88,12 @@ func Test_BranchService_GetBranches_EmptyRepo_ReturnsEmpty(t *testing.T) {
 
 	dir := t.TempDir()
 	repoPath := filepath.Join(dir, "bare.git")
-	repo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
+	cmd := exec.Command("git", "init", "--bare", repoPath)
+	require.NoError(t, cmd.Run())
 
 	svc := newBranchService(t)
 
-	branches, err := svc.GetBranches(repo)
+	branches, err := svc.GetBranches(context.Background(), repoPath)
 
 	require.NoError(t, err)
 	require.Empty(t, branches)
@@ -95,10 +102,10 @@ func Test_BranchService_GetBranches_EmptyRepo_ReturnsEmpty(t *testing.T) {
 func Test_BranchService_GetBranches_WithBranches_ReturnsAll(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 	svc := newBranchService(t)
 
-	branches, err := svc.GetBranches(repo)
+	branches, err := svc.GetBranches(context.Background(), repoPath)
 
 	require.NoError(t, err)
 	require.Len(t, branches, 1)
@@ -108,10 +115,10 @@ func Test_BranchService_GetBranches_WithBranches_ReturnsAll(t *testing.T) {
 func Test_BranchService_CreateBranch_ValidRequest_ReturnsSuccess(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 	svc := newBranchService(t)
 
-	result, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{
+	result, err := svc.CreateBranch(context.Background(), repoPath, CreateBranchRequest{
 		Name:   "feature",
 		Source: "main",
 	})
@@ -120,18 +127,19 @@ func Test_BranchService_CreateBranch_ValidRequest_ReturnsSuccess(t *testing.T) {
 	require.Equal(t, "feature", result.BranchName)
 	require.True(t, result.IsNewBranch)
 
-	ref, err := repo.Reference("refs/heads/feature", false)
+	// Verify via native git
+	exists, _, err := NativeCheckBranchExists(context.Background(), repoPath, "feature")
 	require.NoError(t, err)
-	require.NotEqual(t, plumbing.ZeroHash, ref.Hash())
+	require.True(t, exists)
 }
 
 func Test_BranchService_CreateBranch_DuplicateName_WithoutForce_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 	svc := newBranchService(t)
 
-	_, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{Name: "main", Source: "HEAD"})
+	_, err := svc.CreateBranch(context.Background(), repoPath, CreateBranchRequest{Name: "main", Source: "HEAD"})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already exists")
@@ -140,10 +148,10 @@ func Test_BranchService_CreateBranch_DuplicateName_WithoutForce_ReturnsError(t *
 func Test_BranchService_CreateBranch_DuplicateName_WithForce_Overwrites(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 	svc := newBranchService(t)
 
-	result, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{
+	result, err := svc.CreateBranch(context.Background(), repoPath, CreateBranchRequest{
 		Name:   "main",
 		Source: "HEAD",
 		Force:  true,
@@ -156,91 +164,87 @@ func Test_BranchService_CreateBranch_DuplicateName_WithForce_Overwrites(t *testi
 func Test_BranchService_DeleteBranch_Existing_ReturnsSuccess(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 	svc := newBranchService(t)
 
-	_, err := svc.CreateBranch(context.Background(), repo, CreateBranchRequest{Name: "to-delete", Source: "main"})
+	_, err := svc.CreateBranch(context.Background(), repoPath, CreateBranchRequest{Name: "to-delete", Source: "main"})
 	require.NoError(t, err)
 
-	result, err := svc.DeleteBranch(context.Background(), repo, "to-delete")
+	result, err := svc.DeleteBranch(context.Background(), repoPath, "to-delete")
 
 	require.NoError(t, err)
 	require.Equal(t, "to-delete", result.BranchName)
 
-	_, err = repo.Reference("refs/heads/to-delete", false)
-	require.Error(t, err)
+	// Verify via native git
+	exists, _, err := NativeCheckBranchExists(context.Background(), repoPath, "to-delete")
+	require.NoError(t, err)
+	require.False(t, exists)
 }
 
 func Test_BranchService_DeleteBranch_NonExistent_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 	svc := newBranchService(t)
 
-	_, err := svc.DeleteBranch(context.Background(), repo, "ghost")
+	_, err := svc.DeleteBranch(context.Background(), repoPath, "ghost")
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not exist")
 }
 
-func Test_BranchService_checkBranchExists_Existing_ReturnsTrueAndHash(t *testing.T) {
+func Test_NativeCheckBranchExists_Existing_ReturnsTrueAndHash(t *testing.T) {
 	t.Parallel()
 
-	repo, mainHash := newBareRepoWithMain(t)
-	svc := newBranchService(t)
+	repoPath, commitHash := newBareRepoWithMainNative(t)
 
-	exists, hash, err := svc.checkBranchExists(repo, "main")
+	exists, hash, err := NativeCheckBranchExists(context.Background(), repoPath, "main")
 
 	require.NoError(t, err)
 	require.True(t, exists)
-	require.Equal(t, mainHash, hash)
+	require.Equal(t, commitHash, hash)
 }
 
-func Test_BranchService_checkBranchExists_NonExistent_ReturnsFalse(t *testing.T) {
+func Test_NativeCheckBranchExists_NonExistent_ReturnsFalse(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
-	svc := newBranchService(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 
-	exists, hash, err := svc.checkBranchExists(repo, "ghost")
+	exists, hash, err := NativeCheckBranchExists(context.Background(), repoPath, "ghost")
 
 	require.NoError(t, err)
 	require.False(t, exists)
-	require.Equal(t, plumbing.ZeroHash, hash)
+	require.Empty(t, hash)
 }
 
-func Test_BranchService_resolveSourceReference_HEAD_ReturnsCommitHash(t *testing.T) {
+func Test_NativeResolveRef_HEAD_ReturnsCommitHash(t *testing.T) {
 	t.Parallel()
 
-	repo, mainHash := newBareRepoWithMain(t)
-	svc := newBranchService(t)
+	repoPath, commitHash := newBareRepoWithMainNative(t)
 
-	hash, err := svc.resolveSourceReference(repo, "HEAD")
+	hash, err := NativeResolveRef(context.Background(), repoPath, "HEAD")
 
 	require.NoError(t, err)
-	require.Equal(t, mainHash, hash)
+	require.Equal(t, commitHash, hash)
 }
 
-func Test_BranchService_resolveSourceReference_BranchName_ReturnsCommitHash(t *testing.T) {
+func Test_NativeResolveRef_BranchName_ReturnsCommitHash(t *testing.T) {
 	t.Parallel()
 
-	repo, mainHash := newBareRepoWithMain(t)
-	svc := newBranchService(t)
+	repoPath, commitHash := newBareRepoWithMainNative(t)
 
-	hash, err := svc.resolveSourceReference(repo, "main")
+	hash, err := NativeResolveRef(context.Background(), repoPath, "refs/heads/main")
 
 	require.NoError(t, err)
-	require.Equal(t, mainHash, hash)
+	require.Equal(t, commitHash, hash)
 }
 
-func Test_BranchService_resolveSourceReference_InvalidRef_ReturnsError(t *testing.T) {
+func Test_NativeResolveRef_InvalidRef_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newBareRepoWithMain(t)
-	svc := newBranchService(t)
+	repoPath, _ := newBareRepoWithMainNative(t)
 
-	_, err := svc.resolveSourceReference(repo, "nonexistent")
+	_, err := NativeResolveRef(context.Background(), repoPath, "nonexistent")
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "unable to resolve")
 }

@@ -3,77 +3,57 @@ package commits
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
-	"github.com/collabops/git-executor/internal/repositories"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
-func newBareRepoWrapper(t *testing.T) (*repositories.RepositoryWrapper, *gogit.Repository) {
+func newBareRepoNative(t *testing.T) string {
 	t.Helper()
 
 	tempDir := t.TempDir()
 	repoPath := filepath.Join(tempDir, "o", "r.git")
 	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0o755))
 
-	_, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
+	cmd := exec.Command("git", "init", "--bare", repoPath)
+	require.NoError(t, cmd.Run())
 
-	repoWrapper, err := repositories.OpenRepositorySimple(repoPath)
-	require.NoError(t, err)
-
-	gitRepo := repoWrapper.GetRepo()
-	require.NotNil(t, gitRepo)
-
-	return repoWrapper, gitRepo
+	return repoPath
 }
 
-func createCommitWithSingleFile(t *testing.T, gitRepo *gogit.Repository, path string, content []byte, when time.Time) plumbing.Hash {
+// createInitialCommitNative creates a commit with a single file using native git and returns the commit hash.
+func createInitialCommitNative(t *testing.T, repoPath, filename string, content []byte) string {
 	t.Helper()
+	ctx := context.Background()
 
-	c := newObjectCollector()
-
-	blobHash, err := createBlob(content, c)
+	// Hash the blob
+	blobHash, err := nativeHashObject(ctx, repoPath, content)
 	require.NoError(t, err)
 
-	files := map[string]TreeFileInfo{
-		path: {
-			Hash: blobHash,
-			Mode: filemode.Regular,
-		},
+	// Create tree with the file
+	treeHash, err := nativeMkTree(ctx, repoPath, []nativeMkTreeEntry{
+		{Mode: "100644", Type: "blob", Hash: blobHash, Name: filename},
+	})
+	require.NoError(t, err)
+
+	// Create commit
+	author := &NativeSignature{
+		Name:  "Test",
+		Email: "test@example.com",
+		When:  time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
-	treeHash, err := buildTreeRecursive(files, "", c)
+	commitHash, err := nativeCommitTree(ctx, repoPath, treeHash, nil, "init", author, author)
 	require.NoError(t, err)
 
-	commit := &object.Commit{
-		Author: object.Signature{
-			Name:  "Test",
-			Email: "test@example.com",
-			When:  when,
-		},
-		Committer: object.Signature{
-			Name:  "Test",
-			Email: "test@example.com",
-			When:  when,
-		},
-		Message:  "init",
-		TreeHash: treeHash,
-	}
-
-	commitHash, err := c.encodeCommit(commit)
-	require.NoError(t, err)
-	require.NoError(t, c.flush(gitRepo.Storer))
-
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", commitHash)))
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
+	// Update refs
+	require.NoError(t, nativeUpdateRef(ctx, repoPath, "refs/heads/main", commitHash))
+	require.NoError(t, nativeSetSymbolicRef(ctx, repoPath, "refs/heads/main"))
 
 	return commitHash
 }
@@ -81,8 +61,7 @@ func createCommitWithSingleFile(t *testing.T, gitRepo *gogit.Repository, path st
 func Test_TransactionManager_ValidateTransaction_RootCommitRejectsNonCreate(t *testing.T) {
 	t.Parallel()
 
-	// Given: empty repo and root commit transaction (baseCommit=ZeroHash)
-	repoWrapper, _ := newBareRepoWrapper(t)
+	repoPath := newBareRepoNative(t)
 	logger, err := logging.NewLogger(config.LoggingConfig{
 		Level:       "info",
 		Format:      "text",
@@ -94,7 +73,7 @@ func Test_TransactionManager_ValidateTransaction_RootCommitRejectsNonCreate(t *t
 
 	commitInfo := CommitInfo{
 		Message: "first commit",
-		Author: object.Signature{
+		Author: NativeSignature{
 			Name:  "Test",
 			Email: "test@example.com",
 			When:  time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -102,7 +81,7 @@ func Test_TransactionManager_ValidateTransaction_RootCommitRejectsNonCreate(t *t
 		Parents: nil,
 	}
 
-	txn, err := tm.BeginTransaction(context.Background(), repoWrapper, plumbing.ZeroHash, commitInfo, TransactionOptions{
+	txn, err := tm.BeginTransaction(context.Background(), repoPath, "", commitInfo, TransactionOptions{
 		Timeout:            30 * time.Second,
 		ValidateOnly:       false,
 		AllowPartialCommit: false,
@@ -118,10 +97,8 @@ func Test_TransactionManager_ValidateTransaction_RootCommitRejectsNonCreate(t *t
 	})
 	require.NoError(t, err)
 
-	// When: validate
 	validateErr := tm.ValidateTransaction(context.Background(), txn)
 
-	// Then: validation fails with root commit rule
 	require.Error(t, validateErr)
 	require.Contains(t, validateErr.Error(), "root commit allows only create operations")
 }
@@ -129,9 +106,8 @@ func Test_TransactionManager_ValidateTransaction_RootCommitRejectsNonCreate(t *t
 func Test_TransactionManager_CommitTransaction_ValidateOnly_ReturnsCommittedWithoutCommitResult(t *testing.T) {
 	t.Parallel()
 
-	// Given: repo with one commit and a validate-only transaction
-	repoWrapper, gitRepo := newBareRepoWrapper(t)
-	baseHash := createCommitWithSingleFile(t, gitRepo, "a.txt", []byte("A"), time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	repoPath := newBareRepoNative(t)
+	baseHash := createInitialCommitNative(t, repoPath, "a.txt", []byte("A"))
 
 	logger, err := logging.NewLogger(config.LoggingConfig{
 		Level:       "info",
@@ -144,15 +120,15 @@ func Test_TransactionManager_CommitTransaction_ValidateOnly_ReturnsCommittedWith
 
 	commitInfo := CommitInfo{
 		Message: "validate only",
-		Author: object.Signature{
+		Author: NativeSignature{
 			Name:  "Test",
 			Email: "test@example.com",
 			When:  time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 		},
-		Parents: []plumbing.Hash{baseHash},
+		Parents: []string{baseHash},
 	}
 
-	txn, err := tm.BeginTransaction(context.Background(), repoWrapper, baseHash, commitInfo, TransactionOptions{
+	txn, err := tm.BeginTransaction(context.Background(), repoPath, baseHash, commitInfo, TransactionOptions{
 		Timeout:            30 * time.Second,
 		ValidateOnly:       true,
 		AllowPartialCommit: false,
@@ -171,10 +147,8 @@ func Test_TransactionManager_CommitTransaction_ValidateOnly_ReturnsCommittedWith
 
 	require.NoError(t, tm.ValidateTransaction(context.Background(), txn))
 
-	// When: commit validate-only
 	result, commitErr := tm.CommitTransaction(context.Background(), txn)
 
-	// Then: committed without producing a commit
 	require.NoError(t, commitErr)
 	require.Equal(t, TransactionStateCommitted, result.State)
 	require.Nil(t, result.CommitResult)
@@ -184,101 +158,86 @@ func Test_TransactionManager_CommitTransaction_ValidateOnly_ReturnsCommittedWith
 func Test_CreateTreeFromChanges_CreateUpdateDelete_AppliesAllChanges(t *testing.T) {
 	t.Parallel()
 
-	// Given: repo with base tree containing old.txt and keep.txt
-	repoWrapper, gitRepo := newBareRepoWrapper(t)
-	_ = createCommitWithSingleFile(t, gitRepo, "old.txt", []byte("old"), time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	repoPath := newBareRepoNative(t)
+	ctx := context.Background()
 
-	baseCommit, err := gitRepo.Head()
+	// Create base with two files: old.txt and keep.txt
+	blobOld, err := nativeHashObject(ctx, repoPath, []byte("old"))
 	require.NoError(t, err)
-	baseObj, err := gitRepo.CommitObject(baseCommit.Hash())
-	require.NoError(t, err)
-	baseTree, err := baseObj.Tree()
+	blobKeep, err := nativeHashObject(ctx, repoPath, []byte("keep"))
 	require.NoError(t, err)
 
-	// And: also add keep.txt to base tree by creating a new commit (still a deterministic base)
-	c2 := newObjectCollector()
-	blobHash, err := createBlob([]byte("keep"), c2)
-	require.NoError(t, err)
-	files := map[string]TreeFileInfo{
-		"old.txt": {
-			Hash: mustFileHash(t, baseTree, "old.txt"),
-			Mode: filemode.Regular,
-		},
-		"keep.txt": {
-			Hash: blobHash,
-			Mode: filemode.Regular,
-		},
-	}
-	treeHash, err := buildTreeRecursive(files, "", c2)
-	require.NoError(t, err)
-	require.NoError(t, c2.flush(gitRepo.Storer))
-
-	commitHash, err := storeCommitObject(t, gitRepo, treeHash, time.Date(2024, 1, 1, 0, 0, 1, 0, time.UTC), "base2", baseObj.Hash)
-	require.NoError(t, err)
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", commitHash)))
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
-
-	base2, err := gitRepo.CommitObject(commitHash)
-	require.NoError(t, err)
-	baseTree2, err := base2.Tree()
+	treeHash, err := nativeMkTree(ctx, repoPath, []nativeMkTreeEntry{
+		{Mode: "100644", Type: "blob", Hash: blobKeep, Name: "keep.txt"},
+		{Mode: "100644", Type: "blob", Hash: blobOld, Name: "old.txt"},
+	})
 	require.NoError(t, err)
 
-	// When: create new.txt, update keep.txt, delete old.txt
-	res, c, err := createTreeFromChanges(repoWrapper, baseTree2, []FileChange{
+	author := &NativeSignature{Name: "Test", Email: "test@example.com", When: time.Now()}
+	commitHash, err := nativeCommitTree(ctx, repoPath, treeHash, nil, "base", author, author)
+	require.NoError(t, err)
+	require.NoError(t, nativeUpdateRef(ctx, repoPath, "refs/heads/main", commitHash))
+
+	// Get base tree hash
+	baseTreeHash, err := nativeGetTreeHash(ctx, repoPath, commitHash)
+	require.NoError(t, err)
+
+	// Apply changes: create new.txt, update keep.txt, delete old.txt
+	res, err := createTreeFromChanges(ctx, repoPath, baseTreeHash, []FileChange{
 		{Operation: FileOperationCreate, Path: "new.txt", Content: []byte("new")},
 		{Operation: FileOperationUpdate, Path: "keep.txt", Content: []byte("keep2")},
 		{Operation: FileOperationDelete, Path: "old.txt"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, c.flush(gitRepo.Storer))
 
-	// Then: tree contains new.txt and updated keep.txt, and old.txt is gone
-	newTree, err := gitRepo.TreeObject(res.TreeHash)
+	// Verify: tree should contain new.txt and keep.txt, not old.txt
+	entries, err := nativeLsTree(ctx, repoPath, res.TreeHash)
 	require.NoError(t, err)
 
-	_, err = newTree.File("old.txt")
-	require.Error(t, err)
+	paths := make(map[string]bool)
+	for _, e := range entries {
+		paths[e.Path] = true
+	}
 
-	keepFile, err := newTree.File("keep.txt")
-	require.NoError(t, err)
-	keepContents, err := keepFile.Contents()
-	require.NoError(t, err)
-	require.Equal(t, "keep2", keepContents)
+	require.False(t, paths["old.txt"], "old.txt should be deleted")
+	require.True(t, paths["keep.txt"], "keep.txt should exist")
+	require.True(t, paths["new.txt"], "new.txt should exist")
 
-	newFile, err := newTree.File("new.txt")
+	// Verify content of keep.txt (read via cat-file)
+	cmd := exec.Command("git", "--git-dir", repoPath, "cat-file", "-p", findEntryHash(entries, "keep.txt"))
+	out, err := cmd.Output()
 	require.NoError(t, err)
-	newContents, err := newFile.Contents()
+	require.Equal(t, "keep2", string(out))
+
+	// Verify content of new.txt
+	cmd = exec.Command("git", "--git-dir", repoPath, "cat-file", "-p", findEntryHash(entries, "new.txt"))
+	out, err = cmd.Output()
 	require.NoError(t, err)
-	require.Equal(t, "new", newContents)
+	require.Equal(t, "new", string(out))
 }
 
-func mustFileHash(t *testing.T, tree *object.Tree, name string) plumbing.Hash {
-	t.Helper()
-	f, err := tree.File(name)
-	require.NoError(t, err)
-	return f.Hash
+func findEntryHash(entries []nativeLsTreeEntry, path string) string {
+	for _, e := range entries {
+		if e.Path == path {
+			return e.Hash
+		}
+	}
+	return ""
 }
 
-func storeCommitObject(t *testing.T, gitRepo *gogit.Repository, treeHash plumbing.Hash, when time.Time, msg string, parent plumbing.Hash) (plumbing.Hash, error) {
-	t.Helper()
-	commit := &object.Commit{
-		Author: object.Signature{
-			Name:  "Test",
-			Email: "test@example.com",
-			When:  when,
-		},
-		Committer: object.Signature{
-			Name:  "Test",
-			Email: "test@example.com",
-			When:  when,
-		},
-		Message:      msg,
-		TreeHash:     treeHash,
-		ParentHashes: []plumbing.Hash{parent},
+func Test_SortNativeTreeEntries_DirsBeforeFiles(t *testing.T) {
+	t.Parallel()
+
+	entries := []nativeMkTreeEntry{
+		{Mode: "100644", Type: "blob", Hash: strings.Repeat("a", 40), Name: "z.txt"},
+		{Mode: "040000", Type: "tree", Hash: strings.Repeat("b", 40), Name: "a"},
+		{Mode: "100644", Type: "blob", Hash: strings.Repeat("c", 40), Name: "b.txt"},
 	}
-	obj := gitRepo.Storer.NewEncodedObject()
-	if err := commit.Encode(obj); err != nil {
-		return plumbing.ZeroHash, err
-	}
-	return gitRepo.Storer.SetEncodedObject(obj)
+
+	sortNativeTreeEntries(entries)
+
+	// Directory "a" should sort before "b.txt" and "z.txt"
+	require.Equal(t, "a", entries[0].Name)
+	require.Equal(t, "b.txt", entries[1].Name)
+	require.Equal(t, "z.txt", entries[2].Name)
 }

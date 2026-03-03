@@ -910,20 +910,11 @@ func (v *GitAPIPathValidator) validateGitSpecificPath(path string) error {
 	// Normalize path
 	normalizedPath := filepath.Clean(path)
 
-	// Check for Git-specific forbidden paths
-	forbiddenPaths := []string{
-		".git",
-		".git/",
-		"refs/",
-		"objects/",
-		"hooks/",
-	}
-
-	// Check if path starts with forbidden Git paths
-	for _, forbidden := range forbiddenPaths {
-		if strings.HasPrefix(normalizedPath, forbidden) {
-			return fmt.Errorf("file path cannot access Git internal directories: %s", forbidden)
-		}
+	// Check for Git-specific forbidden paths.
+	// Only block exact ".git" directory or paths under ".git/".
+	// Allow paths like ".github", ".gitignore", ".gitmodules" etc.
+	if normalizedPath == ".git" || strings.HasPrefix(normalizedPath, ".git/") {
+		return fmt.Errorf("file path cannot access Git internal directories: .git")
 	}
 
 	// Check for forbidden file names within the path
