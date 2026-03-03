@@ -2,6 +2,7 @@ package connection
 
 import (
 	"bufio"
+	"context"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -231,6 +232,8 @@ type ProgressAwareConnection struct {
 	protoV2  bool
 
 	// Lifecycle management
+	ctx      context.Context
+	cancel   context.CancelFunc
 	stopChan chan struct{}
 	once     sync.Once
 	closed   int32
@@ -256,6 +259,7 @@ func NewProgressAwareConnection(conn net.Conn, policy *TimeoutPolicy, logger *za
 	// counted. Without this, writes bypass pac.Write() and the stall detector never sees
 	// upload-pack progress, killing long clones after StallThreshold seconds.
 	writeTarget := &progressRecordingWriter{conn: conn, tracker: tracker}
+	ctx, cancel := context.WithCancel(context.Background())
 	pac := &ProgressAwareConnection{
 		conn:            conn,
 		reader:          bufio.NewReaderSize(readSource, defaultReadBufferSize),
@@ -265,6 +269,8 @@ func NewProgressAwareConnection(conn net.Conn, policy *TimeoutPolicy, logger *za
 		currentPhase:    PhaseHandshake,
 		logger:          logger,
 		lastUsed:        time.Now(),
+		ctx:             ctx,
+		cancel:          cancel,
 		stopChan:        make(chan struct{}),
 	}
 
@@ -396,16 +402,25 @@ func (pac *ProgressAwareConnection) Flush() error {
 	return pac.writer.Flush()
 }
 
-// Close closes the connection and stops monitoring
+// Close closes the connection and stops monitoring.
+// Cancelling the context ensures any git processes spawned via
+// exec.CommandContext(conn.Context(), ...) are terminated immediately.
 func (pac *ProgressAwareConnection) Close() error {
 	pac.once.Do(func() {
 		atomic.StoreInt32(&pac.closed, 1)
 		close(pac.stopChan)
+		pac.cancel()
 		if pac.conn != nil {
 			pac.conn.Close()
 		}
 	})
 	return nil
+}
+
+// Context returns a context that is cancelled when the connection is closed.
+// Use this with exec.CommandContext to tie git process lifetime to the connection.
+func (pac *ProgressAwareConnection) Context() context.Context {
+	return pac.ctx
 }
 
 // GetReader returns the buffered reader

@@ -530,3 +530,18 @@ func RunGitPackObjectsRaw(ctx context.Context, repoPath string, fetchReq *FetchR
 
 	return cmd.Run()
 }
+
+// ReadPktLineSection exports readPktLineSection for use by other packages (e.g., TCP server).
+func ReadPktLineSection(body io.Reader) ([]string, error) {
+	return readPktLineSection(body)
+}
+
+// HandleLsRefsNative exports handleLsRefsNative for use by other packages (e.g., TCP server).
+func HandleLsRefsNative(ctx context.Context, repoPath string, lsRefsReq *LsRefsReq, pktWriter *performance.OptimizedPktLineWriter) error {
+	return handleLsRefsNative(ctx, repoPath, lsRefsReq, pktWriter)
+}
+
+// NewSidebandWriter exports sideband writer creation for use by other packages (e.g., TCP server).
+func NewSidebandWriter(w io.Writer, channel byte) *performance.OptimizedSidebandWriter {
+	return newSidebandWriter(w, channel)
+}

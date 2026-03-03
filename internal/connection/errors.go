@@ -2,6 +2,8 @@ package connection
 
 import (
 	"fmt"
+	"net"
+	"strings"
 	"time"
 )
 
@@ -218,6 +220,38 @@ func NewConnectionClosedError(operation string) *ConnectionClosedError {
 	}
 }
 
+// ClientDisconnectError represents errors caused by the client disconnecting
+// (e.g., Ctrl+C, network drop). These are normal operational events, not server errors.
+type ClientDisconnectError struct {
+	*BaseError
+	Operation  string
+	RemoteAddr string
+	Phase      string
+}
+
+// NewClientDisconnectError creates a new client disconnect error
+func NewClientDisconnectError(operation, remoteAddr, phase string, cause error) *ClientDisconnectError {
+	return &ClientDisconnectError{
+		BaseError: &BaseError{
+			code:      "CLIENT_DISCONNECT",
+			category:  ErrorCategoryNetwork,
+			message:   fmt.Sprintf("client disconnected during %s (%s phase)", operation, phase),
+			cause:     cause,
+			temporary: true,
+			retryable: false,
+			timestamp: time.Now(),
+			context: map[string]interface{}{
+				"operation":   operation,
+				"remote_addr": remoteAddr,
+				"phase":       phase,
+			},
+		},
+		Operation:  operation,
+		RemoteAddr: remoteAddr,
+		Phase:      phase,
+	}
+}
+
 // ConnectionStalledError represents stalled connection errors
 type ConnectionStalledError struct {
 	*BaseError
@@ -426,7 +460,7 @@ func IsConfigurationError(err error) bool {
 // IsConnectionError checks if an error is a connection error
 func IsConnectionError(err error) bool {
 	switch err.(type) {
-	case *ConnectionError, *ConnectionClosedError, *ConnectionStalledError:
+	case *ConnectionError, *ConnectionClosedError, *ConnectionStalledError, *ClientDisconnectError:
 		return true
 	default:
 		return false
@@ -478,4 +512,52 @@ func WrapError(err error, category ErrorCategory, message string) Error {
 		retryable: false,
 		timestamp: time.Now(),
 	}
+}
+
+// clientDisconnectPatterns contains error message substrings that indicate a client disconnect.
+var clientDisconnectPatterns = []string{
+	"use of closed network connection",
+	"broken pipe",
+	"connection reset by peer",
+}
+
+// ClassifyNetworkError classifies a network error into a typed error for appropriate handling.
+// It inspects the error message to distinguish client disconnects from timeouts and protocol errors.
+func ClassifyNetworkError(err error, operation, remoteAddr, phase string) Error {
+	if err == nil {
+		return nil
+	}
+
+	errMsg := err.Error()
+
+	// Check for client disconnect patterns
+	for _, pattern := range clientDisconnectPatterns {
+		if strings.Contains(errMsg, pattern) {
+			return NewClientDisconnectError(operation, remoteAddr, phase, err)
+		}
+	}
+
+	// Check for timeout (net.Error interface)
+	var netErr net.Error
+	if ok := errorAs(err, &netErr); ok && netErr.Timeout() {
+		return NewTimeoutError(PhaseOperation, 0, "NETWORK")
+	}
+
+	// Default to protocol error
+	return NewProtocolError(phase, operation, fmt.Sprintf("network error during %s: %v", operation, err), err)
+}
+
+// errorAs is a thin wrapper for type-asserting into a *net.Error target.
+func errorAs(err error, target *net.Error) bool {
+	if ne, ok := err.(net.Error); ok {
+		*target = ne
+		return true
+	}
+	return false
+}
+
+// IsClientDisconnect checks if an error is a client disconnect error
+func IsClientDisconnect(err error) bool {
+	_, ok := err.(*ClientDisconnectError)
+	return ok
 }
