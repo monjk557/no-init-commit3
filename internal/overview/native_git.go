@@ -574,8 +574,10 @@ func NativeGetBranches(ctx context.Context, repoPath string) ([]BranchInfo, erro
 		headRef = strings.TrimSpace(string(out))
 	}
 
+	// NOTE: Using tab separator instead of %x00 because Apple Git's for-each-ref
+	// does not interpret %x00 as null byte (unlike git log --format).
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
-		"for-each-ref", "--format=%(refname)%x00%(objectname)", "refs/heads/")
+		"for-each-ref", "--format=%(refname)\t%(objectname)", "refs/heads/")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref: %w", err)
@@ -589,7 +591,10 @@ func NativeGetBranches(ctx context.Context, repoPath string) ([]BranchInfo, erro
 	lines := strings.Split(raw, "\n")
 	branches := make([]BranchInfo, 0, len(lines))
 	for _, line := range lines {
-		parts := strings.SplitN(line, "\x00", 2)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
 		if len(parts) != 2 {
 			continue
 		}
