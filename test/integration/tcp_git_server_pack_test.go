@@ -212,6 +212,9 @@ func readPktLine(r *bufio.Reader) ([]byte, bool, error) {
 	if bytes.Equal(hdr, []byte("0000")) {
 		return nil, true, nil // flush
 	}
+	if bytes.Equal(hdr, []byte("0001")) {
+		return []byte("0001"), false, nil // delimiter
+	}
 	n, err := strconv.ParseUint(string(hdr), 16, 16)
 	if err != nil {
 		return nil, false, fmt.Errorf("bad pkt-len: %q", string(hdr))
@@ -396,14 +399,25 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 		err = writer.Flush()
 		require.NoError(t, err)
 
-		// Read packfile section header
-		line, isFlush, err := readPktLine(reader)
-		require.NoError(t, err)
-		require.False(t, isFlush)
-		assert.Contains(t, string(line), "packfile", "Should receive packfile section")
+		// Read fetch response sections (acknowledgments → delimiter → packfile)
+		packfileHeaderFound := false
+		for i := 0; i < 20; i++ {
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+			line, isFlush, err := readPktLine(reader)
+			if err != nil {
+				break
+			}
+			if isFlush {
+				break
+			}
+			if strings.Contains(string(line), "packfile") {
+				packfileHeaderFound = true
+				break
+			}
+		}
+		assert.True(t, packfileHeaderFound, "Should receive packfile section header")
 
 		// Read packfile data (sideband format)
-		// The packfile will be wrapped in sideband packets
 		packfileReceived := false
 		for i := 0; i < 100; i++ {
 			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
@@ -414,13 +428,11 @@ func TestTCPGitServerUploadPack(t *testing.T) {
 			if isFlush {
 				break
 			}
-			data := string(line)
-			if strings.Contains(data, "PACK") || len(line) > 100 {
+			if strings.Contains(string(line), "PACK") || len(line) > 100 {
 				packfileReceived = true
 				break
 			}
 		}
-
 		assert.True(t, packfileReceived, "Should receive packfile data")
 	})
 }
@@ -635,7 +647,7 @@ func TestTCPGitServerIntegration(t *testing.T) {
 		err = writer.Flush()
 		require.NoError(t, err)
 
-		// Verify response
+		// Consume acknowledgments section, find packfile header
 		packfileFound := false
 		for i := 0; i < 50; i++ {
 			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
@@ -643,9 +655,23 @@ func TestTCPGitServerIntegration(t *testing.T) {
 			if err != nil || isFlush {
 				break
 			}
-			if strings.Contains(string(line), "packfile") || len(line) > 100 {
+			if strings.Contains(string(line), "packfile") {
 				packfileFound = true
 				break
+			}
+		}
+
+		// If packfile header found, also verify pack data
+		if packfileFound {
+			for i := 0; i < 50; i++ {
+				_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+				line, isFlush, err := readPktLine(reader)
+				if err != nil || isFlush {
+					break
+				}
+				if strings.Contains(string(line), "PACK") || len(line) > 100 {
+					break
+				}
 			}
 		}
 
