@@ -15,9 +15,6 @@ import (
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
@@ -61,7 +58,6 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
 		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
 		if err != nil {
-			// Log warning but continue without events
 			_ = err
 		}
 	}
@@ -74,74 +70,6 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 		eventsClient:     eventsClient,
 		config:           cfg,
 	}, nil
-}
-
-// shouldApplyProtection checks feature flags to determine if protection should be applied
-func (h *MergeOperationsHandler) shouldApplyProtection(isSquash bool) bool {
-	if !h.config.MergeProtection.Enabled {
-		h.logger.Debug("Protection disabled globally via MERGE_PROTECTION_ENABLED=false")
-		return false
-	}
-
-	if !h.config.MergeProtection.EnvironmentProtection.Enabled {
-		h.logger.Debug("Environment protection disabled via MERGE_PROTECTION_ENV_ENABLED=false")
-		return false
-	}
-
-	// Check merge-method specific flags
-	if isSquash && !h.config.MergeProtection.EnvironmentProtection.EnableForSquashMerge {
-		h.logger.Debug("Squash merge protection disabled via MERGE_PROTECTION_SQUASH=false")
-		return false
-	}
-
-	if !isSquash && !h.config.MergeProtection.EnvironmentProtection.EnableForRegularMerge {
-		h.logger.Debug("Regular merge protection disabled via MERGE_PROTECTION_REGULAR=false")
-		return false
-	}
-
-	h.logger.Debug("Protection enabled via feature flags",
-		zap.Bool("is_squash", isSquash),
-		zap.String("safety_mode", h.config.MergeProtection.SafetyMode))
-	return true
-}
-
-// shouldApplyRebaseProtection checks if protection should be applied for rebase operations
-func (h *MergeOperationsHandler) shouldApplyRebaseProtection() bool {
-	if !h.config.MergeProtection.Enabled {
-		return false
-	}
-
-	if !h.config.MergeProtection.EnvironmentProtection.Enabled {
-		return false
-	}
-
-	return h.config.MergeProtection.EnvironmentProtection.EnableForRebaseMerge
-}
-
-// extractEnvironmentFiles extracts environment file paths using PolicyEngine
-func (h *MergeOperationsHandler) extractEnvironmentFiles(ctx context.Context, analysis *MergeAnalysisResult, protectionCtx *MergeProtectionContext) []string {
-	var envFiles []string
-
-	if analysis == nil || protectionCtx == nil || protectionCtx.PolicyEngine == nil {
-		return envFiles
-	}
-
-	for _, conflict := range analysis.FileConflicts {
-		// Use PolicyEngine to determine if file is protected (environment file)
-		decision, err := protectionCtx.PolicyEngine.EvaluateFileProtection(ctx, conflict.FilePath)
-		if err != nil {
-			h.logger.Debug("Failed to evaluate file protection, skipping",
-				zap.String("file", conflict.FilePath),
-				zap.Error(err))
-			continue
-		}
-
-		if decision.Protected {
-			envFiles = append(envFiles, conflict.FilePath)
-		}
-	}
-
-	return envFiles
 }
 
 // MergePreviewHandler handles REST API operations for Git merge preview operations
@@ -186,106 +114,57 @@ func NewMergePreviewHandler(cfg *config.Config) (*MergePreviewHandler, error) {
 func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// Validate path components
 	if err := h.validatePath(owner, repo); err != nil {
-
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// Parse and validate JSON request
 	var req MergeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid JSON: %v", err),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Invalid JSON: %v", err)})
 		return
 	}
 
-	// Set default method if not specified
 	if req.Method == "" {
 		req.Method = MergeMethodMerge
 	}
-
-	// Set default strategy if not specified
 	if req.Strategy == "" {
 		req.Strategy = MergeStrategyRecursive
 	}
 
-	// Validate merge request
 	if err := h.validateMergeRequest(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// Open repository — use NoCache to get a dedicated instance per request.
-	// go-git's *Repository internal maps are NOT thread-safe; sharing a cached
-	// instance across concurrent merge requests causes "concurrent map read and
-	// map write" fatal panics.
-	mergeRepoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	// Resolve repo path (native git — no go-git OpenRepository)
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"error":   "repository not found",
-		})
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-	repoWrapper, err := repositories.OpenRepositoryNoCache(mergeRepoPath)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
-	}
-	defer func() { _ = repoWrapper.Close() }()
-	repository := repoWrapper.GetRepo()
 
-	// Resolve source and target commits
-	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)
+	// Resolve source and target refs to commit SHAs
+	sourceHash, err := gitRevParse(ctx, repoPath, req.SourceRef)
 	if err != nil {
-		if errors.Is(err, repositories.ErrRefNotFound) ||
-			errors.Is(err, repositories.ErrObjectNotFound) ||
-			errors.Is(err, plumbing.ErrReferenceNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "unknown revision") {
+			status = http.StatusNotFound
 		}
+		c.JSON(status, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve source ref: %v", err)})
 		return
 	}
 
-	targetCommit, err := h.objectManager.ResolveReference(repository, req.TargetRef)
+	targetHash, err := gitRevParse(ctx, repoPath, req.TargetRef)
 	if err != nil {
-		if errors.Is(err, repositories.ErrRefNotFound) ||
-			errors.Is(err, repositories.ErrObjectNotFound) ||
-			errors.Is(err, plumbing.ErrReferenceNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "unknown revision") {
+			status = http.StatusNotFound
 		}
+		c.JSON(status, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve target ref: %v", err)})
 		return
 	}
 
@@ -294,26 +173,19 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		close(h.hooks.AfterReadTargetRef)
 	}
 
-	// Perform merge analysis first
-	conflictAnalysis, err := h.analyzeMerge(ctx, repository, sourceCommit, targetCommit, &req)
+	// Perform merge analysis
+	conflictAnalysis, err := h.analyzeMerge(ctx, repoPath, sourceHash, targetHash, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
 	// Handle dry run
 	if req.DryRun {
-		// Rebase method의 경우 각 커밋 단계별로 conflict를 분석해야 함
 		if req.Method == MergeMethodRebase {
-			rebaseAnalysis, err := h.analyzeRebaseDryRun(ctx, repository, sourceCommit, targetCommit, &req)
+			rebaseAnalysis, err := h.analyzeRebaseDryRun(ctx, repoPath, sourceHash, targetHash, &req)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"success": false,
-					"error":   err.Error(),
-				})
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 				return
 			}
 
@@ -324,19 +196,18 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				"estimated_time":        rebaseAnalysis.EstimatedTime.String(),
 				"recommendations":       rebaseAnalysis.Recommendations,
 			}
-			// Add rebase-specific metadata if available
 			if rebaseAnalysis.Metadata != nil {
-				if commitsToRebase, ok := rebaseAnalysis.Metadata["commits_to_rebase"].(int); ok {
-					details["commits_to_rebase"] = commitsToRebase
+				if v, ok := rebaseAnalysis.Metadata["commits_to_rebase"].(int); ok {
+					details["commits_to_rebase"] = v
 				}
-				if firstConflictCommit, ok := rebaseAnalysis.Metadata["first_conflict_commit"].(string); ok {
-					details["first_conflict_commit"] = firstConflictCommit
+				if v, ok := rebaseAnalysis.Metadata["first_conflict_commit"].(string); ok {
+					details["first_conflict_commit"] = v
 				}
 			}
 
-			response := &MergeResponse{
+			c.JSON(http.StatusOK, &MergeResponse{
 				Success:         !rebaseAnalysis.HasConflicts || req.ForceConflict,
-				IsFastForward:   false, // Rebase는 fast-forward가 아님
+				IsFastForward:   false,
 				HasConflicts:    rebaseAnalysis.HasConflicts,
 				ConflictCount:   rebaseAnalysis.ConflictCount,
 				Strategy:        req.Strategy,
@@ -344,13 +215,11 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				Message:         "Rebase dry run completed - no changes made",
 				ConflictSummary: rebaseAnalysis,
 				Details:         details,
-			}
-			c.JSON(http.StatusOK, response)
+			})
 			return
 		}
 
-		// Merge와 Squash는 동일한 분석 사용 (둘 다 source vs target의 단일 merge)
-		response := &MergeResponse{
+		c.JSON(http.StatusOK, &MergeResponse{
 			Success:         !conflictAnalysis.HasConflicts || req.ForceConflict,
 			IsFastForward:   conflictAnalysis.IsFastForward,
 			HasConflicts:    conflictAnalysis.HasConflicts,
@@ -366,18 +235,15 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				"estimated_time":        conflictAnalysis.EstimatedTime.String(),
 				"recommendations":       conflictAnalysis.Recommendations,
 			},
-		}
-		c.JSON(http.StatusOK, response)
+		})
 		return
 	}
 
-	// SAFETY FIX: Replace dangerous force_conflict with explicit conflict resolution
+	// Conflict safety checks
 	if conflictAnalysis.HasConflicts {
-		// Check if this is an environment file conflict
 		hasEnvironmentConflicts := h.hasEnvironmentFileConflicts(conflictAnalysis)
 
 		if hasEnvironmentConflicts && !req.ForceConflict {
-			// Environment conflicts require explicit acknowledgment
 			c.JSON(http.StatusConflict, gin.H{
 				"success":             false,
 				"error":               "Environment file conflicts detected - manual resolution required",
@@ -389,7 +255,6 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		}
 
 		if !req.ForceConflict {
-			// For non-environment conflicts, provide clear resolution options
 			c.JSON(http.StatusConflict, gin.H{
 				"success":   false,
 				"error":     fmt.Sprintf("Merge has %d conflicts requiring resolution", conflictAnalysis.ConflictCount),
@@ -404,7 +269,6 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			return
 		}
 
-		// If force_conflict=true, log the decision for audit
 		h.logger.Warn("Forced merge with conflicts",
 			zap.String("source", req.SourceRef),
 			zap.String("target", req.TargetRef),
@@ -412,8 +276,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			zap.Bool("has_environment_conflicts", hasEnvironmentConflicts))
 	}
 
-	// Serialize pack writes: prevent concurrent DotGit.ObjectPack panics.
-	repoPath, _ := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	// Serialize writes to prevent concurrent panics
 	if repoPath != "" {
 		repoLock := repositories.GetRepoRWLock(repoPath)
 		repoLock.Lock()
@@ -421,9 +284,8 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	}
 
 	// Perform the actual merge
-	mergeResult, err := h.performMerge(ctx, repository, sourceCommit, targetCommit, &req, conflictAnalysis)
+	mergeResult, err := h.performMerge(ctx, repoPath, sourceHash, targetHash, &req, conflictAnalysis)
 	if err != nil {
-		// Check for concurrent update error
 		var concurrentErr *ConcurrentUpdateError
 		if errors.As(err, &concurrentErr) {
 			c.JSON(http.StatusConflict, gin.H{
@@ -433,10 +295,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
@@ -445,9 +304,9 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		Success:       true,
 		IsFastForward: mergeResult.IsFastForward,
 		HasConflicts:  mergeResult.HasConflicts,
-		ConflictCount: 0, // Successful merge means conflicts were resolved
+		ConflictCount: 0,
 		Strategy:      req.Strategy,
-		Method:        req.Method, // 사용된 merge method 추가
+		Method:        req.Method,
 		Message:       "Merge completed successfully",
 	}
 
@@ -455,7 +314,6 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		response.MergeCommit = convertCommitToInfo(mergeResult.MergeCommit)
 	}
 
-	// Add additional details
 	details := map[string]interface{}{
 		"source_ref":    req.SourceRef,
 		"target_ref":    req.TargetRef,
@@ -463,34 +321,19 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		"merge_method":  string(req.Method),
 		"strategy_used": string(req.Strategy),
 	}
-
 	if req.Message != "" {
 		details["custom_message"] = req.Message
 	}
-
 	if mergeResult.HasConflicts {
 		details["conflicts_resolved"] = true
 		details["force_applied"] = req.ForceConflict
 	}
-
 	response.Details = details
 
-	// Extract user ID from X-USER-ID header
+	// Publish commit event
 	userID := c.GetHeader("X-USER-ID")
-	if userID == "" {
-		userID = "" // Empty string if not provided
-	}
-
-	// Publish commit event for merge operations
-	if h.eventsClient != nil {
-		targetHashStr := targetCommit.String()
-		if mergeResult.MergeCommit != nil {
-			// Merge commit was created (non-fast-forward merge)
-			h.publishMergeCommitEvent(ctx, repository, targetHashStr, mergeResult.MergeCommit, req.TargetRef, owner, repo, userID)
-		} else if mergeResult.IsFastForward {
-			// Fast-forward merge: target ref was updated to source commit
-			h.publishFastForwardMergeEvent(ctx, repository, targetHashStr, sourceCommit, req.TargetRef, owner, repo, userID)
-		}
+	if h.eventsClient != nil && mergeResult.MergeCommit != nil {
+		h.publishMergeCommitEvent(ctx, repoPath, targetHash, mergeResult.MergeCommit, req.TargetRef, owner, repo, userID)
 	}
 
 	// Loose object 누적 방지: merge 성공 시 git gc --auto 비동기 실행.
@@ -505,347 +348,144 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		}()
 	}
 
-	// Send success response
 	c.JSON(http.StatusOK, response)
 }
 
-// HandleMergePreview handles GET /repos/{owner}/{repo}/merges/preview for merge analysis
+// HandleMergePreview handles GET /repos/{owner}/{repo}/merges/preview
 func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	startTime := time.Now()
 	ctx := c.Request.Context()
 
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// Validate path components
 	if err := h.validatePath(owner, repo); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// Parse and validate query parameters
 	var req MergePreviewRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid query parameters: %v", err),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Invalid query parameters: %v", err)})
 		return
 	}
 
-	// Set defaults
 	if req.Strategy == "" {
 		req.Strategy = MergeStrategyRecursive
 	}
 	if req.MaxFileSize == 0 {
-		req.MaxFileSize = 1024 * 1024 // 1MB default
+		req.MaxFileSize = 1024 * 1024
 	}
 	if req.MaxFiles == 0 {
-		req.MaxFiles = 1000 // 1000 files default
+		req.MaxFiles = 1000
 	}
 	if req.CompareStrategy == "" {
 		req.CompareStrategy = "tree"
 	}
 
-	// Validate merge preview request
 	status, err := h.validateMergePreviewRequest(&req)
 	if err != nil {
-		c.JSON(status, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(status, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// Open repository — use NoCache (same reason as HandleMerge: avoid
-	// concurrent map panic from shared go-git *Repository instances).
-	previewRepoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	// Resolve repo path using native git
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"error":   "repository not found",
-		})
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-	previewRepoWrapper, err := repositories.OpenRepositoryNoCache(previewRepoPath)
+
+	sourceHash, err := gitRevParse(ctx, repoPath, req.SourceRef)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve source ref: %v", err)})
 		return
 	}
-	defer func() { _ = previewRepoWrapper.Close() }()
-	repository := previewRepoWrapper.GetRepo()
 
-	// Resolve source and target commits
-	sourceCommit, err := h.objectManager.ResolveReference(repository, req.SourceRef)
+	targetHash, err := gitRevParse(ctx, repoPath, req.TargetRef)
 	if err != nil {
-		if errors.Is(err, repositories.ErrRefNotFound) ||
-			errors.Is(err, repositories.ErrObjectNotFound) ||
-			errors.Is(err, plumbing.ErrReferenceNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve target ref: %v", err)})
 		return
 	}
 
-	targetCommit, err := h.objectManager.ResolveReference(repository, req.TargetRef)
+	if sourceHash == targetHash {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Source and target references point to the same commit"})
+		return
+	}
+
+	previewResult, err := h.performMergePreview(ctx, repoPath, sourceHash, targetHash, &req, startTime)
 	if err != nil {
-		if errors.Is(err, repositories.ErrRefNotFound) ||
-			errors.Is(err, repositories.ErrObjectNotFound) ||
-			errors.Is(err, plumbing.ErrReferenceNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// Check if source and target are the same
-	if sourceCommit == targetCommit {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Source and target references point to the same commit",
-		})
-		return
-	}
-
-	// Perform merge preview analysis
-	previewResult, err := h.performMergePreview(ctx, repository, sourceCommit, targetCommit, &req, startTime)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// Send response directly without wrapping in data field
 	c.JSON(http.StatusOK, previewResult)
 }
 
 // validatePath validates the owner and repo path components
 func (h *MergeOperationsHandler) validatePath(owner, repo string) error {
-	// Check for empty components
 	if owner == "" {
 		return fmt.Errorf("owner parameter is required")
 	}
 	if repo == "" {
 		return fmt.Errorf("repo parameter is required")
 	}
-
-	// Check path traversal and security
 	pathValidator := repositories.NewGitAPIPathValidator(h.pathConfig)
 	return pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo))
 }
 
 // validatePath validates the owner and repo path components
 func (h *MergePreviewHandler) validatePath(owner, repo string) error {
-	// Check for empty components
 	if owner == "" {
 		return fmt.Errorf("owner parameter is required")
 	}
 	if repo == "" {
 		return fmt.Errorf("repo parameter is required")
 	}
-
-	// Check path traversal and security
 	pathValidator := repositories.NewGitAPIPathValidator(h.pathConfig)
 	return pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo))
 }
 
-// resolveReference resolves a Git reference to a commit hash
-//
-//nolint:unused // ref resolution helper
-func (h *MergeOperationsHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
-	// Try to resolve as hash first
-	if hash := plumbing.NewHash(ref); !hash.IsZero() {
-		// Verify the commit exists
-		_, err := repo.CommitObject(hash)
-		if err == nil {
-			return hash, nil
-		}
-	}
-
-	// Try to resolve as reference
-	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
-	if err == nil {
-		return reference.Hash(), nil
-	}
-
-	// Try with refs/heads/ prefix for branch names
-	if !strings.HasPrefix(ref, "refs/") {
-		branchRef := "refs/heads/" + ref
-		reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true)
-		if err == nil {
-			return reference.Hash(), nil
-		}
-
-		// Try with refs/tags/ prefix for tag names
-		tagRef := "refs/tags/" + ref
-		reference, err = repo.Reference(plumbing.ReferenceName(tagRef), true)
-		if err == nil {
-			return reference.Hash(), nil
-		}
-	}
-
-	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference: %s", ref)
-}
-
-// resolveReference resolves a Git reference to a commit hash
-//
-//nolint:unused // ref resolution helper
-func (h *MergePreviewHandler) resolveReference(repo *gogit.Repository, ref string) (plumbing.Hash, error) {
-	// Try to resolve as hash first
-	if hash := plumbing.NewHash(ref); !hash.IsZero() {
-		// Verify the commit exists
-		_, err := repo.CommitObject(hash)
-		if err == nil {
-			return hash, nil
-		}
-	}
-
-	// Try to resolve as reference
-	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
-	if err == nil {
-		return reference.Hash(), nil
-	}
-
-	// Try with refs/heads/ prefix for branch names
-	if !strings.HasPrefix(ref, "refs/") {
-		branchRef := "refs/heads/" + ref
-		reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true)
-		if err == nil {
-			return reference.Hash(), nil
-		}
-
-		// Try with refs/tags/ prefix for tag names
-		tagRef := "refs/tags/" + ref
-		reference, err = repo.Reference(plumbing.ReferenceName(tagRef), true)
-		if err == nil {
-			return reference.Hash(), nil
-		}
-	}
-
-	return plumbing.ZeroHash, fmt.Errorf("unable to resolve reference: %s", ref)
-}
-
 // publishMergeCommitEvent publishes a merge commit event to Redis Stream
-func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commit *object.Commit, refName, owner, repoName, userID string) {
-	if h.eventsClient == nil {
+func (h *MergeOperationsHandler) publishMergeCommitEvent(_ context.Context, repoPath string, oldHash string, commit *NativeCommit, refName, owner, repoName, userID string) {
+	if h.eventsClient == nil || commit == nil {
 		return
 	}
 
-	// Get full filesystem path for the repository
-	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
+	fsPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
 	if err != nil {
 		return
 	}
+	relativePath := events.GetRelativeRepoPath(fsPath, h.pathConfig.GetRepoRoot())
 
-	// Convert to relative path (work_space_name/uuid.git format)
-	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
-
-	// Normalize ref name
 	if !strings.HasPrefix(refName, "refs/") {
 		refName = "refs/heads/" + refName
 	}
 
-	// Create event
 	event := &events.CommitEvent{
 		RepoPath:      relativePath,
 		EventType:     events.EventTypeMerge,
-		CommitHash:    commit.Hash.String(),
+		CommitHash:    commit.Hash,
 		OldRev:        oldHash,
 		RefName:       refName,
-		Pusher:        "git", // Default pusher identifier
+		Pusher:        "git",
 		UserID:        userID,
 		CommitMessage: commit.Message,
 		Timestamp:     commit.Committer.When,
 	}
 
-	// Publish asynchronously to avoid blocking
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-
 		_ = h.eventsClient.AddCommitEventToStream(ctx, event)
 	}()
 }
-
-// publishFastForwardMergeEvent publishes a fast-forward merge event to Redis Stream
-func (h *MergeOperationsHandler) publishFastForwardMergeEvent(ctx context.Context, repo *gogit.Repository, oldHash string, commitHash plumbing.Hash, refName, owner, repoName, userID string) {
-	if h.eventsClient == nil {
-		return
-	}
-
-	// Get commit object
-	commit, err := repo.CommitObject(commitHash)
-	if err != nil {
-		return
-	}
-
-	// Get full filesystem path for the repository
-	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
-	if err != nil {
-		return
-	}
-
-	// Convert to relative path (work_space_name/uuid.git format)
-	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
-
-	// Normalize ref name
-	if !strings.HasPrefix(refName, "refs/") {
-		refName = "refs/heads/" + refName
-	}
-
-	// Create event
-	event := &events.CommitEvent{
-		RepoPath:      relativePath,
-		EventType:     events.EventTypeMerge,
-		CommitHash:    commitHash.String(),
-		OldRev:        oldHash,
-		RefName:       refName,
-		Pusher:        "git", // Default pusher identifier
-		UserID:        userID,
-		CommitMessage: commit.Message,
-		Timestamp:     commit.Committer.When,
-	}
-
-	// Publish asynchronously to avoid blocking
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		_ = h.eventsClient.AddCommitEventToStream(ctx, event)
-	}()
-}
-
-// SAFETY FIX: Helper methods for enhanced conflict handling
 
 // hasEnvironmentFileConflicts checks if any conflicts involve environment files
 func (h *MergeOperationsHandler) hasEnvironmentFileConflicts(analysis *MergeAnalysisResult) bool {
 	if analysis == nil {
 		return false
 	}
-
 	environmentPatterns := []string{
 		"config/env/",
 		".env",
@@ -853,7 +493,6 @@ func (h *MergeOperationsHandler) hasEnvironmentFileConflicts(analysis *MergeAnal
 		"config/staging/",
 		"config/production/",
 	}
-
 	for _, conflict := range analysis.FileConflicts {
 		for _, pattern := range environmentPatterns {
 			if h.matchesPattern(conflict.FilePath, pattern) {
@@ -869,14 +508,13 @@ func (h *MergeOperationsHandler) formatConflictsForResponse(analysis *MergeAnaly
 	if analysis == nil {
 		return []map[string]interface{}{}
 	}
-
 	conflicts := make([]map[string]interface{}, 0, len(analysis.FileConflicts))
 	for _, conflict := range analysis.FileConflicts {
 		conflicts = append(conflicts, map[string]interface{}{
 			"file_path":           conflict.FilePath,
 			"conflict_type":       string(conflict.ConflictType),
 			"severity":            string(conflict.Severity),
-			"is_environment_file": h.isEnvironmentFile(conflict.FilePath),
+			"is_environment_file": isEnvironmentFile(conflict.FilePath),
 			"auto_resolvable":     conflict.AutoResolvable,
 		})
 	}
@@ -886,14 +524,11 @@ func (h *MergeOperationsHandler) formatConflictsForResponse(analysis *MergeAnaly
 // matchesPattern provides simple pattern matching
 func (h *MergeOperationsHandler) matchesPattern(path, pattern string) bool {
 	if len(pattern) > 0 && pattern[len(pattern)-1] == '/' {
-		// Directory pattern
 		return len(path) > len(pattern) && path[:len(pattern)] == pattern
 	}
 	if len(pattern) > 0 && pattern[0] == '*' {
-		// Suffix pattern
 		suffix := pattern[1:]
 		return len(path) >= len(suffix) && path[len(path)-len(suffix):] == suffix
 	}
-	// Exact or prefix match
 	return path == pattern || (len(path) > len(pattern) && path[:len(pattern)] == pattern)
 }

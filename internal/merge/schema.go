@@ -4,10 +4,6 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/diffs"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // MergeMethod represents different merge methods (how to combine branches)
@@ -74,7 +70,7 @@ type MergeResponse struct {
 
 // MergeResult represents the internal result of a merge operation
 type MergeResult struct {
-	MergeCommit      *object.Commit
+	MergeCommit      *NativeCommit
 	IsFastForward    bool
 	HasConflicts     bool
 	ConflictAnalysis *MergeAnalysisResult
@@ -83,20 +79,20 @@ type MergeResult struct {
 // mergeFileEntry represents a file's state in base, source, and target
 type mergeFileEntry struct {
 	path       string
-	baseHash   plumbing.Hash
-	baseMode   filemode.FileMode
-	sourceHash plumbing.Hash
-	sourceMode filemode.FileMode
-	targetHash plumbing.Hash
-	targetMode filemode.FileMode
+	baseHash   string
+	baseMode   string
+	sourceHash string
+	sourceMode string
+	targetHash string
+	targetMode string
 }
 
 // mergeTreeEntry represents a tree entry's state in base, source, and target
 type mergeTreeEntry struct {
 	name        string
-	baseEntry   *object.TreeEntry
-	sourceEntry *object.TreeEntry
-	targetEntry *object.TreeEntry
+	baseEntry   *NativeTreeEntry
+	sourceEntry *NativeTreeEntry
+	targetEntry *NativeTreeEntry
 }
 
 // ConflictType은 Merge 충돌의 유형을 나타냅니다.
@@ -148,13 +144,13 @@ type FileConflict struct {
 
 // FileVersion은 특정 커밋에서의 파일 버전을 나타냅니다.
 type FileVersion struct {
-	Hash        plumbing.Hash `json:"hash"`              // Object hash
-	Mode        uint32        `json:"mode"`              // File mode (permissions)
-	Size        int64         `json:"size"`              // File size in bytes
-	Content     string        `json:"content,omitempty"` // File content (for small files)
-	ContentHash string        `json:"content_hash"`      // Hash of file content
-	IsBinary    bool          `json:"is_binary"`         // Whether file is binary
-	Exists      bool          `json:"exists"`            // Whether file exists in this version
+	Hash        string `json:"hash"`              // Object hash (hex SHA)
+	Mode        uint32 `json:"mode"`              // File mode (permissions)
+	Size        int64  `json:"size"`              // File size in bytes
+	Content     string `json:"content,omitempty"` // File content (for small files)
+	ContentHash string `json:"content_hash"`      // Hash of file content
+	IsBinary    bool   `json:"is_binary"`         // Whether file is binary
+	Exists      bool   `json:"exists"`            // Whether file exists in this version
 }
 
 // ConflictResolution represents a suggested resolution for a conflict
@@ -170,15 +166,15 @@ type ConflictResolution struct {
 
 // MergeAnalysisRequest represents a request for merge analysis
 type MergeAnalysisRequest struct {
-	Owner          string            `json:"owner"`           // Repository owner (optional if Repository is provided)
-	Repo           string            `json:"repo"`            // Repository name (optional if Repository is provided)
-	Repository     *gogit.Repository `json:"-"`               // Already opened repository (우선 사용, Owner/Repo보다 우선)
-	SourceRef      string            `json:"source_ref"`      // Source branch/commit to merge FROM
-	TargetRef      string            `json:"target_ref"`      // Target branch/commit to merge INTO
-	Strategy       MergeStrategy     `json:"strategy"`        // Preferred merge strategy
-	AutoResolve    bool              `json:"auto_resolve"`    // Whether to attempt automatic resolution
-	IncludeContent bool              `json:"include_content"` // Whether to include file content in response
-	MaxFileSize    int64             `json:"max_file_size"`   // Maximum file size to analyze for content conflicts
+	Owner          string        `json:"owner"`           // Repository owner
+	Repo           string        `json:"repo"`            // Repository name
+	RepoPath       string        `json:"-"`               // Bare repo path (replaces *gogit.Repository)
+	SourceRef      string        `json:"source_ref"`      // Source branch/commit to merge FROM
+	TargetRef      string        `json:"target_ref"`      // Target branch/commit to merge INTO
+	Strategy       MergeStrategy `json:"strategy"`        // Preferred merge strategy
+	AutoResolve    bool          `json:"auto_resolve"`    // Whether to attempt automatic resolution
+	IncludeContent bool          `json:"include_content"` // Whether to include file content in response
+	MaxFileSize    int64         `json:"max_file_size"`   // Maximum file size to analyze for content conflicts
 }
 
 // MergeAnalysisResult represents the result of merge conflict analysis
@@ -216,28 +212,9 @@ type CommitInfo struct {
 	TreeSHA   string     `json:"tree_sha"`   // Tree hash
 }
 
-// convertCommitToInfo converts object.Commit to CommitInfo
-func convertCommitToInfo(c *object.Commit) *CommitInfo {
-	if c == nil {
-		return nil
-	}
-	return &CommitInfo{
-		SHA:     c.Hash.String(),
-		Message: c.Message,
-		Author: AuthorInfo{
-			Name:  c.Author.Name,
-			Email: c.Author.Email,
-			Date:  c.Author.When,
-		},
-		Committer: AuthorInfo{
-			Name:  c.Committer.Name,
-			Email: c.Committer.Email,
-			Date:  c.Committer.When,
-		},
-		CreatedAt: c.Committer.When.Format(time.RFC3339),
-		TreeSHA:   c.TreeHash.String(),
-	}
-}
+// convertCommitToInfo converts NativeCommit to CommitInfo.
+// This is an alias for nativeCommitToInfo defined in gitcmd.go.
+var convertCommitToInfo = nativeCommitToInfo
 
 // CommitStats는 브랜치 비교를 위한 커밋 수 차이를 나타냅니다
 type CommitStats struct {
@@ -271,7 +248,7 @@ type MergePreviewResponse struct {
 	ConflictCount      int                  `json:"conflict_count"`                // Number of conflicts
 	Strategy           MergeStrategy        `json:"strategy"`                      // Strategy to be used
 	RecommendedActions []string             `json:"recommended_actions,omitempty"` // Recommended actions
-	MergeBase          *object.Commit       `json:"merge_base,omitempty"`          // Common ancestor commit
+	MergeBase          *CommitInfo          `json:"merge_base,omitempty"`          // Common ancestor commit
 	ConflictSummary    *MergeAnalysisResult `json:"conflict_summary,omitempty"`    // Detailed conflict analysis
 	ChangesSummary     *ChangesSummary      `json:"changes_summary,omitempty"`     // Summary of changes
 	FilesChanged       []*FileChange        `json:"files_changed,omitempty"`       // Detailed file changes

@@ -7,137 +7,85 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // performThreeWayMerge performs a three-way merge and creates a merge commit
-func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *MergeAnalysisResult) (*object.Commit, error) {
-	// Get source and target commits
-	sourceCommit, err := repo.CommitObject(sourceHash)
+// using native git commands.
+func (h *MergeOperationsHandler) performThreeWayMerge(ctx context.Context, repoPath string, sourceHash, targetHash string, req *MergeRequest, analysis *MergeAnalysisResult) (*NativeCommit, error) {
+	// Read source and target commits
+	sourceCommit, err := gitCatFileCommit(ctx, repoPath, sourceHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source commit: %w", err)
 	}
-
-	targetCommit, err := repo.CommitObject(targetHash)
+	targetCommit, err := gitCatFileCommit(ctx, repoPath, targetHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get target commit: %w", err)
 	}
 
 	// Use centralized strategy resolution logic
-	mergeTreeHash, err := h.resolveMergeTree(ctx, repo, sourceCommit, targetCommit, analysis, req.Strategy, req.ForceConflict, false)
+	mergeTreeHash, err := h.resolveMergeTree(ctx, repoPath, sourceCommit, targetCommit, analysis, req.Strategy, req.ForceConflict, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve merge tree: %w", err)
 	}
 
 	if analysis.HasConflicts && !req.ForceConflict {
-		// This should not happen as we check for conflicts earlier
 		return nil, fmt.Errorf("conflicts detected but force_conflict is false")
 	}
 
 	// Generate merge commit message
-	message := generateMergeCommitMessage(req, sourceCommit, targetCommit)
+	message := generateMergeCommitMessage(req)
 
-	// Set up author and committer using centralized signature creation
+	// Set up author and committer
 	now := time.Now()
 	author := CreateAuthorSignature(req, nil, now)
 	committer := CreateCommitterSignature(req, &author, now)
 
-	// Create merge commit
-	commit := &object.Commit{
-		Message:      message,
-		TreeHash:     mergeTreeHash, // Use strategy-determined tree
-		ParentHashes: []plumbing.Hash{targetHash, sourceHash},
-		Author:       author,
-		Committer:    committer,
-	}
-
-	// Store the commit
-	obj := repo.Storer.NewEncodedObject()
-	if err := commit.Encode(obj); err != nil {
-		return nil, fmt.Errorf("failed to encode merge commit: %w", err)
-	}
-
-	hash, err := repo.Storer.SetEncodedObject(obj)
+	// Create merge commit via git commit-tree (two parents: target, source)
+	commitHash, err := gitCommitTree(ctx, repoPath, mergeTreeHash,
+		[]string{targetHash, sourceHash}, author, committer, message)
 	if err != nil {
-		return nil, fmt.Errorf("failed to store merge commit: %w", err)
+		return nil, fmt.Errorf("failed to create merge commit: %w", err)
 	}
 
-	commit.Hash = hash
+	// Update the target reference
+	refName := resolveRefName(req.TargetRef)
+	if err := gitUpdateRef(ctx, repoPath, refName, commitHash); err != nil {
+		return nil, fmt.Errorf("failed to update target reference: %w", err)
+	}
 
-	// Update the target reference to point to the new merge commit
-	if strings.HasPrefix(req.TargetRef, "refs/") {
-		refName := plumbing.ReferenceName(req.TargetRef)
-		ref := plumbing.NewHashReference(refName, hash)
-		if err := repo.Storer.SetReference(ref); err != nil {
-			return nil, fmt.Errorf("failed to update target reference: %w", err)
-		}
-	} else {
-		refName := plumbing.ReferenceName("refs/heads/" + req.TargetRef)
-		ref := plumbing.NewHashReference(refName, hash)
-		if err := repo.Storer.SetReference(ref); err != nil {
-			return nil, fmt.Errorf("failed to update target reference: %w", err)
-		}
+	// Read back the created commit
+	commit, err := gitCatFileCommit(ctx, repoPath, commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read created commit: %w", err)
 	}
 
 	return commit, nil
 }
 
-// performFastForwardMerge performs a fast-forward merge by updating the target reference
-//
-//nolint:unused // merge strategy helper
-func (h *MergeOperationsHandler) performFastForwardMerge(repo *gogit.Repository, targetHash, sourceHash plumbing.Hash, targetRef string) error {
-	// Determine the reference name to update
-	var refName plumbing.ReferenceName
-	if strings.HasPrefix(targetRef, "refs/") {
-		refName = plumbing.ReferenceName(targetRef)
-	} else {
-		refName = plumbing.ReferenceName("refs/heads/" + targetRef)
-	}
-
-	// Update the reference to point to the source commit
-	ref := plumbing.NewHashReference(refName, sourceHash)
-	return repo.Storer.SetReference(ref)
-}
-
 // generateMergeCommitMessage generates an appropriate merge commit message
-func generateMergeCommitMessage(req *MergeRequest, source, target *object.Commit) string {
+func generateMergeCommitMessage(req *MergeRequest) string {
 	if req.Message != "" {
 		return req.Message
 	}
-
-	// Generate default merge message
-	sourceRef := req.SourceRef
-	targetRef := req.TargetRef
-
-	// Simplify ref names if they're full refs
-	sourceRef = strings.TrimPrefix(sourceRef, "refs/heads/")
-	targetRef = strings.TrimPrefix(targetRef, "refs/heads/")
-
+	sourceRef := strings.TrimPrefix(req.SourceRef, "refs/heads/")
+	targetRef := strings.TrimPrefix(req.TargetRef, "refs/heads/")
 	return fmt.Sprintf("Merge branch '%s' into '%s'", sourceRef, targetRef)
 }
 
-// resolveMergeTree determines which tree to use based on merge strategy and conflict status
-// This function centralizes the strategy resolution logic used by both regular and squash merges
+// resolveMergeTree determines which tree to use based on merge strategy and conflict status.
+// This function centralizes the strategy resolution logic used by both regular and squash merges.
 func (h *MergeOperationsHandler) resolveMergeTree(
 	ctx context.Context,
-	repo *gogit.Repository,
-	sourceCommit, targetCommit *object.Commit,
+	repoPath string,
+	sourceCommit, targetCommit *NativeCommit,
 	analysis *MergeAnalysisResult,
 	strategy MergeStrategy,
 	forceConflict bool,
 	isSquash bool,
-) (plumbing.Hash, error) {
-	// Create protection context for feature flag control
-	protectionCtx := NewMergeProtectionContext(h.config, isSquash, false) // isRebase=false for regular merges
-
-	// If there are conflicts and we're not forcing, we should not call this function
-	// But handle it gracefully anyway
+) (string, error) {
+	// If there are conflicts and we're not forcing, return appropriate tree
 	if analysis.HasConflicts && !forceConflict {
 		if isSquash {
-			// For squash, prefer source changes when not forcing
 			return sourceCommit.TreeHash, nil
 		}
 		return targetCommit.TreeHash, nil
@@ -152,153 +100,72 @@ func (h *MergeOperationsHandler) resolveMergeTree(
 
 		switch strategy {
 		case MergeStrategyOurs:
-			// Keep our version (target)
 			if isSquash {
-				h.logger.Warn("'ours' strategy in squash merge - keeping target tree (may lose source changes)")
-			} else {
-				h.logger.Debug("Using 'ours' strategy - keeping target tree")
+				h.logger.Warn("'ours' strategy in squash merge - keeping target tree")
 			}
 			return targetCommit.TreeHash, nil
 
 		case MergeStrategyTheirs:
-			// Keep their version (source)
-			if isSquash {
-				h.logger.Debug("Using 'theirs' strategy for squash - using source tree")
-			} else {
-				h.logger.Debug("Using 'theirs' strategy - using source tree")
-			}
 			return sourceCommit.TreeHash, nil
 
 		case MergeStrategyRecursive, MergeStrategyResolve, MergeStrategyORT:
-			// For recursive/resolve/ORT strategy, perform actual 3-way merge
-			if analysis.AutoResolvable > 0 && analysis.AutoResolvable == analysis.ConflictCount {
-				// All conflicts are auto-resolvable, create merged tree
-				h.logger.Debug("Performing 3-way merge - all conflicts auto-resolvable",
-					zap.String("strategy", string(strategy)))
-
-				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
-				if err != nil {
-					fallbackTree := sourceCommit.TreeHash
-					if !isSquash {
-						fallbackTree = targetCommit.TreeHash
-					}
-
-					// Protection now handled by PolicyEngine in createMergedTree
-					h.logger.Debug("Protection already applied via PolicyEngine",
-						zap.String("fallback_tree", fallbackTree.String()),
-						zap.Error(err))
-
-					h.logger.Error("Failed to create merged tree, falling back",
-						zap.Error(err),
-						zap.Bool("is_squash", isSquash),
-						zap.String("fallback_tree", fallbackTree.String()))
-					return fallbackTree, nil
+			// Perform actual 3-way merge via git merge-tree
+			mergedTree, err := h.createMergedTree(ctx, repoPath, sourceCommit, targetCommit, analysis, strategy)
+			if err != nil {
+				fallbackTree := sourceCommit.TreeHash
+				if !isSquash {
+					fallbackTree = targetCommit.TreeHash
 				}
-				h.logger.Info("Successfully created merged tree",
-					zap.String("merged_tree", mergedTree.String()),
-					zap.String("strategy", string(strategy)))
-				return mergedTree, nil
-			} else if analysis.AutoResolvable > 0 {
-				// Mixed auto-resolvable and manual conflicts
-				h.logger.Warn("Not all conflicts auto-resolvable - attempting partial merge",
-					zap.Int("auto_resolvable", analysis.AutoResolvable),
-					zap.Int("total_conflicts", analysis.ConflictCount),
-					zap.String("strategy", string(strategy)))
-
-				// Attempt to create merged tree with auto-resolvable conflicts
-				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
-				if err != nil {
-					fallbackTree := sourceCommit.TreeHash
-					if !isSquash {
-						fallbackTree = targetCommit.TreeHash
-					}
-
-					// Protection now handled by PolicyEngine in createMergedTree
-					h.logger.Debug("Protection already applied via PolicyEngine",
-						zap.String("fallback_tree", fallbackTree.String()),
-						zap.Error(err))
-
-					h.logger.Error("Failed to create partially merged tree, falling back",
-						zap.Error(err),
-						zap.Bool("is_squash", isSquash),
-						zap.String("fallback_tree", fallbackTree.String()))
-					return fallbackTree, nil
-				}
-				h.logger.Info("Successfully created partially merged tree",
-					zap.String("merged_tree", mergedTree.String()),
-					zap.String("strategy", string(strategy)))
-				return mergedTree, nil
-			} else {
-				// No auto-resolvable conflicts - MUST CREATE MERGED TREE WITH PROTECTION
-				h.logger.Info("No auto-resolvable conflicts - creating merged tree with protection",
+				h.logger.Error("Failed to create merged tree, falling back",
+					zap.Error(err),
 					zap.Bool("is_squash", isSquash),
-					zap.String("strategy", string(strategy)))
-
-				// **CRITICAL FIX**: Even with no auto-resolvable conflicts, we need to create merged tree
-				// to apply protection system properly instead of using fallback
-				mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
-				if err != nil {
-					// Only fallback on real error, not for protection
-					fallbackTree := sourceCommit.TreeHash
-					if !isSquash {
-						fallbackTree = targetCommit.TreeHash
-					}
-					h.logger.Error("Failed to create merged tree with protection, falling back",
-						zap.Error(err),
-						zap.Bool("is_squash", isSquash),
-						zap.String("fallback_tree", fallbackTree.String()))
-					return fallbackTree, nil
-				}
-
-				h.logger.Info("Successfully created merged tree with protection",
-					zap.String("merged_tree", mergedTree.String()),
-					zap.String("strategy", string(strategy)))
-				return mergedTree, nil
+					zap.String("fallback_tree", fallbackTree))
+				return fallbackTree, nil
 			}
+			h.logger.Info("Successfully created merged tree",
+				zap.String("merged_tree", mergedTree),
+				zap.String("strategy", string(strategy)))
+			return mergedTree, nil
 
 		case MergeStrategySubtree:
-			// Subtree merge uses source tree
-			h.logger.Debug("Using 'subtree' strategy - using source tree")
 			return sourceCommit.TreeHash, nil
 
 		default:
-			// Fallback based on merge method
 			fallbackTree := sourceCommit.TreeHash
 			if !isSquash {
 				fallbackTree = targetCommit.TreeHash
 			}
-			h.logger.Warn("Unknown strategy - defaulting to fallback tree",
-				zap.String("strategy", string(strategy)),
-				zap.Bool("is_squash", isSquash))
+			h.logger.Warn("Unknown strategy - using fallback tree",
+				zap.String("strategy", string(strategy)))
 			return fallbackTree, nil
 		}
 	}
 
-	// No conflicts - perform proper 3-way merge even when clean
-	// This ensures we get the correct merged tree structure
+	// No conflicts - perform proper 3-way merge
 	h.logger.Debug("No conflicts - performing 3-way merge",
 		zap.String("strategy", string(strategy)),
 		zap.Bool("is_squash", isSquash))
 
-	mergedTree, err := h.createMergedTree(ctx, repo, sourceCommit, targetCommit, analysis, strategy, protectionCtx)
+	mergedTree, err := h.createMergedTree(ctx, repoPath, sourceCommit, targetCommit, analysis, strategy)
 	if err != nil {
-		// Fallback based on merge method
 		fallbackTree := sourceCommit.TreeHash
 		if !isSquash {
 			fallbackTree = targetCommit.TreeHash
 		}
 		h.logger.Warn("Failed to create merged tree for clean merge, using fallback",
-			zap.Error(err),
-			zap.Bool("is_squash", isSquash))
+			zap.Error(err), zap.Bool("is_squash", isSquash))
 		return fallbackTree, nil
 	}
 
-	// Protection now handled by PolicyEngine in createMergedTree
-	h.logger.Debug("Protection already applied via PolicyEngine",
-		zap.String("merged_tree", mergedTree.String()))
-
 	h.logger.Debug("Successfully created merged tree for clean merge",
-		zap.String("merged_tree", mergedTree.String()),
-		zap.String("strategy", string(strategy)))
+		zap.String("merged_tree", mergedTree))
 	return mergedTree, nil
+}
+
+// resolveRefName normalizes a ref to its full form (refs/heads/...).
+func resolveRefName(ref string) string {
+	if strings.HasPrefix(ref, "refs/") {
+		return ref
+	}
+	return "refs/heads/" + ref
 }

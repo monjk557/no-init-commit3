@@ -4,31 +4,27 @@ import (
 	"context"
 	"fmt"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
-// performMerge performs the actual Git merge operation
-func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.Repository, sourceHash, targetHash plumbing.Hash, req *MergeRequest, analysis *MergeAnalysisResult) (*MergeResult, error) {
-	h.logger.Info("🚨 DEBUG: performMerge called",
+// performMerge performs the actual Git merge operation using native git commands.
+func (h *MergeOperationsHandler) performMerge(ctx context.Context, repoPath string, sourceHash, targetHash string, req *MergeRequest, analysis *MergeAnalysisResult) (*MergeResult, error) {
+	h.logger.Info("performMerge called",
 		zap.String("method", string(req.Method)),
 		zap.String("strategy", string(req.Strategy)),
-		zap.String("source", sourceHash.String()),
-		zap.String("target", targetHash.String()))
+		zap.String("source", sourceHash),
+		zap.String("target", targetHash))
+
 	result := &MergeResult{
 		IsFastForward:    analysis.IsFastForward,
 		HasConflicts:     analysis.HasConflicts,
 		ConflictAnalysis: analysis,
 	}
 
-	// Route to appropriate merge method
 	switch req.Method {
 	case MergeMethodSquash:
-		h.logger.Info("🚨 DEBUG: Executing SQUASH merge with protection")
-		// Perform squash merge
-		mergeCommit, err := h.performSquashMerge(ctx, repo, sourceHash, targetHash, req, analysis)
+		h.logger.Info("Executing SQUASH merge")
+		mergeCommit, err := h.performSquashMerge(ctx, repoPath, sourceHash, targetHash, req, analysis)
 		if err != nil {
 			return nil, fmt.Errorf("squash merge failed: %w", err)
 		}
@@ -36,9 +32,8 @@ func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.R
 		return result, nil
 
 	case MergeMethodRebase:
-		h.logger.Info("🚨 DEBUG: Executing REBASE merge with protection")
-		// Perform rebase
-		rebaseCommit, err := h.performRebase(ctx, repo, sourceHash, targetHash, req, analysis)
+		h.logger.Info("Executing REBASE merge")
+		rebaseCommit, err := h.performRebase(ctx, repoPath, sourceHash, targetHash, req, analysis)
 		if err != nil {
 			return nil, fmt.Errorf("rebase failed: %w", err)
 		}
@@ -48,15 +43,11 @@ func (h *MergeOperationsHandler) performMerge(ctx context.Context, repo *gogit.R
 	case MergeMethodMerge:
 		fallthrough
 	default:
-		h.logger.Info("🚨 DEBUG: Executing REGULAR merge with protection")
-		// For merge method, always create a merge commit (even for fast-forward)
-		// This is equivalent to git merge --no-ff
-		// Perform three-way merge (which will create a merge commit)
-		mergeCommit, err := h.performThreeWayMerge(ctx, repo, sourceHash, targetHash, req, analysis)
+		h.logger.Info("Executing REGULAR merge")
+		mergeCommit, err := h.performThreeWayMerge(ctx, repoPath, sourceHash, targetHash, req, analysis)
 		if err != nil {
 			return nil, fmt.Errorf("three-way merge failed: %w", err)
 		}
-
 		result.MergeCommit = mergeCommit
 		return result, nil
 	}
@@ -67,11 +58,9 @@ func generateMergeMessage(result *MergeResult, req *MergeRequest) string {
 	if result.IsFastForward {
 		return fmt.Sprintf("Fast-forward merge from '%s' to '%s' completed successfully", req.SourceRef, req.TargetRef)
 	}
-
 	if result.HasConflicts {
 		return fmt.Sprintf("Merge from '%s' to '%s' completed with conflicts resolved", req.SourceRef, req.TargetRef)
 	}
-
 	return fmt.Sprintf("Merge from '%s' to '%s' completed successfully", req.SourceRef, req.TargetRef)
 }
 
@@ -100,11 +89,10 @@ func getMergeTypeForMethod(method MergeMethod, result *MergeResult) string {
 	}
 }
 
-// commitToInfo converts a commit object to a simple commit info map
-// Note: common.CommitInfo was removed, using map[string]interface{} instead
-func (h *MergeOperationsHandler) commitToInfo(commit *object.Commit) map[string]interface{} {
+// commitToInfo converts a NativeCommit to a simple commit info map
+func (h *MergeOperationsHandler) commitToInfo(commit *NativeCommit) map[string]interface{} {
 	return map[string]interface{}{
-		"sha":     commit.Hash.String(),
+		"sha":     commit.Hash,
 		"message": commit.Message,
 		"author": map[string]interface{}{
 			"name":  commit.Author.Name,

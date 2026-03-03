@@ -561,6 +561,51 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 	return out, nil
 }
 
+// NativeGetBranches는 native git으로 로컬 브랜치 목록을 조회합니다.
+// go-git의 GetBranches를 대체하여 repo open 오버헤드를 제거합니다.
+func NativeGetBranches(ctx context.Context, repoPath string) ([]BranchInfo, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	// HEAD의 symbolic target을 읽어 IsCurrent 판별에 사용
+	headRef := ""
+	headCmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "symbolic-ref", "-q", "HEAD")
+	if out, err := headCmd.Output(); err == nil {
+		headRef = strings.TrimSpace(string(out))
+	}
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
+		"for-each-ref", "--format=%(refname)%x00%(objectname)", "refs/heads/")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git for-each-ref: %w", err)
+	}
+
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return []BranchInfo{}, nil
+	}
+
+	lines := strings.Split(raw, "\n")
+	branches := make([]BranchInfo, 0, len(lines))
+	for _, line := range lines {
+		parts := strings.SplitN(line, "\x00", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		refName := parts[0]
+		hash := parts[1]
+		name := strings.TrimPrefix(refName, "refs/heads/")
+		branches = append(branches, BranchInfo{
+			Name:      name,
+			Hash:      hash,
+			IsRemote:  false,
+			IsCurrent: refName == headRef,
+		})
+	}
+	return branches, nil
+}
+
 // parseLsTreeLine은 `git ls-tree -l` 출력 한 줄을 파싱합니다.
 // 형식: <mode> <type> <hash> <size>\t<name>
 func parseLsTreeLine(line, basePath string) (GitTreeEntryWithCommit, error) {

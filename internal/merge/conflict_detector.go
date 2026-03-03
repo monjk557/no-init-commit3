@@ -3,14 +3,12 @@ package merge
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +26,7 @@ func NewConflictDetector(pathConfig *repositories.PathConfig, logger *logging.Lo
 	}
 }
 
-// AnalyzeMerge performs comprehensive merge conflict analysis
+// AnalyzeMerge performs comprehensive merge conflict analysis using native git.
 func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysisRequest) (*MergeAnalysisResult, error) {
 	cd.logger.Info("Starting merge conflict analysis",
 		zap.String("owner", req.Owner),
@@ -37,43 +35,41 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 		zap.String("target_ref", req.TargetRef),
 		zap.String("strategy", string(req.Strategy)))
 
-	// Use provided repository or open new one
-	var repo *gogit.Repository
-	var err error
-
-	if req.Repository != nil {
-		// Use already opened repository (효율적)
-		repo = req.Repository
-		cd.logger.Debug("Using provided repository instance")
-	} else {
-		// Open repository from path (기존 방식)
-		repoPath := cd.pathConfig.FormatRepoPath(req.Owner, req.Repo)
-		repo, err = gogit.PlainOpen(repoPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open repository: %w", err)
-		}
-		cd.logger.Debug("Opened repository from path", zap.String("path", repoPath))
+	// Determine repo path
+	repoPath := req.RepoPath
+	if repoPath == "" {
+		repoPath = cd.pathConfig.FormatRepoPath(req.Owner, req.Repo)
 	}
 
 	// Resolve source and target commits
-	sourceCommit, err := cd.resolveCommit(repo, req.SourceRef)
+	sourceHash, err := gitRevParse(ctx, repoPath, req.SourceRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve source ref %s: %w", req.SourceRef, err)
 	}
 
-	targetCommit, err := cd.resolveCommit(repo, req.TargetRef)
+	targetHash, err := gitRevParse(ctx, repoPath, req.TargetRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve target ref %s: %w", req.TargetRef, err)
 	}
 
+	// Read commit objects for info
+	sourceCommit, err := gitCatFileCommit(ctx, repoPath, sourceHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read source commit: %w", err)
+	}
+	targetCommit, err := gitCatFileCommit(ctx, repoPath, targetHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read target commit: %w", err)
+	}
+
 	cd.logger.Debug("Resolved commits",
-		zap.String("source_commit", sourceCommit.Hash.String()),
-		zap.String("target_commit", targetCommit.Hash.String()))
+		zap.String("source_commit", sourceHash),
+		zap.String("target_commit", targetHash))
 
 	// Check for fast-forward merge
-	isFastForward, err := cd.isFastForwardMerge(targetCommit, sourceCommit)
+	isFastForward, err := gitMergeBaseIsAncestor(ctx, repoPath, targetHash, sourceHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check fast-forward merge: %w", err)
+		return nil, fmt.Errorf("failed to check fast-forward: %w", err)
 	}
 
 	if isFastForward {
@@ -84,8 +80,8 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 			IsFastForward:     true,
 			ConflictCount:     0,
 			FileConflicts:     []FileConflict{},
-			SourceCommit:      convertCommitToInfo(sourceCommit),
-			TargetCommit:      convertCommitToInfo(targetCommit),
+			SourceCommit:      nativeCommitToInfo(sourceCommit),
+			TargetCommit:      nativeCommitToInfo(targetCommit),
 			Strategy:          req.Strategy,
 			AutoResolvable:    0,
 			SeverityBreakdown: make(map[ConflictSeverity]int),
@@ -94,16 +90,21 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 		}, nil
 	}
 
-	// Find merge base (common ancestor)
-	mergeBase, err := cd.findMergeBase(sourceCommit, targetCommit)
+	// Find merge base
+	mergeBaseHash, err := gitMergeBase(ctx, repoPath, sourceHash, targetHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find merge base: %w", err)
 	}
 
-	cd.logger.Debug("Found merge base", zap.String("merge_base", mergeBase.Hash.String()))
+	mergeBaseCommit, err := gitCatFileCommit(ctx, repoPath, mergeBaseHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read merge base commit: %w", err)
+	}
 
-	// Perform three-way merge analysis
-	conflicts, err := cd.analyzeThreeWayMerge(ctx, repo, mergeBase, sourceCommit, targetCommit, req)
+	cd.logger.Debug("Found merge base", zap.String("merge_base", mergeBaseHash))
+
+	// Use git merge-tree --write-tree to detect conflicts
+	conflicts, err := cd.analyzeThreeWayMerge(ctx, repoPath, mergeBaseHash, sourceHash, targetHash, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to analyze three-way merge: %w", err)
 	}
@@ -115,9 +116,9 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 		IsFastForward:     false,
 		ConflictCount:     len(conflicts),
 		FileConflicts:     conflicts,
-		MergeBase:         convertCommitToInfo(mergeBase),
-		SourceCommit:      convertCommitToInfo(sourceCommit),
-		TargetCommit:      convertCommitToInfo(targetCommit),
+		MergeBase:         nativeCommitToInfo(mergeBaseCommit),
+		SourceCommit:      nativeCommitToInfo(sourceCommit),
+		TargetCommit:      nativeCommitToInfo(targetCommit),
 		Strategy:          req.Strategy,
 		AutoResolvable:    cd.countAutoResolvable(conflicts),
 		SeverityBreakdown: cd.calculateSeverityBreakdown(conflicts),
@@ -134,307 +135,192 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 	return result, nil
 }
 
-// resolveCommit resolves a reference to a commit object
-func (cd *ConflictDetector) resolveCommit(repo *gogit.Repository, ref string) (*object.Commit, error) {
-	// Try to resolve as hash first
-	if hash := plumbing.NewHash(ref); !hash.IsZero() {
-		return repo.CommitObject(hash)
-	}
-
-	// Try to resolve as reference
-	reference, err := repo.Reference(plumbing.ReferenceName(ref), true)
-	if err == nil {
-		return repo.CommitObject(reference.Hash())
-	}
-
-	// Try with refs/heads/ prefix for branch names
-	if !strings.HasPrefix(ref, "refs/") {
-		branchRef := "refs/heads/" + ref
-		reference, err := repo.Reference(plumbing.ReferenceName(branchRef), true)
-		if err == nil {
-			return repo.CommitObject(reference.Hash())
-		}
-
-		// Try with refs/tags/ prefix for tag names
-		tagRef := "refs/tags/" + ref
-		reference, err = repo.Reference(plumbing.ReferenceName(tagRef), true)
-		if err == nil {
-			return repo.CommitObject(reference.Hash())
-		}
-	}
-
-	return nil, fmt.Errorf("unable to resolve reference: %s", ref)
-}
-
-// isFastForwardMerge checks if the merge can be fast-forwarded
-func (cd *ConflictDetector) isFastForwardMerge(base, head *object.Commit) (bool, error) {
-	// Check if base is an ancestor of head
-	isAncestor, err := base.IsAncestor(head)
+// analyzeThreeWayMerge uses native git to perform three-way merge analysis.
+// It uses two approaches:
+//  1. git merge-tree --write-tree for conflict detection
+//  2. git diff-tree for change enumeration
+func (cd *ConflictDetector) analyzeThreeWayMerge(ctx context.Context, repoPath, baseHash, sourceHash, targetHash string, req *MergeAnalysisRequest) ([]FileConflict, error) {
+	// Use git merge-tree to detect actual conflicts
+	mergeResult, err := gitMergeTree(ctx, repoPath, baseHash, targetHash, sourceHash)
 	if err != nil {
-		return false, fmt.Errorf("failed to check ancestry: %w", err)
-	}
-	return isAncestor, nil
-}
-
-// findMergeBase finds the common ancestor of two commits
-func (cd *ConflictDetector) findMergeBase(commit1, commit2 *object.Commit) (*object.Commit, error) {
-	// Use go-git's merge base functionality
-	bases, err := commit1.MergeBase(commit2)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find merge base: %w", err)
+		return nil, fmt.Errorf("merge-tree analysis failed: %w", err)
 	}
 
-	if len(bases) == 0 {
-		return nil, fmt.Errorf("no common ancestor found")
+	if !mergeResult.HasConflicts {
+		return nil, nil
 	}
 
-	// Return the first (most recent) common ancestor
-	return bases[0], nil
-}
-
-// analyzeThreeWayMerge performs detailed three-way merge analysis
-func (cd *ConflictDetector) analyzeThreeWayMerge(ctx context.Context, repo *gogit.Repository, base, source, target *object.Commit, req *MergeAnalysisRequest) ([]FileConflict, error) {
+	// We have conflicts — build detailed FileConflict info by comparing trees
 	var conflicts []FileConflict
 
-	// Get trees for all three commits
-	baseTree, err := base.Tree()
+	// Get diff from base to source and base to target
+	sourceDiffs, err := gitDiffTree(ctx, repoPath, baseHash, sourceHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get base tree: %w", err)
+		return nil, fmt.Errorf("diff-tree base..source: %w", err)
 	}
-
-	sourceTree, err := source.Tree()
+	targetDiffs, err := gitDiffTree(ctx, repoPath, baseHash, targetHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get source tree: %w", err)
+		return nil, fmt.Errorf("diff-tree base..target: %w", err)
 	}
 
-	targetTree, err := target.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get target tree: %w", err)
+	// Build maps of changed files
+	sourceChanges := make(map[string]*DiffEntry)
+	for i := range sourceDiffs {
+		sourceChanges[sourceDiffs[i].Path] = &sourceDiffs[i]
+	}
+	targetChanges := make(map[string]*DiffEntry)
+	for i := range targetDiffs {
+		targetChanges[targetDiffs[i].Path] = &targetDiffs[i]
 	}
 
-	// Compare trees to find differences
-	baseFiles := make(map[string]*object.TreeEntry)
-	sourceFiles := make(map[string]*object.TreeEntry)
-	targetFiles := make(map[string]*object.TreeEntry)
-
-	// Collect all files from all trees
-	err = cd.collectTreeFiles(baseTree, baseFiles)
-	if err != nil {
-		return nil, fmt.Errorf("failed to collect base tree files: %w", err)
-	}
-
-	err = cd.collectTreeFiles(sourceTree, sourceFiles)
-	if err != nil {
-		return nil, fmt.Errorf("failed to collect source tree files: %w", err)
-	}
-
-	err = cd.collectTreeFiles(targetTree, targetFiles)
-	if err != nil {
-		return nil, fmt.Errorf("failed to collect target tree files: %w", err)
-	}
-
-	// Find all unique file paths
-	allPaths := make(map[string]bool)
-	for path := range baseFiles {
-		allPaths[path] = true
-	}
-	for path := range sourceFiles {
-		allPaths[path] = true
-	}
-	for path := range targetFiles {
-		allPaths[path] = true
-	}
-
-	// Analyze each file for conflicts
-	for path := range allPaths {
-		conflict, err := cd.analyzeFileConflict(ctx, repo, path, baseFiles[path], sourceFiles[path], targetFiles[path], req)
-		if err != nil {
-			cd.logger.Warn("Failed to analyze file conflict", zap.String("path", path), zap.Error(err))
-			continue
+	// Files changed in both branches are potential conflicts
+	// The merge-tree output tells us which are actual conflicts
+	conflictPaths := make(map[string]bool)
+	for _, c := range mergeResult.Conflicts {
+		if c.Path != "" {
+			conflictPaths[c.Path] = true
 		}
+	}
 
+	// For each conflict path, create a FileConflict
+	for path := range conflictPaths {
+		sourceDiff := sourceChanges[path]
+		targetDiff := targetChanges[path]
+
+		conflict := cd.buildFileConflict(ctx, repoPath, path, sourceDiff, targetDiff, req)
 		if conflict != nil {
 			conflicts = append(conflicts, *conflict)
+		}
+	}
+
+	// Also check for files changed in both branches not caught by path extraction
+	if len(conflicts) == 0 && mergeResult.HasConflicts {
+		for path, se := range sourceChanges {
+			if te, ok := targetChanges[path]; ok {
+				// Both branches modified same file
+				if se.DstHash != te.DstHash {
+					conflict := cd.buildFileConflict(ctx, repoPath, path, se, te, req)
+					if conflict != nil {
+						conflicts = append(conflicts, *conflict)
+					}
+				}
+			}
 		}
 	}
 
 	return conflicts, nil
 }
 
-// collectTreeFiles recursively collects all files from a tree
-func (cd *ConflictDetector) collectTreeFiles(tree *object.Tree, files map[string]*object.TreeEntry) error {
-	return tree.Files().ForEach(func(file *object.File) error {
-		files[file.Name] = &object.TreeEntry{
-			Name: file.Name,
-			Mode: file.Mode,
-			Hash: file.Hash,
-		}
-		return nil
-	})
-}
-
-// analyzeFileConflict analyzes a single file for conflicts
-func (cd *ConflictDetector) analyzeFileConflict(ctx context.Context, repo *gogit.Repository, path string, base, source, target *object.TreeEntry, req *MergeAnalysisRequest) (*FileConflict, error) {
-	// Determine file existence in each version
-	baseExists := base != nil
-	sourceExists := source != nil
-	targetExists := target != nil
-
-	// SAFETY FIX: Proper single-side change detection (fix Bug #1)
-
-	// No conflict if all versions are identical
-	if baseExists && sourceExists && targetExists &&
-		base.Hash == source.Hash && base.Hash == target.Hash {
-		return nil, nil
-	}
-
-	// FIXED: Single-side changes are NOT conflicts
-	if baseExists && sourceExists && targetExists {
-		// Only source changed - not a conflict
-		if base.Hash == target.Hash && base.Hash != source.Hash {
-			cd.logger.Debug("Only source changed, no conflict", zap.String("path", path))
-			return nil, nil
-		}
-		// Only target changed - not a conflict
-		if base.Hash == source.Hash && base.Hash != target.Hash {
-			cd.logger.Debug("Only target changed, no conflict", zap.String("path", path))
-			return nil, nil
-		}
-		// Both changed differently - this IS a real conflict, continue to analysis
-	}
-
-	// Addition/deletion cases without conflicts
-	if !baseExists && sourceExists && !targetExists {
-		// File added only in source - not a conflict
-		cd.logger.Debug("File added in source only, no conflict", zap.String("path", path))
-		return nil, nil
-	}
-	if !baseExists && !sourceExists && targetExists {
-		// File added only in target - not a conflict
-		cd.logger.Debug("File added in target only, no conflict", zap.String("path", path))
-		return nil, nil
-	}
-
-	// Only report REAL conflicts that need user resolution
-	cd.logger.Info("Real conflict detected requiring resolution", zap.String("path", path))
-
-	// Analyze conflict type and create file versions
-	baseVersion := cd.createFileVersion(repo, base)
-	sourceVersion := cd.createFileVersion(repo, source)
-	targetVersion := cd.createFileVersion(repo, target)
-
+// buildFileConflict creates a FileConflict from diff entries.
+func (cd *ConflictDetector) buildFileConflict(ctx context.Context, repoPath, path string, sourceDiff, targetDiff *DiffEntry, req *MergeAnalysisRequest) *FileConflict {
 	conflict := &FileConflict{
-		FilePath:     path,
-		OurVersion:   sourceVersion,
-		TheirVersion: targetVersion,
-		BaseVersion:  baseVersion,
-		Regions:      []ConflictRegion{},
-		Metadata:     make(map[string]interface{}),
+		FilePath: path,
+		Regions:  []ConflictRegion{},
+		Metadata: make(map[string]interface{}),
 	}
+
+	// Determine file existence and build versions
+	sourceExists := sourceDiff != nil && sourceDiff.Status != "D"
+	targetExists := targetDiff != nil && targetDiff.Status != "D"
+	baseExists := true // if we have diffs from base, base existed for modified/deleted files
+	if sourceDiff != nil && sourceDiff.Status == "A" {
+		baseExists = false
+	}
+	if targetDiff != nil && targetDiff.Status == "A" {
+		baseExists = false
+	}
+
+	conflict.OurVersion = buildFileVersionFromDiff(sourceDiff, true)
+	conflict.TheirVersion = buildFileVersionFromDiff(targetDiff, false)
+	conflict.BaseVersion = buildBaseFileVersionFromDiff(sourceDiff, targetDiff)
 
 	// Determine conflict type
-	conflict.ConflictType = cd.determineConflictType(baseExists, sourceExists, targetExists, base, source, target)
-	conflict.Severity = cd.calculateConflictSeverity(conflict.ConflictType, sourceVersion, targetVersion)
+	conflict.ConflictType = cd.determineConflictType(baseExists, sourceExists, targetExists, sourceDiff, targetDiff)
+	conflict.Severity = cd.calculateConflictSeverity(conflict.ConflictType, conflict.OurVersion, conflict.TheirVersion)
 
-	// Analyze content conflicts for text files
+	// Analyze content conflicts if requested
 	if req.IncludeContent && conflict.ConflictType == ConflictTypeContent {
-		regions, err := cd.analyzeContentConflicts(repo, base, source, target, req.MaxFileSize)
+		regions, err := cd.analyzeContentConflicts(ctx, repoPath, sourceDiff, targetDiff, req.MaxFileSize)
 		if err != nil {
-			cd.logger.Warn("Failed to analyze content conflicts", zap.String("path", path), zap.Error(err))
+			cd.logger.Warn("Failed to analyze content conflicts",
+				zap.String("path", path), zap.Error(err))
 		} else {
 			conflict.Regions = regions
 		}
 	}
 
-	// Determine if auto-resolvable
 	conflict.AutoResolvable = cd.isAutoResolvable(conflict)
-
-	// Generate resolution suggestion if auto-resolvable
 	if conflict.AutoResolvable && req.AutoResolve {
-		resolution := cd.generateResolution(conflict)
-		conflict.Resolution = resolution
+		conflict.Resolution = cd.generateResolution(conflict)
 	}
 
-	return conflict, nil
+	return conflict
 }
 
-// Helper methods for conflict analysis
-func (cd *ConflictDetector) createFileVersion(repo *gogit.Repository, entry *object.TreeEntry) *FileVersion {
-	if entry == nil {
+// buildFileVersionFromDiff builds a FileVersion from a DiffEntry.
+func buildFileVersionFromDiff(diff *DiffEntry, isSource bool) *FileVersion {
+	if diff == nil {
 		return &FileVersion{Exists: false}
 	}
 
-	version := &FileVersion{
-		Hash:   entry.Hash,
-		Mode:   uint32(entry.Mode),
+	hash := diff.DstHash
+	modeStr := diff.DstMode
+	exists := diff.Status != "D"
+
+	if !exists {
+		return &FileVersion{Exists: false}
+	}
+
+	mode, _ := strconv.ParseUint(modeStr, 8, 32)
+	return &FileVersion{
+		Hash:   hash,
+		Mode:   uint32(mode),
 		Exists: true,
 	}
-
-	// Get file object to determine additional properties
-	if obj, err := repo.BlobObject(entry.Hash); err == nil {
-		version.Size = obj.Size
-		version.ContentHash = obj.Hash.String()
-
-		// Check if binary (simple heuristic)
-		if reader, err := obj.Reader(); err == nil {
-			defer func() {
-				if err := reader.Close(); err != nil {
-					fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
-				}
-			}()
-			buffer := make([]byte, 512)
-			if n, err := reader.Read(buffer); err == nil {
-				version.IsBinary = cd.isBinaryContent(buffer[:n])
-			}
-		}
-	}
-
-	return version
 }
 
-// determineConflictType determines the type of conflict based on file states
-func (cd *ConflictDetector) determineConflictType(baseExists, sourceExists, targetExists bool, base, source, target *object.TreeEntry) ConflictType {
-	// File deleted in one branch, modified in other
+// buildBaseFileVersionFromDiff extracts base version info from diff entries.
+func buildBaseFileVersionFromDiff(sourceDiff, targetDiff *DiffEntry) *FileVersion {
+	// The base version comes from SrcHash of either diff
+	diff := sourceDiff
+	if diff == nil {
+		diff = targetDiff
+	}
+	if diff == nil || diff.Status == "A" {
+		return &FileVersion{Exists: false}
+	}
+
+	mode, _ := strconv.ParseUint(diff.SrcMode, 8, 32)
+	return &FileVersion{
+		Hash:   diff.SrcHash,
+		Mode:   uint32(mode),
+		Exists: true,
+	}
+}
+
+// determineConflictType determines the type of conflict based on diff states.
+func (cd *ConflictDetector) determineConflictType(baseExists, sourceExists, targetExists bool, sourceDiff, targetDiff *DiffEntry) ConflictType {
+	// Delete/modify conflict
 	if baseExists && !sourceExists && targetExists {
-		// Check if base and target have different hashes (indicating modification)
-		if base != nil && target != nil && base.Hash != target.Hash {
-			return ConflictTypeDelete
-		} else if base == nil || target == nil {
-			// If we don't have tree entries but have existence flags, assume it's a delete conflict
-			return ConflictTypeDelete
-		}
+		return ConflictTypeDelete
 	}
 	if baseExists && sourceExists && !targetExists {
-		// Check if base and source have different hashes (indicating modification)
-		if base != nil && source != nil && base.Hash != source.Hash {
-			return ConflictTypeDelete
-		} else if base == nil || source == nil {
-			// If we don't have tree entries but have existence flags, assume it's a delete conflict
-			return ConflictTypeDelete
-		}
+		return ConflictTypeDelete
 	}
 
-	// File added in both branches
+	// Add/add conflict
 	if !baseExists && sourceExists && targetExists {
-		if source != nil && target != nil && source.Hash != target.Hash {
-			return ConflictTypeAdd
-		} else if source == nil || target == nil {
-			// If we don't have tree entries but both exist, assume it's an add conflict
-			return ConflictTypeAdd
-		}
+		return ConflictTypeAdd
 	}
 
-	// Mode conflicts
-	if sourceExists && targetExists && source != nil && target != nil && source.Hash == target.Hash && source.Mode != target.Mode {
+	// Mode conflict
+	if sourceDiff != nil && targetDiff != nil &&
+		sourceDiff.DstHash == targetDiff.DstHash &&
+		sourceDiff.DstMode != targetDiff.DstMode {
 		return ConflictTypeMode
 	}
 
-	// Content conflicts (most common)
-	if sourceExists && targetExists && source != nil && target != nil && source.Hash != target.Hash {
-		return ConflictTypeContent
-	}
-
-	// Default fallback
+	// Content conflict (default for both-modified)
 	return ConflictTypeContent
 }
 
@@ -460,26 +346,33 @@ func (cd *ConflictDetector) calculateConflictSeverity(conflictType ConflictType,
 	}
 }
 
-// analyzeContentConflicts analyzes content-level conflicts within a file
-func (cd *ConflictDetector) analyzeContentConflicts(repo *gogit.Repository, base, source, target *object.TreeEntry, maxFileSize int64) ([]ConflictRegion, error) {
-	// This is a simplified implementation - in practice, you'd want more sophisticated
-	// three-way merge analysis using libraries like go-git's merge package
+// analyzeContentConflicts analyzes content-level conflicts using native git.
+func (cd *ConflictDetector) analyzeContentConflicts(ctx context.Context, repoPath string, sourceDiff, targetDiff *DiffEntry, maxFileSize int64) ([]ConflictRegion, error) {
 	var regions []ConflictRegion
 
-	// Get file contents
-	baseContent, err := cd.getFileContent(repo, base, maxFileSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get base content: %w", err)
-	}
+	// Read file contents via git cat-file
+	var baseContent, sourceContent, targetContent string
 
-	sourceContent, err := cd.getFileContent(repo, source, maxFileSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get source content: %w", err)
+	if sourceDiff != nil && sourceDiff.SrcHash != "" && sourceDiff.SrcHash != strings.Repeat("0", 40) {
+		if size, err := gitCatFileBlobSize(ctx, repoPath, sourceDiff.SrcHash); err == nil && size <= maxFileSize {
+			if data, err := gitCatFileBlob(ctx, repoPath, sourceDiff.SrcHash); err == nil {
+				baseContent = string(data)
+			}
+		}
 	}
-
-	targetContent, err := cd.getFileContent(repo, target, maxFileSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get target content: %w", err)
+	if sourceDiff != nil && sourceDiff.DstHash != "" && sourceDiff.DstHash != strings.Repeat("0", 40) {
+		if size, err := gitCatFileBlobSize(ctx, repoPath, sourceDiff.DstHash); err == nil && size <= maxFileSize {
+			if data, err := gitCatFileBlob(ctx, repoPath, sourceDiff.DstHash); err == nil {
+				sourceContent = string(data)
+			}
+		}
+	}
+	if targetDiff != nil && targetDiff.DstHash != "" && targetDiff.DstHash != strings.Repeat("0", 40) {
+		if size, err := gitCatFileBlobSize(ctx, repoPath, targetDiff.DstHash); err == nil && size <= maxFileSize {
+			if data, err := gitCatFileBlob(ctx, repoPath, targetDiff.DstHash); err == nil {
+				targetContent = string(data)
+			}
+		}
 	}
 
 	// Simple line-based conflict detection
@@ -487,9 +380,7 @@ func (cd *ConflictDetector) analyzeContentConflicts(repo *gogit.Repository, base
 	sourceLines := strings.Split(sourceContent, "\n")
 	targetLines := strings.Split(targetContent, "\n")
 
-	// This is a simplified algorithm - real implementation would use
-	// Myers diff algorithm or similar for accurate three-way merge
-	if len(sourceLines) != len(targetLines) || strings.Join(sourceLines, "\n") != strings.Join(targetLines, "\n") {
+	if sourceContent != targetContent {
 		regions = append(regions, ConflictRegion{
 			StartLine:    1,
 			EndLine:      len(sourceLines),
@@ -503,42 +394,7 @@ func (cd *ConflictDetector) analyzeContentConflicts(repo *gogit.Repository, base
 	return regions, nil
 }
 
-// Helper methods
-func (cd *ConflictDetector) getFileContent(repo *gogit.Repository, entry *object.TreeEntry, maxFileSize int64) (string, error) {
-	if entry == nil {
-		return "", nil
-	}
-
-	obj, err := repo.BlobObject(entry.Hash)
-	if err != nil {
-		return "", err
-	}
-
-	if obj.Size > maxFileSize {
-		return "", fmt.Errorf("file too large: %d bytes", obj.Size)
-	}
-
-	reader, err := obj.Reader()
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		if err := reader.Close(); err != nil {
-			fmt.Printf("Warning: failed to close reader during cleanup: %v\n", err)
-		}
-	}()
-
-	content := make([]byte, obj.Size)
-	_, err = reader.Read(content)
-	if err != nil {
-		return "", err
-	}
-
-	return string(content), nil
-}
-
 func (cd *ConflictDetector) isBinaryContent(data []byte) bool {
-	// Simple binary detection - check for null bytes
 	for _, b := range data {
 		if b == 0 {
 			return true
@@ -550,11 +406,11 @@ func (cd *ConflictDetector) isBinaryContent(data []byte) bool {
 func (cd *ConflictDetector) isAutoResolvable(conflict *FileConflict) bool {
 	switch conflict.ConflictType {
 	case ConflictTypeMode:
-		return true // Mode conflicts are often auto-resolvable
+		return true
 	case ConflictTypeAdd:
-		return false // Adding same file with different content needs manual review
+		return false
 	case ConflictTypeDelete:
-		return false // Delete conflicts need manual review
+		return false
 	case ConflictTypeContent:
 		return len(conflict.Regions) == 0 || (conflict.OurVersion != nil && !conflict.OurVersion.IsBinary && conflict.TheirVersion != nil && !conflict.TheirVersion.IsBinary)
 	default:
@@ -565,7 +421,6 @@ func (cd *ConflictDetector) isAutoResolvable(conflict *FileConflict) bool {
 func (cd *ConflictDetector) generateResolution(conflict *FileConflict) *ConflictResolution {
 	switch conflict.ConflictType {
 	case ConflictTypeMode:
-		// For mode conflicts, typically choose the more permissive mode
 		return &ConflictResolution{
 			Strategy:   "prefer_permissive_mode",
 			Confidence: 0.8,
@@ -638,7 +493,6 @@ func (cd *ConflictDetector) generateRecommendations(conflicts []FileConflict, st
 		recommendations = append(recommendations, fmt.Sprintf("%d of %d conflicts require manual resolution", len(conflicts)-autoResolvable, len(conflicts)))
 	}
 
-	// Strategy-specific recommendations
 	switch strategy {
 	case MergeStrategyRecursive:
 		recommendations = append(recommendations, "Recursive strategy provides good conflict detection")

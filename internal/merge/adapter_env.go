@@ -6,7 +6,6 @@ import (
 
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
-	gogit "github.com/go-git/go-git/v5"
 )
 
 // env.go - Layer 2: Adapters
@@ -15,7 +14,7 @@ import (
 // MergeEnv contains environmental dependencies for merge operations
 // This is NOT a God Object - it only contains:
 // - Context (for cancellation)
-// - Repository (for git operations)
+// - RepoPath (for native git operations)
 // - Now (for deterministic timestamps)
 // - Logger (for observability)
 // - PathConfig (for path resolution)
@@ -23,7 +22,7 @@ import (
 // Domain inputs (MergeRequest, analysis results) should be passed separately
 type MergeEnv struct {
 	Ctx        context.Context
-	Repo       *gogit.Repository
+	RepoPath   string
 	Now        time.Time
 	Logger     *logging.Logger
 	PathConfig *repositories.PathConfig
@@ -32,13 +31,13 @@ type MergeEnv struct {
 // NewMergeEnv creates a new MergeEnv
 func NewMergeEnv(
 	ctx context.Context,
-	repo *gogit.Repository,
+	repoPath string,
 	logger *logging.Logger,
 	pathConfig *repositories.PathConfig,
 ) *MergeEnv {
 	return &MergeEnv{
 		Ctx:        ctx,
-		Repo:       repo,
+		RepoPath:   repoPath,
 		Now:        time.Now(),
 		Logger:     logger,
 		PathConfig: pathConfig,
@@ -49,14 +48,14 @@ func NewMergeEnv(
 // This is useful for deterministic testing
 func NewMergeEnvWithTime(
 	ctx context.Context,
-	repo *gogit.Repository,
+	repoPath string,
 	now time.Time,
 	logger *logging.Logger,
 	pathConfig *repositories.PathConfig,
 ) *MergeEnv {
 	return &MergeEnv{
 		Ctx:        ctx,
-		Repo:       repo,
+		RepoPath:   repoPath,
 		Now:        now,
 		Logger:     logger,
 		PathConfig: pathConfig,

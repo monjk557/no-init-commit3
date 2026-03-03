@@ -1339,7 +1339,7 @@ components:
       type: object
       properties:
         hash:
-          type: object
+          type: string
         mode:
           type: object
         size:
@@ -1752,7 +1752,7 @@ components:
           items:
             type: string
         merge_base:
-          $ref: '#/components/schemas/Commit'
+          $ref: '#/components/schemas/CommitInfo'
         conflict_summary:
           $ref: '#/components/schemas/MergeAnalysisResult'
         changes_summary:

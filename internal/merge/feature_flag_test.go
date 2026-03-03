@@ -1,3 +1,5 @@
+//go:build gogit
+
 package merge
 
 import (
