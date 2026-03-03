@@ -282,6 +282,13 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *UploadPackHandler) readSection(body io.Reader) ([]string, error) {
+	return readPktLineSection(body)
+}
+
+// readPktLineSection reads one pkt-line section from the reader, collecting lines
+// until a flush packet (0000) or delimiter packet (0001) is encountered.
+// This is the canonical pkt-line section reader used by both HTTP and SSH handlers.
+func readPktLineSection(body io.Reader) ([]string, error) {
 	var cmds []string
 	buf := make([]byte, 4)
 

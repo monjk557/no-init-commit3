@@ -16,6 +16,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/orchestrator"
+	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
 )
@@ -186,40 +187,6 @@ func (h *SSHProtocolHandler) CheckSSHPermissions(ctx context.Context, req *SSHRe
 	}
 }
 
-// sendEmptyPackfile sends an empty packfile (for when objects can't be found)
-func (h *SSHProtocolHandler) sendEmptyPackfile(output *SSHProtocolWriter) error {
-	// Pack header: "PACK" + version(4 bytes) + object count(4 bytes)
-	packHeader := []byte{
-		'P', 'A', 'C', 'K', // PACK magic
-		0x00, 0x00, 0x00, 0x02, // version 2
-		0x00, 0x00, 0x00, 0x00, // object count = 0
-	}
-
-	// Pack trailer: SHA-1 of pack (for empty pack, this is constant)
-	// SHA-1 of empty pack with version 2 and 0 objects
-	packTrailer := []byte{
-		0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d,
-		0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90,
-		0xaf, 0xd8, 0x07, 0x09,
-	}
-
-	// Use sideband writer for empty packfile too
-	sbWriter := newSSHSidebandWriter(output, 0x01)
-	if _, err := sbWriter.Write(packHeader); err != nil {
-		return err
-	}
-	if _, err := sbWriter.Write(packTrailer); err != nil {
-		return err
-	}
-
-	// Flush sideband stream (sends "0000" flush packet)
-	if err := sbWriter.Flush(); err != nil {
-		return err
-	}
-
-	return output.Flush()
-}
-
 // EnsureSSHRepository ensures the repository exists and can be opened
 func (h *SSHProtocolHandler) EnsureSSHRepository(ctx context.Context, req *SSHRequest) (*repositories.RepositoryWrapper, error) {
 	// Ensure repository exists using existing repository utilities
@@ -260,101 +227,6 @@ func DefaultSSHStreamingOptions(correlationID string) *SSHStreamingOptions {
 type SSHProtocolWriter struct {
 	writer io.Writer
 	buffer *bufio.Writer
-}
-
-// sshSidebandWriter writes data in side-band-64k format for SSH protocol
-type sshSidebandWriter struct {
-	w          io.Writer
-	channel    byte
-	chunkSize  int
-	firstWrite bool
-}
-
-// newSSHSidebandWriter creates a new sideband writer for SSH protocol
-func newSSHSidebandWriter(w io.Writer, channel byte) *sshSidebandWriter {
-	// pkt-line 총 길이(4바이트 헤더 포함) 최대 65520
-	// payload = length-4, 그 중 1바이트는 채널이 차지
-	// 안전하게 payload(채널 포함) 65515 사용
-	return &sshSidebandWriter{
-		w:          w,
-		channel:    channel,
-		chunkSize:  65515,
-		firstWrite: true,
-	}
-}
-
-// Write implements io.Writer for sshSidebandWriter
-// 데이터를 64k 청크로 나눠서 side-band 포맷으로 전송
-func (sb *sshSidebandWriter) Write(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-
-	total := 0
-	for len(p) > 0 {
-		n := sb.chunkSize - 1 // 채널 바이트(1)를 뺀 실제 데이터 공간
-		if n > len(p) {
-			n = len(p)
-		}
-		chunk := p[:n]
-		p = p[n:]
-
-		payloadLen := 1 + len(chunk) // [channel][data...]
-		length := payloadLen + 4     // pkt-line 총 길이
-
-		if _, err := fmt.Fprintf(sb.w, "%04x", length); err != nil {
-			return total, err
-		}
-		if _, err := sb.w.Write([]byte{sb.channel}); err != nil {
-			return total, err
-		}
-		if _, err := sb.w.Write(chunk); err != nil {
-			return total, err
-		}
-
-		// 첫 번째 chunk를 즉시 전송하도록 flush
-		// "PACK" 헤더를 포함한 첫 번째 패킷에 중요합니다
-		// packfile 데이터가 즉시 시작되어야 합니다
-		if sb.firstWrite {
-			// 기본 writer가 지원하는 경우 flush 시도
-			if flusher, ok := sb.w.(interface{ Flush() error }); ok {
-				if err := flusher.Flush(); err != nil {
-					return total, err
-				}
-			}
-			sb.firstWrite = false
-		}
-
-		total += len(chunk)
-	}
-
-	return total, nil
-}
-
-// Flush writes the flush packet to end sideband stream
-func (sb *sshSidebandWriter) Flush() error {
-	_, err := sb.w.Write([]byte("0000"))
-	return err
-}
-
-// writeProgressMessage sends a progress message on sideband channel 2 (progress)
-func writeProgressMessage(w io.Writer, message string) error {
-	// Progress messages use channel 2 (0x02)
-	// Format: [4-byte hex length][0x02][message]
-	messageBytes := []byte(message)
-	payloadLen := 1 + len(messageBytes) // channel byte + message
-	length := payloadLen + 4            // total pkt-line length
-
-	if _, err := fmt.Fprintf(w, "%04x", length); err != nil {
-		return err
-	}
-	if _, err := w.Write([]byte{0x02}); err != nil { // channel 2 = progress
-		return err
-	}
-	if _, err := w.Write(messageBytes); err != nil {
-		return err
-	}
-	return nil
 }
 
 // NewSSHProtocolWriter creates a new SSH protocol writer
@@ -497,68 +369,176 @@ func (h *SSHProtocolHandler) HandleSSHReceivePack(w http.ResponseWriter, r *http
 	h.processSSHReceivePack(w, r, sshReq, repo, streamOpts)
 }
 
-// processSSHUploadPack processes the SSH upload-pack operation (fetch)
-func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, repo *repositories.RepositoryWrapper, opts *SSHStreamingOptions) {
-	// Set content type for SSH upload-pack (no service advertisement)
+// processSSHUploadPack processes the SSH upload-pack operation (fetch).
+// Implements Git protocol v2 over SSH: advertisement → ls-refs → fetch → packfile.
+// Reuses the same pkt-line parsing, negotiation, and pack-objects logic as the HTTP handler.
+func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http.Request, sshReq *SSHRequest, _ *repositories.RepositoryWrapper, opts *SSHStreamingOptions) {
+	ctx := r.Context()
+	repoPath := sshReq.RepoPath
+
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 
-	// Create SSH protocol writer for streaming
 	writer := NewSSHProtocolWriter(w, opts.BufferSize)
 	defer func() { _ = writer.Flush() }()
 
-	// Parse SSH protocol headers
-	protocolHeaders := ParseSSHGitProtocolHeaders(r)
-
-	// For SSH upload-pack, we need to:
-	// 0. Write advertise service
-	// 1. Read the want/have negotiation from the request body
-	// 2. Generate the appropriate packfile
-	// 3. Stream it back to the gateway
-
-	// 1. Write advertise service in pkt-line format
-	// Use PktWriter to ensure proper formatting
-	pw := &PktWriter{W: writer, WithLF: false}
-	if err := pw.WriteLine("version 2"); err != nil {
+	// 1. Send Git protocol v2 advertisement (same as HTTP info/refs)
+	if err := WriteV2Advert(writer, "git/collabops-git-executor", "ls-refs", "fetch=shallow filter"); err != nil {
 		return
 	}
-	if err := pw.WriteLine("agent=collabops"); err != nil {
-		return
-	}
-	if err := pw.WriteLine("ls-refs"); err != nil {
-		return
-	}
-	if err := pw.WriteLine("fetch"); err != nil {
-		return
-	}
-	if err := pw.Flush(); err != nil {
-		return
-	}
-	// Flush the underlying buffer to ensure data is sent
 	if err := writer.Flush(); err != nil {
 		return
 	}
 
-	// Read request body for want/have negotiation
-	requestBody := r.Body
+	// Set up request body reader
+	var body io.Reader = r.Body
 	if opts.MaxRequestSize > 0 {
-		requestBody = http.MaxBytesReader(w, r.Body, opts.MaxRequestSize)
+		body = http.MaxBytesReader(w, r.Body, opts.MaxRequestSize)
 	}
 	defer func() { _ = r.Body.Close() }()
 
-	// Add timeout to context for reading request body
-	// This prevents indefinite blocking when client doesn't send data immediately
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
+	pktWriter := performance.NewOptimizedPktLineWriter(writer)
 
-	// For now, delegate to the existing upload-pack logic
-	// This is a simplified implementation - in production, you'd implement full SSH protocol negotiation
-	err := h.executeSSHGitCommand(ctx, "git-upload-pack", sshReq.RepoPath, requestBody, writer, protocolHeaders)
-	if err != nil {
-		// Write SSH error format
-		if sshErr := writer.WriteSSHError(fmt.Sprintf("upload-pack failed: %v", err)); sshErr != nil {
-			_ = sshErr // Log the SSH error writing failure, but don't fail the request further
+	// 2. Read and handle command sections in a loop.
+	// SSH protocol v2 flow: client sends ls-refs first, then fetch.
+	for {
+		cmds, err := readPktLineSection(body)
+		if err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			return
 		}
-		return
+		if len(cmds) == 0 {
+			return
+		}
+
+		if strings.HasPrefix(cmds[0], "command=ls-refs") {
+			// Read ls-refs options (second section after delimiter)
+			lsRefsOpts, err := readPktLineSection(body)
+			if err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				return
+			}
+			allCmds := append(cmds, lsRefsOpts...)
+			lsRefsReq, err := ParseLsRefsSection(allCmds)
+			if err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				return
+			}
+
+			if err := handleLsRefsNative(ctx, repoPath, lsRefsReq, pktWriter); err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				return
+			}
+			_ = pktWriter.Flush()
+			_ = writer.Flush()
+			continue // read next command (fetch)
+
+		} else if strings.HasPrefix(cmds[0], "command=fetch") {
+			// Read fetch options (second section after delimiter)
+			fetchOpts, err := readPktLineSection(body)
+			if err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				return
+			}
+			allCmds := append(cmds, fetchOpts...)
+			fetchReq, err := ParseFetchSection(allCmds)
+			if err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				return
+			}
+
+			if err := ValidateFetchSupport(fetchReq); err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				_ = pktWriter.Flush()
+				return
+			}
+
+			// 3. Fetch negotiation: acknowledgments + ready (same as HTTP handler)
+			if !fetchReq.Done {
+				if err := pktWriter.WriteLine("acknowledgments"); err != nil {
+					return
+				}
+				ackSent := false
+				for _, have := range fetchReq.Haves {
+					if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+						if err := pktWriter.WriteLine(fmt.Sprintf("ACK %s", have)); err != nil {
+							return
+						}
+						ackSent = true
+					}
+				}
+				if !ackSent {
+					if err := pktWriter.WriteLine("NAK"); err != nil {
+						return
+					}
+				}
+				if err := pktWriter.WriteLine("ready"); err != nil {
+					return
+				}
+				// Delimiter (0001) — NOT flush (0000)
+				if err := pktWriter.WriteDelim(); err != nil {
+					return
+				}
+			}
+
+			// 4. Shallow-info section (if applicable)
+			var shallowGrafts []string
+			if fetchReq.Deepen > 0 {
+				shallowGrafts, err = GetShallowBoundary(repoPath, fetchReq)
+				if err != nil {
+					_ = pktWriter.WriteLine(fmt.Sprintf("ERR shallow boundary: %s", err.Error()))
+					_ = pktWriter.Flush()
+					return
+				}
+			}
+			if len(shallowGrafts) > 0 {
+				if err := pktWriter.WriteLine("shallow-info"); err != nil {
+					return
+				}
+				for _, sh := range shallowGrafts {
+					if err := pktWriter.WriteLine("shallow " + sh); err != nil {
+						return
+					}
+				}
+				if err := pktWriter.WriteDelim(); err != nil {
+					return
+				}
+			}
+
+			// 5. Packfile section header
+			if err := pktWriter.WriteLine("packfile"); err != nil {
+				return
+			}
+
+			// 6. Stream packfile via native git pack-objects with sideband encoding
+			packShallow := append(fetchReq.Shallow, shallowGrafts...)
+			sbWriter := newSidebandWriter(writer, 0x01)
+			packOpts := &gitcmd.PackObjectsOpts{
+				Wants:         fetchReq.Wants,
+				Haves:         fetchReq.Haves,
+				Shallow:       packShallow,
+				ThinPack:      fetchReq.ThinPack,
+				OfsDelta:      fetchReq.OfsDelta,
+				IncludeTag:    fetchReq.IncludeTag,
+				DeepenSince:   fetchReq.DeepenSince,
+				DeepenExclude: fetchReq.DeepenNot,
+				Filter:        fetchReq.Filter,
+			}
+			if _, err := gitcmd.RunPackObjects(ctx, repoPath, packOpts, sbWriter); err != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+				_ = writer.Flush()
+				return
+			}
+			if err := sbWriter.Flush(); err != nil {
+				_ = writer.Flush()
+				return
+			}
+			_ = writer.Flush()
+			return // fetch completes the session
+
+		} else {
+			_ = pktWriter.WriteLine("ERR unknown command")
+			return
+		}
 	}
 }
 
@@ -711,124 +691,6 @@ func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo
 	}()
 }
 
-// executeSSHGitCommand executes a Git command for SSH operations
-func (h *SSHProtocolHandler) executeSSHGitCommand(ctx context.Context, command, repoPath string, input io.ReadCloser, output *SSHProtocolWriter, headers map[string]string) error {
-	// Validate the Git command
-	if err := ValidateSSHGitCommand(command, repoPath); err != nil {
-		return fmt.Errorf("invalid Git command: %w", err)
-	}
-
-	// Parse git protocol v2 commands from input
-	requestData, err := h.parseGitProtocolRequest(ctx, input)
-	if err != nil {
-		return fmt.Errorf("failed to parse git protocol request: %w", err)
-	}
-
-	// Handle different git protocol commands
-	switch command {
-	case "git-upload-pack":
-		return h.handleSSHUploadPackCommand(ctx, repoPath, requestData, output)
-	case "git-receive-pack":
-		return h.handleSSHReceivePackCommand(ctx, repoPath, requestData, output)
-	default:
-		return fmt.Errorf("unsupported git command: %s", command)
-	}
-}
-
-// parseGitProtocolRequest parses git protocol v2 requests
-func (h *SSHProtocolHandler) parseGitProtocolRequest(ctx context.Context, input io.ReadCloser) (map[string]string, error) {
-	data := make(map[string]string)
-	buffer := make([]byte, 8192)
-
-	// Use a channel to receive read result
-	type readResult struct {
-		n   int
-		err error
-	}
-	readCh := make(chan readResult, 1)
-
-	// Read in a goroutine to avoid blocking indefinitely
-	go func() {
-		n, err := input.Read(buffer)
-		readCh <- readResult{n: n, err: err}
-	}()
-
-	// Wait for read to complete or context cancellation
-	var n int
-	var err error
-	select {
-	case result := <-readCh:
-		n = result.n
-		err = result.err
-	case <-ctx.Done():
-		// Context cancelled or timed out - return empty data
-		// This handles the case where client doesn't send data immediately
-		return data, nil
-	}
-
-	if err != nil && err != io.EOF {
-		return nil, err
-	}
-
-	if n > 0 {
-		content := string(buffer[:n])
-
-		// Parse pkt-line format
-		// Example: "0032want 9b13bf533e90b50697bb5d466995991a637501e4 0000"
-		if len(content) >= 4 {
-			// Extract pkt-line length (first 4 characters)
-			lengthStr := content[:4]
-
-			// Parse length as hex
-			var length int
-			if _, err := fmt.Sscanf(lengthStr, "%x", &length); err == nil {
-
-				// Validate length to prevent slice bounds error
-				if length > 4 && length <= len(content) {
-					// Extract the actual data (skip the 4-byte length prefix)
-					pktData := content[4:length]
-
-					// Parse the command
-					if strings.Contains(pktData, "command=ls-refs") {
-						data["command"] = "ls-refs"
-					} else if strings.Contains(pktData, "want ") {
-						data["command"] = "upload-pack"
-						// Extract want hash
-						parts := strings.Fields(pktData)
-						for i, part := range parts {
-							if part == "want" && i+1 < len(parts) {
-								data["wants"] = parts[i+1]
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return data, nil
-}
-
-// handleSSHUploadPackCommand handles git-upload-pack commands for SSH
-func (h *SSHProtocolHandler) handleSSHUploadPackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
-	// Handle ls-refs command
-	if requestData["command"] == "ls-refs" {
-		return h.handleLsRefs(ctx, repoPath, output)
-	}
-
-	// For SSH upload-pack, handle want/have negotiation using native git
-	return h.handleSSHWantHaveNegotiation(ctx, repoPath, requestData, output)
-}
-
-// handleSSHReceivePackCommand handles git-receive-pack commands for SSH
-// This is now deprecated - use processSSHReceivePack instead
-func (h *SSHProtocolHandler) handleSSHReceivePackCommand(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
-	// This function is kept for backward compatibility but should not be used
-	// The actual implementation is in processSSHReceivePack
-	return fmt.Errorf("handleSSHReceivePackCommand is deprecated, use processSSHReceivePack instead")
-}
-
 // parseSSHReceivePackRequest parses the receive-pack request body in pkt-line format
 func (h *SSHProtocolHandler) parseSSHReceivePackRequest(body io.Reader) (*ReceivePackRequest, error) {
 	req := &ReceivePackRequest{
@@ -956,109 +818,6 @@ func readPktLineFromReader(reader *bufio.Reader) ([]byte, bool, error) {
 	}
 
 	return payload, false, nil
-}
-
-// processSSHRefUpdate is no longer used — ref updates are handled atomically
-// in processSSHReceivePack via gitcmd.AtomicRefUpdate.
-
-// handleSSHWantHaveNegotiation handles want/have negotiation for SSH upload-pack
-// using native git pack-objects.
-func (h *SSHProtocolHandler) handleSSHWantHaveNegotiation(ctx context.Context, repoPath string, requestData map[string]string, output *SSHProtocolWriter) error {
-	// Parse wants from request data
-	var wants []string
-	if wantStr, exists := requestData["wants"]; exists && wantStr != "" {
-		for _, w := range strings.Split(wantStr, ",") {
-			w = strings.TrimSpace(w)
-			if w != "" {
-				wants = append(wants, w)
-			}
-		}
-	}
-
-	if len(wants) == 0 {
-		return h.sendEmptyPackfile(output)
-	}
-
-	// Parse haves (if any)
-	var haves []string
-	if haveStr, exists := requestData["haves"]; exists && haveStr != "" {
-		for _, h := range strings.Split(haveStr, ",") {
-			h = strings.TrimSpace(h)
-			if h != "" {
-				haves = append(haves, h)
-			}
-		}
-	}
-
-	// Send NAK (no common ancestor) if no haves
-	if len(haves) == 0 {
-		nakLine := "NAK\n"
-		pktLine := fmt.Sprintf("%04x%s", len(nakLine)+4, nakLine)
-		if _, err := output.Write([]byte(pktLine)); err != nil {
-			return fmt.Errorf("failed to write NAK: %w", err)
-		}
-	}
-
-	// Flush to end negotiation phase
-	if _, err := output.Write([]byte("0000")); err != nil {
-		return fmt.Errorf("failed to flush negotiation: %w", err)
-	}
-	if err := output.Flush(); err != nil {
-		return fmt.Errorf("failed to flush buffer: %w", err)
-	}
-
-	// Use native git pack-objects for packfile generation
-	useOfsDelta := strings.Contains(requestData["capabilities"], "ofs-delta") || requestData["capabilities"] == ""
-
-	opts := &gitcmd.PackObjectsOpts{
-		Wants:    wants,
-		Haves:    haves,
-		OfsDelta: useOfsDelta,
-	}
-
-	// Create sideband writer for packfile transmission
-	sbWriter := newSSHSidebandWriter(output, 0x01)
-
-	_, err := gitcmd.RunPackObjects(ctx, repoPath, opts, sbWriter)
-	if err != nil {
-		return fmt.Errorf("git pack-objects: %w", err)
-	}
-
-	// Flush sideband stream
-	if err := sbWriter.Flush(); err != nil {
-		return fmt.Errorf("failed to flush sideband stream: %w", err)
-	}
-
-	return output.Flush()
-}
-
-// handleLsRefs handles the ls-refs command for SSH upload-pack using native git.
-func (h *SSHProtocolHandler) handleLsRefs(ctx context.Context, repoPath string, output *SSHProtocolWriter) error {
-	// Resolve HEAD
-	headInfo, err := gitcmd.ResolveHEAD(ctx, repoPath)
-	if err == nil && headInfo.OID != "" {
-		refLine := fmt.Sprintf("%s HEAD\n", headInfo.OID)
-		pktLine := fmt.Sprintf("%04x%s", len(refLine)+4, refLine)
-		if _, err := output.Write([]byte(pktLine)); err != nil {
-			return err
-		}
-	}
-
-	// List refs
-	refs, err := gitcmd.ListRefs(ctx, repoPath, "refs/heads/", "refs/tags/")
-	if err == nil {
-		for _, ref := range refs {
-			refLine := fmt.Sprintf("%s %s\n", ref.ObjectName, ref.RefName)
-			pktLine := fmt.Sprintf("%04x%s", len(refLine)+4, refLine)
-			if _, err := output.Write([]byte(pktLine)); err != nil {
-				return err
-			}
-		}
-	}
-
-	// End with flush packet
-	_, err = output.Write([]byte("0000"))
-	return err
 }
 
 // SSHEndpointMetrics provides metrics collection for SSH endpoints

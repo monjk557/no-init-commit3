@@ -232,59 +232,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 }
 
 func (h *ReceivePackHandler) readSection(body io.Reader) ([]string, error) {
-	var cmds []string
-	buf := make([]byte, 4)
-
-	for {
-		n, err := io.ReadFull(body, buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return cmds, err
-		}
-		if n != 4 {
-			break
-		}
-
-		lengthHex := string(buf)
-		length, err := strconv.ParseInt(lengthHex, 16, 32)
-		if err != nil {
-			continue
-		}
-
-		if length == 0 {
-			break
-		}
-		if length == 1 {
-			break
-		}
-		if length < 4 {
-			continue
-		}
-
-		dataLen := int(length) - 4
-		if dataLen <= 0 {
-			continue
-		}
-
-		dataBuf := make([]byte, dataLen)
-		n, err = io.ReadFull(body, dataBuf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return cmds, err
-		}
-		if n != dataLen {
-			continue
-		}
-
-		data := strings.TrimSuffix(string(dataBuf), "\n")
-		cmds = append(cmds, data)
-	}
-
-	return cmds, nil
+	return readPktLineSection(body)
 }
 
 func (h *ReceivePackHandler) parseV1ReceivePack(body []byte) (*ReceivePackRequest, error) {
