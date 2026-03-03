@@ -525,34 +525,9 @@ func initBareRepo(t *testing.T, baseDir, owner, repo string) string {
 	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/master"))
 	require.NoError(t, gitRepo.Storer.SetReference(headRef))
 
-	// 실제 commit object 생성 (empty tree → commit)
-	emptyTree := &object.Tree{}
-	treeObj := gitRepo.Storer.NewEncodedObject()
-	require.NoError(t, emptyTree.Encode(treeObj))
-	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
-	require.NoError(t, err)
-
-	commit := &object.Commit{
-		TreeHash: treeHash,
-		Author: object.Signature{
-			Name:  "Test",
-			Email: "test@test.com",
-			When:  time.Now(),
-		},
-		Committer: object.Signature{
-			Name:  "Test",
-			Email: "test@test.com",
-			When:  time.Now(),
-		},
-		Message: "initial commit",
-	}
-	commitObj := gitRepo.Storer.NewEncodedObject()
-	require.NoError(t, commit.Encode(commitObj))
-	commitHash, err := gitRepo.Storer.SetEncodedObject(commitObj)
-	require.NoError(t, err)
-
-	// master 브랜치를 실제 commit hash로 생성
-	masterRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), commitHash)
+	// master 브랜치 생성 (zero hash로)
+	emptyHash := plumbing.NewHash("0000000000000000000000000000000000000000")
+	masterRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), emptyHash)
 	require.NoError(t, gitRepo.Storer.SetReference(masterRef))
 
 	return repoPath
@@ -1310,9 +1285,9 @@ func Test_UpdateBranch_NonFastForward_Returns400(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// master로 돌아가서 다른 커밋 생성
+	// main으로 돌아가서 다른 커밋 생성
 	require.NoError(t, wt.Checkout(&gogit.CheckoutOptions{
-		Branch: plumbing.NewBranchReferenceName("master"),
+		Branch: plumbing.NewBranchReferenceName("main"),
 	}))
 
 	filePath3 := filepath.Join(tempWorkDir, "file3.txt")
@@ -1320,7 +1295,7 @@ func Test_UpdateBranch_NonFastForward_Returns400(t *testing.T) {
 	_, err = wt.Add("file3.txt")
 	require.NoError(t, err)
 
-	commit3, err := wt.Commit("master commit", &gogit.CommitOptions{
+	commit3, err := wt.Commit("main commit", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test",
 			Email: "test@test.com",
@@ -1431,9 +1406,9 @@ func Test_UpdateBranch_NonFastForwardForce_ReturnsSuccess(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// master로 돌아가서 다른 커밋 생성
+	// main으로 돌아가서 다른 커밋 생성
 	require.NoError(t, wt.Checkout(&gogit.CheckoutOptions{
-		Branch: plumbing.NewBranchReferenceName("master"),
+		Branch: plumbing.NewBranchReferenceName("main"),
 	}))
 
 	filePath3 := filepath.Join(tempWorkDir, "file3.txt")
@@ -1441,7 +1416,7 @@ func Test_UpdateBranch_NonFastForwardForce_ReturnsSuccess(t *testing.T) {
 	_, err = wt.Add("file3.txt")
 	require.NoError(t, err)
 
-	commit3, err := wt.Commit("master commit", &gogit.CommitOptions{
+	commit3, err := wt.Commit("main commit", &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test",
 			Email: "test@test.com",
@@ -1450,16 +1425,14 @@ func Test_UpdateBranch_NonFastForwardForce_ReturnsSuccess(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 커밋 객체를 bare repo로 복사 (tree, blob 포함)
+	// 커밋 객체를 bare repo로 복사
 	bareRepo := openRepo(t, repoPath)
 	for _, hash := range []plumbing.Hash{commit1, commit2, commit3} {
-		cObj, cErr := workRepo.CommitObject(hash)
-		require.NoError(t, cErr)
-		encObj, encErr := workRepo.Storer.EncodedObject(plumbing.CommitObject, hash)
-		require.NoError(t, encErr)
-		_, err = bareRepo.Storer.SetEncodedObject(encObj)
+		commitObj := workRepo.Storer.NewEncodedObject()
+		commit, _ := workRepo.CommitObject(hash)
+		require.NoError(t, commit.Encode(commitObj))
+		_, err = bareRepo.Storer.SetEncodedObject(commitObj)
 		require.NoError(t, err)
-		require.NoError(t, copyTreeRecursive(workRepo, bareRepo, cObj.TreeHash))
 	}
 
 	// feature 브랜치를 commit2에 생성

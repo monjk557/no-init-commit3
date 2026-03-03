@@ -436,13 +436,6 @@ func (pac *ProgressAwareConnection) GetProgressTracker() *TransferProgressTracke
 	return pac.progressTracker
 }
 
-// NetConn returns the underlying raw net.Conn.
-// Used for direct I/O piping (e.g. git upload-pack stdout → client)
-// that must bypass the buffered writer.
-func (pac *ProgressAwareConnection) NetConn() net.Conn {
-	return pac.conn
-}
-
 // GetRemoteAddr returns the remote address
 func (pac *ProgressAwareConnection) GetRemoteAddr() net.Addr {
 	if pac.conn != nil {

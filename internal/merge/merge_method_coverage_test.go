@@ -215,7 +215,6 @@ func TestMergeRequestValidation(t *testing.T) {
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = req
-			c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
 
 			handler.HandleMerge(c)
 

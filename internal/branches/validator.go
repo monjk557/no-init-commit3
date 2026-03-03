@@ -29,14 +29,6 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 		return fmt.Errorf("branch name cannot start or end with a slash")
 	}
 
-	if strings.HasPrefix(name, "refs/") {
-		return fmt.Errorf("branch name cannot start with 'refs/'")
-	}
-
-	if strings.Count(name, "/") > 1 {
-		return fmt.Errorf("branch name cannot contain multiple slashes")
-	}
-
 	if strings.Contains(name, "//") {
 		return fmt.Errorf("branch name cannot contain consecutive slashes")
 	}

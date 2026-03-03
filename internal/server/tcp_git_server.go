@@ -444,16 +444,30 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 				return fmt.Errorf("fetch not supported: %w", err)
 			}
 
-			// === Git protocol v2 fetch negotiation ===
-			// Per spec, the server MUST always send the acknowledgments section,
-			// even when the client sets done=true. Omitting it causes the client
-			// to misparse the next section ("packfile") as ack data → "bad pack header".
-			if err := s.writePktLine(conn, "acknowledgments"); err != nil {
-				return fmt.Errorf("failed to write acknowledgments header: %w", err)
-			}
-
-			ackSent := false
-			if len(fetchReq.Haves) > 0 {
+			// === 협상 라운드 (done 없음) ===
+			// Git protocol v2 spec:
+			// - haves 없음 (NAK): flush(0000) 보내고 다음 라운드(done 포함) 대기
+			// - haves 있음 (ready): delim(0001) 보내고 바로 packfile 전송
+			//   "ready"는 "공통 조상 찾았으니 packfile 바로 보내겠다"는 의미.
+			//   delim 후 같은 스트림에서 packfile 섹션이 이어져야 한다.
+			if !fetchReq.Done {
+				if err := s.writePktLine(conn, "acknowledgments"); err != nil {
+					return fmt.Errorf("failed to write acknowledgments header: %w", err)
+				}
+				if len(fetchReq.Haves) == 0 {
+					// No common objects — send NAK + flush, wait for client to retry with done
+					if err := s.writePktLine(conn, "NAK"); err != nil {
+						return fmt.Errorf("failed to write NAK: %w", err)
+					}
+					if _, err := writer.WriteString("0000"); err != nil {
+						return fmt.Errorf("failed to write flush-pkt: %w", err)
+					}
+					if err := conn.Flush(); err != nil {
+						return fmt.Errorf("failed to flush after NAK: %w", err)
+					}
+					continue // 다음 라운드(done 포함)를 기다림
+				}
+				// Haves present — ACK common objects then send ready + delim, fall through to packfile
 				repoPathForACK, ackPathErr := func() (string, error) {
 					pc, pcErr := repositories.NewPathConfig(s.config.Git.RepoRoot)
 					if pcErr != nil {
@@ -468,42 +482,20 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 							if err := s.writePktLine(conn, fmt.Sprintf("ACK %s", have)); err != nil {
 								return fmt.Errorf("failed to write ACK: %w", err)
 							}
-							ackSent = true
 						}
 					}
 				}
-			}
-
-			if !ackSent {
-				if err := s.writePktLine(conn, "NAK"); err != nil {
-					return fmt.Errorf("failed to write NAK: %w", err)
+				if err := s.writePktLine(conn, "ready"); err != nil {
+					return fmt.Errorf("failed to write ready: %w", err)
 				}
-			}
-
-			// Decide whether to proceed with packfile or wait for another round.
-			// Send packfile when: client sent done (final round) OR common objects found.
-			// Otherwise: flush and wait for client to retry with more haves/done.
-			canSendPack := fetchReq.Done || ackSent
-			if !canSendPack {
-				if _, err := writer.WriteString("0000"); err != nil {
-					return fmt.Errorf("failed to write flush-pkt: %w", err)
+				// Delimiter (0001): "다음 섹션(packfile)이 이어진다"
+				if _, err := writer.WriteString("0001"); err != nil {
+					return fmt.Errorf("failed to write delim-pkt: %w", err)
 				}
 				if err := conn.Flush(); err != nil {
-					return fmt.Errorf("failed to flush after NAK: %w", err)
+					return fmt.Errorf("failed to flush after ready: %w", err)
 				}
-				continue // 다음 라운드를 기다림
-			}
-
-			// Common objects found or client sent done — send ready + delimiter,
-			// then fall through to packfile transmission.
-			if err := s.writePktLine(conn, "ready"); err != nil {
-				return fmt.Errorf("failed to write ready: %w", err)
-			}
-			if _, err := writer.WriteString("0001"); err != nil {
-				return fmt.Errorf("failed to write delim-pkt: %w", err)
-			}
-			if err := conn.Flush(); err != nil {
-				return fmt.Errorf("failed to flush after ready: %w", err)
+				// Fall through to packfile transmission below
 			}
 
 			// === packfile 전송 ===

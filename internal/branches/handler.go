@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -117,17 +116,11 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	name := strings.TrimPrefix(c.Param("name"), "/")
+	name := c.Param("name")
 
 	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
-	}
-
-	// 저장소 실제 존재 여부 확인
-	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return
 	}
@@ -287,12 +280,6 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) {
 	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
-	}
-
-	// 저장소 실제 존재 여부 확인
-	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return
 	}
