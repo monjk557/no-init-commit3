@@ -325,8 +325,15 @@ func convertToFileChange(op *MultiFileOperation) (*FileChange, error) {
 	return fileChange, nil
 }
 
-// ExecuteMultiFileCommit는 다중 파일 커밋 작업을 실행합니다.
-// 브랜치/HEAD가 없고 refs/heads가 하나도 없으면 빈 repo로 간주하고 root commit을 생성합니다.
+// ExecuteMultiFileCommit creates a multi-file commit using a single git fast-import process.
+//
+// Optimized pipeline (replaces the previous 7+3N+D process approach):
+//  1. Lock acquisition + branch/ref resolution (2-3 git processes)
+//  2. Single nativeLsTree call for all file validations (1 process, replaces N per-file calls)
+//  3. Single git fast-import process for blob+tree+commit+ref-update (1 process, replaces N+D+2)
+//  4. Event publishing (1 process)
+//
+// Total: ~5 git processes regardless of file count (was 7+3N+D).
 func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath string, req *MultiFileCommitRequest, branch string, owner, repo, userID string) (*MultiFileCommitResponse, error) {
 	start := time.Now()
 	s.logger.Info("commit: start",
@@ -348,7 +355,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 	)
 	defer repoLock.Unlock()
 
-	// branch 비어 있으면 HEAD가 가리키는 브랜치 사용 (default branch)
+	// Phase 1: Resolve branch
 	if branch == "" {
 		symRef, _ := nativeSymbolicRef(ctx, repoPath)
 		if symRef != "" && strings.HasPrefix(symRef, "refs/heads/") {
@@ -359,18 +366,16 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 		}
 	}
 
-	// 기본 커밋 해시 가져오기
+	// Phase 2: Resolve base commit hash
 	baseHash, err := nativeResolveRef(ctx, repoPath, "refs/heads/"+branch)
 	if err != nil {
 		baseHash, err = nativeResolveRef(ctx, repoPath, "HEAD")
 		if err != nil {
-			// 브랜치/HEAD 모두 없음 → 빈 repo면 root commit 허용
 			hasHeads, _ := nativeHasRefs(ctx, repoPath, "refs/heads/")
 			if hasHeads {
 				return nil, fmt.Errorf("branch '%s' not found", branch)
 			}
 
-			// 빈 repo: default branch만 허용
 			defaultBranch := "main"
 			symRef, _ := nativeSymbolicRef(ctx, repoPath)
 			if symRef != "" && strings.HasPrefix(symRef, "refs/heads/") {
@@ -382,14 +387,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 			if branch == "" {
 				branch = defaultBranch
 			}
-
-			// 빈 repo: create 작업만 허용
-			for _, op := range req.Operations {
-				if op.Operation != OperationCreate {
-					return nil, fmt.Errorf("repository has no commits; only create operations are allowed for the first commit")
-				}
-			}
-			baseHash = "" // empty = root commit
+			baseHash = ""
 		}
 	}
 
@@ -401,7 +399,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 		zap.Duration("elapsed", time.Since(start)),
 	)
 
-	// Per-path lookup으로 파일 존재 여부 확인
+	// Phase 3: Get base tree hash (single call — not duplicated)
 	var baseTreeHash string
 	if baseHash != "" {
 		baseTreeHash, err = nativeGetTreeHash(ctx, repoPath, baseHash)
@@ -410,58 +408,44 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 		}
 	}
 
-	// batchState는 현재 배치 내에서 create/delete/move로 인해 변경된 파일 상태를 추적합니다.
-	batchState := make(map[string]bool)
-	fileExists := func(path string) bool {
-		if state, tracked := batchState[path]; tracked {
-			return state
-		}
-		if baseTreeHash == "" {
-			return false
-		}
-		exists, err := nativeLsTreePath(ctx, repoPath, baseTreeHash, path)
+	// Phase 4: Convert operations to FileChange list
+	operationResults := make([]OperationResult, len(req.Operations))
+	var fileChanges []FileChange
+	for i, op := range req.Operations {
+		fileChange, err := convertToFileChange(&op)
 		if err != nil {
-			return false
+			operationResults[i] = OperationResult{
+				Path:      op.Path,
+				Operation: Operation(op.Operation),
+				Success:   false,
+				Error:     err.Error(),
+			}
+			return nil, fmt.Errorf("operation %d failed: %w", i, err)
 		}
-		return exists
+		fileChanges = append(fileChanges, *fileChange)
+		operationResults[i] = OperationResult{
+			Path:      op.Path,
+			Operation: Operation(op.Operation),
+			Success:   true,
+		}
 	}
 
-	s.logger.Info("commit: file lookup ready",
+	// Phase 5: Validate all operations in a single ls-tree call
+	// Replaces: per-file nativeLsTreePath × N + ValidateTransaction nativeLsTreePath × N
+	// Total: 1 git process instead of 2N
+	validateStart := time.Now()
+	if err := PreValidateChanges(ctx, repoPath, baseTreeHash, fileChanges); err != nil {
+		return nil, err
+	}
+	s.logger.Info("commit: validated",
 		zap.String("owner", owner),
 		zap.String("repo", repo),
+		zap.Int("operations", len(fileChanges)),
+		zap.Duration("validate_dur", time.Since(validateStart)),
 		zap.Duration("elapsed", time.Since(start)),
 	)
 
-	for _, op := range req.Operations {
-		switch op.Operation {
-		case "create":
-			if fileExists(op.Path) {
-				return nil, fmt.Errorf("file already exists: %s", op.Path)
-			}
-			batchState[op.Path] = true
-
-		case "delete":
-			if !fileExists(op.Path) {
-				return nil, fmt.Errorf("file '%s' not found in repository", op.Path)
-			}
-			batchState[op.Path] = false
-
-		case "move":
-			if op.OriginalPath == "" {
-				return nil, fmt.Errorf("original_path is required for move operations")
-			}
-			if !fileExists(op.OriginalPath) {
-				return nil, fmt.Errorf("file '%s' not found in repository", op.OriginalPath)
-			}
-			if fileExists(op.Path) {
-				return nil, fmt.Errorf("file already exists: %s", op.Path)
-			}
-			batchState[op.OriginalPath] = false
-			batchState[op.Path] = true
-		}
-	}
-
-	// 작성자 및 커밋터 기본값 설정
+	// Phase 6: Prepare commit metadata
 	if req.Author == nil {
 		req.Author = &CommitAuthor{
 			Name:  "Git API",
@@ -472,211 +456,94 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 		req.Committer = req.Author
 	}
 
-	// 트랜잭션 옵션 준비
-	options := TransactionOptions{
-		Timeout:            30 * time.Minute,
-		ValidateOnly:       false,
-		AllowPartialCommit: false,
-	}
-
-	if req.Options != nil {
-		if req.Options.Timeout > 0 {
-			options.Timeout = req.Options.Timeout
-		}
-		if req.Options.ValidateOnly || req.Options.DryRun {
-			options.ValidateOnly = true
-		}
-		if req.Options.AllowPartialCommit {
-			options.AllowPartialCommit = true
-		}
-	}
-
-	// 커밋 정보 생성
 	var parents []string
 	if baseHash != "" {
 		parents = []string{baseHash}
 	}
+
+	now := time.Now()
 	commitInfo := CommitInfo{
 		Message: req.Message,
 		Author: NativeSignature{
 			Name:  req.Author.Name,
 			Email: req.Author.Email,
-			When:  time.Now(),
+			When:  now,
 		},
 		Committer: &NativeSignature{
 			Name:  req.Committer.Name,
 			Email: req.Committer.Email,
-			When:  time.Now(),
+			When:  now,
 		},
 		Parents: parents,
 	}
 
-	s.logger.Info("commit: ops validated",
+	// Check for validate-only / dry-run mode
+	validateOnly := false
+	if req.Options != nil && (req.Options.ValidateOnly || req.Options.DryRun) {
+		validateOnly = true
+	}
+
+	if validateOnly {
+		s.logger.Info("commit: dry-run complete",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+		return &MultiFileCommitResponse{
+			Success:          true,
+			Message:          req.Message,
+			TotalOperations:  len(req.Operations),
+			SuccessfulOps:    len(req.Operations),
+			OperationResults: operationResults,
+			ValidationOnly:   true,
+			Duration:         time.Since(start),
+		}, nil
+	}
+
+	// Phase 7: Execute fast-import — single process creates blobs + tree + commit + ref update
+	// Replaces: hash-object × N + mktree × D + commit-tree + update-ref = N+D+2 processes → 1 process
+	fastImportStart := time.Now()
+	s.logger.Info("commit: fast-import start",
 		zap.String("owner", owner),
 		zap.String("repo", repo),
-		zap.Int("operations", len(req.Operations)),
-		zap.Duration("elapsed", time.Since(start)),
 	)
 
-	// 트랜잭션 시작
-	txnStart := time.Now()
-	transaction, err := s.transactionManager.BeginTransaction(ctx, repoPath, baseHash, commitInfo, options)
+	fiResult, err := ExecuteFastImportCommit(ctx, &FastImportCommitRequest{
+		RepoPath:     repoPath,
+		Branch:       branch,
+		BaseTreeHash: baseTreeHash,
+		Changes:      fileChanges,
+		CommitInfo:   commitInfo,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+		return nil, fmt.Errorf("failed to create commit: %w", err)
 	}
-	s.logger.Info("commit: transaction begun",
+
+	s.logger.Info("commit: fast-import done",
 		zap.String("owner", owner),
 		zap.String("repo", repo),
-		zap.String("transaction_id", transaction.ID),
-		zap.Duration("txn_begin_dur", time.Since(txnStart)),
+		zap.String("commit_hash", fiResult.CommitHash),
+		zap.Duration("fast_import_dur", time.Since(fastImportStart)),
 		zap.Duration("elapsed", time.Since(start)),
 	)
 
-	// 트랜잭션 정리 보장
-	defer func() {
-		if transaction.State != TransactionStateCommitted {
-			if rollbackErr := s.transactionManager.RollbackTransaction(ctx, transaction); rollbackErr != nil {
-				s.logger.Warn("트랜잭션 정리 중 롤백 실패",
-					zap.String("transaction_id", transaction.ID),
-					zap.Error(rollbackErr))
-			}
-		}
-		s.transactionManager.CleanupTransaction(transaction.ID)
-	}()
-
-	// 작업 변환 및 트랜잭션에 추가
-	operationResults := make([]OperationResult, len(req.Operations))
-	for i, op := range req.Operations {
-		fileChange, err := convertToFileChange(&op)
-		if err != nil {
-			operationResults[i] = OperationResult{
-				Path:      op.Path,
-				Operation: Operation(op.Operation),
-				Success:   false,
-				Error:     err.Error(),
-			}
-			if !options.AllowPartialCommit {
-				return nil, fmt.Errorf("operation %d failed: %w", i, err)
-			}
-			continue
-		}
-
-		txnOp := TransactionOperation{
-			Type:       FileOperation(op.Operation),
-			FileChange: *fileChange,
-		}
-
-		if err := s.transactionManager.AddOperation(ctx, transaction, txnOp); err != nil {
-			operationResults[i] = OperationResult{
-				Path:      op.Path,
-				Operation: Operation(op.Operation),
-				Success:   false,
-				Error:     err.Error(),
-			}
-			if !options.AllowPartialCommit {
-				return nil, fmt.Errorf("failed to add operation: %w", err)
-			}
-		} else {
-			operationResults[i] = OperationResult{
-				Path:      op.Path,
-				Operation: Operation(op.Operation),
-				Success:   true,
-			}
-		}
+	// Phase 8: Post-commit — event publishing
+	if s.eventsClient != nil && owner != "" && repo != "" {
+		s.addCommitEventToStream(ctx, repoPath, baseHash, fiResult.CommitHash, branch, owner, repo, userID)
 	}
 
-	s.logger.Info("commit: all ops added to transaction",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("transaction_id", transaction.ID),
-		zap.Duration("elapsed", time.Since(start)),
-	)
+	// Phase 9: Invalidate cache
+	repositories.GetSimpleCache().Invalidate(repoPath)
 
-	// 트랜잭션 검증
-	if err := s.transactionManager.ValidateTransaction(ctx, transaction); err != nil {
-		if !options.AllowPartialCommit {
-			return nil, fmt.Errorf("transaction validation failed: %w", err)
-		}
-		s.logger.Warn("트랜잭션 검증에 문제가 있었지만 부분 커밋으로 계속 진행",
-			zap.String("transaction_id", transaction.ID),
-			zap.Error(err))
-	}
-
-	s.logger.Info("commit: transaction validated",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("transaction_id", transaction.ID),
-		zap.Duration("elapsed", time.Since(start)),
-	)
-
-	// 트랜잭션 커밋
-	commitTxnStart := time.Now()
-	s.logger.Info("commit: CommitTransaction start",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("transaction_id", transaction.ID),
-	)
-	result, err := s.transactionManager.CommitTransaction(ctx, transaction)
-	if err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	s.logger.Info("commit: CommitTransaction done",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("transaction_id", transaction.ID),
-		zap.Duration("commit_txn_dur", time.Since(commitTxnStart)),
-		zap.Duration("elapsed", time.Since(start)),
-	)
-
-	// 트랜잭션이 성공한 경우 브랜치 참조 업데이트
-	if result.State == TransactionStateCommitted && result.CommitResult != nil {
-		refName := fmt.Sprintf("refs/heads/%s", branch)
-		refStart := time.Now()
-		if err := nativeUpdateRef(ctx, repoPath, refName, result.CommitResult.Hash); err != nil {
-			s.logger.Error("커밋 성공 후 브랜치 참조 업데이트 실패",
-				zap.String("branch", branch),
-				zap.String("commit_hash", result.CommitResult.Hash),
-				zap.Error(err))
-		} else {
-			s.logger.Info("commit: branch ref updated",
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.String("branch", branch),
-				zap.String("commit_hash", result.CommitResult.Hash),
-				zap.Duration("ref_update_dur", time.Since(refStart)),
-				zap.Duration("elapsed", time.Since(start)),
-			)
-		}
-
-		// Publish commit event if enabled
-		if s.eventsClient != nil && owner != "" && repo != "" {
-			oldHashStr := baseHash
-			s.addCommitEventToStream(ctx, repoPath, oldHashStr, result.CommitResult.Hash, branch, owner, repo, userID)
-		}
-	}
-
-	// 응답 준비
+	// Phase 10: Build response
 	response := MultiFileCommitResponse{
-		Success:          result.State == TransactionStateCommitted,
-		TransactionID:    result.TransactionID,
+		Success:          true,
+		CommitSHA:        fiResult.CommitHash,
 		Message:          req.Message,
 		TotalOperations:  len(req.Operations),
-		SuccessfulOps:    result.GetSuccessfulOperationCount(),
-		FailedOps:        result.GetFailedOperationCount(),
+		SuccessfulOps:    len(req.Operations),
 		OperationResults: operationResults,
-		ValidationOnly:   options.ValidateOnly,
-		Duration:         result.Duration,
-	}
-
-	if result.CommitResult != nil {
-		response.CommitSHA = result.CommitResult.Hash
-	}
-
-	if result.GetFailedOperationCount() > 0 {
-		response.Details = map[string]interface{}{
-			"partial_success":   options.AllowPartialCommit,
-			"failed_operations": result.FailedOperations,
-		}
+		Duration:         time.Since(start),
 	}
 
 	s.logger.Info("commit: done",
@@ -684,23 +551,20 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 		zap.String("repo", repo),
 		zap.String("branch", branch),
 		zap.String("commit_sha", response.CommitSHA),
-		zap.Bool("success", response.Success),
-		zap.Int("successful_ops", response.SuccessfulOps),
-		zap.Int("failed_ops", response.FailedOps),
+		zap.Bool("success", true),
+		zap.Int("operations", len(req.Operations)),
 		zap.Duration("total", time.Since(start)),
 	)
 
 	// Loose object 누적 방지: git gc --auto 비동기 실행
-	if response.Success {
-		go func() {
-			gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer gcCancel()
-			cmd := exec.CommandContext(gcCtx, "git", "--git-dir", repoPath, "gc", "--auto")
-			if err := cmd.Run(); err != nil {
-				s.logger.Debug("git gc --auto failed (non-critical)", zap.String("repo", repoPath), zap.Error(err))
-			}
-		}()
-	}
+	go func() {
+		gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer gcCancel()
+		cmd := exec.CommandContext(gcCtx, "git", "--git-dir", repoPath, "gc", "--auto")
+		if err := cmd.Run(); err != nil {
+			s.logger.Debug("git gc --auto failed (non-critical)", zap.String("repo", repoPath), zap.Error(err))
+		}
+	}()
 
 	return &response, nil
 }
