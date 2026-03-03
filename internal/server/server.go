@@ -19,6 +19,7 @@ import (
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/diffs"
+	"github.com/collabops/git-executor/internal/langstats"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/merge"
 	"github.com/collabops/git-executor/internal/observability"
@@ -264,6 +265,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	langStatsHandler, err := langstats.NewHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create langstats handler", zap.Error(err))
+		return
+	}
+
 	ownerRepoGroup := apiGroup.Group("/:owner/:repo")
 	ownerRepoGroup.Use(ginContextMiddleware())
 	ownerRepoGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
@@ -315,6 +322,8 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/overview/branches", overviewHandler.HandleGetBranchesOverview)
 	ownerRepoGroup.POST("/overview/latest-commits", overviewHandler.HandlePostLatestCommitsBatch)
 
+	// Language stats endpoint
+	ownerRepoGroup.GET("/languages", langStatsHandler.HandleGetLanguageStats)
 }
 
 // setupSwaggerRoutes - Swagger 문서 라우트 설정 (API 문서화용)
