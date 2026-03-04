@@ -69,6 +69,7 @@ jobs:
         image: golang:1.25-alpine
         run: |
           set -eu
+          apk add --no-cache make
           cd /workspace/source
 
           echo "📦 Installing dependencies..."
@@ -186,6 +187,7 @@ jobs:
         image: golang:1.25-alpine
         run: |
           set -eu
+          apk add --no-cache make
           cd /workspace/source
           go mod download
           make specs
