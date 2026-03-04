@@ -10,6 +10,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -58,8 +59,8 @@ func (h *DiffHandler) HandleCommitDiff(c *gin.Context) {
 	}
 
 	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
-	base := c.Param("base")
-	head := c.Param("head")
+	base := protocol.SafeParam(c, "base")
+	head := protocol.SafeParam(c, "head")
 	if base == "" || head == "" {
 		h.logger.Error("Missing required parameters: base or head")
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
@@ -157,8 +158,8 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 	}
 
 	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
-	base := c.Param("base")
-	head := c.Param("head")
+	base := protocol.SafeParam(c, "base")
+	head := protocol.SafeParam(c, "head")
 	if base == "" || head == "" {
 		h.logger.Error("Missing required parameters: base or head")
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
@@ -393,8 +394,8 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 	}
 
 	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
-	base := c.Param("base")
-	head := c.Param("head")
+	base := protocol.SafeParam(c, "base")
+	head := protocol.SafeParam(c, "head")
 	if base == "" || head == "" {
 		h.logger.Error("Missing required parameters: base or head")
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})

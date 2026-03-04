@@ -202,9 +202,13 @@ func normalizeEndpoint(path string) string {
 		path = "/ssh/{command}"
 	}
 
-	// Limit path length to prevent cardinality explosion
-	if len(path) > 100 {
-		path = path[:100] + "..."
+	// Rune-safe truncation to prevent splitting multi-byte UTF-8 characters
+	if len(path) > 200 {
+		r := []rune(path)
+		if len(r) > 60 {
+			r = r[:60]
+		}
+		path = string(r) + "..."
 	}
 
 	return path

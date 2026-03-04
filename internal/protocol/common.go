@@ -5,10 +5,22 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 
 	"github.com/gin-gonic/gin"
 )
+
+// SafeParam extracts a Gin path parameter and defensively URL-decodes it.
+// This handles double-encoded URLs where the client sends percent-encoded
+// Korean characters that remain encoded after Go's net/http single decode pass.
+func SafeParam(c *gin.Context, key string) string {
+	v := c.Param(key)
+	if decoded, err := url.PathUnescape(v); err == nil {
+		return decoded
+	}
+	return v
+}
 
 var (
 	ginTestModeOnce sync.Once

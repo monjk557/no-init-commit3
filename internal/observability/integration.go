@@ -169,7 +169,10 @@ func (m *Manager) ginMetricsMiddleware() gin.HandlerFunc {
 
 		// Calculate metrics
 		duration := time.Since(start)
-		endpoint := normalizeEndpoint(c.Request.URL.Path)
+		endpoint := c.FullPath()
+		if endpoint == "" {
+			endpoint = normalizeEndpoint(c.Request.URL.Path)
+		}
 		method := c.Request.Method
 		statusCode := c.Writer.Status()
 		responseSize := int64(c.Writer.Size())

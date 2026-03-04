@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/go-enry/go-enry/v2"
 )
 
@@ -18,7 +19,7 @@ const maxSamplesPerExt = 10
 // 확장자만으로 언어가 확정되는 파일은 즉시 집계하고,
 // 모호한 확장자는 extensionGroup으로 모아 Phase 2 샘플링에 넘깁니다.
 func StreamTreeAndClassify(ctx context.Context, repoPath, ref string) (*scanResult, error) {
-	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "ls-tree", "-r", "--long", ref)
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", "-r", "--long", ref)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
@@ -137,7 +138,7 @@ func parseLsTreeLong(line string) (mode, entryType, hash string, size int64, pat
 	if tabIdx < 0 {
 		return
 	}
-	path = line[tabIdx+1:]
+	path = gitutil.UnquoteGitPath(line[tabIdx+1:])
 	meta := strings.Fields(line[:tabIdx])
 	if len(meta) < 4 {
 		return

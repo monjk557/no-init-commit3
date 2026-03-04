@@ -14,6 +14,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -116,7 +117,7 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	name := c.Param("name")
+	name := protocol.SafeParam(c, "name")
 
 	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
@@ -271,7 +272,7 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) {
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := strings.TrimPrefix(c.Param("ref"), "/")
+	ref := strings.TrimPrefix(protocol.SafeParam(c, "ref"), "/")
 	if ref == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "branch name is required"})
 		return
@@ -385,8 +386,7 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 	repo := c.Param("repo")
 
 	// Extract branch name from wildcard parameter (remove leading slash)
-	branchName := c.Param("branch")
-	branchName = strings.TrimPrefix(branchName, "/")
+	branchName := strings.TrimPrefix(protocol.SafeParam(c, "branch"), "/")
 
 	h.logger.LogInfo(c.Request.Context(), "Processing branch update request",
 		zap.String("event", "branch_update_request"),
@@ -539,8 +539,7 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 	repo := c.Param("repo")
 
 	// Extract branch name from wildcard parameter (remove leading slash)
-	branchName := c.Param("branch")
-	branchName = strings.TrimPrefix(branchName, "/")
+	branchName := strings.TrimPrefix(protocol.SafeParam(c, "branch"), "/")
 
 	h.logger.LogInfo(c.Request.Context(), "Processing branch deletion request",
 		zap.String("event", "branch_delete_request"),

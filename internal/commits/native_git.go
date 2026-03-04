@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 const nativeGitTimeout = 10 * time.Second
@@ -207,7 +209,7 @@ func nativeLsTree(ctx context.Context, repoPath, treeHash string) ([]nativeLsTre
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "ls-tree", "-r", treeHash)
+	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", "-r", treeHash)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -238,7 +240,7 @@ func nativeLsTree(ctx context.Context, repoPath, treeHash string) ([]nativeLsTre
 			Mode: metaParts[0],
 			Type: metaParts[1],
 			Hash: metaParts[2],
-			Path: tabParts[1],
+			Path: gitutil.UnquoteGitPath(tabParts[1]),
 		})
 	}
 	return entries, nil
@@ -249,7 +251,7 @@ func nativeLsTreePath(ctx context.Context, repoPath, treeHash, path string) (boo
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "ls-tree", treeHash, "--", path)
+	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", treeHash, "--", path)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
