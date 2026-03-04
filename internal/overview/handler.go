@@ -188,8 +188,8 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 	repoLock := repositories.GetRepoRWLock(repoPath)
 	repoLock.RLock()
 
-	// Repo 존재 확인: git rev-parse HEAD (go-git PlainOpen 대체)
-	if _, err := nativeResolveRef(ctx, repoPath, "HEAD"); err != nil {
+	// Repo 존재 확인: git rev-parse --git-dir (빈 저장소도 지원)
+	if err := nativeCheckRepoExists(ctx, repoPath); err != nil {
 		repoLock.RUnlock()
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
 		return nil, false
