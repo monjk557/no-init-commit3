@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 )
@@ -28,7 +29,7 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 		target = ref + ":" + path
 	}
 
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "ls-tree", target)
+	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", target)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -64,7 +65,7 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 		}
 
 		entryType := metaParts[1] // "blob", "tree", "commit"
-		name := tabParts[1]
+		name := gitutil.UnquoteGitPath(tabParts[1])
 
 		// Map commit (submodule) to its type
 		displayType := entryType

@@ -24,7 +24,7 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 
 	spec := target + ":" + path
 
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "show", spec)
+	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "show", spec)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 

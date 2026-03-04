@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -395,7 +397,7 @@ func nativeRunGitCmd(ctx context.Context, repoPath string, timeout time.Duration
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	fullArgs := append([]string{"--git-dir", repoPath}, args...)
+	fullArgs := append([]string{"-c", "core.quotePath=false", "--git-dir", repoPath}, args...)
 	cmd := exec.CommandContext(cmdCtx, "git", fullArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -610,24 +612,24 @@ func parseNameStatus(output string) []nameStatusEntry {
 		switch {
 		case statusCode == "M":
 			entry.status = FileDiffStatusModified
-			entry.path = parts[1]
+			entry.path = gitutil.UnquoteGitPath(parts[1])
 		case statusCode == "A":
 			entry.status = FileDiffStatusAdded
-			entry.path = parts[1]
+			entry.path = gitutil.UnquoteGitPath(parts[1])
 		case statusCode == "D":
 			entry.status = FileDiffStatusDeleted
-			entry.path = parts[1]
+			entry.path = gitutil.UnquoteGitPath(parts[1])
 		case strings.HasPrefix(statusCode, "R"):
 			entry.status = FileDiffStatusRenamed
 			if len(parts) >= 3 {
-				entry.oldPath = parts[1]
-				entry.path = parts[2]
+				entry.oldPath = gitutil.UnquoteGitPath(parts[1])
+				entry.path = gitutil.UnquoteGitPath(parts[2])
 			} else {
-				entry.path = parts[1]
+				entry.path = gitutil.UnquoteGitPath(parts[1])
 			}
 		default:
 			entry.status = FileDiffStatusModified
-			entry.path = parts[1]
+			entry.path = gitutil.UnquoteGitPath(parts[1])
 		}
 
 		result = append(result, entry)

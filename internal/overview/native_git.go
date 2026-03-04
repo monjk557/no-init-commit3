@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -258,7 +260,7 @@ func NativeGetTreeEntries(ctx context.Context, repoPath, ref, path string) ([]Gi
 		treeSpec = target + ":" + path
 	}
 
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "ls-tree", "-l", treeSpec)
+	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", "-l", treeSpec)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -551,7 +553,7 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 	}
 
 	spec := target + ":" + path
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "show", spec)
+	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "show", spec)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -619,7 +621,7 @@ func parseLsTreeLine(line, basePath string) (GitTreeEntryWithCommit, error) {
 	if len(tabParts) != 2 {
 		return GitTreeEntryWithCommit{}, fmt.Errorf("invalid ls-tree line")
 	}
-	name := tabParts[1]
+	name := gitutil.UnquoteGitPath(tabParts[1])
 
 	// Parse metadata: "<mode> <type> <hash> <size>"
 	// size can be "-" for trees
