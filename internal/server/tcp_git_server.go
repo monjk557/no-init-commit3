@@ -434,20 +434,23 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 			}
 
 			// 3. Fetch negotiation: acknowledgments + ready
+			// Filter haves to only those that exist on the server.
+			// Clients may send OIDs that were force-pushed away or GC'd on the server;
+			// passing unknown OIDs to pack-objects causes "fatal: bad object".
+			var knownHaves []string
 			if !fetchReq.Done {
 				if err := pktWriter.WriteLine("acknowledgments"); err != nil {
 					return fmt.Errorf("write acknowledgments: %w", err)
 				}
-				ackSent := false
 				for _, have := range fetchReq.Haves {
 					if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
 						if err := pktWriter.WriteLine(fmt.Sprintf("ACK %s", have)); err != nil {
 							return fmt.Errorf("write ACK: %w", err)
 						}
-						ackSent = true
+						knownHaves = append(knownHaves, have)
 					}
 				}
-				if !ackSent {
+				if len(knownHaves) == 0 {
 					if err := pktWriter.WriteLine("NAK"); err != nil {
 						return fmt.Errorf("write NAK: %w", err)
 					}
@@ -458,6 +461,13 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 				// Delimiter (0001) — NOT flush (0000)
 				if err := pktWriter.WriteDelim(); err != nil {
 					return fmt.Errorf("write delim: %w", err)
+				}
+			} else {
+				// Client sent "done" — still filter haves for pack-objects
+				for _, have := range fetchReq.Haves {
+					if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+						knownHaves = append(knownHaves, have)
+					}
 				}
 			}
 
@@ -493,7 +503,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 			sbWriter := protocol.NewSidebandWriter(writer, 0x01)
 			packOpts := &gitcmd.PackObjectsOpts{
 				Wants:         fetchReq.Wants,
-				Haves:         fetchReq.Haves,
+				Haves:         knownHaves,
 				Shallow:       packShallow,
 				ThinPack:      fetchReq.ThinPack,
 				OfsDelta:      fetchReq.OfsDelta,

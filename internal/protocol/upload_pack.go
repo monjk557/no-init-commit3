@@ -158,6 +158,10 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		// Negotiation: acknowledgments + ready, then fall through to packfile
 		// Per Git protocol v2 spec, when server sends "ready" it MUST continue
 		// with packfile in the same response stream (delimiter 0001, not flush 0000).
+		// Filter haves to only those that exist on the server.
+		// Clients may send OIDs that were force-pushed away or GC'd on the server;
+		// passing unknown OIDs to pack-objects causes "fatal: bad object".
+		var knownHaves []string
 		if !fetchReq.Done {
 			if err := pktWriter.WriteLine("acknowledgments"); err != nil {
 				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
@@ -165,7 +169,6 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 				return
 			}
 
-			ackSent := false
 			for _, have := range fetchReq.Haves {
 				if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
 					if err := pktWriter.WriteLine(fmt.Sprintf("ACK %s", have)); err != nil {
@@ -173,10 +176,10 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 						_ = pktWriter.Flush()
 						return
 					}
-					ackSent = true
+					knownHaves = append(knownHaves, have)
 				}
 			}
-			if !ackSent {
+			if len(knownHaves) == 0 {
 				if err := pktWriter.WriteLine("NAK"); err != nil {
 					_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 					_ = pktWriter.Flush()
@@ -194,6 +197,13 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 				return
 			}
 			// Fall through to packfile transmission below
+		} else {
+			// Client sent "done" — still filter haves for pack-objects
+			for _, have := range fetchReq.Haves {
+				if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+					knownHaves = append(knownHaves, have)
+				}
+			}
 		}
 
 		// Compute shallow graft commits for deepen requests.
@@ -245,7 +255,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		sbWriter := newSidebandWriter(w, 0x01)
 		opts := &gitcmd.PackObjectsOpts{
 			Wants:         fetchReq.Wants,
-			Haves:         fetchReq.Haves,
+			Haves:         knownHaves,
 			Shallow:       packShallow,
 			ThinPack:      fetchReq.ThinPack,
 			OfsDelta:      fetchReq.OfsDelta,
@@ -459,10 +469,19 @@ func (h *UploadPackHandler) sendEmptyPackfile(w io.Writer, useSideBand bool) err
 // RunPackObjectsForHTTP is a helper to run git pack-objects for HTTP upload-pack.
 // It streams the packfile directly to the writer via sideband.
 func RunPackObjectsForHTTP(ctx context.Context, repoPath string, fetchReq *FetchReq, w io.Writer) error {
+	// Filter haves: only pass OIDs that exist on the server to pack-objects.
+	// Clients may reference objects that were force-pushed away or GC'd.
+	var knownHaves []string
+	for _, have := range fetchReq.Haves {
+		if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+			knownHaves = append(knownHaves, have)
+		}
+	}
+
 	sbWriter := newSidebandWriter(w, 0x01)
 	opts := &gitcmd.PackObjectsOpts{
 		Wants:         fetchReq.Wants,
-		Haves:         fetchReq.Haves,
+		Haves:         knownHaves,
 		Shallow:       fetchReq.Shallow,
 		ThinPack:      fetchReq.ThinPack,
 		OfsDelta:      fetchReq.OfsDelta,
@@ -521,9 +540,13 @@ func RunGitPackObjectsRaw(ctx context.Context, repoPath string, fetchReq *FetchR
 		stdinBuf.WriteByte('\n')
 	}
 	for _, have := range fetchReq.Haves {
-		stdinBuf.WriteString("^")
-		stdinBuf.WriteString(have)
-		stdinBuf.WriteByte('\n')
+		// Only include haves that exist on the server — clients may reference
+		// objects that were force-pushed away or GC'd.
+		if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+			stdinBuf.WriteString("^")
+			stdinBuf.WriteString(have)
+			stdinBuf.WriteByte('\n')
+		}
 	}
 	cmd.Stdin = strings.NewReader(stdinBuf.String())
 	cmd.Stdout = w
