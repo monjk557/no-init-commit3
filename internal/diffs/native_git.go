@@ -199,16 +199,31 @@ func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, base, head
 		Hunks:     []Hunk{},
 	}
 
-	// 바이너리가 아니고 contextLines > 0이면 변경 내용 포함
-	if !isBinary && contextLines > 0 {
+	// LoadStatus 설정
+	if isBinary {
+		fileDiff.LoadStatus = FileLoadStatusBinary
+	} else if contextLines <= 0 {
+		fileDiff.LoadStatus = FileLoadStatusCollapsed
+	} else {
 		changedLines := additions + deletions
-		if changedLines <= MaxChangedLines {
+		if changedLines > MaxChangedLines {
+			fileDiff.LoadStatus = FileLoadStatusTooLarge
+		} else {
 			patchText, err := nativeGetFilePatch(ctx, repoPath, baseHash, headHash, filePath, contextLines)
-			if err == nil && patchText != "" {
+			if err != nil {
+				fileDiff.LoadStatus = FileLoadStatusCollapsed
+			} else if patchText == "" {
+				fileDiff.LoadStatus = FileLoadStatusLoaded
+			} else {
 				lineChanges, hunks, parseErr := GenerateLineChangesFromPatch(patchText, contextLines)
-				if parseErr == nil && len(lineChanges) <= MaxFileLines {
+				if parseErr != nil {
+					fileDiff.LoadStatus = FileLoadStatusCollapsed
+				} else if len(lineChanges) > MaxFileLines {
+					fileDiff.LoadStatus = FileLoadStatusTooLarge
+				} else {
 					fileDiff.Changes = lineChanges
 					fileDiff.Hunks = hunks
+					fileDiff.LoadStatus = FileLoadStatusLoaded
 				}
 			}
 		}
@@ -302,31 +317,53 @@ func nativeBuildDiffResponse(ctx context.Context, repoPath, baseHash, headHash, 
 		// 변경된 라인 수 체크
 		changedLines := fileDiffs[i].Additions + fileDiffs[i].Deletions
 		if changedLines > MaxChangedLines {
+			fileDiffs[i].LoadStatus = FileLoadStatusTooLarge
 			continue
 		}
 
 		diffPath := fileDiffs[i].Path
 		patchText, err := nativeGetFilePatch(ctx, repoPath, baseHash, headHash, diffPath, contextLines)
 		if err != nil {
+			fileDiffs[i].LoadStatus = FileLoadStatusCollapsed
 			continue
 		}
 
 		if patchText == "" {
+			fileDiffs[i].LoadStatus = FileLoadStatusLoaded
+			filesWithChangesCount++
 			continue
 		}
 
 		lineChanges, hunks, err := GenerateLineChangesFromPatch(patchText, contextLines)
 		if err != nil {
+			fileDiffs[i].LoadStatus = FileLoadStatusCollapsed
 			continue
 		}
 
 		if len(lineChanges) > MaxFileLines {
+			fileDiffs[i].LoadStatus = FileLoadStatusTooLarge
 			continue
 		}
 
 		fileDiffs[i].Changes = lineChanges
 		fileDiffs[i].Hunks = hunks
+		fileDiffs[i].LoadStatus = FileLoadStatusLoaded
 		filesWithChangesCount++
+	}
+
+	// LoadStatus가 아직 비어있는 파일들에 대해 post-processing
+	for i := range fileDiffs {
+		if fileDiffs[i].LoadStatus != "" {
+			continue
+		}
+		if fileDiffs[i].IsBinary {
+			fileDiffs[i].LoadStatus = FileLoadStatusBinary
+		} else if contextLines <= 0 {
+			fileDiffs[i].LoadStatus = FileLoadStatusCollapsed
+		} else {
+			// MaxFilesWithChanges 초과로 처리되지 않은 파일
+			fileDiffs[i].LoadStatus = FileLoadStatusCollapsed
+		}
 	}
 
 	// 통계 계산

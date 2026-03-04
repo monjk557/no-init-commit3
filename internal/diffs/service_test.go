@@ -222,17 +222,20 @@ func TestBinaryFile_NoChanges(t *testing.T) {
 	require.NotNil(t, pngFile, "image.png should be in diff")
 	assert.True(t, pngFile.IsBinary, "image.png should be detected as binary")
 	assert.Nil(t, pngFile.Changes, "Binary file should not have changes")
+	assert.Equal(t, FileLoadStatusBinary, pngFile.LoadStatus, "Binary file should have load_status=binary")
 
 	// Binary file with null bytes should be binary and have no changes
 	require.NotNil(t, binFile, "binary.bin should be in diff")
 	assert.True(t, binFile.IsBinary, "binary.bin should be detected as binary")
 	assert.Nil(t, binFile.Changes, "Binary file should not have changes")
+	assert.Equal(t, FileLoadStatusBinary, binFile.LoadStatus, "Binary file should have load_status=binary")
 
 	// Text file should not be binary and should have changes
 	require.NotNil(t, textFile, "text.txt should be in diff")
 	assert.False(t, textFile.IsBinary, "text.txt should not be binary")
 	assert.NotNil(t, textFile.Changes, "Text file should have changes")
 	assert.Greater(t, len(textFile.Changes), 0, "Text file should have line changes")
+	assert.Equal(t, FileLoadStatusLoaded, textFile.LoadStatus, "Text file with changes should have load_status=loaded")
 }
 
 // setupTestRepositoryForLargeFiles creates a test repository with large files
@@ -410,8 +413,10 @@ func TestMaxFilesWithChanges_Limit(t *testing.T) {
 		if i < MaxFilesWithChanges {
 			assert.NotNil(t, file.Changes, "File %d should have changes", i)
 			assert.Greater(t, len(file.Changes), 0, "File %d should have non-empty changes", i)
+			assert.Equal(t, FileLoadStatusLoaded, file.LoadStatus, "File %d should have load_status=loaded", i)
 		} else {
 			assert.Nil(t, file.Changes, "File %d should not have changes", i)
+			assert.Equal(t, FileLoadStatusCollapsed, file.LoadStatus, "File %d should have load_status=collapsed", i)
 		}
 	}
 }
@@ -593,6 +598,7 @@ func TestMaxChangedLines_Limit(t *testing.T) {
 
 	// But should not have changes array
 	assert.Nil(t, largeFile.Changes, "File with more than MaxChangedLines should not have changes")
+	assert.Equal(t, FileLoadStatusTooLarge, largeFile.LoadStatus, "File exceeding MaxChangedLines should have load_status=too_large")
 }
 
 // TestBinaryFileDetection_ByExtension tests binary file detection by extension
@@ -725,4 +731,72 @@ func TestTimeoutPrevention_AllFilesMetadata(t *testing.T) {
 
 	// Stats should reflect all files
 	assert.Equal(t, 10, diffResp.Stats.FilesChanged, "Stats should show all 10 files changed")
+}
+
+// TestLoadStatus_JSONSerialization tests that load_status is always present in JSON output
+func TestLoadStatus_JSONSerialization(t *testing.T) {
+	testCases := []struct {
+		name       string
+		fileDiff   FileDiff
+		wantStatus string
+	}{
+		{
+			name: "loaded status",
+			fileDiff: FileDiff{
+				Path:       "test.go",
+				Status:     FileDiffStatusModified,
+				LoadStatus: FileLoadStatusLoaded,
+				Changes:    []LineChange{},
+				Hunks:      []Hunk{},
+			},
+			wantStatus: "loaded",
+		},
+		{
+			name: "collapsed status",
+			fileDiff: FileDiff{
+				Path:       "big_dir/file.go",
+				Status:     FileDiffStatusModified,
+				LoadStatus: FileLoadStatusCollapsed,
+				Hunks:      []Hunk{},
+			},
+			wantStatus: "collapsed",
+		},
+		{
+			name: "too_large status",
+			fileDiff: FileDiff{
+				Path:       "huge.txt",
+				Status:     FileDiffStatusModified,
+				LoadStatus: FileLoadStatusTooLarge,
+				Hunks:      []Hunk{},
+			},
+			wantStatus: "too_large",
+		},
+		{
+			name: "binary status",
+			fileDiff: FileDiff{
+				Path:       "image.png",
+				Status:     FileDiffStatusAdded,
+				IsBinary:   true,
+				LoadStatus: FileLoadStatusBinary,
+				Hunks:      []Hunk{},
+			},
+			wantStatus: "binary",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.fileDiff)
+			require.NoError(t, err)
+
+			var m map[string]interface{}
+			err = json.Unmarshal(data, &m)
+			require.NoError(t, err)
+
+			// load_status must always be present in JSON
+			loadStatus, ok := m["load_status"]
+			assert.True(t, ok, "load_status field must be present in JSON output")
+			assert.Equal(t, tc.wantStatus, loadStatus, "load_status value mismatch")
+		})
+	}
 }

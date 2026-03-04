@@ -1322,6 +1322,9 @@ components:
             $ref: '#/components/schemas/Hunk'
         is_binary:
           type: boolean
+        load_status:
+          type: string
+          enum: [loaded, collapsed, too_large, binary]
         old_path:
           type: string
         metadata:
@@ -1333,6 +1336,7 @@ components:
         - deletions
         - hunks
         - is_binary
+        - load_status
         - path
         - status
     FileVersion:

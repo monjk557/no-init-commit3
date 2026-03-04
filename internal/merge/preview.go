@@ -233,6 +233,15 @@ func (h *MergePreviewHandler) compareRepositoryTrees(ctx context.Context, repoPa
 		metrics.FilesAnalyzed++
 	}
 
+	// LoadStatus 할당: 프론트엔드 diff 상태 구분 지원
+	for i := range fileChanges {
+		if fileChanges[i].IsBinary {
+			fileChanges[i].LoadStatus = diffs.FileLoadStatusBinary
+		} else {
+			fileChanges[i].LoadStatus = diffs.FileLoadStatusCollapsed
+		}
+	}
+
 	summary.TotalFiles = len(fileChanges)
 	metrics.ObjectsTraversed = len(diffEntries)
 

@@ -683,6 +683,8 @@ func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo
 		return []string{"type: string", "enum: [add, del, context, hunk]"}
 	case base == "FileDiffStatus":
 		return []string{"type: string", "enum: [added, deleted, modified, renamed]"}
+	case base == "FileLoadStatus":
+		return []string{"type: string", "enum: [loaded, collapsed, too_large, binary]"}
 	case strings.HasPrefix(base, "[]"):
 		elem := strings.TrimPrefix(strings.TrimPrefix(base, "[]"), "*")
 		if _, ok := knownSchemas[elem]; ok {

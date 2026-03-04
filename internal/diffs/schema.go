@@ -82,15 +82,16 @@ type Hunk struct {
 
 // FileDiff는 단일 파일의 변경사항을 나타냅니다
 type FileDiff struct {
-	Path      string                 `json:"path"`
-	Status    FileDiffStatus         `json:"status"` // "added", "deleted", "modified", "renamed"
-	Additions int                    `json:"additions"`
-	Deletions int                    `json:"deletions"`
-	Changes   []LineChange           `json:"changes"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
-	Hunks     []Hunk                 `json:"hunks"`   // hunk 목록. LineChange.hunk_index로 참조 (항상 포함, 없으면 [])
-	IsBinary  bool                   `json:"is_binary"`
-	OldPath   string                 `json:"old_path,omitempty"` // 이름 변경시 사용
-	Metadata  map[string]interface{} `json:"metadata,omitempty"` // 파일 메타데이터 (해시, 모드)
+	Path       string                 `json:"path"`
+	Status     FileDiffStatus         `json:"status"` // "added", "deleted", "modified", "renamed"
+	Additions  int                    `json:"additions"`
+	Deletions  int                    `json:"deletions"`
+	Changes    []LineChange           `json:"changes"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
+	Hunks      []Hunk                 `json:"hunks"`   // hunk 목록. LineChange.hunk_index로 참조 (항상 포함, 없으면 [])
+	IsBinary   bool                   `json:"is_binary"`
+	LoadStatus FileLoadStatus         `json:"load_status"`        // 파일 diff 로드 상태: loaded, collapsed, too_large, binary
+	OldPath    string                 `json:"old_path,omitempty"` // 이름 변경시 사용
+	Metadata   map[string]interface{} `json:"metadata,omitempty"` // 파일 메타데이터 (해시, 모드)
 }
 
 // LineChange는 diff의 단일 라인 변경을 나타냅니다. 라인 번호(left_line/right_line)로 접근 가능하며, hunk_index로 Hunks를 참조합니다.
@@ -119,6 +120,16 @@ const (
 	FileDiffStatusDeleted  FileDiffStatus = "deleted"  // 파일 삭제됨
 	FileDiffStatusModified FileDiffStatus = "modified" // 파일 수정됨
 	FileDiffStatusRenamed  FileDiffStatus = "renamed"  // 파일 이름 변경됨
+)
+
+// FileLoadStatus는 파일 diff의 로드 상태를 나타냅니다
+type FileLoadStatus string
+
+const (
+	FileLoadStatusLoaded    FileLoadStatus = "loaded"    // Changes[] 포함됨 — 바로 렌더
+	FileLoadStatusCollapsed FileLoadStatus = "collapsed" // MaxFilesWithChanges 초과로 미로드 — /diff/file 개별 조회 가능
+	FileLoadStatusTooLarge  FileLoadStatus = "too_large" // MaxChangedLines/MaxFileLines 초과 — 표시 불가
+	FileLoadStatusBinary    FileLoadStatus = "binary"    // 바이너리 파일
 )
 
 // LineChangeType은 diff 라인 변경의 타입을 나타냅니다
