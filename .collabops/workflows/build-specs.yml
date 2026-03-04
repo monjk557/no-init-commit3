@@ -1,0 +1,321 @@
+name: Build API Specs Image
+
+triggers:
+  push:
+    branches: [main]
+    # paths:
+    #   - 'internal/**'
+    #   - 'specs/**'
+    #   - 'config/**'
+    #   - 'config/docker/Dockerfile'
+    #   - 'config/docker/specs/nginx.conf'
+    #   - '.github/workflows/build-specs.yml'
+  change_request:
+    branches: [main]
+    # paths:
+    #   - 'internal/**'
+    #   - 'specs/**'
+
+env:
+  REGION: asia-northeast3
+  REPOSITORY: git-executor
+  IMAGE: collabops-git-executor-specs
+
+jobs:
+  generate-openapi-specs:
+    name: Generate OpenAPI Specifications
+    steps:
+      - name: Checkout code
+        image: debian:bookworm-slim
+        env:
+          GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
+          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          apt-get update && apt-get install -y --no-install-recommends git openssh-client
+          mkdir -p ~/.ssh
+          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
+          if [ -n "${GIT_HOST}" ]; then
+            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
+          [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
+          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          cd /workspace/source
+          git fetch origin "${COMMIT_SHA}"
+          git checkout "${COMMIT_SHA}"
+
+      - name: Verify OpenAPI prerequisites
+        image: alpine:3.19
+        run: |
+          echo "🔍 Verifying OpenAPI generation prerequisites..."
+          cd /workspace/source
+
+          echo "Checking required files..."
+          [ -f "config/docker/Dockerfile" ] && echo "✓ config/docker/Dockerfile exists" || { echo "✗ config/docker/Dockerfile not found" ; exit 1; }
+          [ -f "config/docker/specs/nginx.conf" ] && echo "✓ config/docker/specs/nginx.conf exists" || { echo "✗ config/docker/specs/nginx.conf not found" ; exit 1; }
+
+          echo "Checking core files..."
+          [ -f "specs/Makefile" ] && echo "✓ specs/Makefile exists" || { echo "✗ specs/Makefile not found" ; exit 1; }
+          [ -f "specs/generate.go" ] && echo "✓ Go spec generator exists" || { echo "✗ specs/generate.go not found" ; exit 1; }
+          [ -f "go.mod" ] && echo "✓ go.mod exists" || { echo "✗ go.mod not found" ; exit 1; }
+          [ -f "Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
+
+      - name: Setup Go and generate specs
+        image: golang:1.25-alpine
+        run: |
+          set -eu
+          cd /workspace/source
+
+          echo "📦 Installing dependencies..."
+          go mod download
+
+          echo "🔍 Validating Go environment..."
+          go version
+
+          echo "🚀 Generating OpenAPI specs using Go code analysis..."
+          if make specs; then
+            echo "✅ Spec file generated successfully"
+            if [ -f "specs/generated/collabops-git-executor.yaml" ]; then
+              ls -la specs/generated/
+              lines=$(wc -l < specs/generated/collabops-git-executor.yaml)
+              api_count=$(grep -c "^  /" specs/generated/collabops-git-executor.yaml || echo "0")
+              echo "📊 Generated spec has $lines lines"
+              echo "🛣️  API endpoints found: $api_count"
+            else
+              echo "❌ Generated spec file not found"
+              exit 1
+            fi
+          else
+            echo "❌ Spec generation failed"
+            exit 1
+          fi
+
+      - name: Compare API specifications
+        image: alpine:3.19
+        run: |
+          set -eu
+          apk add --no-cache git
+          cd /workspace/source
+          echo "🔍 Comparing API specs with existing..."
+
+          if git show HEAD:specs/generated/collabops-git-executor.yaml >/dev/null 2>&1; then
+            echo "📋 Comparing newly generated spec with committed version..."
+            git show HEAD:specs/generated/collabops-git-executor.yaml > specs_committed.yml
+
+            if diff specs/generated/collabops-git-executor.yaml specs_committed.yml >/dev/null 2>&1; then
+              echo "✅ No changes detected in API spec"
+              echo "false" > .specs-changed
+            else
+              echo "⚠️ Changes detected in API spec!"
+              echo "true" > .specs-changed
+              echo "spec_details<<EOF"
+              echo "## 🔄 Git Executor API 스펙 변경사항 감지"
+              echo ""
+              new_lines=$(wc -l < specs/generated/collabops-git-executor.yaml)
+              committed_lines=$(wc -l < specs_committed.yml)
+              new_endpoints=$(grep -c "^  /" specs/generated/collabops-git-executor.yaml || echo "0")
+              committed_endpoints=$(grep -c "^  /" specs_committed.yml || echo "0")
+              echo "### 📊 스펙 통계"
+              echo "- **새로 생성된 스펙**: $new_lines lines, $new_endpoints endpoints"
+              echo "- **커밋된 스펙**: $committed_lines lines, $committed_endpoints endpoints"
+              echo "EOF"
+            fi
+            rm -f specs_committed.yml
+          else
+            echo "📝 No existing API spec found in git - this is the first generation"
+            echo "true" > .specs-changed
+          fi
+
+      - name: Fail workflow if specs are out of sync
+        image: alpine:3.19
+        run: |
+          set -eu
+          cd /workspace/source
+          SPECS_CHANGED=$(cat .specs-changed 2>/dev/null || echo "false")
+          if [ "${SPECS_CHANGED}" = "true" ]; then
+            echo "❌ Git Executor API 스펙이 최신 상태가 아닙니다!"
+            echo "Go API 코드 변경사항이 있지만 OpenAPI 스펙이 업데이트되지 않았습니다."
+            echo ""
+            echo "🔧 해결 방법:"
+            echo "1. 로컬에서 API 스펙 생성: make specs"
+            echo "2. 변경사항 커밋: git add specs/generated/ && git commit -m '📋 Update Git Executor OpenAPI specs'"
+            echo "3. 푸시: git push"
+            echo ""
+            echo "이 워크플로우는 스펙이 동기화될 때까지 실패합니다."
+            exit 1
+          fi
+          echo "✅ Specs are in sync"
+
+  build-and-push:
+    name: Build & Push Specs Server Image
+    if: collabops.event_name == 'push'
+    needs: [generate-openapi-specs]
+    env:
+      CLOUDSDK_CONFIG: /workspace/source/.gcp
+    steps:
+      - name: Checkout code
+        image: debian:bookworm-slim
+        env:
+          GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
+          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          apt-get update && apt-get install -y --no-install-recommends git openssh-client
+          mkdir -p ~/.ssh
+          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
+          if [ -n "${GIT_HOST}" ]; then
+            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
+          [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
+          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          cd /workspace/source
+          git fetch origin "${COMMIT_SHA}"
+          git checkout "${COMMIT_SHA}"
+
+      - name: Generate OpenAPI specs for build
+        image: golang:1.25-alpine
+        run: |
+          set -eu
+          cd /workspace/source
+          go mod download
+          make specs
+          echo "✅ Specs generated for image build"
+
+      - name: Verify image build prerequisites
+        image: alpine:3.19
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+        run: |
+          set -eu
+          cd /workspace/source
+          echo "🔍 Verifying Docker image build prerequisites..."
+          echo "Checking required files..."
+          [ -f "config/docker/Dockerfile" ] && echo "✓ config/docker/Dockerfile exists" || { echo "✗ config/docker/Dockerfile not found" ; exit 1; }
+          [ -f "config/docker/specs/nginx.conf" ] && echo "✓ config/docker/specs/nginx.conf exists" || { echo "✗ config/docker/specs/nginx.conf not found" ; exit 1; }
+          [ -f "specs/generated/collabops-git-executor.yaml" ] && echo "✓ Spec generated" || { echo "✗ Spec not found" ; exit 1; }
+
+      - name: Google Cloud Auth
+        image: google/cloud-sdk:slim
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          set -eu
+          mkdir -p ${{ env.CLOUDSDK_CONFIG }}
+          printf '%s' "${GCP_SA_KEY}" | tr -d '\r' > "${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json"
+          export GOOGLE_APPLICATION_CREDENTIALS=${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
+          gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}"
+          gcloud config set project "${GCP_PROJECT_ID_SHARED}"
+
+      - name: Configure Docker for Artifact Registry
+        image: google/cloud-sdk:slim
+        run: |
+          set -eu
+          export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+          echo "✓ Docker authentication configured"
+
+      - name: Verify GCP Configuration
+        image: google/cloud-sdk:slim
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+        run: |
+          set -eu
+          cd /workspace/source
+          export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
+          echo "🔍 Verifying GCP configuration..."
+          CURRENT_PROJECT=$(gcloud config get-value project)
+          if [ "$CURRENT_PROJECT" != "${GCP_PROJECT_ID_SHARED}" ]; then
+            echo "❌ Project mismatch: Current=$CURRENT_PROJECT, Expected=${GCP_PROJECT_ID_SHARED}"
+            exit 1
+          fi
+          echo "✓ Project correctly set to: $CURRENT_PROJECT"
+
+      - name: Build and push specs server image
+        image: gcr.io/kaniko-project/executor:debug
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          COMMIT_SHA: ${{ collabops.sha }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
+        run: |
+          set -eu
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}/${IMAGE}"
+          CONTEXT="/workspace/source"
+          DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
+
+          echo "📋 Building and pushing specs image..."
+          /kaniko/executor \
+            --context="${CONTEXT}" \
+            --dockerfile="${DOCKERFILE}" \
+            --target=specs \
+            --customPlatform=linux/amd64 \
+            --destination="${IMAGE_BASE}:${COMMIT_SHA}" \
+            --destination="${IMAGE_BASE}:latest" \
+            --destination="${IMAGE_BASE}:${COLLABOPS_REF_NAME}"
+
+      - name: Verify image deployment
+        image: google/cloud-sdk:slim
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          COMMIT_SHA: ${{ collabops.sha }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+        run: |
+          set -eu
+          export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}/${IMAGE}"
+
+          check_tag() {
+            local tag=$1
+            echo "Checking ${IMAGE}:${tag}..."
+            if gcloud artifacts docker images describe "${IMAGE_BASE}:${tag}" >/dev/null 2>&1; then
+              echo "✓ ${IMAGE}:${tag} exists"
+              return 0
+            else
+              echo "❌ ${IMAGE}:${tag} not found"
+              return 1
+            fi
+          }
+
+          failed=0
+          check_tag "${COMMIT_SHA}" || failed=1
+          check_tag "latest" || failed=1
+          check_tag "${COLLABOPS_REF_NAME}" || failed=1
+          [ $failed -eq 0 ] || exit 1
+          echo "✅ All image tags verified successfully!"
+
+      - name: Show deployment summary
+        image: alpine:3.19
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          COMMIT_SHA: ${{ collabops.sha }}
+          COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
+        run: |
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}"
+          echo "✨ OpenAPI Specs Server Deployment Summary ✨"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Image Details:"
+          echo "   Type: Static file server (nginx + specs)"
+          echo "   Tags: latest, ${COMMIT_SHA}, ${COLLABOPS_REF_NAME}"
+          echo ""
+          echo "☁️ GCP Artifact Registry:"
+          echo "   Registry: ${IMAGE_BASE}"
+          echo "   Repository: ${REPOSITORY}"
+          echo "   Image: ${IMAGE}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🚀 Service Details:"
+          echo "   • Server: nginx alpine"
+          echo "   • Content: OpenAPI specs"
+          echo "   • Endpoints: /api/schema/, /health"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎉 GCP Artifact Registry deployment completed successfully!"

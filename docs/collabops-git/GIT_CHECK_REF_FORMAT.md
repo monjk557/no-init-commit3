@@ -65,7 +65,6 @@ release/2024-01-15     ✅ hyphen 포함 허용
 feat/JIRA-123/fix      ✅ 다중 slash 허용
 v1.0.0                 ✅
 ```
-
 ## 거부 예시
 
 ```
