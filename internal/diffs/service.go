@@ -65,7 +65,7 @@ func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineCha
 		if len(line) == 0 {
 			continue
 		}
-		// @@ hunk header — changes[]에 type "hunk"로 끼워 넣어 프론트가 한 번만 순회하며 렌더링 가능
+		// @@ hunk header — diffLines에 type "HUNK"로 끼워 넣어 프론트가 한 번만 순회하며 렌더링 가능
 		if startOld, countOld, startNew, countNew, ok := parseHunkHeader(line); ok {
 			hunkIndex++
 			hunks = append(hunks, Hunk{
@@ -76,16 +76,24 @@ func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineCha
 				Header:   line,
 			})
 			lineChanges = append(lineChanges, LineChange{
-				Type:         LineChangeTypeHunk,
-				LeftLineNum:  startOld,
-				RightLineNum: startNew,
-				HunkIndex:    hunkIndex,
-				Content:      line,
+				Type:           LineChangeTypeHunk,
+				BlobLineNumber: intPtr(startOld),
+				Text:           line,
+				Left:           intPtr(startOld),
+				Right:          intPtr(startNew),
+				HunkIndex:      hunkIndex,
 			})
 			leftLine, rightLine = startOld, startNew
 			continue
 		}
-		// content line: space, +, - only (skip "diff --git", "---", "+++", "\ No newline" 등)
+		// "\ No newline at end of file" 감지 → 직전 라인에 경고 플래그 설정
+		if strings.HasPrefix(line, "\\ ") {
+			if len(lineChanges) > 0 {
+				lineChanges[len(lineChanges)-1].DisplayNoNewLineWarning = true
+			}
+			continue
+		}
+		// content line: space, +, - only (skip "diff --git", "---", "+++" 등)
 		if len(line) > 0 && line[0] != ' ' && line[0] != '+' && line[0] != '-' {
 			continue
 		}
@@ -94,19 +102,24 @@ func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineCha
 			prefix = line[0]
 		}
 		var changeType LineChangeType
-		var leftNum, rightNum int
+		var leftPtr, rightPtr *int
+		var blobLinePtr *int
 		switch prefix {
 		case '-':
 			changeType = LineChangeTypeDel
-			leftNum, rightNum = leftLine, 0
+			leftPtr = intPtr(leftLine)
+			blobLinePtr = intPtr(leftLine)
 			leftLine++
 		case '+':
 			changeType = LineChangeTypeAdd
-			leftNum, rightNum = 0, rightLine
+			rightPtr = intPtr(rightLine)
+			// ADD 라인은 blobLineNumber가 null
 			rightLine++
 		case ' ':
 			changeType = LineChangeTypeContext
-			leftNum, rightNum = leftLine, rightLine
+			leftPtr = intPtr(leftLine)
+			rightPtr = intPtr(rightLine)
+			blobLinePtr = intPtr(leftLine)
 			leftLine++
 			rightLine++
 		default:
@@ -118,11 +131,12 @@ func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineCha
 			idx = 0
 		}
 		lineChanges = append(lineChanges, LineChange{
-			Type:         changeType,
-			LeftLineNum:  leftNum,
-			RightLineNum: rightNum,
-			HunkIndex:    idx,
-			Content:      line,
+			Type:           changeType,
+			BlobLineNumber: blobLinePtr,
+			Text:           line,
+			Left:           leftPtr,
+			Right:          rightPtr,
+			HunkIndex:      idx,
 		})
 	}
 
@@ -197,11 +211,8 @@ func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 		}
 
 		lineChanges = append(lineChanges, LineChange{
-			Type:         changeType,
-			LeftLineNum:  0,
-			RightLineNum: 0,
-			HunkIndex:    0,
-			Content:      line,
+			Type: changeType,
+			Text: line,
 		})
 	}
 

@@ -793,10 +793,10 @@ func TestLoadStatus_JSONSerialization(t *testing.T) {
 			err = json.Unmarshal(data, &m)
 			require.NoError(t, err)
 
-			// load_status must always be present in JSON
-			loadStatus, ok := m["load_status"]
-			assert.True(t, ok, "load_status field must be present in JSON output")
-			assert.Equal(t, tc.wantStatus, loadStatus, "load_status value mismatch")
+			// loadStatus must always be present in JSON
+			loadStatus, ok := m["loadStatus"]
+			assert.True(t, ok, "loadStatus field must be present in JSON output")
+			assert.Equal(t, tc.wantStatus, loadStatus, "loadStatus value mismatch")
 		})
 	}
 }

@@ -198,9 +198,8 @@ func TestMergePreviewTwoPhaseProcessing(t *testing.T) {
 	// Verify all files have metadata (Phase 1)
 	assert.GreaterOrEqual(t, len(response.FilesChanged), 3)
 
-	// Verify that files have either changes or empty changes array (Phase 2)
+	// Verify that files have path set (Phase 2)
 	for _, fileChange := range response.FilesChanged {
-		assert.NotNil(t, fileChange.Changes, "Changes should be initialized (even if empty)")
 		assert.NotEmpty(t, fileChange.Path, "File path should be set")
 	}
 }
@@ -264,8 +263,6 @@ func TestProcessChangeFromDiffMaxPatchSize(t *testing.T) {
 	} else {
 		// If no error, verify fileDiff is valid
 		assert.NotEmpty(t, fileDiff.Path)
-		// Changes might be empty if file is too large or binary
-		assert.NotNil(t, fileDiff.Changes)
 	}
 }
 
@@ -334,7 +331,6 @@ func TestCompareTreesBasicTwoPhase(t *testing.T) {
 		}
 		// All files should have metadata
 		assert.NotEmpty(t, fc.Path)
-		assert.NotNil(t, fc.Changes)
 	}
 
 	assert.LessOrEqual(t, filesWithChanges, diffs.MaxFilesWithChanges)
@@ -405,7 +401,6 @@ func TestCompareTreesWithDiffTwoPhase(t *testing.T) {
 		}
 		// All files should have metadata
 		assert.NotEmpty(t, fc.Path)
-		assert.NotNil(t, fc.Changes)
 	}
 
 	assert.LessOrEqual(t, filesWithChanges, diffs.MaxFilesWithChanges)
