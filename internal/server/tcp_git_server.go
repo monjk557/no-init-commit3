@@ -619,6 +619,12 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	_, _, userID, _ := conn.GetConnectionInfo()
 	s.publishRefChangeEvents(postPushCtx, repoPath, owner, repo, userID, refsBefore, refsAfter)
 
+	// Asynchronous git gc --auto: packs loose objects when threshold is exceeded
+	// (default: >6700 loose objects or >50 packs). Runs in background to avoid
+	// blocking the push response. Without this, repos accumulate loose objects
+	// and eventually pack-objects fails with exit status 128 during fetch.
+	// go s.runAutoGC(repoPath, tenantID)
+
 	return nil
 }
 
@@ -674,6 +680,33 @@ func (s *DuplexTCPServer) publishRefChangeEvents(
 			zap.String("ref", refName),
 			zap.String("old", oldHash))
 		s.addCommitEventToStream(repoPath, oldHash, zeroHash, refName, owner, repo, userID, events.EventTypePush)
+	}
+}
+
+// runAutoGC runs `git gc --auto` on the repository in the background.
+// Only performs actual GC when git's internal thresholds are exceeded
+// (>6700 loose objects or >50 packs), otherwise returns immediately.
+func (s *DuplexTCPServer) runAutoGC(repoPath, tenantID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "gc", "--auto")
+	cmd.Dir = repoPath
+
+	start := time.Now()
+	if err := cmd.Run(); err != nil {
+		s.logger.Warn("git gc --auto failed",
+			zap.String("repo", tenantID),
+			zap.String("repo_path", repoPath),
+			zap.Error(err))
+		return
+	}
+
+	duration := time.Since(start)
+	if duration > 1*time.Second {
+		s.logger.Info("git gc --auto completed",
+			zap.String("repo", tenantID),
+			zap.Duration("duration", duration))
 	}
 }
 

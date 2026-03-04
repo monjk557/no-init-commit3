@@ -97,8 +97,9 @@ func RunPackObjects(ctx context.Context, repoPath string, opts *PackObjectsOpts,
 		return 0, fmt.Errorf("start git pack-objects: %w", err)
 	}
 
-	// Parse stderr for progress and object count
+	// Parse stderr for progress and object count; capture fatal/error lines for diagnostics
 	objectCount := 0
+	var stderrErrors []string
 	scanner := bufio.NewScanner(stderrPipe)
 	scanner.Split(scanCROrLF)
 	for scanner.Scan() {
@@ -110,9 +111,16 @@ func RunPackObjects(ctx context.Context, repoPath string, opts *PackObjectsOpts,
 		if n := parsePackObjectsTotal(line); n > 0 {
 			objectCount = n
 		}
+		// Capture fatal/error lines for error reporting
+		if strings.HasPrefix(line, "fatal:") || strings.HasPrefix(line, "error:") {
+			stderrErrors = append(stderrErrors, line)
+		}
 	}
 
 	if err := cmd.Wait(); err != nil {
+		if len(stderrErrors) > 0 {
+			return objectCount, fmt.Errorf("git pack-objects: %w (%s)", err, strings.Join(stderrErrors, "; "))
+		}
 		return objectCount, fmt.Errorf("git pack-objects: %w", err)
 	}
 
