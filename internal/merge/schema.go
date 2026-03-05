@@ -137,7 +137,7 @@ type FileConflict struct {
 	TheirVersion   *FileVersion           `json:"their_version"`        // Their branch version
 	BaseVersion    *FileVersion           `json:"base_version"`         // Common ancestor version
 	Regions        []ConflictRegion       `json:"regions"`              // Specific conflict regions
-	AutoResolvable bool                   `json:"auto_resolvable"`      // Can be automatically resolved
+	AutoResolvable bool                   `json:"auto_resolvable"`      // Deprecated: always false. All conflicts require manual resolution
 	Resolution     *ConflictResolution    `json:"resolution,omitempty"` // Suggested resolution
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`   // Additional metadata
 }
@@ -172,7 +172,7 @@ type MergeAnalysisRequest struct {
 	SourceRef      string        `json:"source_ref"`      // Source branch/commit to merge FROM
 	TargetRef      string        `json:"target_ref"`      // Target branch/commit to merge INTO
 	Strategy       MergeStrategy `json:"strategy"`        // Preferred merge strategy
-	AutoResolve    bool          `json:"auto_resolve"`    // Whether to attempt automatic resolution
+	AutoResolve    bool          `json:"auto_resolve"`    // Deprecated: ignored. All conflicts require manual resolution
 	IncludeContent bool          `json:"include_content"` // Whether to include file content in response
 	MaxFileSize    int64         `json:"max_file_size"`   // Maximum file size to analyze for content conflicts
 }
@@ -188,7 +188,7 @@ type MergeAnalysisResult struct {
 	SourceCommit      *CommitInfo              `json:"source_commit"`      // Source commit info
 	TargetCommit      *CommitInfo              `json:"target_commit"`      // Target commit info
 	Strategy          MergeStrategy            `json:"strategy"`           // Merge strategy used
-	AutoResolvable    int                      `json:"auto_resolvable"`    // Number of auto-resolvable conflicts
+	AutoResolvable    int                      `json:"auto_resolvable"`    // Deprecated: always 0. All conflicts require manual resolution
 	SeverityBreakdown map[ConflictSeverity]int `json:"severity_breakdown"` // Conflicts by severity
 	EstimatedTime     time.Duration            `json:"estimated_time"`     // Estimated resolution time
 	Recommendations   []string                 `json:"recommendations"`    // Resolution recommendations

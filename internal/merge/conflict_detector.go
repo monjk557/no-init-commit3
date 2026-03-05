@@ -110,9 +110,11 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 	}
 
 	// Calculate summary statistics
+	// Industry standard: conflicts exist → cannot merge. No auto-resolve.
+	hasConflicts := len(conflicts) > 0
 	result := &MergeAnalysisResult{
-		CanMerge:          len(conflicts) == 0 || cd.allAutoResolvable(conflicts),
-		HasConflicts:      len(conflicts) > 0,
+		CanMerge:          !hasConflicts,
+		HasConflicts:      hasConflicts,
 		IsFastForward:     false,
 		ConflictCount:     len(conflicts),
 		FileConflicts:     conflicts,
@@ -120,7 +122,7 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 		SourceCommit:      nativeCommitToInfo(sourceCommit),
 		TargetCommit:      nativeCommitToInfo(targetCommit),
 		Strategy:          req.Strategy,
-		AutoResolvable:    cd.countAutoResolvable(conflicts),
+		AutoResolvable:    0,
 		SeverityBreakdown: cd.calculateSeverityBreakdown(conflicts),
 		EstimatedTime:     cd.estimateResolutionTime(conflicts),
 		Recommendations:   cd.generateRecommendations(conflicts, req.Strategy),
@@ -128,7 +130,6 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 
 	cd.logger.Info("Merge analysis completed",
 		zap.Int("total_conflicts", result.ConflictCount),
-		zap.Int("auto_resolvable", result.AutoResolvable),
 		zap.Bool("can_merge", result.CanMerge),
 		zap.Duration("estimated_time", result.EstimatedTime))
 
@@ -249,10 +250,8 @@ func (cd *ConflictDetector) buildFileConflict(ctx context.Context, repoPath, pat
 		}
 	}
 
-	conflict.AutoResolvable = cd.isAutoResolvable(conflict)
-	if conflict.AutoResolvable && req.AutoResolve {
-		conflict.Resolution = cd.generateResolution(conflict)
-	}
+	// All conflicts require manual human resolution (no auto-resolve)
+	conflict.AutoResolvable = false
 
 	return conflict
 }
@@ -403,57 +402,6 @@ func (cd *ConflictDetector) isBinaryContent(data []byte) bool {
 	return false
 }
 
-func (cd *ConflictDetector) isAutoResolvable(conflict *FileConflict) bool {
-	switch conflict.ConflictType {
-	case ConflictTypeMode:
-		return true
-	case ConflictTypeAdd:
-		return false
-	case ConflictTypeDelete:
-		return false
-	case ConflictTypeContent:
-		return len(conflict.Regions) == 0 || (conflict.OurVersion != nil && !conflict.OurVersion.IsBinary && conflict.TheirVersion != nil && !conflict.TheirVersion.IsBinary)
-	default:
-		return false
-	}
-}
-
-func (cd *ConflictDetector) generateResolution(conflict *FileConflict) *ConflictResolution {
-	switch conflict.ConflictType {
-	case ConflictTypeMode:
-		return &ConflictResolution{
-			Strategy:   "prefer_permissive_mode",
-			Confidence: 0.8,
-			Reasoning:  "Mode conflicts resolved by choosing more permissive file mode",
-		}
-	default:
-		return &ConflictResolution{
-			Strategy:   "manual_review_required",
-			Confidence: 0.0,
-			Reasoning:  "This conflict requires manual review and resolution",
-		}
-	}
-}
-
-func (cd *ConflictDetector) allAutoResolvable(conflicts []FileConflict) bool {
-	for _, conflict := range conflicts {
-		if !conflict.AutoResolvable {
-			return false
-		}
-	}
-	return true
-}
-
-func (cd *ConflictDetector) countAutoResolvable(conflicts []FileConflict) int {
-	count := 0
-	for _, conflict := range conflicts {
-		if conflict.AutoResolvable {
-			count++
-		}
-	}
-	return count
-}
-
 func (cd *ConflictDetector) calculateSeverityBreakdown(conflicts []FileConflict) map[ConflictSeverity]int {
 	breakdown := make(map[ConflictSeverity]int)
 	for _, conflict := range conflicts {
@@ -480,17 +428,12 @@ func (cd *ConflictDetector) estimateResolutionTime(conflicts []FileConflict) tim
 }
 
 func (cd *ConflictDetector) generateRecommendations(conflicts []FileConflict, strategy MergeStrategy) []string {
-	var recommendations []string
-
 	if len(conflicts) == 0 {
 		return []string{"No conflicts detected - merge can proceed safely"}
 	}
 
-	autoResolvable := cd.countAutoResolvable(conflicts)
-	if autoResolvable == len(conflicts) {
-		recommendations = append(recommendations, "All conflicts can be automatically resolved")
-	} else {
-		recommendations = append(recommendations, fmt.Sprintf("%d of %d conflicts require manual resolution", len(conflicts)-autoResolvable, len(conflicts)))
+	recommendations := []string{
+		fmt.Sprintf("All %d conflicts require manual resolution", len(conflicts)),
 	}
 
 	switch strategy {

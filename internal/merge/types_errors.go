@@ -263,12 +263,13 @@ func NewNotFoundError(kind, name string) error {
 	return NotFoundError{Kind: kind, Name: name}
 }
 
-// NewConflictError creates a new ConflictError
-func NewConflictError(conflictCount, autoResolvable int) error {
+// NewConflictError creates a new ConflictError.
+// All conflicts require manual human resolution.
+func NewConflictError(conflictCount int) error {
 	return ConflictError{
 		ConflictCount:  conflictCount,
-		AutoResolvable: autoResolvable,
-		Message:        fmt.Sprintf("merge has %d conflicts. Use force_conflict=true to override", conflictCount),
+		AutoResolvable: 0,
+		Message:        fmt.Sprintf("merge has %d conflicts. All conflicts require manual resolution", conflictCount),
 	}
 }
 

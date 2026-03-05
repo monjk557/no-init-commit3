@@ -116,7 +116,7 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repoPath 
 	}
 
 	response := &MergePreviewResponse{
-		CanMerge:           !conflictAnalysis.HasConflicts || conflictAnalysis.CanMerge,
+		CanMerge:           !conflictAnalysis.HasConflicts,
 		IsFastForward:      conflictAnalysis.IsFastForward,
 		HasConflicts:       conflictAnalysis.HasConflicts,
 		ConflictCount:      conflictAnalysis.ConflictCount,
@@ -318,12 +318,8 @@ func (h *MergePreviewHandler) generatePreviewRecommendations(conflictAnalysis *M
 	}
 
 	if conflictAnalysis.HasConflicts {
-		if conflictAnalysis.AutoResolvable > 0 {
-			recommendations = append(recommendations, fmt.Sprintf("%d conflicts can be automatically resolved", conflictAnalysis.AutoResolvable))
-		}
-		if conflictAnalysis.ConflictCount-conflictAnalysis.AutoResolvable > 0 {
-			recommendations = append(recommendations, "Manual conflict resolution will be required")
-		}
+		recommendations = append(recommendations,
+			fmt.Sprintf("All %d conflicts require manual resolution", conflictAnalysis.ConflictCount))
 		recommendations = append(recommendations, "Consider using a different merge strategy to reduce conflicts")
 	}
 

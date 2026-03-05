@@ -15,7 +15,7 @@ func (h *MergeOperationsHandler) analyzeMerge(ctx context.Context, repoPath stri
 		SourceRef:      sourceHash,
 		TargetRef:      targetHash,
 		Strategy:       MergeStrategy(req.Strategy),
-		AutoResolve:    req.ForceConflict,
+		AutoResolve:    false,
 		IncludeContent: true,
 		MaxFileSize:    1024 * 1024, // 1MB max for conflict analysis
 	}
@@ -126,13 +126,6 @@ func (h *MergeOperationsHandler) analyzeRebaseDryRun(ctx context.Context, repoPa
 		fileConflicts = append(fileConflicts, conflict)
 	}
 
-	autoResolvable := 0
-	for _, conflict := range fileConflicts {
-		if conflict.AutoResolvable {
-			autoResolvable++
-		}
-	}
-
 	severityBreakdown := make(map[ConflictSeverity]int)
 	for _, conflict := range fileConflicts {
 		severityBreakdown[conflict.Severity]++
@@ -148,9 +141,7 @@ func (h *MergeOperationsHandler) analyzeRebaseDryRun(ctx context.Context, repoPa
 			}
 			recommendations = append(recommendations, fmt.Sprintf("First conflict occurs at commit %s", shortSHA))
 		}
-		if autoResolvable > 0 {
-			recommendations = append(recommendations, fmt.Sprintf("%d conflicts may be auto-resolvable", autoResolvable))
-		}
+		recommendations = append(recommendations, "All conflicts require manual resolution")
 	} else {
 		recommendations = append(recommendations, "Rebase will complete without conflicts")
 	}
@@ -162,13 +153,13 @@ func (h *MergeOperationsHandler) analyzeRebaseDryRun(ctx context.Context, repoPa
 	}
 
 	return &MergeAnalysisResult{
-		CanMerge:          totalConflictCount == 0 || (req.ForceConflict && autoResolvable == totalConflictCount),
+		CanMerge:          totalConflictCount == 0,
 		HasConflicts:      totalConflictCount > 0,
 		IsFastForward:     false,
 		ConflictCount:     len(fileConflicts),
 		FileConflicts:     fileConflicts,
 		Strategy:          MergeStrategy(req.Strategy),
-		AutoResolvable:    autoResolvable,
+		AutoResolvable:    0,
 		SeverityBreakdown: severityBreakdown,
 		EstimatedTime:     time.Duration(totalConflictCount) * time.Minute,
 		Recommendations:   recommendations,
