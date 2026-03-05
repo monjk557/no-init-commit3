@@ -140,6 +140,24 @@ git status              # ✅ Ready to commit
 **Good (Long-term):**
 "Design a distributed Git protocol optimization with chunked transfer, resume capability, and intelligent resource coordination across the entire system"
 
+## Worktree Workflow
+
+워크트리에서 작업 후 정리할 때 **반드시 아래 순서를 지킬 것**:
+
+1. 워크트리 안에서 커밋 완료
+2. **메인 레포 경로로 먼저 이동** (`cd /Users/seungbaek/Desktop/CODE/collabops-git-executor`)
+3. 그 다음 머지 + 워크트리 제거 + 브랜치 삭제
+
+```bash
+# 반드시 메인 레포로 이동한 뒤 실행
+cd /Users/seungbaek/Desktop/CODE/collabops-git-executor
+git merge <worktree-branch> --no-edit
+git worktree remove .claude/worktrees/<name>
+git branch -d <worktree-branch>
+```
+
+**절대 하지 말 것**: 워크트리 디렉토리 안에서 워크트리 제거/머지 시도 — CWD가 삭제된 경로를 가리키게 되어 이후 모든 git/파일 명령이 실패함.
+
 ---
 
 *Remember: We build systems that last, scale, and evolve. Every solution should make the system more intelligent, more adaptive, and more capable of handling future challenges.*
