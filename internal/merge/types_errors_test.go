@@ -35,7 +35,7 @@ func Test_ConflictError_Error_ReturnsCustomMessage(t *testing.T) {
 
 	err := ConflictError{
 		ConflictCount:  5,
-		AutoResolvable: 2,
+		AutoResolvable: 0,
 		Message:        "custom conflict message",
 	}
 
@@ -178,7 +178,7 @@ func Test_ToAPIError_NotFoundError_Returns404(t *testing.T) {
 func Test_ToAPIError_ConflictError_Returns409(t *testing.T) {
 	t.Parallel()
 
-	err := ConflictError{ConflictCount: 5, AutoResolvable: 2}
+	err := ConflictError{ConflictCount: 5, AutoResolvable: 0}
 
 	apiErr := ToAPIError(err)
 
@@ -310,7 +310,7 @@ func Test_NewNotFoundError_CreatesCorrectError(t *testing.T) {
 func Test_NewConflictError_CreatesCorrectError(t *testing.T) {
 	t.Parallel()
 
-	err := NewConflictError(5, 2)
+	err := NewConflictError(5)
 
 	var conflict ConflictError
 	if !errors.As(err, &conflict) {
@@ -319,7 +319,7 @@ func Test_NewConflictError_CreatesCorrectError(t *testing.T) {
 	if conflict.ConflictCount != 5 {
 		t.Fatalf("ConflictCount=%d want=%d", conflict.ConflictCount, 5)
 	}
-	if conflict.AutoResolvable != 2 {
-		t.Fatalf("AutoResolvable=%d want=%d", conflict.AutoResolvable, 2)
+	if conflict.AutoResolvable != 0 {
+		t.Fatalf("AutoResolvable=%d want=%d", conflict.AutoResolvable, 0)
 	}
 }

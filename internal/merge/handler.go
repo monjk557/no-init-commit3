@@ -190,11 +190,10 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			}
 
 			details := map[string]interface{}{
-				"dry_run":               true,
-				"can_merge":             rebaseAnalysis.CanMerge,
-				"auto_resolvable_count": rebaseAnalysis.AutoResolvable,
-				"estimated_time":        rebaseAnalysis.EstimatedTime.String(),
-				"recommendations":       rebaseAnalysis.Recommendations,
+				"dry_run":         true,
+				"can_merge":       rebaseAnalysis.CanMerge,
+				"estimated_time":  rebaseAnalysis.EstimatedTime.String(),
+				"recommendations": rebaseAnalysis.Recommendations,
 			}
 			if rebaseAnalysis.Metadata != nil {
 				if v, ok := rebaseAnalysis.Metadata["commits_to_rebase"].(int); ok {
@@ -229,11 +228,10 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			Message:         "Dry run completed - no changes made",
 			ConflictSummary: conflictAnalysis,
 			Details: map[string]interface{}{
-				"dry_run":               true,
-				"can_merge":             conflictAnalysis.CanMerge,
-				"auto_resolvable_count": conflictAnalysis.AutoResolvable,
-				"estimated_time":        conflictAnalysis.EstimatedTime.String(),
-				"recommendations":       conflictAnalysis.Recommendations,
+				"dry_run":         true,
+				"can_merge":       conflictAnalysis.CanMerge,
+				"estimated_time":  conflictAnalysis.EstimatedTime.String(),
+				"recommendations": conflictAnalysis.Recommendations,
 			},
 		})
 		return
@@ -515,7 +513,6 @@ func (h *MergeOperationsHandler) formatConflictsForResponse(analysis *MergeAnaly
 			"conflict_type":       string(conflict.ConflictType),
 			"severity":            string(conflict.Severity),
 			"is_environment_file": isEnvironmentFile(conflict.FilePath),
-			"auto_resolvable":     conflict.AutoResolvable,
 		})
 	}
 	return conflicts
