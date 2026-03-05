@@ -1,4 +1,4 @@
-# CollabOps Git Executor (update)
+# CollabOps Git Executor
 
 ## 📦 Project Structure
 
