@@ -103,6 +103,20 @@ func GetLatestCommitsNative(
 	return result, meta
 }
 
+// nativeCheckRepoExists는 repoPath가 유효한 git 저장소인지 확인합니다.
+// git rev-parse --git-dir를 사용하여 커밋이 없는 빈 저장소도 올바르게 검증합니다.
+func nativeCheckRepoExists(ctx context.Context, repoPath string) error {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", "--git-dir")
+	_, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("git rev-parse --git-dir failed: %w", err)
+	}
+	return nil
+}
+
 // nativeResolveRef는 ref를 커밋 해시로 resolve합니다.
 func nativeResolveRef(ctx context.Context, repoPath, ref string) (string, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

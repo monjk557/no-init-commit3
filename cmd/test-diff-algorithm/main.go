@@ -125,8 +125,8 @@ func simulateNaiveDiff(baseLines, headLines []string) ([]diffs.LineChange, int, 
 			// Remaining lines in head are additions
 			for headIndex < len(headLines) {
 				changes = append(changes, diffs.LineChange{
-					Type:    diffs.LineChangeTypeAdd,
-					Content: "+" + headLines[headIndex],
+					Type: diffs.LineChangeTypeAdd,
+					Text: "+" + headLines[headIndex],
 				})
 				additions++
 				headIndex++
@@ -135,8 +135,8 @@ func simulateNaiveDiff(baseLines, headLines []string) ([]diffs.LineChange, int, 
 			// Remaining lines in base are deletions
 			for baseIndex < len(baseLines) {
 				changes = append(changes, diffs.LineChange{
-					Type:    diffs.LineChangeTypeDel,
-					Content: "-" + baseLines[baseIndex],
+					Type: diffs.LineChangeTypeDel,
+					Text: "-" + baseLines[baseIndex],
 				})
 				deletions++
 				baseIndex++
@@ -144,23 +144,23 @@ func simulateNaiveDiff(baseLines, headLines []string) ([]diffs.LineChange, int, 
 		} else if baseLines[baseIndex] == headLines[headIndex] {
 			// Same line - context
 			changes = append(changes, diffs.LineChange{
-				Type:    diffs.LineChangeTypeContext,
-				Content: " " + baseLines[baseIndex],
+				Type: diffs.LineChangeTypeContext,
+				Text: " " + baseLines[baseIndex],
 			})
 			baseIndex++
 			headIndex++
 		} else {
 			// Different lines - delete and add
 			changes = append(changes, diffs.LineChange{
-				Type:    diffs.LineChangeTypeDel,
-				Content: "-" + baseLines[baseIndex],
+				Type: diffs.LineChangeTypeDel,
+				Text: "-" + baseLines[baseIndex],
 			})
 			deletions++
 			baseIndex++
 
 			changes = append(changes, diffs.LineChange{
-				Type:    diffs.LineChangeTypeAdd,
-				Content: "+" + headLines[headIndex],
+				Type: diffs.LineChangeTypeAdd,
+				Text: "+" + headLines[headIndex],
 			})
 			additions++
 			headIndex++

@@ -193,9 +193,8 @@ func (h *MergePreviewHandler) compareRepositoryTrees(ctx context.Context, repoPa
 		status := diffEntryToStatus(de.Status)
 
 		fileDiff := diffs.FileDiff{
-			Path:    filePath,
-			Status:  status,
-			Changes: []diffs.LineChange{},
+			Path:   filePath,
+			Status: status,
 		}
 
 		if de.Status == "R" || de.Status == "C" {
