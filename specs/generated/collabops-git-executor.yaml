@@ -1312,7 +1312,7 @@ components:
           type: integer
         deletions:
           type: integer
-        changes:
+        diffLines:
           type: array
           items:
             $ref: '#/components/schemas/LineChange'
@@ -1322,7 +1322,7 @@ components:
             $ref: '#/components/schemas/Hunk'
         is_binary:
           type: boolean
-        load_status:
+        loadStatus:
           type: string
           enum: [loaded, collapsed, too_large, binary]
         old_path:
@@ -1332,11 +1332,11 @@ components:
           additionalProperties: true
       required:
         - additions
-        - changes
         - deletions
+        - diffLines
         - hunks
         - is_binary
-        - load_status
+        - loadStatus
         - path
         - status
     FileVersion:
@@ -1635,25 +1635,23 @@ components:
       properties:
         type:
           type: string
-          enum: [add, del, context, hunk]
-        left_line:
+          enum: [ADD, DELETE, CONTEXT, HUNK]
+        blobLineNumber:
           type: integer
-        right_line:
-          type: integer
-        hunk_index:
-          type: integer
-        content:
+        displayNoNewLineWarning:
+          type: boolean
+        text:
           type: string
-        meta:
-          type: object
-          additionalProperties: true
-        comment:
-          type: string
+        left:
+          type: integer
+        right:
+          type: integer
       required:
-        - content
-        - hunk_index
-        - left_line
-        - right_line
+        - blobLineNumber
+        - displayNoNewLineWarning
+        - left
+        - right
+        - text
         - type
     MergeAnalysisRequest:
       type: object

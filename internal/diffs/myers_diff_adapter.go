@@ -51,8 +51,8 @@ func (m *MyersDiffAdapter) OptimizedLineDiff(baseLines, headLines []string, cont
 		}
 
 		lineChanges = append(lineChanges, LineChange{
-			Type:    changeType,
-			Content: content,
+			Type: changeType,
+			Text: content,
 		})
 	}
 
