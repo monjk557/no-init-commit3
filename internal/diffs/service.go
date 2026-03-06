@@ -93,8 +93,12 @@ func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineCha
 			}
 			continue
 		}
-		// content line: space, +, - only (skip "diff --git", "---", "+++" 등)
+		// skip non-content lines: "diff --git", "index", "similarity" etc.
 		if len(line) > 0 && line[0] != ' ' && line[0] != '+' && line[0] != '-' {
+			continue
+		}
+		// skip file headers: "--- a/..." and "+++ b/..."
+		if strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
 			continue
 		}
 		var prefix byte = ' '
