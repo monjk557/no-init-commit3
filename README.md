@@ -1,6 +1,6 @@
 # CollabOps Git Executor
 
-# Update for Prepare Test (HDD -> SDD) in Stage
+# Update for Prepare Test (HDD -> SDD)
 
 ## 📦 Project Structure
 
