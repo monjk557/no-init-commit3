@@ -306,6 +306,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	// Diff endpoints
 	ownerRepoGroup.GET("/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
 	ownerRepoGroup.GET("/diff/branches/:base/:head", diffsHandler.HandleBranchDiff)
+	ownerRepoGroup.GET("/diff/branches", diffsHandler.HandleBranchDiffQuery) // query parameter 방식 (슬래시 포함 브랜치명 지원)
 	ownerRepoGroup.GET("/diff/file", diffsHandler.HandleFileDiff)
 	ownerRepoGroup.GET("/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
 	ownerRepoGroup.GET("/diff/patch/:base/:head", diffsHandler.HandlePatch)

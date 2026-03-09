@@ -246,6 +246,106 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 	}
 }
 
+// HandleBranchDiffQuery는 GET /repos/:owner/:repo/diff/branches?base=:base&head=:head를 처리합니다.
+// HandleBranchDiff와 동일한 응답을 반환하지만, 브랜치명을 query parameter로 받아
+// 슬래시(/)가 포함된 브랜치명(예: fix/some-branch)을 안전하게 처리합니다.
+func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// 공통 파라미터 추출 및 검증
+	params, err := h.validateAndExtractParams(c)
+	if err != nil {
+		h.logger.Error("Failed to validate and extract parameters", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// query parameter에서 base와 head 추출
+	base := c.Query("base")
+	head := c.Query("head")
+	if base == "" || head == "" {
+		h.logger.Error("Missing required query parameters: base or head")
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required query parameters: base or head"})
+		return
+	}
+
+	params.Base = base
+	params.Head = head
+
+	// 저장소 경로 검증
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
+	if err != nil {
+		h.logger.Error("Invalid repository path", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
+	contextLines := 3 // 기본값
+	if contextStr := c.Query("context"); contextStr != "" {
+		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
+			contextLines = ctx
+		}
+	}
+
+	// 브랜치 diff 계산 (HandleBranchDiff와 동일한 로직)
+	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
+	if err != nil {
+		if diffErr, ok := err.(*DiffTooLargeError); ok {
+			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"error":   "This diff is too large to display",
+				"reason":  diffErr.Reason,
+			})
+			return
+		}
+		errStr := err.Error()
+		if strings.Contains(errStr, "object not found") ||
+			strings.Contains(errStr, "not found") ||
+			strings.Contains(errStr, "reference not found") ||
+			strings.Contains(errStr, "Invalid revision range") ||
+			strings.Contains(errStr, "bad revision") {
+			h.logger.Warn("Reference or object not found", zap.Error(err))
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+				"code":    "REF_NOT_FOUND",
+			})
+			return
+		}
+		h.logger.Error("Failed to calculate branch diff", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 페이지네이션 요청 확인
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		pagination := extractPaginationParams(c.Request)
+		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
+
+		response := &PaginatedDiffResponse{
+			Success: true,
+			DiffResponse: &DiffResponse{
+				Base:  diffResp.Base,
+				Head:  diffResp.Head,
+				Files: paginatedFiles,
+				Stats: DiffStats{
+					TotalAdditions: diffResp.Stats.TotalAdditions,
+					TotalDeletions: diffResp.Stats.TotalDeletions,
+					FilesChanged:   len(paginatedFiles),
+				},
+				Commits:   diffResp.Commits,
+				MergeBase: diffResp.MergeBase,
+			},
+			Pagination: &updatedPagination,
+		}
+		c.JSON(http.StatusOK, response)
+	} else {
+		c.JSON(http.StatusOK, diffResp)
+	}
+}
+
 // HandleFileDiff는 GET /repos/:owner/:repo/diff/file?path=:path&base=:base&head=:head를 처리합니다
 func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
 	ctx := c.Request.Context()
