@@ -17,6 +17,7 @@ triggers:
     #   - 'specs/**'
 
 env:
+  GAR_MIRROR: asia-northeast3-docker.pkg.dev/collabops-shared/dockerhub
   REGION: asia-northeast3
   REPOSITORY: git-executor
   IMAGE: collabops-git-executor-specs
@@ -26,7 +27,7 @@ jobs:
     name: Generate OpenAPI Specifications
     steps:
       - name: Checkout code
-        image: debian:bookworm-slim
+        image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
           GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
@@ -50,7 +51,7 @@ jobs:
           git checkout "${COMMIT_SHA}"
 
       - name: Verify OpenAPI prerequisites
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         run: |
           echo "🔍 Verifying OpenAPI generation prerequisites..."
           cd /workspace/source
@@ -66,7 +67,7 @@ jobs:
           [ -f "Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
 
       - name: Setup Go and generate specs
-        image: golang:1.25-alpine
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-alpine
         run: |
           set -eu
           apk add --no-cache make
@@ -97,7 +98,7 @@ jobs:
           fi
 
       - name: Compare API specifications
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         run: |
           set -eu
           apk add --no-cache git
@@ -133,7 +134,7 @@ jobs:
           fi
 
       - name: Fail workflow if specs are out of sync
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         run: |
           set -eu
           cd /workspace/source
@@ -160,7 +161,7 @@ jobs:
       CLOUDSDK_CONFIG: /workspace/source/.gcp
     steps:
       - name: Checkout code
-        image: debian:bookworm-slim
+        image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
           GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
@@ -184,7 +185,7 @@ jobs:
           git checkout "${COMMIT_SHA}"
 
       - name: Generate OpenAPI specs for build
-        image: golang:1.25-alpine
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-alpine
         run: |
           set -eu
           apk add --no-cache make
@@ -194,7 +195,7 @@ jobs:
           echo "✅ Specs generated for image build"
 
       - name: Verify image build prerequisites
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         env:
           GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
         run: |
@@ -207,7 +208,7 @@ jobs:
           [ -f "specs/generated/collabops-git-executor.yaml" ] && echo "✓ Spec generated" || { echo "✗ Spec not found" ; exit 1; }
 
       - name: Google Cloud Auth
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
@@ -220,7 +221,7 @@ jobs:
           gcloud config set project "${GCP_PROJECT_ID_SHARED}"
 
       - name: Configure Docker for Artifact Registry
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         run: |
           set -eu
           export CLOUDSDK_CONFIG=${{ env.CLOUDSDK_CONFIG }}
@@ -228,7 +229,7 @@ jobs:
           echo "✓ Docker authentication configured"
 
       - name: Verify GCP Configuration
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
         run: |
@@ -252,12 +253,16 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
         run: |
           set -eu
+          CRED_FILE="${GOOGLE_APPLICATION_CREDENTIALS}"
+          AUTH=$(printf '_json_key:%s' "$(cat ${CRED_FILE})" | base64 -w 0)
+          printf '{"auths":{"asia-northeast3-docker.pkg.dev":{"auth":"%s"}}}' "${AUTH}" > /kaniko/.docker/config.json
           IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}/${IMAGE}"
           CONTEXT="/workspace/source"
           DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
 
           echo "📋 Building and pushing specs image..."
           /kaniko/executor \
+            --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
             --context="${CONTEXT}" \
             --dockerfile="${DOCKERFILE}" \
             --target=specs \
@@ -267,7 +272,7 @@ jobs:
             --destination="${IMAGE_BASE}:${COLLABOPS_REF_NAME}"
 
       - name: Verify image deployment
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
           COMMIT_SHA: ${{ collabops.sha }}
@@ -297,7 +302,7 @@ jobs:
           echo "✅ All image tags verified successfully!"
 
       - name: Show deployment summary
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         env:
           GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
           COMMIT_SHA: ${{ collabops.sha }}

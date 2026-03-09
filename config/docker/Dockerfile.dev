@@ -1,4 +1,6 @@
-FROM golang:1.25-alpine AS builder
+ARG GAR_MIRROR=asia-northeast3-docker.pkg.dev/collabops-shared/dockerhub
+
+FROM ${GAR_MIRROR}/golang:1.25.5-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata curl bash build-base
 
@@ -25,7 +27,7 @@ RUN mkdir -p /usr/local/bin && \
     chmod +x /usr/local/bin/air
 
 # 런타임 이미지
-FROM golang:1.25-alpine 
+FROM ${GAR_MIRROR}/golang:1.25.5-alpine
 
 RUN apk add --no-cache ca-certificates tzdata curl git bash build-base
 

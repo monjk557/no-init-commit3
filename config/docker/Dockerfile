@@ -1,4 +1,6 @@
-FROM golang:1.25-alpine AS builder
+ARG GAR_MIRROR=asia-northeast3-docker.pkg.dev/collabops-shared/dockerhub
+
+FROM ${GAR_MIRROR}/golang:1.25.5-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata curl bash build-base
 
@@ -13,7 +15,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o git-executor ./cmd/git-executor
 
 # Specs 서버 이미지 (nginx 기반) - 명시적으로 타겟 지정 필요
-FROM nginx:alpine AS specs
+FROM ${GAR_MIRROR}/nginx:1.28.2-alpine AS specs
 
 # Copy nginx configuration
 COPY config/docker/specs/nginx.conf /etc/nginx/conf.d/default.conf
@@ -37,7 +39,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 CMD ["nginx", "-g", "daemon off;"]
 
 # 애플리케이션 런타임 이미지 (기본 타겟 - 기존 CI/CD와 호환)
-FROM alpine:latest
+FROM ${GAR_MIRROR}/alpine:3.19.9
 
 RUN apk add --no-cache ca-certificates tzdata curl git
 

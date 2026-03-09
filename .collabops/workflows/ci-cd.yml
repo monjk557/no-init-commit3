@@ -7,6 +7,7 @@ triggers:
     branches: ["main"]
 
 env:
+  GAR_MIRROR: asia-northeast3-docker.pkg.dev/collabops-shared/dockerhub
   REGION: asia-northeast3
   REPOSITORY: git-executor
   IMAGE: collabops-git-executor
@@ -16,7 +17,7 @@ jobs:
     name: Run Tests
     steps:
       - name: Checkout code
-        image: debian:bookworm-slim
+        image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
           GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
@@ -40,28 +41,28 @@ jobs:
           git checkout "${COMMIT_SHA}"
 
       - name: Install dependencies and tools
-        image: golang:1.25-bookworm
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
         run: |
           set -eu
           cd /workspace/source
           make install
 
       - name: Format
-        image: golang:1.25-bookworm
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
         run: |
           set -eu
           cd /workspace/source
           make format
 
       # - name: Lint
-      #   image: golang:1.25-bookworm
+      #   image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
       #   run: |
       #     set -eu
       #     cd /workspace/source
       #     make lint
 
       - name: Run tests
-        image: golang:1.25-bookworm
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
         env:
           REDIS_URL: redis://localhost:6379/0
         run: |
@@ -73,9 +74,11 @@ jobs:
     name: Build Only (PR)
     needs: [test]
     if: collabops.event_name == 'change_request'
+    env:
+      CLOUDSDK_CONFIG: /workspace/source/.gcp
     steps:
       - name: Checkout code
-        image: debian:bookworm-slim
+        image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
           GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
@@ -98,14 +101,33 @@ jobs:
           git fetch origin "${COMMIT_SHA}"
           git checkout "${COMMIT_SHA}"
 
+      - name: Google Cloud Auth
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
+        env:
+          GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          set -eu
+          mkdir -p ${{ env.CLOUDSDK_CONFIG }}
+          printf '%s' "${GCP_SA_KEY}" | tr -d '\r' > "${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json"
+          export GOOGLE_APPLICATION_CREDENTIALS=${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
+          gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}"
+          gcloud config set project "${GCP_PROJECT_ID_SHARED}"
+
       - name: Build Docker image (no push)
         image: gcr.io/kaniko-project/executor:debug
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
         run: |
           set -eu
           echo "Building image for PR (no push)...."
+          CRED_FILE="${GOOGLE_APPLICATION_CREDENTIALS}"
+          AUTH=$(printf '_json_key:%s' "$(cat ${CRED_FILE})" | base64 -w 0)
+          printf '{"auths":{"asia-northeast3-docker.pkg.dev":{"auth":"%s"}}}' "${AUTH}" > /kaniko/.docker/config.json
           CONTEXT="/workspace/source"
           DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
           /kaniko/executor \
+            --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
             --context="${CONTEXT}" \
             --dockerfile="${DOCKERFILE}" \
             --destination=tar:///workspace/source/git-executor-pr.tar \
@@ -119,7 +141,7 @@ jobs:
       CLOUDSDK_CONFIG: /workspace/source/.gcp
     steps:
       - name: Checkout code
-        image: debian:bookworm-slim
+        image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
           GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
@@ -143,7 +165,7 @@ jobs:
           git checkout "${COMMIT_SHA}"
 
       - name: Extract metadata and prepare tags
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         env:
           REGION: ${{ env.REGION }}
           REPOSITORY: ${{ env.REPOSITORY }}
@@ -172,7 +194,7 @@ jobs:
           echo "✅ Version: ${VERSION}"
 
       - name: Prepare branch/tag name for Docker tag
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         env:
           COLLABOPS_REF_NAME: ${{ collabops.ref_name }}
         run: |
@@ -180,7 +202,7 @@ jobs:
           echo "📋 Docker tag for ref: ${REF_TAG}"
 
       - name: Verify prerequisites
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         run: |
           set -eu
           echo "🔍 Verifying prerequisites..."
@@ -189,7 +211,7 @@ jobs:
           [ -f "/workspace/source/Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
 
       - name: Google Cloud Auth
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
@@ -202,7 +224,7 @@ jobs:
           gcloud config set project "${GCP_PROJECT_ID_SHARED}"
 
       - name: Set up Cloud SDK
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           GCP_PROJECT_ID_SHARED: ${{ secrets.GCP_PROJECT_ID_SHARED }}
         run: |
@@ -211,7 +233,7 @@ jobs:
           echo "Cloud SDK ready. Project: $(gcloud config get-value project)"
 
       - name: Verify GCP Configuration
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           REGION: ${{ env.REGION }}
           REPOSITORY: ${{ env.REPOSITORY }}
@@ -240,7 +262,7 @@ jobs:
           fi
 
       - name: Configure Docker Authentication
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
         run: |
@@ -262,6 +284,9 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ env.CLOUDSDK_CONFIG }}/application_default_credentials.json
         run: |
           set -eu
+          CRED_FILE="${GOOGLE_APPLICATION_CREDENTIALS}"
+          AUTH=$(printf '_json_key:%s' "$(cat ${CRED_FILE})" | base64 -w 0)
+          printf '{"auths":{"asia-northeast3-docker.pkg.dev":{"auth":"%s"}}}' "${AUTH}" > /kaniko/.docker/config.json
           REF_TAG=$(echo "${COLLABOPS_REF_NAME}" | sed 's/\//-/g')
           IMAGE_BASE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID_SHARED}/${REPOSITORY}/${IMAGE}"
           CONTEXT="/workspace/source"
@@ -271,6 +296,7 @@ jobs:
             echo "📋 Hotfix: ${REF_TAG}, ${COMMIT_SHA}"
             echo "Building and pushing hotfix tags: ${REF_TAG}, ${COMMIT_SHA}"
             /kaniko/executor \
+              --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
               --context="${CONTEXT}" \
               --dockerfile="${DOCKERFILE}" \
               --destination="${IMAGE_BASE}:${REF_TAG}" \
@@ -279,6 +305,7 @@ jobs:
             echo "📋 Main: ${COMMIT_SHA}, latest"
             echo "Building and pushing main tags: ${COMMIT_SHA}, latest"
             /kaniko/executor \
+              --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
               --context="${CONTEXT}" \
               --dockerfile="${DOCKERFILE}" \
               --destination="${IMAGE_BASE}:${COMMIT_SHA}" \
@@ -286,7 +313,7 @@ jobs:
           fi
 
       - name: Verify All Images Push
-        image: google/cloud-sdk:slim
+        image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim
         env:
           REGION: ${{ env.REGION }}
           REPOSITORY: ${{ env.REPOSITORY }}
@@ -332,7 +359,7 @@ jobs:
     if: collabops.event_name == 'push' && success()
     steps:
       - name: Show Deployment Summary
-        image: alpine:3.19
+        image: ${{ env.GAR_MIRROR }}/alpine:3.19.9
         env:
           REGION: ${{ env.REGION }}
           REPOSITORY: ${{ env.REPOSITORY }}
@@ -360,7 +387,7 @@ jobs:
           echo "🎉 All images deployed successfully!"
 
       - name: Send Slack notification
-        image: curlimages/curl:8.5.0
+        image: ${{ env.GAR_MIRROR }}/curlimages/curl:8.17.0
         env:
           IMAGE: ${{ env.IMAGE }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_ARTIFACT_REGISTRY_QA1 }}
@@ -385,4 +412,5 @@ jobs:
           curl -sS -X POST -H 'Content-type: application/json' \
             --data "{\"text\": \"🚀 **${IMAGE}** image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\n👤 Contributor: ${ACTOR} | 🕐 Time: ${KST_TIME}\"}" \
             "${SLACK_WEBHOOK_URL}"
+
 
