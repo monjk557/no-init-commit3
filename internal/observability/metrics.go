@@ -1,89 +1,92 @@
 // Package observability는 Git executor 서비스를 위한 포괄적인 메트릭, 로깅, 모니터링 기능을 제공합니다.
-// 기존 캐시 메트릭 인프라를 기반으로 구축된 종합적인 모니터링 시스템입니다.
+// OTel metrics API + Prometheus exporter 기반 종합 모니터링 시스템입니다.
 package observability
 
 import (
+	"context"
 	"net/http"
 	"runtime"
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
+	otelmetric "go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Global singleton for application metrics to avoid duplicate registrations
 var (
 	globalMetrics     *ApplicationMetrics
 	globalMetricsOnce sync.Once
+	globalMeterProv   *sdkmetric.MeterProvider
 )
 
-// ApplicationMetrics는 애플리케이션 전반에 걸친 Prometheus 메트릭들을 보유합니다.
-// HTTP 요청, Git 작업, 오류, 리소스 사용량 등 모든 주요 메트릭을 포함합니다.
+// ApplicationMetrics는 애플리케이션 전반에 걸친 OTel 메트릭들을 보유합니다.
 type ApplicationMetrics struct {
 	// HTTP Request Metrics
-	HTTPRequestsTotal     prometheus.CounterVec   // Total HTTP requests by method, endpoint, status
-	HTTPRequestDuration   prometheus.HistogramVec // HTTP request duration by method, endpoint
-	HTTPActiveRequests    prometheus.Gauge        // Currently active HTTP requests
-	HTTPRequestSizeBytes  prometheus.HistogramVec // HTTP request size in bytes
-	HTTPResponseSizeBytes prometheus.HistogramVec // HTTP response size in bytes
+	httpRequestsTotal     otelmetric.Int64Counter
+	httpRequestDuration   otelmetric.Float64Histogram
+	httpActiveRequests    otelmetric.Int64UpDownCounter
+	httpRequestSizeBytes  otelmetric.Float64Histogram
+	httpResponseSizeBytes otelmetric.Float64Histogram
 
 	// Git Operation Metrics
-	GitOperationsTotal      prometheus.CounterVec   // Total Git operations by type, result
-	GitOperationDuration    prometheus.HistogramVec // Git operation duration by type
-	GitRepositoriesAccessed prometheus.Counter      // Total repositories accessed
-	GitObjectsProcessed     prometheus.CounterVec   // Git objects processed by type (commit, tree, blob)
+	gitOperationsTotal      otelmetric.Int64Counter
+	gitOperationDuration    otelmetric.Float64Histogram
+	gitRepositoriesAccessed otelmetric.Int64Counter
+	gitObjectsProcessed     otelmetric.Int64Counter
 
 	// Error Metrics
-	ErrorsTotal           prometheus.CounterVec // Total errors by type, operation
-	PermissionDeniedTotal prometheus.CounterVec // Permission denied errors by resource
-	ValidationErrorsTotal prometheus.CounterVec // Validation errors by field
+	errorsTotal           otelmetric.Int64Counter
+	permissionDeniedTotal otelmetric.Int64Counter
+	validationErrorsTotal otelmetric.Int64Counter
 
 	// Resource Usage Metrics
-	MemoryUsageBytes     prometheus.Gauge // Current memory usage
-	GoroutinesCount      prometheus.Gauge // Current number of goroutines
-	FileDescriptorsCount prometheus.Gauge // Current number of open file descriptors
-	CPUUsagePercent      prometheus.Gauge // Current CPU usage percentage
+	memoryUsageBytes     otelmetric.Float64Gauge
+	goroutinesCount      otelmetric.Float64Gauge
+	fileDescriptorsCount otelmetric.Float64Gauge
+	cpuUsagePercent      otelmetric.Float64Gauge
 
 	// Performance Metrics
-	ConcurrentConnections prometheus.Gauge // Current concurrent connections
-	RequestQueueLength    prometheus.Gauge // Current request queue length
-	ResponseLatencyP95    prometheus.Gauge // 95th percentile response latency
-	ResponseLatencyP99    prometheus.Gauge // 99th percentile response latency
+	concurrentConnections otelmetric.Float64Gauge
+	requestQueueLength    otelmetric.Float64Gauge
+	responseLatencyP95    otelmetric.Float64Gauge
+	responseLatencyP99    otelmetric.Float64Gauge
 
 	// Business Logic Metrics
-	RepositoryCacheHitRate  prometheus.Gauge        // Repository cache hit rate
-	PermissionCheckDuration prometheus.HistogramVec // Permission check duration by result
-	APIServiceCallsTotal    prometheus.CounterVec   // API service calls by endpoint, result
+	repositoryCacheHitRate  otelmetric.Float64Gauge
+	permissionCheckDuration otelmetric.Float64Histogram
+	apiServiceCallsTotal    otelmetric.Int64Counter
 
 	// Overview / Performance (repo browser)
-	OverviewCacheOpsTotal                prometheus.CounterVec   // Cache operations by kind/op (hit, miss, set)
-	OverviewCacheEntries                 prometheus.GaugeVec     // Current cache entry count by kind
-	OverviewCacheSingleflightSharedTotal prometheus.CounterVec   // singleflight shared result count by kind
-	LatestCommitsBatchRequestsTotal      prometheus.CounterVec   // Requests by outcome (cache_hit, complete, incomplete, error)
-	LatestCommitsBatchDuration           prometheus.HistogramVec // Duration by outcome
-	LatestCommitsBatchPaths              prometheus.HistogramVec // Requested path count by outcome
-	LatestCommitsBatchScannedCommits     prometheus.HistogramVec // scanned commits by outcome
-	LatestCommitsBatchCutReasonTotal     prometheus.CounterVec   // cut reason counts (only when incomplete)
+	overviewCacheOpsTotal                otelmetric.Int64Counter
+	overviewCacheEntries                 otelmetric.Float64Gauge
+	overviewCacheSingleflightSharedTotal otelmetric.Int64Counter
+	latestCommitsBatchRequestsTotal      otelmetric.Int64Counter
+	latestCommitsBatchDuration           otelmetric.Float64Histogram
+	latestCommitsBatchPaths              otelmetric.Float64Histogram
+	latestCommitsBatchScannedCommits     otelmetric.Float64Histogram
+	latestCommitsBatchCutReasonTotal     otelmetric.Int64Counter
 
-	// Tree-with-commit endpoint (GET /overview/tree/commits)
-	TreeWithCommitRequestsTotal prometheus.CounterVec   // Requests by outcome (complete, incomplete, error)
-	TreeWithCommitDuration      prometheus.HistogramVec // Duration by outcome
-	TreeWithCommitEntries       prometheus.HistogramVec // Entry count (N) by outcome
+	// Tree-with-commit endpoint
+	treeWithCommitRequestsTotal otelmetric.Int64Counter
+	treeWithCommitDuration      otelmetric.Float64Histogram
+	treeWithCommitEntries       otelmetric.Float64Histogram
 
-	// Commit index (background-populated dir→commit lookup)
-	CommitIndexOpsTotal prometheus.CounterVec // hit / miss / populate / evict
-	CommitIndexEntries  prometheus.Gauge      // current index entry count
+	// Commit index
+	commitIndexOpsTotal otelmetric.Int64Counter
+	commitIndexEntries  otelmetric.Float64Gauge
 }
 
 // MetricsConfig는 메트릭 수집을 위한 설정을 보유합니다.
-// 메트릭 활성화 여부, 네임스페이스, 수집 간격 등을 설정합니다.
 type MetricsConfig struct {
-	Enabled         bool                  `mapstructure:"enabled"`
-	Namespace       string                `mapstructure:"namespace"`
-	Registry        prometheus.Registerer `mapstructure:"-"`
-	CollectInterval time.Duration         `mapstructure:"collect_interval"`
+	Enabled         bool          `mapstructure:"enabled"`
+	Namespace       string        `mapstructure:"namespace"`
+	CollectInterval time.Duration `mapstructure:"collect_interval"`
 }
 
 // DefaultMetricsConfig returns default metrics configuration
@@ -91,325 +94,185 @@ func DefaultMetricsConfig() MetricsConfig {
 	return MetricsConfig{
 		Enabled:         true,
 		Namespace:       "git_executor",
-		Registry:        prometheus.DefaultRegisterer,
 		CollectInterval: 15 * time.Second,
 	}
 }
 
+// initMeterProvider sets up the OTel MeterProvider with Prometheus exporter.
+func initMeterProvider() {
+	exporter, err := promexporter.New(
+		promexporter.WithoutScopeInfo(),
+		promexporter.WithoutTargetInfo(),
+	)
+	if err != nil {
+		panic("failed to create prometheus exporter: " + err.Error())
+	}
+
+	globalMeterProv = sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
+	otel.SetMeterProvider(globalMeterProv)
+}
+
+// must panics on error — only used during deterministic init.
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
 // NewApplicationMetrics는 모든 애플리케이션 메트릭을 생성하고 등록합니다.
-// 싱글톤 패턴을 사용하여 중복 등록을 방지합니다.
 func NewApplicationMetrics() *ApplicationMetrics {
 	globalMetricsOnce.Do(func() {
+		initMeterProvider()
+		m := otel.Meter("git-executor")
+
 		globalMetrics = &ApplicationMetrics{
 			// HTTP Request Metrics
-			HTTPRequestsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_http_requests_total",
-					Help: "Total number of HTTP requests by method, endpoint, and status",
-				},
-				[]string{"method", "endpoint", "status_code"},
-			),
-
-			HTTPRequestDuration: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_http_request_duration_seconds",
-					Help:    "HTTP request duration in seconds",
-					Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
-				},
-				[]string{"method", "endpoint"},
-			),
-
-			HTTPActiveRequests: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_http_active_requests",
-					Help: "Number of currently active HTTP requests",
-				},
-			),
-
-			HTTPRequestSizeBytes: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_http_request_size_bytes",
-					Help:    "HTTP request size in bytes",
-					Buckets: prometheus.ExponentialBuckets(1024, 2, 10), // 1KB to 1MB
-				},
-				[]string{"method", "endpoint"},
-			),
-
-			HTTPResponseSizeBytes: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_http_response_size_bytes",
-					Help:    "HTTP response size in bytes",
-					Buckets: prometheus.ExponentialBuckets(1024, 2, 10), // 1KB to 1MB
-				},
-				[]string{"method", "endpoint", "status_code"},
-			),
+			httpRequestsTotal: must(m.Int64Counter("git_executor_http_requests",
+				otelmetric.WithDescription("Total number of HTTP requests"),
+			)),
+			httpRequestDuration: must(m.Float64Histogram("git_executor_http_request_duration",
+				otelmetric.WithDescription("HTTP request duration in seconds"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+			)),
+			httpActiveRequests: must(m.Int64UpDownCounter("git_executor_http_active_requests",
+				otelmetric.WithDescription("Number of currently active HTTP requests"),
+			)),
+			httpRequestSizeBytes: must(m.Float64Histogram("git_executor_http_request_size",
+				otelmetric.WithDescription("HTTP request size in bytes"),
+				otelmetric.WithUnit("By"),
+			)),
+			httpResponseSizeBytes: must(m.Float64Histogram("git_executor_http_response_size",
+				otelmetric.WithDescription("HTTP response size in bytes"),
+				otelmetric.WithUnit("By"),
+			)),
 
 			// Git Operation Metrics
-			GitOperationsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_git_operations_total",
-					Help: "Total number of Git operations by type and result",
-				},
-				[]string{"operation", "result"}, // operation: clone, fetch, diff, etc. result: success, error
-			),
-
-			GitOperationDuration: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_git_operation_duration_seconds",
-					Help:    "Git operation duration in seconds",
-					Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
-				},
-				[]string{"operation"},
-			),
-
-			GitRepositoriesAccessed: promauto.NewCounter(
-				prometheus.CounterOpts{
-					Name: "git_executor_git_repositories_accessed_total",
-					Help: "Total number of repositories accessed",
-				},
-			),
-
-			GitObjectsProcessed: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_git_objects_processed_total",
-					Help: "Total number of Git objects processed by type",
-				},
-				[]string{"object_type"}, // commit, tree, blob, tag
-			),
+			gitOperationsTotal: must(m.Int64Counter("git_executor_git_operations",
+				otelmetric.WithDescription("Total number of Git operations"),
+			)),
+			gitOperationDuration: must(m.Float64Histogram("git_executor_git_operation_duration",
+				otelmetric.WithDescription("Git operation duration in seconds"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+			)),
+			gitRepositoriesAccessed: must(m.Int64Counter("git_executor_git_repositories_accessed",
+				otelmetric.WithDescription("Total number of repositories accessed"),
+			)),
+			gitObjectsProcessed: must(m.Int64Counter("git_executor_git_objects_processed",
+				otelmetric.WithDescription("Total number of Git objects processed"),
+			)),
 
 			// Error Metrics
-			ErrorsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_errors_total",
-					Help: "Total number of errors by type and operation",
-				},
-				[]string{"error_type", "operation"},
-			),
-
-			PermissionDeniedTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_permission_denied_total",
-					Help: "Total number of permission denied errors by resource",
-				},
-				[]string{"resource_type", "operation"},
-			),
-
-			ValidationErrorsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_validation_errors_total",
-					Help: "Total number of validation errors by field",
-				},
-				[]string{"field", "error_type"},
-			),
+			errorsTotal: must(m.Int64Counter("git_executor_errors",
+				otelmetric.WithDescription("Total number of errors"),
+			)),
+			permissionDeniedTotal: must(m.Int64Counter("git_executor_permission_denied",
+				otelmetric.WithDescription("Total number of permission denied errors"),
+			)),
+			validationErrorsTotal: must(m.Int64Counter("git_executor_validation_errors",
+				otelmetric.WithDescription("Total number of validation errors"),
+			)),
 
 			// Resource Usage Metrics
-			MemoryUsageBytes: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_memory_usage_bytes",
-					Help: "Current memory usage in bytes",
-				},
-			),
-
-			GoroutinesCount: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_goroutines_count",
-					Help: "Current number of goroutines",
-				},
-			),
-
-			FileDescriptorsCount: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_file_descriptors_count",
-					Help: "Current number of open file descriptors",
-				},
-			),
-
-			CPUUsagePercent: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_cpu_usage_percent",
-					Help: "Current CPU usage percentage",
-				},
-			),
+			memoryUsageBytes: must(m.Float64Gauge("git_executor_memory_usage",
+				otelmetric.WithDescription("Current memory usage in bytes"),
+				otelmetric.WithUnit("By"),
+			)),
+			goroutinesCount: must(m.Float64Gauge("git_executor_goroutines_count",
+				otelmetric.WithDescription("Current number of goroutines"),
+			)),
+			fileDescriptorsCount: must(m.Float64Gauge("git_executor_file_descriptors_count",
+				otelmetric.WithDescription("Current number of open file descriptors"),
+			)),
+			cpuUsagePercent: must(m.Float64Gauge("git_executor_cpu_usage_percent",
+				otelmetric.WithDescription("Current CPU usage percentage"),
+			)),
 
 			// Performance Metrics
-			ConcurrentConnections: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_concurrent_connections",
-					Help: "Current number of concurrent connections",
-				},
-			),
-
-			RequestQueueLength: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_request_queue_length",
-					Help: "Current request queue length",
-				},
-			),
-
-			ResponseLatencyP95: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_response_latency_p95_seconds",
-					Help: "95th percentile response latency in seconds",
-				},
-			),
-
-			ResponseLatencyP99: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_response_latency_p99_seconds",
-					Help: "99th percentile response latency in seconds",
-				},
-			),
+			concurrentConnections: must(m.Float64Gauge("git_executor_concurrent_connections",
+				otelmetric.WithDescription("Current number of concurrent connections"),
+			)),
+			requestQueueLength: must(m.Float64Gauge("git_executor_request_queue_length",
+				otelmetric.WithDescription("Current request queue length"),
+			)),
+			responseLatencyP95: must(m.Float64Gauge("git_executor_response_latency_p95",
+				otelmetric.WithDescription("95th percentile response latency in seconds"),
+				otelmetric.WithUnit("s"),
+			)),
+			responseLatencyP99: must(m.Float64Gauge("git_executor_response_latency_p99",
+				otelmetric.WithDescription("99th percentile response latency in seconds"),
+				otelmetric.WithUnit("s"),
+			)),
 
 			// Business Logic Metrics
-			RepositoryCacheHitRate: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_repository_cache_hit_rate",
-					Help: "Repository cache hit rate as a percentage",
-				},
-			),
+			repositoryCacheHitRate: must(m.Float64Gauge("git_executor_repository_cache_hit_rate",
+				otelmetric.WithDescription("Repository cache hit rate as a percentage"),
+			)),
+			permissionCheckDuration: must(m.Float64Histogram("git_executor_permission_check_duration",
+				otelmetric.WithDescription("Permission check duration in seconds"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1),
+			)),
+			apiServiceCallsTotal: must(m.Int64Counter("git_executor_api_service_calls",
+				otelmetric.WithDescription("Total number of API service calls"),
+			)),
 
-			PermissionCheckDuration: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_permission_check_duration_seconds",
-					Help:    "Permission check duration in seconds by result",
-					Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
-				},
-				[]string{"result"}, // success, error, timeout
-			),
-
-			APIServiceCallsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_api_service_calls_total",
-					Help: "Total number of API service calls by endpoint and result",
-				},
-				[]string{"endpoint", "result"},
-			),
-
-			OverviewCacheOpsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_overview_cache_ops_total",
-					Help: "Overview in-memory cache operations by kind and op (hit, miss, set)",
-				},
-				[]string{"kind", "op"},
-			),
-
-			OverviewCacheEntries: *promauto.NewGaugeVec(
-				prometheus.GaugeOpts{
-					Name: "git_executor_overview_cache_entries",
-					Help: "Current overview in-memory cache entry count by kind",
-				},
-				[]string{"kind"},
-			),
-
-			OverviewCacheSingleflightSharedTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_overview_cache_singleflight_shared_total",
-					Help: "Overview cache singleflight shared result count by kind",
-				},
-				[]string{"kind"},
-			),
-
-			LatestCommitsBatchRequestsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_latest_commits_batch_requests_total",
-					Help: "latest-commits batch requests by outcome",
-				},
-				[]string{"outcome"},
-			),
-
-			LatestCommitsBatchDuration: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_latest_commits_batch_duration_seconds",
-					Help:    "latest-commits batch handler duration in seconds by outcome",
-					Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 1.5, 2.5, 5, 10},
-				},
-				[]string{"outcome"},
-			),
-
-			LatestCommitsBatchPaths: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_latest_commits_batch_paths",
-					Help:    "latest-commits batch requested path count by outcome",
-					Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000},
-				},
-				[]string{"outcome"},
-			),
-
-			LatestCommitsBatchScannedCommits: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_latest_commits_batch_scanned_commits",
-					Help:    "latest-commits batch scanned commits by outcome",
-					Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000},
-				},
-				[]string{"outcome"},
-			),
-
-			LatestCommitsBatchCutReasonTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_latest_commits_batch_cut_reason_total",
-					Help: "latest-commits batch cut reason count (only when incomplete)",
-				},
-				[]string{"reason"},
-			),
+			// Overview cache
+			overviewCacheOpsTotal: must(m.Int64Counter("git_executor_overview_cache_ops",
+				otelmetric.WithDescription("Overview in-memory cache operations"),
+			)),
+			overviewCacheEntries: must(m.Float64Gauge("git_executor_overview_cache_entries",
+				otelmetric.WithDescription("Current overview in-memory cache entry count"),
+			)),
+			overviewCacheSingleflightSharedTotal: must(m.Int64Counter("git_executor_overview_cache_singleflight_shared",
+				otelmetric.WithDescription("Overview cache singleflight shared result count"),
+			)),
+			latestCommitsBatchRequestsTotal: must(m.Int64Counter("git_executor_latest_commits_batch_requests",
+				otelmetric.WithDescription("latest-commits batch requests by outcome"),
+			)),
+			latestCommitsBatchDuration: must(m.Float64Histogram("git_executor_latest_commits_batch_duration",
+				otelmetric.WithDescription("latest-commits batch handler duration in seconds"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 1.5, 2.5, 5, 10),
+			)),
+			latestCommitsBatchPaths: must(m.Float64Histogram("git_executor_latest_commits_batch_paths",
+				otelmetric.WithDescription("latest-commits batch requested path count"),
+				otelmetric.WithExplicitBucketBoundaries(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000),
+			)),
+			latestCommitsBatchScannedCommits: must(m.Float64Histogram("git_executor_latest_commits_batch_scanned_commits",
+				otelmetric.WithDescription("latest-commits batch scanned commits"),
+				otelmetric.WithExplicitBucketBoundaries(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000),
+			)),
+			latestCommitsBatchCutReasonTotal: must(m.Int64Counter("git_executor_latest_commits_batch_cut_reason",
+				otelmetric.WithDescription("latest-commits batch cut reason count"),
+			)),
 
 			// Tree-with-commit endpoint
-			TreeWithCommitRequestsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_tree_with_commit_requests_total",
-					Help: "tree-with-commit requests by outcome (complete, incomplete, error)",
-				},
-				[]string{"outcome"},
-			),
-			TreeWithCommitDuration: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_tree_with_commit_duration_seconds",
-					Help:    "tree-with-commit handler duration in seconds by outcome",
-					Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 1.5, 2.5, 5, 10},
-				},
-				[]string{"outcome"},
-			),
-			TreeWithCommitEntries: *promauto.NewHistogramVec(
-				prometheus.HistogramOpts{
-					Name:    "git_executor_tree_with_commit_entries",
-					Help:    "tree-with-commit entry count (N) by outcome",
-					Buckets: []float64{1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000},
-				},
-				[]string{"outcome"},
-			),
+			treeWithCommitRequestsTotal: must(m.Int64Counter("git_executor_tree_with_commit_requests",
+				otelmetric.WithDescription("tree-with-commit requests by outcome"),
+			)),
+			treeWithCommitDuration: must(m.Float64Histogram("git_executor_tree_with_commit_duration",
+				otelmetric.WithDescription("tree-with-commit handler duration in seconds"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 1.5, 2.5, 5, 10),
+			)),
+			treeWithCommitEntries: must(m.Float64Histogram("git_executor_tree_with_commit_entries",
+				otelmetric.WithDescription("tree-with-commit entry count (N)"),
+				otelmetric.WithExplicitBucketBoundaries(1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000),
+			)),
 
 			// Commit index
-			CommitIndexOpsTotal: *promauto.NewCounterVec(
-				prometheus.CounterOpts{
-					Name: "git_executor_commit_index_ops_total",
-					Help: "commit index operations by op (hit, miss, populate, evict)",
-				},
-				[]string{"op"},
-			),
-			CommitIndexEntries: promauto.NewGauge(
-				prometheus.GaugeOpts{
-					Name: "git_executor_commit_index_entries",
-					Help: "current commit index entry count",
-				},
-			),
+			commitIndexOpsTotal: must(m.Int64Counter("git_executor_commit_index_ops",
+				otelmetric.WithDescription("commit index operations"),
+			)),
+			commitIndexEntries: must(m.Float64Gauge("git_executor_commit_index_entries",
+				otelmetric.WithDescription("current commit index entry count"),
+			)),
 		}
 	})
 	return globalMetrics
-}
-
-// NewApplicationMetricsWithRegistry creates metrics with a custom registry (for testing)
-func NewApplicationMetricsWithRegistry(registry prometheus.Registerer) *ApplicationMetrics {
-	return &ApplicationMetrics{
-		// HTTP Request Metrics
-		HTTPRequestsTotal: *prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "git_executor_http_requests_total",
-				Help: "Total number of HTTP requests by method, endpoint, and status",
-			},
-			[]string{"method", "endpoint", "status_code"},
-		),
-		// Note: For brevity, only showing one metric here. In practice, all metrics would be recreated.
-		// The full implementation would mirror the structure above but use prometheus.New* instead of promauto.New*
-	}
 }
 
 // GetApplicationMetrics returns the global metrics instance
@@ -420,152 +283,208 @@ func GetApplicationMetrics() *ApplicationMetrics {
 	return globalMetrics
 }
 
+// ctx returns a background context for recording metrics.
+func ctx() context.Context { return context.Background() }
+
 // StartResourceCollector starts a background goroutine to collect resource usage metrics
-func (m *ApplicationMetrics) StartResourceCollector(interval time.Duration) {
+func (am *ApplicationMetrics) StartResourceCollector(interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for range ticker.C {
-			m.collectResourceMetrics()
+			am.collectResourceMetrics()
 		}
 	}()
 }
 
 // collectResourceMetrics collects and updates resource usage metrics
-func (m *ApplicationMetrics) collectResourceMetrics() {
+func (am *ApplicationMetrics) collectResourceMetrics() {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	// Update memory metrics
-	m.MemoryUsageBytes.Set(float64(memStats.Alloc))
-
-	// Update goroutine count
-	m.GoroutinesCount.Set(float64(runtime.NumGoroutine()))
-
-	// Note: File descriptors and CPU usage would require platform-specific code
-	// This is a simplified implementation
+	am.memoryUsageBytes.Record(ctx(), float64(memStats.Alloc))
+	am.goroutinesCount.Record(ctx(), float64(runtime.NumGoroutine()))
 }
 
 // RecordHTTPRequest는 HTTP 요청에 대한 메트릭을 기록합니다.
-// 요청 수, 지속 시간, 요청/응답 크기 등을 기록합니다.
-func (m *ApplicationMetrics) RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, requestSize, responseSize int64) {
+func (am *ApplicationMetrics) RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, requestSize, responseSize int64) {
 	status := http.StatusText(statusCode)
+	attrs := otelmetric.WithAttributes(
+		attribute.String("method", method),
+		attribute.String("endpoint", endpoint),
+		attribute.String("status_code", status),
+	)
 
-	m.HTTPRequestsTotal.WithLabelValues(method, endpoint, status).Inc()
-	m.HTTPRequestDuration.WithLabelValues(method, endpoint).Observe(duration.Seconds())
-	m.HTTPRequestSizeBytes.WithLabelValues(method, endpoint).Observe(float64(requestSize))
-	m.HTTPResponseSizeBytes.WithLabelValues(method, endpoint, status).Observe(float64(responseSize))
+	am.httpRequestsTotal.Add(ctx(), 1, attrs)
+	am.httpRequestDuration.Record(ctx(), duration.Seconds(), otelmetric.WithAttributes(
+		attribute.String("method", method),
+		attribute.String("endpoint", endpoint),
+	))
+	am.httpRequestSizeBytes.Record(ctx(), float64(requestSize), otelmetric.WithAttributes(
+		attribute.String("method", method),
+		attribute.String("endpoint", endpoint),
+	))
+	am.httpResponseSizeBytes.Record(ctx(), float64(responseSize), attrs)
 }
 
-func (m *ApplicationMetrics) RecordOverviewCacheOp(kind, op string) {
-	if m == nil {
+func (am *ApplicationMetrics) RecordOverviewCacheOp(kind, op string) {
+	if am == nil {
 		return
 	}
-	m.OverviewCacheOpsTotal.WithLabelValues(kind, op).Inc()
+	am.overviewCacheOpsTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("kind", kind),
+		attribute.String("op", op),
+	))
 }
 
-func (m *ApplicationMetrics) SetOverviewCacheEntries(kind string, n int) {
-	if m == nil {
+func (am *ApplicationMetrics) SetOverviewCacheEntries(kind string, n int) {
+	if am == nil {
 		return
 	}
-	m.OverviewCacheEntries.WithLabelValues(kind).Set(float64(n))
+	am.overviewCacheEntries.Record(ctx(), float64(n), otelmetric.WithAttributes(
+		attribute.String("kind", kind),
+	))
 }
 
-func (m *ApplicationMetrics) RecordOverviewSingleflightShared(kind string) {
-	if m == nil {
+func (am *ApplicationMetrics) RecordOverviewSingleflightShared(kind string) {
+	if am == nil {
 		return
 	}
-	m.OverviewCacheSingleflightSharedTotal.WithLabelValues(kind).Inc()
+	am.overviewCacheSingleflightSharedTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("kind", kind),
+	))
 }
 
-func (m *ApplicationMetrics) RecordLatestCommitsBatch(outcome string, duration time.Duration, paths int, scannedCommits int) {
-	if m == nil {
+func (am *ApplicationMetrics) RecordLatestCommitsBatch(outcome string, duration time.Duration, paths int, scannedCommits int) {
+	if am == nil {
 		return
 	}
-	m.LatestCommitsBatchRequestsTotal.WithLabelValues(outcome).Inc()
-	m.LatestCommitsBatchDuration.WithLabelValues(outcome).Observe(duration.Seconds())
-	m.LatestCommitsBatchPaths.WithLabelValues(outcome).Observe(float64(paths))
-	m.LatestCommitsBatchScannedCommits.WithLabelValues(outcome).Observe(float64(scannedCommits))
+	attrs := otelmetric.WithAttributes(attribute.String("outcome", outcome))
+	am.latestCommitsBatchRequestsTotal.Add(ctx(), 1, attrs)
+	am.latestCommitsBatchDuration.Record(ctx(), duration.Seconds(), attrs)
+	am.latestCommitsBatchPaths.Record(ctx(), float64(paths), attrs)
+	am.latestCommitsBatchScannedCommits.Record(ctx(), float64(scannedCommits), attrs)
 }
 
-func (m *ApplicationMetrics) RecordLatestCommitsBatchCutReason(reason string) {
-	if m == nil {
+func (am *ApplicationMetrics) RecordLatestCommitsBatchCutReason(reason string) {
+	if am == nil {
 		return
 	}
-	m.LatestCommitsBatchCutReasonTotal.WithLabelValues(reason).Inc()
+	am.latestCommitsBatchCutReasonTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("reason", reason),
+	))
 }
 
 // RecordTreeWithCommit records metrics for the tree-with-commit endpoint.
-func (m *ApplicationMetrics) RecordTreeWithCommit(outcome string, duration time.Duration, entries int) {
-	if m == nil {
+func (am *ApplicationMetrics) RecordTreeWithCommit(outcome string, duration time.Duration, entries int) {
+	if am == nil {
 		return
 	}
-	m.TreeWithCommitRequestsTotal.WithLabelValues(outcome).Inc()
-	m.TreeWithCommitDuration.WithLabelValues(outcome).Observe(duration.Seconds())
-	m.TreeWithCommitEntries.WithLabelValues(outcome).Observe(float64(entries))
+	attrs := otelmetric.WithAttributes(attribute.String("outcome", outcome))
+	am.treeWithCommitRequestsTotal.Add(ctx(), 1, attrs)
+	am.treeWithCommitDuration.Record(ctx(), duration.Seconds(), attrs)
+	am.treeWithCommitEntries.Record(ctx(), float64(entries), attrs)
 }
 
 // RecordCommitIndexOp records a commit-index operation (hit, miss, populate, evict).
-func (m *ApplicationMetrics) RecordCommitIndexOp(op string) {
-	if m == nil {
+func (am *ApplicationMetrics) RecordCommitIndexOp(op string) {
+	if am == nil {
 		return
 	}
-	m.CommitIndexOpsTotal.WithLabelValues(op).Inc()
+	am.commitIndexOpsTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("op", op),
+	))
 }
 
 // SetCommitIndexEntries sets the current commit index entry count gauge.
-func (m *ApplicationMetrics) SetCommitIndexEntries(n int) {
-	if m == nil {
+func (am *ApplicationMetrics) SetCommitIndexEntries(n int) {
+	if am == nil {
 		return
 	}
-	m.CommitIndexEntries.Set(float64(n))
+	am.commitIndexEntries.Record(ctx(), float64(n))
 }
 
 // RecordGitOperation records metrics for a Git operation
-func (m *ApplicationMetrics) RecordGitOperation(operation string, duration time.Duration, success bool) {
+func (am *ApplicationMetrics) RecordGitOperation(operation string, duration time.Duration, success bool) {
 	result := "success"
 	if !success {
 		result = "error"
 	}
 
-	m.GitOperationsTotal.WithLabelValues(operation, result).Inc()
-	m.GitOperationDuration.WithLabelValues(operation).Observe(duration.Seconds())
+	am.gitOperationsTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("operation", operation),
+		attribute.String("result", result),
+	))
+	am.gitOperationDuration.Record(ctx(), duration.Seconds(), otelmetric.WithAttributes(
+		attribute.String("operation", operation),
+	))
 }
 
 // RecordError records an error metric
-func (m *ApplicationMetrics) RecordError(errorType, operation string) {
-	m.ErrorsTotal.WithLabelValues(errorType, operation).Inc()
+func (am *ApplicationMetrics) RecordError(errorType, operation string) {
+	am.errorsTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("error_type", errorType),
+		attribute.String("operation", operation),
+	))
 }
 
 // RecordPermissionDenied records a permission denied error
-func (m *ApplicationMetrics) RecordPermissionDenied(resourceType, operation string) {
-	m.PermissionDeniedTotal.WithLabelValues(resourceType, operation).Inc()
+func (am *ApplicationMetrics) RecordPermissionDenied(resourceType, operation string) {
+	am.permissionDeniedTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("resource_type", resourceType),
+		attribute.String("operation", operation),
+	))
 }
 
 // RecordValidationError records a validation error
-func (m *ApplicationMetrics) RecordValidationError(field, errorType string) {
-	m.ValidationErrorsTotal.WithLabelValues(field, errorType).Inc()
+func (am *ApplicationMetrics) RecordValidationError(field, errorType string) {
+	am.validationErrorsTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("field", field),
+		attribute.String("error_type", errorType),
+	))
 }
 
 // IncrementActiveRequests increments the active requests counter
-func (m *ApplicationMetrics) IncrementActiveRequests() {
-	m.HTTPActiveRequests.Inc()
+func (am *ApplicationMetrics) IncrementActiveRequests() {
+	am.httpActiveRequests.Add(ctx(), 1)
 }
 
 // DecrementActiveRequests decrements the active requests counter
-func (m *ApplicationMetrics) DecrementActiveRequests() {
-	m.HTTPActiveRequests.Dec()
+func (am *ApplicationMetrics) DecrementActiveRequests() {
+	am.httpActiveRequests.Add(ctx(), -1)
 }
 
 // RecordRepositoryAccess records access to a repository
-func (m *ApplicationMetrics) RecordRepositoryAccess() {
-	m.GitRepositoriesAccessed.Inc()
+func (am *ApplicationMetrics) RecordRepositoryAccess() {
+	am.gitRepositoriesAccessed.Add(ctx(), 1)
 }
 
 // RecordGitObjectProcessed records processing of a Git object
-func (m *ApplicationMetrics) RecordGitObjectProcessed(objectType string) {
-	m.GitObjectsProcessed.WithLabelValues(objectType).Inc()
+func (am *ApplicationMetrics) RecordGitObjectProcessed(objectType string) {
+	am.gitObjectsProcessed.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("object_type", objectType),
+	))
+}
+
+// RecordPermissionCheckDuration records permission check duration
+func (am *ApplicationMetrics) RecordPermissionCheckDuration(result string, duration time.Duration) {
+	am.permissionCheckDuration.Record(ctx(), duration.Seconds(), otelmetric.WithAttributes(
+		attribute.String("result", result),
+	))
+}
+
+// RecordAPIServiceCall records an API service call
+func (am *ApplicationMetrics) RecordAPIServiceCall(endpoint, result string) {
+	am.apiServiceCallsTotal.Add(ctx(), 1, otelmetric.WithAttributes(
+		attribute.String("endpoint", endpoint),
+		attribute.String("result", result),
+	))
+}
+
+// SetCacheHitRate sets the cache hit rate gauge
+func (am *ApplicationMetrics) SetCacheHitRate(rate float64) {
+	am.repositoryCacheHitRate.Record(ctx(), rate*100)
 }
 
 // MetricsHandler returns the Prometheus metrics HTTP handler

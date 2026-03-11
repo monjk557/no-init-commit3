@@ -7,7 +7,6 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	lru "github.com/hashicorp/golang-lru/v2"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Repository는 메타데이터와 함께 캐시된 Git 저장소를 나타냅니다
@@ -515,16 +514,9 @@ func (c *LRUCache) EnablePrometheusMetrics() {
 	}
 }
 
-// EnablePrometheusMetricsWithRegistry enables Prometheus metrics with a custom registry
-func (c *LRUCache) EnablePrometheusMetricsWithRegistry(registry prometheus.Registerer) error {
-	if c.prometheusMetrics == nil {
-		c.prometheusMetrics = NewPrometheusMetricsWithRegistry(registry)
-		if err := c.prometheusMetrics.RegisterMetrics(registry); err != nil {
-			return fmt.Errorf("failed to register metrics: %w", err)
-		}
-		// Update current state
-		c.updatePrometheusMetrics()
-	}
+// EnablePrometheusMetricsWithRegistry enables metrics (registry parameter ignored, kept for API compatibility).
+func (c *LRUCache) EnablePrometheusMetricsWithRegistry(_ any) error {
+	c.EnablePrometheusMetrics()
 	return nil
 }
 

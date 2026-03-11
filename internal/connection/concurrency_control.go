@@ -7,8 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
@@ -72,118 +73,84 @@ func (ot OperationType) String() string {
 	}
 }
 
-// MetricsCollector collects operational metrics for Git operations
+func metricsCtx() context.Context { return context.Background() }
+
+// must panics on error — only used during deterministic init.
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// MetricsCollector collects operational metrics for Git operations using OTel
 type MetricsCollector struct {
-	operationDuration    prometheus.HistogramVec
-	timeoutEvents        prometheus.CounterVec
-	progressRate         prometheus.GaugeVec
-	concurrentOperations prometheus.GaugeVec
-	stallDetections      prometheus.CounterVec
-	queueWaitTime        prometheus.HistogramVec
-	operationsTotal      prometheus.CounterVec
-	operationsInProgress prometheus.GaugeVec
-	connectionErrors     prometheus.CounterVec
+	operationDuration    otelmetric.Float64Histogram
+	timeoutEvents        otelmetric.Int64Counter
+	progressRate         otelmetric.Float64Gauge
+	concurrentOperations otelmetric.Float64Gauge
+	stallDetections      otelmetric.Int64Counter
+	queueWaitTime        otelmetric.Float64Histogram
+	operationsTotal      otelmetric.Int64Counter
+	operationsInProgress otelmetric.Float64Gauge
+	connectionErrors     otelmetric.Int64Counter
 }
 
 var (
-	// Global metrics to avoid duplicate registration
-	operationDurationVec    *prometheus.HistogramVec
-	timeoutEventsVec        *prometheus.CounterVec
-	progressRateVec         *prometheus.GaugeVec
-	concurrentOperationsVec *prometheus.GaugeVec
-	stallDetectionsVec      *prometheus.CounterVec
-	queueWaitTimeVec        *prometheus.HistogramVec
-	operationsTotalVec      *prometheus.CounterVec
-	operationsInProgressVec *prometheus.GaugeVec
-	connectionErrorsVec     *prometheus.CounterVec
-	metricsInitOnce         sync.Once
+	globalConnMetrics     *MetricsCollector
+	globalConnMetricsOnce sync.Once
 )
-
-// initMetrics registers TCP/connection-layer metrics with distinct names from observability
-// (git_executor_git_operation_duration_seconds etc.) to avoid duplicate descriptor panic.
-func initMetrics(namespace string) {
-	operationDurationVec = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Name:      "tcp_operation_duration_seconds",
-		Help:      "Duration of TCP Git operations (clone/push) in seconds",
-		Buckets:   prometheus.ExponentialBuckets(0.1, 2, 10),
-	}, []string{"operation", "status"})
-
-	timeoutEventsVec = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "tcp_timeout_events_total",
-		Help:      "Total number of TCP timeout events",
-	}, []string{"type", "operation"})
-
-	progressRateVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "tcp_transfer_rate_bytes_per_second",
-		Help:      "Current TCP transfer rate in bytes per second",
-	}, []string{"operation", "tenant"})
-
-	concurrentOperationsVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "tcp_concurrent_operations",
-		Help:      "Number of concurrent TCP Git operations",
-	}, []string{"operation"})
-
-	stallDetectionsVec = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "tcp_stall_detections_total",
-		Help:      "Total number of TCP stall detections",
-	}, []string{"operation", "tenant"})
-
-	queueWaitTimeVec = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Name:      "tcp_queue_wait_time_seconds",
-		Help:      "Time spent waiting in TCP queue",
-		Buckets:   prometheus.ExponentialBuckets(0.01, 2, 8),
-	}, []string{"operation"})
-
-	operationsTotalVec = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "tcp_operations_total",
-		Help:      "Total number of TCP Git operations",
-	}, []string{"operation", "status"})
-
-	operationsInProgressVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "tcp_operations_in_progress",
-		Help:      "Number of TCP Git operations currently in progress",
-	}, []string{"operation"})
-
-	connectionErrorsVec = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "tcp_connection_errors_total",
-		Help:      "Total number of TCP connection errors",
-	}, []string{"type", "operation"})
-}
 
 // NewMetricsCollector creates a new metrics collector
 func NewMetricsCollector(namespace string) *MetricsCollector {
-	metricsInitOnce.Do(func() {
-		initMetrics(namespace)
-	})
+	globalConnMetricsOnce.Do(func() {
+		m := otel.Meter("git-executor-tcp")
 
-	return &MetricsCollector{
-		operationDuration:    *operationDurationVec,
-		timeoutEvents:        *timeoutEventsVec,
-		progressRate:         *progressRateVec,
-		concurrentOperations: *concurrentOperationsVec,
-		stallDetections:      *stallDetectionsVec,
-		queueWaitTime:        *queueWaitTimeVec,
-		operationsTotal:      *operationsTotalVec,
-		operationsInProgress: *operationsInProgressVec,
-		connectionErrors:     *connectionErrorsVec,
-	}
+		globalConnMetrics = &MetricsCollector{
+			operationDuration: must(m.Float64Histogram(namespace+"_tcp_operation_duration",
+				otelmetric.WithDescription("Duration of TCP Git operations (clone/push) in seconds"),
+				otelmetric.WithUnit("s"),
+			)),
+			timeoutEvents: must(m.Int64Counter(namespace+"_tcp_timeout_events",
+				otelmetric.WithDescription("Total number of TCP timeout events"),
+			)),
+			progressRate: must(m.Float64Gauge(namespace+"_tcp_transfer_rate_bytes_per_second",
+				otelmetric.WithDescription("Current TCP transfer rate in bytes per second"),
+			)),
+			concurrentOperations: must(m.Float64Gauge(namespace+"_tcp_concurrent_operations",
+				otelmetric.WithDescription("Number of concurrent TCP Git operations"),
+			)),
+			stallDetections: must(m.Int64Counter(namespace+"_tcp_stall_detections",
+				otelmetric.WithDescription("Total number of TCP stall detections"),
+			)),
+			queueWaitTime: must(m.Float64Histogram(namespace+"_tcp_queue_wait_time",
+				otelmetric.WithDescription("Time spent waiting in TCP queue"),
+				otelmetric.WithUnit("s"),
+			)),
+			operationsTotal: must(m.Int64Counter(namespace+"_tcp_operations",
+				otelmetric.WithDescription("Total number of TCP Git operations"),
+			)),
+			operationsInProgress: must(m.Float64Gauge(namespace+"_tcp_operations_in_progress",
+				otelmetric.WithDescription("Number of TCP Git operations currently in progress"),
+			)),
+			connectionErrors: must(m.Int64Counter(namespace+"_tcp_connection_errors",
+				otelmetric.WithDescription("Total number of TCP connection errors"),
+			)),
+		}
+	})
+	return globalConnMetrics
 }
 
 // RecordOperationStart records the start of a Git operation
 func (mc *MetricsCollector) RecordOperationStart(operation OperationType, tenantID string) {
 	opStr := operation.String()
-	mc.operationsTotal.WithLabelValues(opStr, "started").Inc()
-	mc.operationsInProgress.WithLabelValues(opStr).Inc()
-	mc.concurrentOperations.WithLabelValues(opStr).Inc()
+	opAttr := otelmetric.WithAttributes(attribute.String("operation", opStr))
+	mc.operationsTotal.Add(metricsCtx(), 1, otelmetric.WithAttributes(
+		attribute.String("operation", opStr),
+		attribute.String("status", "started"),
+	))
+	mc.operationsInProgress.Record(metricsCtx(), 1, opAttr)
+	mc.concurrentOperations.Record(metricsCtx(), 1, opAttr)
 }
 
 // RecordOperationComplete records the completion of a Git operation
@@ -194,35 +161,56 @@ func (mc *MetricsCollector) RecordOperationComplete(operation OperationType, dur
 		status = "failure"
 	}
 
-	mc.operationDuration.WithLabelValues(opStr, status).Observe(duration.Seconds())
-	mc.operationsTotal.WithLabelValues(opStr, status).Inc()
-	mc.operationsInProgress.WithLabelValues(opStr).Dec()
-	mc.concurrentOperations.WithLabelValues(opStr).Dec()
+	mc.operationDuration.Record(metricsCtx(), duration.Seconds(), otelmetric.WithAttributes(
+		attribute.String("operation", opStr),
+		attribute.String("status", status),
+	))
+	mc.operationsTotal.Add(metricsCtx(), 1, otelmetric.WithAttributes(
+		attribute.String("operation", opStr),
+		attribute.String("status", status),
+	))
+	opAttr := otelmetric.WithAttributes(attribute.String("operation", opStr))
+	mc.operationsInProgress.Record(metricsCtx(), -1, opAttr)
+	mc.concurrentOperations.Record(metricsCtx(), -1, opAttr)
 }
 
 // RecordTimeout records a timeout event
 func (mc *MetricsCollector) RecordTimeout(timeoutType string, operation OperationType) {
-	mc.timeoutEvents.WithLabelValues(timeoutType, operation.String()).Inc()
+	mc.timeoutEvents.Add(metricsCtx(), 1, otelmetric.WithAttributes(
+		attribute.String("type", timeoutType),
+		attribute.String("operation", operation.String()),
+	))
 }
 
 // RecordTransferRate records current transfer rate
 func (mc *MetricsCollector) RecordTransferRate(operation OperationType, tenantID string, bytesPerSecond float64) {
-	mc.progressRate.WithLabelValues(operation.String(), tenantID).Set(bytesPerSecond)
+	mc.progressRate.Record(metricsCtx(), bytesPerSecond, otelmetric.WithAttributes(
+		attribute.String("operation", operation.String()),
+		attribute.String("tenant", tenantID),
+	))
 }
 
 // RecordStallDetection records a stall detection event
 func (mc *MetricsCollector) RecordStallDetection(operation OperationType, tenantID string) {
-	mc.stallDetections.WithLabelValues(operation.String(), tenantID).Inc()
+	mc.stallDetections.Add(metricsCtx(), 1, otelmetric.WithAttributes(
+		attribute.String("operation", operation.String()),
+		attribute.String("tenant", tenantID),
+	))
 }
 
 // RecordQueueWait records time spent waiting in queue
 func (mc *MetricsCollector) RecordQueueWait(operation OperationType, duration time.Duration) {
-	mc.queueWaitTime.WithLabelValues(operation.String()).Observe(duration.Seconds())
+	mc.queueWaitTime.Record(metricsCtx(), duration.Seconds(), otelmetric.WithAttributes(
+		attribute.String("operation", operation.String()),
+	))
 }
 
 // RecordConnectionError records a connection error
 func (mc *MetricsCollector) RecordConnectionError(errorType string, operation OperationType) {
-	mc.connectionErrors.WithLabelValues(errorType, operation.String()).Inc()
+	mc.connectionErrors.Add(metricsCtx(), 1, otelmetric.WithAttributes(
+		attribute.String("type", errorType),
+		attribute.String("operation", operation.String()),
+	))
 }
 
 // ConcurrencyConfig holds configuration for concurrency control
@@ -235,7 +223,6 @@ type ConcurrencyConfig struct {
 }
 
 // DefaultConcurrencyConfig returns default concurrency configuration
-// Uses centralized configuration manager
 func DefaultConcurrencyConfig() *ConcurrencyConfig {
 	configManager := NewConfigManager()
 	return configManager.ToConcurrencyConfig()

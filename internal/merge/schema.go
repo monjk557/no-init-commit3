@@ -6,6 +6,13 @@ import (
 	"github.com/collabops/git-executor/internal/diffs"
 )
 
+// Commit pagination defaults for merge preview
+const (
+	DefaultCommitLimit = 30
+	MaxCommitLimit     = 100
+	MinCommitLimit     = 1
+)
+
 // MergeMethod represents different merge methods (how to combine branches)
 type MergeMethod string
 
@@ -238,6 +245,8 @@ type MergePreviewRequest struct {
 	MaxFileSize     int64         `form:"max_file_size,omitempty"`       // Max file size for content preview (default: 1MB)
 	MaxFiles        int           `form:"max_files,omitempty"`           // Max files to analyze (default: 1000)
 	CompareStrategy string        `form:"compare_strategy,omitempty"`    // tree, diff, or full (default: tree)
+	CommitLimit     int           `form:"commit_limit,omitempty"`        // Max commits per page (default: 30, max: 100)
+	CommitSkip      int           `form:"commit_skip,omitempty"`         // Number of commits to skip (default: 0)
 }
 
 // MergePreviewResponse represents the response for merge preview operations
@@ -261,6 +270,9 @@ type MergePreviewResponse struct {
 
 	// Simple count summary for UI display
 	CountSummary *CountSummary `json:"count_summary,omitempty"` // Simple count summary
+
+	// Commit pagination info
+	CommitPagination *CommitPaginationInfo `json:"commit_pagination,omitempty"` // Pagination info for commits_by_date
 }
 
 // CountSummary provides simple count summary for UI display
@@ -268,6 +280,14 @@ type CountSummary struct {
 	Commits      int `json:"commits"`      // Total commits count
 	Files        int `json:"files"`        // Total files changed count
 	Contributors int `json:"contributors"` // Total contributors count
+}
+
+// CommitPaginationInfo provides pagination info for commit list in merge preview
+type CommitPaginationInfo struct {
+	TotalCount int  `json:"total_count"` // Total commits (ahead count)
+	Limit      int  `json:"limit"`       // Page size used
+	Skip       int  `json:"skip"`        // Offset used
+	HasMore    bool `json:"has_more"`    // Whether more commits exist beyond this page
 }
 
 // ChangesSummary provides high-level statistics about merge changes

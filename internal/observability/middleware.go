@@ -55,7 +55,6 @@ func (m *MetricsMiddleware) Handler() func(http.Handler) http.Handler {
 				errorType := categorizeHTTPError(statusCode)
 				m.metrics.RecordError(errorType, "http_request")
 
-				// Record specific error types
 				if statusCode == 403 {
 					m.metrics.RecordPermissionDenied("http_endpoint", method+" "+endpoint)
 				}
@@ -138,7 +137,7 @@ func (p *PermissionMiddleware) RecordPermissionCheck(fn func() (bool, error)) (b
 		result = "denied"
 	}
 
-	p.metrics.PermissionCheckDuration.WithLabelValues(result).Observe(duration.Seconds())
+	p.metrics.RecordPermissionCheckDuration(result, duration)
 
 	// Record errors
 	if err != nil {
@@ -190,7 +189,6 @@ func normalizeEndpoint(path string) string {
 	if strings.Contains(path, "/repos/{owner}/") {
 		parts := strings.Split(path, "/")
 		if len(parts) >= 4 {
-			// Replace owner and repo with placeholders
 			parts[2] = "{owner}"
 			parts[3] = "{repo}"
 			path = strings.Join(parts, "/")
@@ -260,19 +258,12 @@ func categorizeGitError(err error) string {
 	}
 }
 
-// MetricsConfig holds configuration for the metrics middleware
+// MetricsMiddlewareConfig holds configuration for the metrics middleware
 type MetricsMiddlewareConfig struct {
-	// EnableResourceCollection enables automatic resource usage collection
-	EnableResourceCollection bool `mapstructure:"enable_resource_collection"`
-
-	// ResourceCollectionInterval defines how often to collect resource metrics
+	EnableResourceCollection   bool          `mapstructure:"enable_resource_collection"`
 	ResourceCollectionInterval time.Duration `mapstructure:"resource_collection_interval"`
-
-	// EndpointNormalization enables path normalization for metrics
-	EndpointNormalization bool `mapstructure:"endpoint_normalization"`
-
-	// MaxPathLength limits the maximum path length in metrics
-	MaxPathLength int `mapstructure:"max_path_length"`
+	EndpointNormalization      bool          `mapstructure:"endpoint_normalization"`
+	MaxPathLength              int           `mapstructure:"max_path_length"`
 }
 
 // DefaultMetricsMiddlewareConfig returns default configuration
@@ -299,7 +290,7 @@ func NewCacheMetricsIntegration() *CacheMetricsIntegration {
 
 // UpdateCacheHitRate updates the repository cache hit rate metric
 func (c *CacheMetricsIntegration) UpdateCacheHitRate(hitRate float64) {
-	c.metrics.RepositoryCacheHitRate.Set(hitRate * 100) // Convert to percentage
+	c.metrics.SetCacheHitRate(hitRate)
 }
 
 // APIServiceCallsTracker tracks calls to external API services
@@ -320,5 +311,5 @@ func (a *APIServiceCallsTracker) RecordAPICall(endpoint string, success bool) {
 	if !success {
 		result = "error"
 	}
-	a.metrics.APIServiceCallsTotal.WithLabelValues(endpoint, result).Inc()
+	a.metrics.RecordAPIServiceCall(endpoint, result)
 }

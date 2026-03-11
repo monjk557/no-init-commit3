@@ -65,8 +65,8 @@ func GinRequestLogger(logger *Logger) gin.HandlerFunc {
 
 		c.Next()
 
-		// Skip logging for health check endpoints to reduce noise
-		if p := c.Request.URL.Path; p == "/health" || strings.HasPrefix(p, "/health/") {
+		// Skip logging for infrastructure endpoints to reduce noise
+		if p := c.Request.URL.Path; p == "/health" || strings.HasPrefix(p, "/health/") || p == "/metrics" || p == "/ready" {
 			return
 		}
 

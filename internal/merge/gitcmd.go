@@ -551,6 +551,38 @@ func gitRevListReverse(ctx context.Context, repoPath, from, to string) ([]string
 	return strings.Split(raw, "\n"), nil
 }
 
+// gitRevListCount returns the number of commits in a range without listing them.
+func gitRevListCount(ctx context.Context, repoPath, from, to string) (int, error) {
+	rangeSpec := from + ".." + to
+	out, err := runGit(ctx, repoPath, "rev-list", "--count", rangeSpec)
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("parse rev-list count: %w", err)
+	}
+	return count, nil
+}
+
+// gitLogRange returns parsed NativeCommit objects for a range (from..to) with pagination.
+func gitLogRange(ctx context.Context, repoPath, from, to string, limit, skip int) ([]*NativeCommit, error) {
+	args := []string{"log", "--format=" + nativeGitLogFormat}
+	if limit > 0 {
+		args = append(args, fmt.Sprintf("--max-count=%d", limit))
+	}
+	if skip > 0 {
+		args = append(args, fmt.Sprintf("--skip=%d", skip))
+	}
+	args = append(args, from+".."+to)
+
+	out, err := runGit(ctx, repoPath, args...)
+	if err != nil {
+		return nil, err
+	}
+	return parseLogOutput(out)
+}
+
 // gitLog returns parsed NativeCommit objects for a ref, limited to n commits.
 func gitLog(ctx context.Context, repoPath, ref string, n int) ([]*NativeCommit, error) {
 	args := []string{"log", fmt.Sprintf("-%d", n), "--format=" + nativeGitLogFormat, ref}
