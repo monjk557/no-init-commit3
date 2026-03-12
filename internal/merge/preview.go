@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/collabops/git-executor/internal/diffs"
 )
@@ -95,25 +92,8 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repoPath 
 
 	metrics.AnalysisTime = time.Since(startTime)
 
-	// Phase 5: GitHub PR style statistics
-	commitStats, contributors, commitsByDate, err := h.calculateMergeStatistics(ctx, repoPath, sourceHash, targetHash)
-	if err != nil {
-		h.logger.Warn("Failed to calculate merge statistics", zap.Error(err))
-		commitStats = &CommitStats{Ahead: 0, Behind: 0}
-		contributors = []string{}
-		commitsByDate = []CommitsByDate{}
-	}
-
-	filesCount := 0
-	if changesSummary != nil {
-		filesCount = changesSummary.TotalFiles
-	}
-
-	countSummary := &CountSummary{
-		Commits:      commitStats.Ahead,
-		Files:        filesCount,
-		Contributors: len(contributors),
-	}
+	// Phase 5: Lightweight count summary (no full commit listing)
+	countSummary := h.calculateCountSummary(ctx, repoPath, sourceHash, targetHash, changesSummary)
 
 	response := &MergePreviewResponse{
 		CanMerge:           !conflictAnalysis.HasConflicts,
@@ -128,9 +108,9 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repoPath 
 		FilesChanged:       filesChanged,
 		PerformanceMetrics: metrics,
 		Warnings:           warnings,
-		Commits:            commitStats,
-		Contributors:       contributors,
-		CommitsByDate:      commitsByDate,
+		Commits:            &CommitStats{Ahead: countSummary.Commits, Behind: 0},
+		Contributors:       []string{},
+		CommitsByDate:      []CommitsByDate{},
 		CountSummary:       countSummary,
 	}
 
@@ -357,74 +337,45 @@ func (h *MergePreviewHandler) generatePreviewWarnings(conflictAnalysis *MergeAna
 	return warnings
 }
 
-// calculateMergeStatistics calculates GitHub PR style statistics using native git.
-func (h *MergePreviewHandler) calculateMergeStatistics(ctx context.Context, repoPath string, sourceHash, targetHash string) (*CommitStats, []string, []CommitsByDate, error) {
+// calculateCountSummary calculates lightweight count summary using rev-list --count and shortlog.
+func (h *MergePreviewHandler) calculateCountSummary(ctx context.Context, repoPath, sourceHash, targetHash string, changesSummary *ChangesSummary) *CountSummary {
+	filesCount := 0
+	if changesSummary != nil {
+		filesCount = changesSummary.TotalFiles
+	}
+
+	summary := &CountSummary{
+		Commits:      0,
+		Files:        filesCount,
+		Contributors: 0,
+	}
+
 	mergeBaseHash, err := gitMergeBase(ctx, repoPath, sourceHash, targetHash)
 	if err != nil {
-		if strings.Contains(err.Error(), "no merge base") {
-			return &CommitStats{Ahead: 0, Behind: 0}, []string{}, []CommitsByDate{}, nil
-		}
-		return nil, nil, nil, fmt.Errorf("failed to find merge base: %w", err)
+		return summary
 	}
 
-	// Commits ahead: mergeBase..source
-	aheadHashes, err := gitRevList(ctx, repoPath, mergeBaseHash, sourceHash)
+	aheadCount, err := gitRevListCount(ctx, repoPath, mergeBaseHash, sourceHash)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to count ahead: %w", err)
+		return summary
 	}
-	// Commits behind: mergeBase..target
-	behindHashes, err := gitRevList(ctx, repoPath, mergeBaseHash, targetHash)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to count behind: %w", err)
-	}
+	summary.Commits = aheadCount
 
-	commitStats := &CommitStats{
-		Ahead:  len(aheadHashes),
-		Behind: len(behindHashes),
-	}
-
-	// Get contributors from ahead commits
-	contributorSet := make(map[string]bool)
-	commitsByDateMap := make(map[string][]diffs.CommitMetadata)
-
-	for _, hash := range aheadHashes {
-		commit, err := gitCatFileCommit(ctx, repoPath, hash)
-		if err != nil {
-			continue
+	// Count unique contributors via git shortlog
+	rangeSpec := mergeBaseHash + ".." + sourceHash
+	out, err := runGit(ctx, repoPath, "shortlog", "-sne", rangeSpec)
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		count := 0
+		for _, line := range lines {
+			if strings.TrimSpace(line) != "" {
+				count++
+			}
 		}
-		if commit.Author.Email != "" {
-			contributorSet[commit.Author.Email] = true
-		}
-
-		date := commit.Author.When.Format("2006-01-02")
-		commitsByDateMap[date] = append(commitsByDateMap[date], diffs.CommitMetadata{
-			SHA:     commit.Hash,
-			Author:  commit.Author.Name,
-			Email:   commit.Author.Email,
-			Date:    commit.Author.When.Format("2006-01-02 15:04:05"),
-			Message: commit.Message,
-			Parents: commit.ParentHashes,
-		})
+		summary.Contributors = count
 	}
 
-	var contributors []string
-	for c := range contributorSet {
-		contributors = append(contributors, c)
-	}
-
-	var commitsByDate []CommitsByDate
-	for date, commits := range commitsByDateMap {
-		commitsByDate = append(commitsByDate, CommitsByDate{
-			Date:    date,
-			Commits: commits,
-		})
-	}
-
-	sort.Slice(commitsByDate, func(i, j int) bool {
-		return commitsByDate[i].Date > commitsByDate[j].Date
-	})
-
-	return commitStats, contributors, commitsByDate, nil
+	return summary
 }
 
 // Helper methods for content analysis (used in "full" compare strategy)

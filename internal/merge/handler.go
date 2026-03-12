@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -418,6 +420,92 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, previewResult)
+}
+
+// HandleMergeDiff handles GET /repos/{owner}/{repo}/merges/diff
+// merge-base 기준 diff를 반환합니다. Change Request 페이지에서 source 브랜치가
+// 도입한 변경만 보여주기 위한 엔드포인트입니다.
+// Query params: source_ref (required), target_ref (required), context (default: 3), page, page_size
+func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	if err := h.validatePath(owner, repo); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	sourceRef := c.Query("source_ref")
+	targetRef := c.Query("target_ref")
+	if sourceRef == "" || targetRef == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "source_ref and target_ref are required"})
+		return
+	}
+
+	contextLines := 3
+	if contextStr := c.Query("context"); contextStr != "" {
+		if v, err := strconv.Atoi(contextStr); err == nil && v >= 0 {
+			contextLines = v
+		}
+	}
+
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// base = target (merge INTO), head = source (merge FROM)
+	diffResp, err := diffs.CalculateMergeBaseDiff(ctx, repoPath, targetRef, sourceRef, contextLines)
+	if err != nil {
+		if diffErr, ok := err.(*diffs.DiffTooLargeError); ok {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"error":   "This diff is too large to display",
+				"reason":  diffErr.Reason,
+			})
+			return
+		}
+		errStr := err.Error()
+		if strings.Contains(errStr, "not found") ||
+			strings.Contains(errStr, "bad revision") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   err.Error(),
+				"code":    "REF_NOT_FOUND",
+			})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 페이지네이션 지원
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		page, pageSize := 1, 50
+		if v, err := strconv.Atoi(c.Query("page")); err == nil && v > 0 {
+			page = v
+		}
+		if v, err := strconv.Atoi(c.Query("page_size")); err == nil && v > 0 && v <= 200 {
+			pageSize = v
+		}
+
+		total := len(diffResp.Files)
+		start := (page - 1) * pageSize
+		if start >= total {
+			diffResp.Files = []diffs.FileDiff{}
+		} else {
+			end := start + pageSize
+			if end > total {
+				end = total
+			}
+			diffResp.Files = diffResp.Files[start:end]
+		}
+	}
+
+	c.JSON(http.StatusOK, diffResp)
 }
 
 // validatePath validates the owner and repo path components

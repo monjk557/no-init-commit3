@@ -252,6 +252,13 @@ func (h *DiffHandler) CalculateBranchDiff(ctx context.Context, repoPath, baseBra
 	return nativeCalculateBranchDiff(ctx, repoPath, baseBranch, headBranch, contextLines)
 }
 
+// CalculateMergeBaseDiff는 merge-base 기준으로 두 ref 간의 diff를 계산합니다.
+// Change Request 페이지에서 source 브랜치가 도입한 변경만 보여주기 위한 package-level 함수입니다.
+// baseBranch = merge INTO (target), headBranch = merge FROM (source).
+func CalculateMergeBaseDiff(ctx context.Context, repoPath, baseBranch, headBranch string, contextLines int) (*DiffResponse, error) {
+	return nativeCalculateBranchDiff(ctx, repoPath, baseBranch, headBranch, contextLines)
+}
+
 // calculateFileDiff는 두 참조 간의 특정 파일에 대한 diff를 계산합니다.
 // native git diff를 사용합니다 (go-git 대체).
 func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath, base, head string, contextLines int, _ string) (*DiffResponse, error) {

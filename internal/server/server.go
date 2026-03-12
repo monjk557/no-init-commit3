@@ -317,6 +317,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 	// Merge endpoints
 	ownerRepoGroup.GET("/merges/preview", mergePreviewHandler.HandleMergePreview)
+	ownerRepoGroup.GET("/merges/diff", mergePreviewHandler.HandleMergeDiff)
 	ownerRepoGroup.POST("/merges", mergeOpsHandler.HandleMerge)
 
 	// Overview endpoints
