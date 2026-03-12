@@ -169,9 +169,6 @@ func (s *Server) setupAPIRoutesOnGroup(group *gin.RouterGroup) {
 		c.Header("Content-Type", "application/json")
 		c.Status(http.StatusOK)
 
-		// Record metrics for this request
-		s.observabilityManager.RecordHTTPRequest("GET", "/", 200, time.Since(time.Now()), 0, 0)
-
 		_, _ = fmt.Fprintf(c.Writer, `{
 			"service": "git-executor",
 			"version": "1.0.0",

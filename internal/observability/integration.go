@@ -158,28 +158,8 @@ func (m *Manager) SetupRoutes(router *gin.Engine) {
 // ginMetricsMiddleware adapts the metrics middleware for Gin
 func (m *Manager) ginMetricsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		start := time.Now()
-
-		// Increment active requests
-		m.metrics.IncrementActiveRequests()
-		defer m.metrics.DecrementActiveRequests()
-
 		// Process request
 		c.Next()
-
-		// Calculate metrics
-		duration := time.Since(start)
-		endpoint := c.FullPath()
-		if endpoint == "" {
-			endpoint = normalizeEndpoint(c.Request.URL.Path)
-		}
-		method := c.Request.Method
-		statusCode := c.Writer.Status()
-		responseSize := int64(c.Writer.Size())
-		requestSize := getRequestSize(c.Request)
-
-		// Record HTTP metrics
-		m.metrics.RecordHTTPRequest(method, endpoint, statusCode, duration, requestSize, responseSize)
 	}
 }
 
@@ -227,11 +207,6 @@ func (m *Manager) GetPermissionTracer() *PermissionMiddleware {
 // GetCacheIntegration returns the cache metrics integration
 func (m *Manager) GetCacheIntegration() *CacheMetricsIntegration {
 	return m.cacheIntegration
-}
-
-// RecordHTTPRequest is a convenience method to record HTTP request metrics
-func (m *Manager) RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, requestSize, responseSize int64) {
-	m.metrics.RecordHTTPRequest(method, endpoint, statusCode, duration, requestSize, responseSize)
 }
 
 // RecordGitOperation is a convenience method to record Git operation metrics

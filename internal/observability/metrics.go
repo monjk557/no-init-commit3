@@ -27,13 +27,6 @@ var (
 
 // ApplicationMetrics는 애플리케이션 전반에 걸친 OTel 메트릭들을 보유합니다.
 type ApplicationMetrics struct {
-	// HTTP Request Metrics
-	httpRequestsTotal     otelmetric.Int64Counter
-	httpRequestDuration   otelmetric.Float64Histogram
-	httpActiveRequests    otelmetric.Int64UpDownCounter
-	httpRequestSizeBytes  otelmetric.Float64Histogram
-	httpResponseSizeBytes otelmetric.Float64Histogram
-
 	// Git Operation Metrics
 	gitOperationsTotal      otelmetric.Int64Counter
 	gitOperationDuration    otelmetric.Float64Histogram
@@ -127,27 +120,6 @@ func NewApplicationMetrics() *ApplicationMetrics {
 		m := otel.Meter("git-executor")
 
 		globalMetrics = &ApplicationMetrics{
-			// HTTP Request Metrics
-			httpRequestsTotal: must(m.Int64Counter("git_executor_http_requests",
-				otelmetric.WithDescription("Total number of HTTP requests"),
-			)),
-			httpRequestDuration: must(m.Float64Histogram("git_executor_http_request_duration",
-				otelmetric.WithDescription("HTTP request duration in seconds"),
-				otelmetric.WithUnit("s"),
-				otelmetric.WithExplicitBucketBoundaries(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
-			)),
-			httpActiveRequests: must(m.Int64UpDownCounter("git_executor_http_active_requests",
-				otelmetric.WithDescription("Number of currently active HTTP requests"),
-			)),
-			httpRequestSizeBytes: must(m.Float64Histogram("git_executor_http_request_size",
-				otelmetric.WithDescription("HTTP request size in bytes"),
-				otelmetric.WithUnit("By"),
-			)),
-			httpResponseSizeBytes: must(m.Float64Histogram("git_executor_http_response_size",
-				otelmetric.WithDescription("HTTP response size in bytes"),
-				otelmetric.WithUnit("By"),
-			)),
-
 			// Git Operation Metrics
 			gitOperationsTotal: must(m.Int64Counter("git_executor_git_operations",
 				otelmetric.WithDescription("Total number of Git operations"),
@@ -307,27 +279,6 @@ func (am *ApplicationMetrics) collectResourceMetrics() {
 	am.goroutinesCount.Record(ctx(), float64(runtime.NumGoroutine()))
 }
 
-// RecordHTTPRequest는 HTTP 요청에 대한 메트릭을 기록합니다.
-func (am *ApplicationMetrics) RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, requestSize, responseSize int64) {
-	status := http.StatusText(statusCode)
-	attrs := otelmetric.WithAttributes(
-		attribute.String("method", method),
-		attribute.String("endpoint", endpoint),
-		attribute.String("status_code", status),
-	)
-
-	am.httpRequestsTotal.Add(ctx(), 1, attrs)
-	am.httpRequestDuration.Record(ctx(), duration.Seconds(), otelmetric.WithAttributes(
-		attribute.String("method", method),
-		attribute.String("endpoint", endpoint),
-	))
-	am.httpRequestSizeBytes.Record(ctx(), float64(requestSize), otelmetric.WithAttributes(
-		attribute.String("method", method),
-		attribute.String("endpoint", endpoint),
-	))
-	am.httpResponseSizeBytes.Record(ctx(), float64(responseSize), attrs)
-}
-
 func (am *ApplicationMetrics) RecordOverviewCacheOp(kind, op string) {
 	if am == nil {
 		return
@@ -443,16 +394,6 @@ func (am *ApplicationMetrics) RecordValidationError(field, errorType string) {
 		attribute.String("field", field),
 		attribute.String("error_type", errorType),
 	))
-}
-
-// IncrementActiveRequests increments the active requests counter
-func (am *ApplicationMetrics) IncrementActiveRequests() {
-	am.httpActiveRequests.Add(ctx(), 1)
-}
-
-// DecrementActiveRequests decrements the active requests counter
-func (am *ApplicationMetrics) DecrementActiveRequests() {
-	am.httpActiveRequests.Add(ctx(), -1)
 }
 
 // RecordRepositoryAccess records access to a repository

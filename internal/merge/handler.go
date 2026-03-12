@@ -380,15 +380,6 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	if req.CompareStrategy == "" {
 		req.CompareStrategy = "tree"
 	}
-	if req.CommitLimit == 0 {
-		req.CommitLimit = DefaultCommitLimit
-	}
-	if req.CommitLimit > MaxCommitLimit {
-		req.CommitLimit = MaxCommitLimit
-	}
-	if req.CommitSkip < 0 {
-		req.CommitSkip = 0
-	}
 
 	status, err := h.validateMergePreviewRequest(&req)
 	if err != nil {

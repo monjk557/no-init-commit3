@@ -25,33 +25,17 @@ func NewMetricsMiddleware() *MetricsMiddleware {
 func (m *MetricsMiddleware) Handler() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-
-			// Increment active requests
-			m.metrics.IncrementActiveRequests()
-			defer m.metrics.DecrementActiveRequests()
-
 			// Wrap response writer to capture response details
 			ww := logging.NewWrapResponseWriter(w)
-
-			// Get request size
-			requestSize := getRequestSize(r)
 
 			// Execute the request
 			next.ServeHTTP(ww, r)
 
-			// Calculate metrics
-			duration := time.Since(start)
-			endpoint := normalizeEndpoint(r.URL.Path)
-			method := r.Method
-			statusCode := ww.Status()
-			responseSize := int64(ww.BytesWritten())
-
-			// Record HTTP metrics
-			m.metrics.RecordHTTPRequest(method, endpoint, statusCode, duration, requestSize, responseSize)
-
 			// Record errors if status indicates an error
+			statusCode := ww.Status()
 			if statusCode >= 400 {
+				endpoint := normalizeEndpoint(r.URL.Path)
+				method := r.Method
 				errorType := categorizeHTTPError(statusCode)
 				m.metrics.RecordError(errorType, "http_request")
 
