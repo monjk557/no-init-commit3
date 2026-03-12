@@ -64,6 +64,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateRepositoryResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/blob:
@@ -92,6 +96,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetBranchesResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
     post:
@@ -111,6 +119,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateBranchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/resolve/{ref}:
@@ -174,6 +186,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateBranchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
     delete:
@@ -206,6 +222,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
     post:
@@ -225,6 +245,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MultiFileCommitResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/context:
@@ -236,9 +260,19 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextRequest'
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/branches:
@@ -253,6 +287,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/branches/{base}/{head}:
@@ -277,6 +315,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/commit/{sha}:
@@ -296,6 +338,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleCommitDiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/commits/{base}/{head}:
@@ -320,6 +366,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/file:
@@ -334,6 +384,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileDiff'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/patch/{base}/{head}:
@@ -372,6 +426,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageStatsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/merges:
@@ -392,6 +450,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergeResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/merges/diff:
@@ -406,6 +468,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/merges/preview:
@@ -420,6 +486,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePreviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview:
@@ -434,6 +504,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/blob:
@@ -448,6 +522,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlobOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/branches:
@@ -462,6 +540,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchesOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/latest-commits:
@@ -476,6 +558,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatestCommitsBatchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/tree:
@@ -490,6 +576,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/tree/commits:
@@ -504,6 +594,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeWithCommitOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/state:
@@ -518,6 +612,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryStateData'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/tags:
@@ -532,6 +630,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
     post:
@@ -551,6 +653,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTagResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/tags/{tag}:
@@ -584,6 +690,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeEntriesRecursiveResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
 
@@ -973,6 +1083,25 @@ components:
         - pagination
         - results
         - success
+    ComputationMeta:
+      type: object
+      properties:
+        total_files_scanned:
+          type: integer
+        files_skipped:
+          type: integer
+        files_detected_by_ext:
+          type: integer
+        files_sampled:
+          type: integer
+        elapsed_ms:
+          type: integer
+      required:
+        - elapsed_ms
+        - files_detected_by_ext
+        - files_sampled
+        - files_skipped
+        - total_files_scanned
     ConflictRegion:
       type: object
       properties:
@@ -1022,6 +1151,32 @@ components:
         - content
         - reasoning
         - strategy
+    ContextRequest:
+      type: object
+      properties:
+        old_rev:
+          type: string
+        new_rev:
+          type: string
+      required:
+        - new_rev
+        - old_rev
+    ContextResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        diff_files:
+          type: array
+          items:
+            type: string
+        workflows:
+          type: object
+          additionalProperties: true
+      required:
+        - diff_files
+        - success
+        - workflows
     CountSummary:
       type: object
       properties:
@@ -1586,6 +1741,22 @@ components:
         - languages
         - total_bytes
         - total_files
+    LanguageStat:
+      type: object
+      properties:
+        language:
+          type: string
+        bytes:
+          type: integer
+        percentage:
+          type: number
+        files:
+          type: integer
+      required:
+        - bytes
+        - files
+        - language
+        - percentage
     LanguageStats:
       type: object
       properties:
@@ -1602,6 +1773,33 @@ components:
         - files
         - language
         - percentage
+    LanguageStatsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        repository:
+          type: string
+        commit_sha:
+          type: string
+        languages:
+          type: array
+          items:
+            $ref: '#/components/schemas/LanguageStat'
+        total_bytes:
+          type: integer
+        total_files:
+          type: integer
+        meta:
+          $ref: '#/components/schemas/ComputationMeta'
+      required:
+        - commit_sha
+        - languages
+        - meta
+        - repository
+        - success
+        - total_bytes
+        - total_files
     LatestCommitsBatchRequest:
       type: object
       properties:

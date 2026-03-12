@@ -331,6 +331,8 @@ func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
 		"internal/merge/schema.go",
 		"internal/state/schema.go",
 		"internal/overview/schema.go",
+		"internal/context/schema.go",
+		"internal/langstats/schema.go",
 	}
 
 	for _, relPath := range schemaFiles {
@@ -501,6 +503,12 @@ func generatePathsFromRoutes(routes []RouteInfo) string {
 			buf.WriteString("      responses:\n")
 			buf.WriteString("        '200':\n")
 			buf.WriteString("          description: Success\n")
+			if ref := responseSchemaRef(route.Method, specPath); ref != "" {
+				buf.WriteString("          content:\n")
+				buf.WriteString("            application/json:\n")
+				buf.WriteString("              schema:\n")
+				buf.WriteString(fmt.Sprintf("                $ref: '#/components/schemas/%s'\n", openAPISchemaName(ref)))
+			}
 			buf.WriteString("        '400':\n")
 			buf.WriteString("          $ref: '#/components/responses/BadRequest'\n")
 		}
@@ -524,11 +532,89 @@ func requestSchemaRef(method, specPath string) string {
 			return "CreateTagRequest"
 		case "/repos/{owner}/{repo}/merges":
 			return "MergeRequest"
+		case "/repos/{owner}/{repo}/context":
+			return "ContextRequest"
 		}
 	case "PATCH":
 		if strings.Contains(specPath, "/branches/{branch}") {
 			return "UpdateBranchRequest"
 		}
+	}
+	return ""
+}
+
+// responseSchemaRef returns the component schema name for 200 response body. Empty if none.
+func responseSchemaRef(method, specPath string) string {
+	switch specPath {
+	case "/repos/{owner}/{repo}":
+		if method == "POST" {
+			return "CreateRepositoryResponse"
+		}
+	case "/repos/{owner}/{repo}/branches":
+		if method == "GET" {
+			return "GetBranchesResponse"
+		}
+		if method == "POST" {
+			return "CreateBranchResponse"
+		}
+	case "/repos/{owner}/{repo}/branches/{branch}":
+		if method == "PATCH" {
+			return "UpdateBranchResponse"
+		}
+	case "/repos/{owner}/{repo}/commits":
+		if method == "GET" {
+			return "CommitsResponse"
+		}
+		if method == "POST" {
+			return "MultiFileCommitResponse"
+		}
+	case "/repos/{owner}/{repo}/tags":
+		if method == "GET" {
+			return "TagsResponse"
+		}
+		if method == "POST" {
+			return "CreateTagResponse"
+		}
+	case "/repos/{owner}/{repo}/merges":
+		if method == "POST" {
+			return "MergeResponse"
+		}
+	case "/repos/{owner}/{repo}/merges/preview":
+		return "MergePreviewResponse"
+	case "/repos/{owner}/{repo}/merges/diff":
+		return "DiffResponse"
+	case "/repos/{owner}/{repo}/context":
+		return "ContextResponse"
+	case "/repos/{owner}/{repo}/overview":
+		return "RepositoryOverviewResponse"
+	case "/repos/{owner}/{repo}/overview/blob":
+		return "BlobOverviewResponse"
+	case "/repos/{owner}/{repo}/overview/branches":
+		return "BranchesOverviewResponse"
+	case "/repos/{owner}/{repo}/overview/latest-commits":
+		return "LatestCommitsBatchResponse"
+	case "/repos/{owner}/{repo}/overview/tree":
+		return "TreeOverviewResponse"
+	case "/repos/{owner}/{repo}/overview/tree/commits":
+		return "TreeWithCommitOverviewResponse"
+	case "/repos/{owner}/{repo}/state":
+		return "RepositoryStateData"
+	case "/repos/{owner}/{repo}/languages":
+		return "LanguageStatsResponse"
+	case "/repos/{owner}/{repo}/tree":
+		return "TreeEntriesRecursiveResponse"
+	case "/repos/{owner}/{repo}/diff/branches":
+		return "DiffResponse"
+	case "/repos/{owner}/{repo}/diff/branches/{base}/{head}":
+		return "DiffResponse"
+	case "/repos/{owner}/{repo}/diff/commit/{sha}":
+		return "SingleCommitDiffResponse"
+	case "/repos/{owner}/{repo}/diff/commits/{base}/{head}":
+		return "DiffResponse"
+	case "/repos/{owner}/{repo}/diff/file":
+		return "FileDiff"
+	case "/repos/{owner}/{repo}/diff/file/branches/{base}/{head}":
+		return "DiffResponse"
 	}
 	return ""
 }
