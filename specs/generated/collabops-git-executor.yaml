@@ -227,6 +227,20 @@ paths:
           description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/context:
+    post:
+      summary: HandleContext
+      operationId: handlecontext
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/branches:
     get:
       summary: HandleBranchDiffQuery

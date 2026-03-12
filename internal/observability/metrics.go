@@ -16,6 +16,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
 )
 
 // Global singleton for application metrics to avoid duplicate registrations
@@ -95,13 +96,27 @@ func DefaultMetricsConfig() MetricsConfig {
 func initMeterProvider() {
 	exporter, err := promexporter.New(
 		promexporter.WithoutScopeInfo(),
-		promexporter.WithoutTargetInfo(),
 	)
 	if err != nil {
 		panic("failed to create prometheus exporter: " + err.Error())
 	}
 
-	globalMeterProv = sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
+	res, err := resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			"",
+			attribute.String("service.name", "git-executor"),
+			attribute.String("service.version", "1.0.0"),
+		),
+	)
+	if err != nil {
+		panic("failed to create resource: " + err.Error())
+	}
+
+	globalMeterProv = sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(exporter),
+		sdkmetric.WithResource(res),
+	)
 	otel.SetMeterProvider(globalMeterProv)
 }
 

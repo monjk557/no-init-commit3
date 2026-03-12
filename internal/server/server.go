@@ -18,6 +18,7 @@ import (
 	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
+	repocontext "github.com/collabops/git-executor/internal/context"
 	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/langstats"
 	"github.com/collabops/git-executor/internal/logging"
@@ -268,6 +269,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	contextHandler, err := repocontext.NewContextHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create context handler", zap.Error(err))
+		return
+	}
+
 	ownerRepoGroup := apiGroup.Group("/:owner/:repo")
 	ownerRepoGroup.Use(ginContextMiddleware())
 	ownerRepoGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
@@ -319,6 +326,9 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/overview/blob", overviewHandler.HandleGetBlobOverview)
 	ownerRepoGroup.GET("/overview/branches", overviewHandler.HandleGetBranchesOverview)
 	ownerRepoGroup.POST("/overview/latest-commits", overviewHandler.HandlePostLatestCommitsBatch)
+
+	// Context endpoint
+	ownerRepoGroup.POST("/context", contextHandler.HandleContext)
 
 	// Language stats endpoint
 	ownerRepoGroup.GET("/languages", langStatsHandler.HandleGetLanguageStats)
