@@ -36,8 +36,8 @@ type CreateBranchResult struct {
 
 // GetBranches는 저장소의 모든 브랜치를 가져옵니다.
 // native git for-each-ref를 사용합니다.
-func (s *BranchService) GetBranches(ctx context.Context, repoPath string) ([]BranchInfo, error) {
-	return NativeGetBranches(ctx, repoPath)
+func (s *BranchService) GetBranches(ctx context.Context, repoPath string, sort BranchSortField) ([]BranchInfo, error) {
+	return NativeGetBranches(ctx, repoPath, sort)
 }
 
 // CreateBranch는 새로운 브랜치를 생성합니다 (native git).

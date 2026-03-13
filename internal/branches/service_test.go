@@ -93,7 +93,7 @@ func Test_BranchService_GetBranches_EmptyRepo_ReturnsEmpty(t *testing.T) {
 
 	svc := newBranchService(t)
 
-	branches, err := svc.GetBranches(context.Background(), repoPath)
+	branches, err := svc.GetBranches(context.Background(), repoPath, BranchSortNewest)
 
 	require.NoError(t, err)
 	require.Empty(t, branches)
@@ -105,7 +105,7 @@ func Test_BranchService_GetBranches_WithBranches_ReturnsAll(t *testing.T) {
 	repoPath, _ := newBareRepoWithMainNative(t)
 	svc := newBranchService(t)
 
-	branches, err := svc.GetBranches(context.Background(), repoPath)
+	branches, err := svc.GetBranches(context.Background(), repoPath, BranchSortNewest)
 
 	require.NoError(t, err)
 	require.Len(t, branches, 1)

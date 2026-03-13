@@ -12,20 +12,45 @@ import (
 
 const nativeGitTimeout = 5 * time.Second
 
+// BranchSortField는 브랜치 정렬 기준을 나타냅니다.
+type BranchSortField string
+
+const (
+	// BranchSortNewest는 최근 커밋 순 정렬입니다 (기본값).
+	BranchSortNewest BranchSortField = "-committerdate"
+	// BranchSortOldest는 오래된 커밋 순 정렬입니다.
+	BranchSortOldest BranchSortField = "committerdate"
+	// BranchSortName은 브랜치명 ABC 순 정렬입니다.
+	BranchSortName BranchSortField = "refname"
+)
+
+// ParseBranchSort는 쿼리 파라미터 문자열을 BranchSortField로 변환합니다.
+// 지원: "newest" (기본), "oldest", "name"
+func ParseBranchSort(s string) BranchSortField {
+	switch s {
+	case "oldest":
+		return BranchSortOldest
+	case "name":
+		return BranchSortName
+	default:
+		return BranchSortNewest
+	}
+}
+
 // NativeGetBranches는 native git으로 모든 브랜치를 조회합니다.
 // go-git의 repo.References() + ref.IsBranch() 조합을 대체합니다.
-func NativeGetBranches(ctx context.Context, repoPath string) ([]BranchInfo, error) {
+func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortField) ([]BranchInfo, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
 	// format: refname:short\tsha\tdate\trefname
 	// NOTE: Using tab separator instead of %x00 because Apple Git's for-each-ref
 	// does not interpret %x00 as null byte (unlike git log --format).
-	format := "%(refname:short)\t%(objectname)\t%(authordate:iso8601-strict)\t%(refname)"
+	format := "%(refname:short)\t%(objectname)\t%(committerdate:iso8601-strict)\t%(refname)"
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"for-each-ref", "refs/heads/",
 		"--format="+format,
-		"--sort=refname")
+		"--sort="+string(sort))
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

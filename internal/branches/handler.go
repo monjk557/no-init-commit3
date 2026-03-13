@@ -150,6 +150,8 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 	// 파라미터 추출 및 검증
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
+	sortParam := c.DefaultQuery("sort", "newest") // "newest" (기본), "oldest", "name"
+	sort := ParseBranchSort(sortParam)
 
 	// limit 파라미터 파싱 및 검증
 	limit := DefaultBranchesLimit
@@ -184,8 +186,8 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		return
 	}
 
-	// native git으로 모든 브랜치 가져오기
-	allBranches, err := h.service.GetBranches(ctx, repoPath)
+	// native git으로 모든 브랜치 가져오기 (정렬 적용)
+	allBranches, err := h.service.GetBranches(ctx, repoPath, sort)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
 		return
