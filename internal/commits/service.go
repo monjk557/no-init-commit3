@@ -461,7 +461,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 		parents = []string{baseHash}
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	commitInfo := CommitInfo{
 		Message: req.Message,
 		Author: NativeSignature{
