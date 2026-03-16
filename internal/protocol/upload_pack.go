@@ -106,11 +106,16 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 
 	cmds, err := h.readSection(r.Body)
 	if err != nil {
+		fmt.Printf("[DEBUG upload-pack] readSection error: %v\n", err)
 		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 
+	fmt.Printf("[DEBUG upload-pack] first section cmds(%d): %v\n", len(cmds), cmds)
+
 	if len(cmds) == 0 {
+		fmt.Printf("[DEBUG upload-pack] empty cmds, returning flush. Content-Length=%d, Transfer-Encoding=%s\n",
+			r.ContentLength, r.Header.Get("Transfer-Encoding"))
 		_ = pktWriter.Flush()
 		return
 	}
@@ -139,15 +144,23 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	} else if strings.HasPrefix(cmds[0], "command=fetch") {
 		fetchOpts, err := h.readSection(r.Body)
 		if err != nil {
+			fmt.Printf("[DEBUG upload-pack] fetch readSection error: %v\n", err)
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
+		fmt.Printf("[DEBUG upload-pack] fetch opts(%d): wants=%d, has_done=%v\n",
+			len(fetchOpts),
+			countPrefix(fetchOpts, "want "),
+			containsStr(fetchOpts, "done"))
 		allCmds := append(cmds, fetchOpts...)
 		fetchReq, err := ParseFetchSection(allCmds)
 		if err != nil {
+			fmt.Printf("[DEBUG upload-pack] ParseFetchSection error: %v\n", err)
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
+		fmt.Printf("[DEBUG upload-pack] fetchReq: wants=%d, haves=%d, done=%v, deepen=%d\n",
+			len(fetchReq.Wants), len(fetchReq.Haves), fetchReq.Done, fetchReq.Deepen)
 
 		if err := ValidateFetchSupport(fetchReq); err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
@@ -241,6 +254,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		}
 
 		// Packfile section header
+		fmt.Printf("[DEBUG upload-pack] writing packfile header, wants=%d, knownHaves=%d\n", len(fetchReq.Wants), len(knownHaves))
 		if err := pktWriter.WriteLine("packfile"); err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			_ = pktWriter.Flush()
@@ -264,7 +278,8 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 			DeepenExclude: fetchReq.DeepenNot,
 			Filter:        fetchReq.Filter,
 		}
-		_, err = gitcmd.RunPackObjects(ctx, repoPath, opts, sbWriter)
+		objCount, err := gitcmd.RunPackObjects(ctx, repoPath, opts, sbWriter)
+		fmt.Printf("[DEBUG upload-pack] RunPackObjects: objects=%d, err=%v\n", objCount, err)
 		if err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			if hasFlusher {
@@ -567,4 +582,24 @@ func HandleLsRefsNative(ctx context.Context, repoPath string, lsRefsReq *LsRefsR
 // NewSidebandWriter exports sideband writer creation for use by other packages (e.g., TCP server).
 func NewSidebandWriter(w io.Writer, channel byte) *performance.OptimizedSidebandWriter {
 	return newSidebandWriter(w, channel)
+}
+
+// debug helpers
+func countPrefix(lines []string, prefix string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.HasPrefix(l, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func containsStr(lines []string, s string) bool {
+	for _, l := range lines {
+		if l == s {
+			return true
+		}
+	}
+	return false
 }
