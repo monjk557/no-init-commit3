@@ -68,7 +68,7 @@ func (h *CommitsHandler) convertGitCommitToMetadata(commit Commit) CommitMetadat
 		SHA:     commit.Sha,
 		Author:  commit.Author.Name,
 		Email:   commit.Author.Email,
-		Date:    commit.Author.Date.Format("2006-01-02 15:04:05"),
+		Date:    commit.Author.Date.UTC().Format("2006-01-02 15:04:05"),
 		Message: commit.Message,
 		Parents: commit.ParentHashes,
 	}
@@ -186,7 +186,7 @@ func (h *CommitsHandler) groupCommitsByDate(commits []Commit) []CommitsByDate {
 	dateMap := make(map[string][]CommitMetadata)
 
 	for _, commit := range commits {
-		dateStr := commit.Author.Date.Format("2006-01-02")
+		dateStr := commit.Author.Date.UTC().Format("2006-01-02")
 		commitMeta := h.convertGitCommitToMetadata(commit)
 		dateMap[dateStr] = append(dateMap[dateStr], commitMeta)
 	}
