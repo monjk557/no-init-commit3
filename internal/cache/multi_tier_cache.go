@@ -30,6 +30,7 @@ type MultiTierConfig struct {
 	L1CleanupInterval time.Duration `json:"l1_cleanup_interval" yaml:"l1_cleanup_interval"`
 
 	// L2 Redis cache settings
+	L2Enabled    bool          `json:"l2_enabled" yaml:"l2_enabled"` // Whether to initialize L2 Redis cache
 	L2DefaultTTL time.Duration `json:"l2_default_ttl" yaml:"l2_default_ttl"`
 	L2Address    string        `json:"l2_address" yaml:"l2_address"`
 	L2Password   string        `json:"l2_password,omitempty" yaml:"l2_password,omitempty"`
@@ -125,32 +126,35 @@ func NewMultiTierCache[T any](config *MultiTierConfig, logger *zap.Logger) (*Mul
 	}
 	l1Cache := NewMemoryCache[T](l1Config, logger)
 
-	// Initialize L2 Redis cache
-	l2Config := &RedisCacheConfig{
-		Address:         config.L2Address,
-		Password:        config.L2Password,
-		DB:              config.L2DB,
-		PoolSize:        config.L2PoolSize,
-		Prefix:          "collabops:multi:",
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     3 * time.Second,
-		WriteTimeout:    3 * time.Second,
-		PoolTimeout:     4 * time.Second,
-		MaxRetries:      3,
-		MinRetryBackoff: 8 * time.Millisecond,
-		MaxRetryBackoff: 512 * time.Millisecond,
-	}
-	l2Cache, err := NewRedisCache[T](l2Config, logger)
-	if err != nil {
-		l1Cache.Close()
-		return nil, fmt.Errorf("failed to initialize L2 Redis cache: %w", err)
+	// Initialize L2 Redis cache (only if enabled)
+	var l2Cache *RedisCache[T]
+	if config.L2Enabled {
+		l2Config := &RedisCacheConfig{
+			Address:         config.L2Address,
+			Password:        config.L2Password,
+			DB:              config.L2DB,
+			PoolSize:        config.L2PoolSize,
+			Prefix:          "collabops:multi:",
+			DialTimeout:     5 * time.Second,
+			ReadTimeout:     3 * time.Second,
+			WriteTimeout:    3 * time.Second,
+			PoolTimeout:     4 * time.Second,
+			MaxRetries:      3,
+			MinRetryBackoff: 8 * time.Millisecond,
+			MaxRetryBackoff: 512 * time.Millisecond,
+		}
+		var err error
+		l2Cache, err = NewRedisCache[T](l2Config, logger)
+		if err != nil {
+			l1Cache.Close()
+			return nil, fmt.Errorf("failed to initialize L2 Redis cache: %w", err)
+		}
 	}
 
 	logger.Info("Multi-tier cache system initialized",
 		zap.Int("l1_max_size", config.L1MaxSize),
 		zap.Duration("l1_ttl", config.L1DefaultTTL),
-		zap.Duration("l2_ttl", config.L2DefaultTTL),
-		zap.String("l2_address", config.L2Address),
+		zap.Bool("l2_enabled", config.L2Enabled),
 		zap.Bool("cache_warming", config.EnableCacheWarming))
 
 	return &MultiTierCache[T]{
@@ -177,29 +181,32 @@ func (m *MultiTierCache[T]) Get(ctx context.Context, key string) (T, bool) {
 	}
 	m.recordL1Miss()
 
-	// Try L2 (millisecond performance)
-	startL2 := time.Now()
-	value, found, err := m.L2.Get(ctx, key)
-	m.updateL2ResponseTime(time.Since(startL2))
+	// Try L2 (millisecond performance) - only if Redis is enabled
+	if m.L2 != nil {
+		startL2 := time.Now()
+		value, found, err := m.L2.Get(ctx, key)
+		m.updateL2ResponseTime(time.Since(startL2))
 
-	if err != nil {
-		m.logger.Error("L2 cache error", zap.String("key", key), zap.Error(err))
-		m.recordL2Miss()
-		return zero, false
-	}
-
-	if found {
-		m.recordL2Hit()
-
-		// Warm L1 cache if enabled
-		if m.config.WarmL1FromL2 {
-			go m.warmL1Cache(key, value)
+		if err != nil {
+			m.logger.Error("L2 cache error", zap.String("key", key), zap.Error(err))
+			m.recordL2Miss()
+			return zero, false
 		}
 
-		return value, true
+		if found {
+			m.recordL2Hit()
+
+			// Warm L1 cache if enabled
+			if m.config.WarmL1FromL2 {
+				go m.warmL1Cache(key, value)
+			}
+
+			return value, true
+		}
+
+		m.recordL2Miss()
 	}
 
-	m.recordL2Miss()
 	return zero, false
 }
 
@@ -208,10 +215,12 @@ func (m *MultiTierCache[T]) Set(ctx context.Context, key string, value T) error 
 	// Set in L1 first (immediate availability)
 	m.L1.Set(key, value, m.config.L1DefaultTTL)
 
-	// Set in L2 for persistence
-	if err := m.L2.Set(ctx, key, value, m.config.L2DefaultTTL); err != nil {
-		m.logger.Error("Failed to set L2 cache", zap.String("key", key), zap.Error(err))
-		return err
+	// Set in L2 for persistence (only if Redis is enabled)
+	if m.L2 != nil {
+		if err := m.L2.Set(ctx, key, value, m.config.L2DefaultTTL); err != nil {
+			m.logger.Error("Failed to set L2 cache", zap.String("key", key), zap.Error(err))
+			return err
+		}
 	}
 
 	return nil
@@ -220,8 +229,10 @@ func (m *MultiTierCache[T]) Set(ctx context.Context, key string, value T) error 
 // InvalidateByPattern removes all keys matching a pattern from both cache layers
 func (m *MultiTierCache[T]) InvalidateByPattern(ctx context.Context, pattern string) error {
 	// Invalidate L2 first (more comprehensive pattern matching)
-	if err := m.L2.DeleteByPattern(ctx, pattern); err != nil {
-		m.logger.Error("Failed to invalidate L2 pattern", zap.String("pattern", pattern), zap.Error(err))
+	if m.L2 != nil {
+		if err := m.L2.DeleteByPattern(ctx, pattern); err != nil {
+			m.logger.Error("Failed to invalidate L2 pattern", zap.String("pattern", pattern), zap.Error(err))
+		}
 	}
 
 	// Note: L1 memory cache doesn't support pattern matching efficiently
@@ -240,10 +251,12 @@ func (m *MultiTierCache[T]) InvalidateKey(ctx context.Context, key string) error
 	// Remove from L1
 	m.L1.Delete(key)
 
-	// Remove from L2
-	if err := m.L2.Delete(ctx, key); err != nil {
-		m.logger.Error("Failed to invalidate L2 key", zap.String("key", key), zap.Error(err))
-		return err
+	// Remove from L2 (only if Redis is enabled)
+	if m.L2 != nil {
+		if err := m.L2.Delete(ctx, key); err != nil {
+			m.logger.Error("Failed to invalidate L2 key", zap.String("key", key), zap.Error(err))
+			return err
+		}
 	}
 
 	return nil
@@ -318,8 +331,10 @@ func (m *MultiTierCache[T]) Close() error {
 		errors = append(errors, fmt.Errorf("L1 cache close error: %w", err))
 	}
 
-	if err := m.L2.Close(); err != nil {
-		errors = append(errors, fmt.Errorf("L2 cache close error: %w", err))
+	if m.L2 != nil {
+		if err := m.L2.Close(); err != nil {
+			errors = append(errors, fmt.Errorf("L2 cache close error: %w", err))
+		}
 	}
 
 	if len(errors) > 0 {
@@ -340,16 +355,22 @@ func (m *MultiTierCache[T]) HealthCheck(ctx context.Context) map[string]interfac
 		"hit_ratio":      m.GetOverallHitRatio(),
 	}
 
-	// Test L2 connection
-	if err := m.L2.Ping(ctx); err != nil {
-		health["overall_status"] = "degraded"
-		health["l2_cache"] = map[string]interface{}{
-			"status": "unhealthy",
-			"error":  err.Error(),
+	// Test L2 connection (only if Redis is enabled)
+	if m.L2 != nil {
+		if err := m.L2.Ping(ctx); err != nil {
+			health["overall_status"] = "degraded"
+			health["l2_cache"] = map[string]interface{}{
+				"status": "unhealthy",
+				"error":  err.Error(),
+			}
+		} else {
+			if info, err := m.L2.GetInfo(ctx); err == nil {
+				health["l2_cache"] = info
+			}
 		}
 	} else {
-		if info, err := m.L2.GetInfo(ctx); err == nil {
-			health["l2_cache"] = info
+		health["l2_cache"] = map[string]interface{}{
+			"status": "disabled",
 		}
 	}
 
@@ -423,14 +444,18 @@ func (m *MultiTierCache[T]) updateL2ResponseTime(duration time.Duration) {
 
 // GetCacheInfo returns detailed information about the multi-tier cache
 func (m *MultiTierCache[T]) GetCacheInfo() map[string]interface{} {
-	return map[string]interface{}{
+	info := map[string]interface{}{
 		"type":                "multi_tier_cache",
 		"l1_info":             m.L1.GetCacheInfo(),
-		"l2_hit_ratio":        m.L2.GetHitRatio(),
+		"l2_enabled":          m.L2 != nil,
 		"overall_hit_ratio":   m.GetOverallHitRatio(),
 		"cache_warming":       m.config.EnableCacheWarming,
 		"performance_mode":    m.config.EnablePerformanceMode,
 		"warming_in_progress": len(m.warmingKeys),
 		"metrics":             m.GetMetrics(),
 	}
+	if m.L2 != nil {
+		info["l2_hit_ratio"] = m.L2.GetHitRatio()
+	}
+	return info
 }

@@ -95,57 +95,42 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	w.Header().Del("Content-Encoding")
-	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Transfer-Encoding", "chunked")
-
-	w.WriteHeader(http.StatusOK)
-
-	pktWriter := performance.NewOptimizedPktLineWriter(w)
-
+	// Body를 response 시작 전에 먼저 읽는다.
+	// 이유: libcurl(Apple Git 등)은 body > 1024 bytes일 때 Expect: 100-continue를 보내는데,
+	// WriteHeader(200)을 먼저 호출하면 Go HTTP 서버가 100 Continue 대신 200을 보내고,
+	// 클라이언트 Transport가 body 전송을 취소해서 body가 비어버린다.
 	cmds, err := h.readSection(r.Body)
 	if err != nil {
 		fmt.Printf("[DEBUG upload-pack] readSection error: %v\n", err)
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
 		return
 	}
 
 	fmt.Printf("[DEBUG upload-pack] first section cmds(%d): %v\n", len(cmds), cmds)
 
+	// 명령어에 따라 추가 body section도 미리 읽는다
+	var lsRefsReq *LsRefsReq
+	var fetchReq *FetchReq
 	if len(cmds) == 0 {
 		fmt.Printf("[DEBUG upload-pack] empty cmds, returning flush. Content-Length=%d, Transfer-Encoding=%s\n",
 			r.ContentLength, r.Header.Get("Transfer-Encoding"))
-		_ = pktWriter.Flush()
-		return
-	}
-
-	// v2 protocol: command=ls-refs or command=fetch
-	if strings.HasPrefix(cmds[0], "command=ls-refs") {
+	} else if strings.HasPrefix(cmds[0], "command=ls-refs") {
 		lsRefsOpts, err := h.readSection(r.Body)
 		if err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
 			return
 		}
 		allCmds := append(cmds, lsRefsOpts...)
-		lsRefsReq, err := ParseLsRefsSection(allCmds)
+		lsRefsReq, err = ParseLsRefsSection(allCmds)
 		if err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
 			return
 		}
-
-		if err := handleLsRefsNative(ctx, repoPath, lsRefsReq, pktWriter); err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-			return
-		}
-
-		_ = pktWriter.Flush()
-		return
 	} else if strings.HasPrefix(cmds[0], "command=fetch") {
 		fetchOpts, err := h.readSection(r.Body)
 		if err != nil {
 			fmt.Printf("[DEBUG upload-pack] fetch readSection error: %v\n", err)
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
 			return
 		}
 		fmt.Printf("[DEBUG upload-pack] fetch opts(%d): wants=%d, has_done=%v\n",
@@ -153,12 +138,38 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 			countPrefix(fetchOpts, "want "),
 			containsStr(fetchOpts, "done"))
 		allCmds := append(cmds, fetchOpts...)
-		fetchReq, err := ParseFetchSection(allCmds)
+		fetchReq, err = ParseFetchSection(allCmds)
 		if err != nil {
 			fmt.Printf("[DEBUG upload-pack] ParseFetchSection error: %v\n", err)
+			http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Body 읽기 완료 — 이제 response를 시작한다
+	w.Header().Del("Content-Encoding")
+	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	w.WriteHeader(http.StatusOK)
+
+	pktWriter := performance.NewOptimizedPktLineWriter(w)
+
+	if len(cmds) == 0 {
+		_ = pktWriter.Flush()
+		return
+	}
+
+	// v2 protocol: command=ls-refs or command=fetch
+	if lsRefsReq != nil {
+		if err := handleLsRefsNative(ctx, repoPath, lsRefsReq, pktWriter); err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			return
 		}
+
+		_ = pktWriter.Flush()
+		return
+	} else if fetchReq != nil {
 		fmt.Printf("[DEBUG upload-pack] fetchReq: wants=%d, haves=%d, done=%v, deepen=%d\n",
 			len(fetchReq.Wants), len(fetchReq.Haves), fetchReq.Done, fetchReq.Deepen)
 
