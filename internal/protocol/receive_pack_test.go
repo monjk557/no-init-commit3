@@ -83,9 +83,10 @@ func Test_HTTP_InfoRefs_ReturnsRefs(t *testing.T) {
 	h.HandleInfoRefs(rr, req)
 	require.Equal(t, 200, rr.Code)
 	assert.Equal(t, "application/x-git-receive-pack-advertisement", rr.Header().Get("Content-Type"))
-	// Native engine uses git for-each-ref which skips zero-OID refs.
-	// For empty repos, only the capabilities line is returned.
-	assert.Contains(t, rr.Body.String(), "capabilities^{}")
+	// Native git advertises refs with capabilities on the first ref line.
+	body := rr.Body.String()
+	assert.Contains(t, body, "refs/heads/main")
+	assert.Contains(t, body, "report-status")
 }
 
 // Test_HTTP_UploadPack_ReturnsPackfile upload-pack이 packfile을 반환한다.
