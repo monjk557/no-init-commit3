@@ -66,34 +66,39 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repoPath 
 	}
 	metrics.ConflictAnalysisTime = time.Since(conflictStartTime)
 
-	// Phase 2: Tree Comparison via native git diff-tree
+	// Phase 2: Compute merge-base (used for tree comparison and merge base info)
+	mergeBaseHash, err := gitMergeBase(ctx, repoPath, sourceHash, targetHash)
+	if err != nil {
+		return nil, fmt.Errorf("merge-base failed: %w", err)
+	}
+
+	// Phase 3: Tree Comparison via native git diff-tree (merge-base → source)
+	// Compare merge-base to source so we only see changes the source branch introduced,
+	// not all differences between the two branch tips.
 	treeStartTime := time.Now()
-	changesSummary, filesChanged, err := h.compareRepositoryTrees(ctx, repoPath, sourceHash, targetHash, req, metrics)
+	changesSummary, filesChanged, err := h.compareRepositoryTrees(ctx, repoPath, mergeBaseHash, sourceHash, req, metrics)
 	if err != nil {
 		return nil, fmt.Errorf("tree comparison failed: %w", err)
 	}
 	metrics.TreeComparisonTime = time.Since(treeStartTime)
 
-	// Phase 3: Recommendations and warnings
+	// Phase 4: Recommendations and warnings
 	recommendations := h.generatePreviewRecommendations(conflictAnalysis, changesSummary)
 	warnings := h.generatePreviewWarnings(conflictAnalysis, changesSummary, req)
 
-	// Phase 4: Merge base info
+	// Phase 5: Merge base commit info
 	var mergeBaseInfo *CommitInfo
 	if conflictAnalysis != nil && !conflictAnalysis.IsFastForward {
-		mbHash, err := gitMergeBase(ctx, repoPath, sourceHash, targetHash)
+		mbCommit, err := gitCatFileCommit(ctx, repoPath, mergeBaseHash)
 		if err == nil {
-			mbCommit, err := gitCatFileCommit(ctx, repoPath, mbHash)
-			if err == nil {
-				mergeBaseInfo = nativeCommitToInfo(mbCommit)
-			}
+			mergeBaseInfo = nativeCommitToInfo(mbCommit)
 		}
 	}
 
 	metrics.AnalysisTime = time.Since(startTime)
 
-	// Phase 5: Lightweight count summary (no full commit listing)
-	countSummary := h.calculateCountSummary(ctx, repoPath, sourceHash, targetHash, changesSummary)
+	// Phase 6: Lightweight count summary (no full commit listing)
+	countSummary := h.calculateCountSummary(ctx, repoPath, sourceHash, mergeBaseHash, changesSummary)
 
 	response := &MergePreviewResponse{
 		CanMerge:           !conflictAnalysis.HasConflicts,
@@ -137,10 +142,11 @@ func (h *MergePreviewHandler) analyzeConflicts(ctx context.Context, repoPath str
 	return result, nil
 }
 
-// compareRepositoryTrees compares source and target trees using native git diff-tree.
-func (h *MergePreviewHandler) compareRepositoryTrees(ctx context.Context, repoPath string, sourceHash, targetHash string, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
-	// Get diff between target and source trees using native git
-	diffEntries, err := gitDiffTree(ctx, repoPath, targetHash, sourceHash)
+// compareRepositoryTrees compares two trees using native git diff-tree.
+// baseHash is the starting point (e.g. merge-base), headHash is what we compare to.
+func (h *MergePreviewHandler) compareRepositoryTrees(ctx context.Context, repoPath string, baseHash, headHash string, req *MergePreviewRequest, metrics *PreviewMetrics) (*ChangesSummary, []*FileChange, error) {
+	// Get diff from base to head using native git
+	diffEntries, err := gitDiffTree(ctx, repoPath, baseHash, headHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("diff-tree failed: %w", err)
 	}
@@ -338,7 +344,7 @@ func (h *MergePreviewHandler) generatePreviewWarnings(conflictAnalysis *MergeAna
 }
 
 // calculateCountSummary calculates lightweight count summary using rev-list --count and shortlog.
-func (h *MergePreviewHandler) calculateCountSummary(ctx context.Context, repoPath, sourceHash, targetHash string, changesSummary *ChangesSummary) *CountSummary {
+func (h *MergePreviewHandler) calculateCountSummary(ctx context.Context, repoPath, sourceHash, mergeBaseHash string, changesSummary *ChangesSummary) *CountSummary {
 	filesCount := 0
 	if changesSummary != nil {
 		filesCount = changesSummary.TotalFiles
@@ -348,11 +354,6 @@ func (h *MergePreviewHandler) calculateCountSummary(ctx context.Context, repoPat
 		Commits:      0,
 		Files:        filesCount,
 		Contributors: 0,
-	}
-
-	mergeBaseHash, err := gitMergeBase(ctx, repoPath, sourceHash, targetHash)
-	if err != nil {
-		return summary
 	}
 
 	aheadCount, err := gitRevListCount(ctx, repoPath, mergeBaseHash, sourceHash)
