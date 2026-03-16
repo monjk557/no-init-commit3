@@ -11,6 +11,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/maintenance"
 	"github.com/collabops/git-executor/internal/server"
 	"go.uber.org/zap"
 )
@@ -58,6 +59,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start git maintenance scheduler
+	maintenanceCfg := maintenance.DefaultMaintenanceConfig()
+	maintenanceCfg.Enabled = cfg.Maintenance.Enabled
+	maintenanceScheduler := maintenance.NewScheduler(maintenanceCfg, cfg.Git.RepoRoot, logger)
+	maintenanceScheduler.Start()
+
 	// Start HTTP server in goroutine
 	go func() {
 		if err := srv.Start(); err != nil {
@@ -80,6 +87,9 @@ func main() {
 	<-quit
 
 	logger.Info("Received shutdown signal, shutting down gracefully")
+
+	// Shutdown maintenance scheduler first (stop new maintenance jobs)
+	maintenanceScheduler.Stop()
 
 	// Shutdown both servers
 	ctx := context.Background()

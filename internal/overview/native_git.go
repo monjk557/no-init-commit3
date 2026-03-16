@@ -469,7 +469,7 @@ type nativeBranchInfo struct {
 	CommitSHA     string
 	AuthorName    string
 	AuthorEmail   string
-	AuthorDate    time.Time
+	CommitterDate time.Time
 	CommitMessage string
 }
 
@@ -490,11 +490,11 @@ func NativeGetBranchesForOverview(ctx context.Context, repoPath string) ([]nativ
 	// for-each-ref with rich format: name, sha, author name, author email, date, subject
 	// NOTE: Using tab separator instead of %x00 because Apple Git's for-each-ref
 	// does not interpret %x00 as null byte (unlike git log --format).
-	format := "%(refname:short)\t%(objectname:short=8)\t%(authorname)\t%(authoremail)\t%(authordate:iso8601-strict)\t%(subject)"
+	format := "%(refname:short)\t%(objectname:short=8)\t%(authorname)\t%(authoremail)\t%(committerdate:iso8601-strict)\t%(subject)"
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"for-each-ref", "refs/heads/",
 		"--format", format,
-		"--sort=-authordate",
+		"--sort=-committerdate",
 	)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -515,7 +515,7 @@ func NativeGetBranchesForOverview(ctx context.Context, repoPath string) ([]nativ
 			continue
 		}
 
-		authorDate, _ := time.Parse(time.RFC3339, parts[4])
+		committerDate, _ := time.Parse(time.RFC3339, parts[4])
 		email := strings.Trim(parts[3], "<>")
 
 		result = append(result, nativeBranchInfo{
@@ -523,7 +523,7 @@ func NativeGetBranchesForOverview(ctx context.Context, repoPath string) ([]nativ
 			CommitSHA:     parts[1],
 			AuthorName:    parts[2],
 			AuthorEmail:   email,
-			AuthorDate:    authorDate,
+			CommitterDate: committerDate,
 			CommitMessage: parts[5],
 		})
 	}
@@ -593,7 +593,7 @@ func NativeGetBranches(ctx context.Context, repoPath string) ([]BranchInfo, erro
 	// NOTE: Using tab separator instead of %x00 because Apple Git's for-each-ref
 	// does not interpret %x00 as null byte (unlike git log --format).
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
-		"for-each-ref", "--format=%(refname)\t%(objectname)", "refs/heads/")
+		"for-each-ref", "--format=%(refname)\t%(objectname)", "--sort=-committerdate", "refs/heads/")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref: %w", err)

@@ -712,7 +712,7 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 			author = bi.AuthorEmail
 		}
 
-		daysSinceLastCommit := int(time.Since(bi.AuthorDate).Hours() / 24)
+		daysSinceLastCommit := int(time.Since(bi.CommitterDate).Hours() / 24)
 
 		isStale := daysSinceLastCommit >= 120
 		isYours := false
@@ -723,7 +723,7 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 
 		branchItem := BranchListItem{
 			Name:                bi.Name,
-			Updated:             bi.AuthorDate.Format("Jan 2, 2006"),
+			Updated:             bi.CommitterDate.Format("Jan 2, 2006"),
 			UpdatedBy:           author,
 			CommitSHA:           bi.CommitSHA,
 			CommitMessage:       bi.CommitMessage,
@@ -732,7 +732,7 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 			Ahead:               0,
 			CreatedBy:           bi.AuthorEmail,
 			DaysSinceLastCommit: daysSinceLastCommit,
-			SortTime:            bi.AuthorDate,
+			SortTime:            bi.CommitterDate,
 		}
 
 		// ahead/behind 계산 (native git rev-list --count --left-right)

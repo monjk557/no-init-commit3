@@ -81,7 +81,7 @@ func TestMergeMethodCoverage(t *testing.T) {
 			t.Logf("📝 Request body: %s", string(reqBody))
 
 			// Create HTTP request
-			req := httptest.NewRequest(http.MethodPost, "/merge", bytes.NewReader(reqBody))
+			req := httptest.NewRequest(http.MethodPost, "/test-owner/test-repo/merge", bytes.NewReader(reqBody))
 			req.Header.Set("Content-Type", "application/json")
 
 			// Create response recorder
@@ -90,6 +90,10 @@ func TestMergeMethodCoverage(t *testing.T) {
 			// Create gin context
 			c, _ := gin.CreateTestContext(w)
 			c.Request = req
+			c.Params = gin.Params{
+				{Key: "owner", Value: "test-owner"},
+				{Key: "repo", Value: "test-repo"},
+			}
 
 			t.Logf("🔄 Calling HandleMerge with method: %s", tt.mergeMethod)
 
@@ -209,12 +213,16 @@ func TestMergeRequestValidation(t *testing.T) {
 			reqBody, err := json.Marshal(tt.request)
 			require.NoError(t, err)
 
-			req := httptest.NewRequest(http.MethodPost, "/merge", bytes.NewReader(reqBody))
+			req := httptest.NewRequest(http.MethodPost, "/test-owner/test-repo/merge", bytes.NewReader(reqBody))
 			req.Header.Set("Content-Type", "application/json")
 
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = req
+			c.Params = gin.Params{
+				{Key: "owner", Value: "test-owner"},
+				{Key: "repo", Value: "test-repo"},
+			}
 
 			handler.HandleMerge(c)
 
@@ -283,12 +291,16 @@ func TestAllMergeMethodsEndToEnd(t *testing.T) {
 			reqBody, err := json.Marshal(mergeReq)
 			require.NoError(t, err)
 
-			req := httptest.NewRequest(http.MethodPost, "/merge", bytes.NewReader(reqBody))
+			req := httptest.NewRequest(http.MethodPost, "/test-owner/test-repo/merge", bytes.NewReader(reqBody))
 			req.Header.Set("Content-Type", "application/json")
 
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = req
+			c.Params = gin.Params{
+				{Key: "owner", Value: "test-owner"},
+				{Key: "repo", Value: "test-repo"},
+			}
 
 			handler.HandleMerge(c)
 

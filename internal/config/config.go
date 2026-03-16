@@ -20,6 +20,13 @@ type Config struct {
 	Events          EventsConfig
 	Orchestrator    OrchestratorConfig
 	MergeProtection MergeProtectionConfig
+	Maintenance     MaintenanceConfig
+}
+
+// MaintenanceConfig controls Git repository maintenance scheduling.
+// See internal/maintenance package for the full implementation.
+type MaintenanceConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 // ServerConfig stores HTTP server configuration
@@ -192,6 +199,7 @@ func Load() (*Config, error) {
 	}
 	orchestratorConfig := parseOrchestratorConfig()
 	mergeProtectionConfig := parseMergeProtectionConfig()
+	maintenanceConfig := parseMaintenanceConfig()
 
 	config := &Config{
 		Server:          serverConfig,
@@ -201,6 +209,7 @@ func Load() (*Config, error) {
 		Events:          eventsConfig,
 		Orchestrator:    orchestratorConfig,
 		MergeProtection: mergeProtectionConfig,
+		Maintenance:     maintenanceConfig,
 	}
 
 	// 설정 유효성 검사
@@ -496,6 +505,15 @@ func parseStringSliceFromEnv(key string, defaultValue []string) []string {
 		}
 	}
 	return result
+}
+
+// ------------------------------------------------------------
+// MaintenanceConfig 파싱 (환경변수 + 하드코딩)
+// ------------------------------------------------------------
+func parseMaintenanceConfig() MaintenanceConfig {
+	return MaintenanceConfig{
+		Enabled: parseBoolFromEnv("GIT_MAINTENANCE_ENABLED", true),
+	}
 }
 
 // validate는 설정 유효성 검사를 수행합니다

@@ -1,7 +1,7 @@
 # CollabOps Git Executor update
 
 update
-
+readme update in web
 # Update for Prepare Test (HDD -> SDD) after ssd fd 
 
 ## 📦 Project Structure
@@ -952,4 +952,4 @@ go test ./internal/server -v      # Server routing and middleware
 go test ./internal/permissions -v # Permission system
 ```
 
----ㅇㅇㄹ
+---
