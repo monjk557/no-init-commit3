@@ -1,7 +1,9 @@
 package protocol
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -96,10 +98,22 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Body를 response 시작 전에 먼저 읽는다.
-	// 이유: libcurl(Apple Git 등)은 body > 1024 bytes일 때 Expect: 100-continue를 보내는데,
-	// WriteHeader(200)을 먼저 호출하면 Go HTTP 서버가 100 Continue 대신 200을 보내고,
-	// 클라이언트 Transport가 body 전송을 취소해서 body가 비어버린다.
-	cmds, err := h.readSection(r.Body)
+	// 전체 body를 먼저 버퍼로 읽어서 디버깅 + readSection에 전달
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		fmt.Printf("[DEBUG upload-pack] body read error: %v\n", err)
+		http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
+		return
+	}
+	peekLen := len(bodyBytes)
+	if peekLen > 64 {
+		peekLen = 64
+	}
+	fmt.Printf("[DEBUG upload-pack] raw body: len=%d, first%d=%s\n",
+		len(bodyBytes), peekLen, hex.EncodeToString(bodyBytes[:peekLen]))
+	bodyReader := bytes.NewReader(bodyBytes)
+
+	cmds, err := h.readSection(bodyReader)
 	if err != nil {
 		fmt.Printf("[DEBUG upload-pack] readSection error: %v\n", err)
 		http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
@@ -115,7 +129,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		fmt.Printf("[DEBUG upload-pack] empty cmds, returning flush. Content-Length=%d, Transfer-Encoding=%s\n",
 			r.ContentLength, r.Header.Get("Transfer-Encoding"))
 	} else if strings.HasPrefix(cmds[0], "command=ls-refs") {
-		lsRefsOpts, err := h.readSection(r.Body)
+		lsRefsOpts, err := h.readSection(bodyReader)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
 			return
@@ -127,7 +141,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	} else if strings.HasPrefix(cmds[0], "command=fetch") {
-		fetchOpts, err := h.readSection(r.Body)
+		fetchOpts, err := h.readSection(bodyReader)
 		if err != nil {
 			fmt.Printf("[DEBUG upload-pack] fetch readSection error: %v\n", err)
 			http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
