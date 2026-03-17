@@ -105,7 +105,7 @@ func initMeterProvider() {
 		resource.Default(),
 		resource.NewWithAttributes(
 			"",
-			attribute.String("service.name", "git-executor"),
+			attribute.String("service.name", "collabops-git-executor"),
 			attribute.String("service.version", "1.0.0"),
 		),
 	)

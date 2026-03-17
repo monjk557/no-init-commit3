@@ -23,7 +23,7 @@ const (
 	TracerName = "github.com/collabops/git-executor"
 
 	// Service attributes
-	ServiceName    = "git-executor"
+	ServiceName    = "collabops-git-executor"
 	ServiceVersion = "1.0.0" // This could be injected at build time
 )
 
