@@ -430,3 +430,58 @@ func nativeGetCommitInfo(ctx context.Context, repoPath, hash string) (*Commit, e
 	}
 	return &commits[0], nil
 }
+
+// nativeRevListCountRange counts commits reachable from 'from' but not from 'excludeAncestorsOf'.
+// Equivalent to: git rev-list --count from ^excludeAncestorsOf
+func nativeRevListCountRange(ctx context.Context, repoPath, from, excludeAncestorsOf string) (int, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-list", "--count", from, "^"+excludeAncestorsOf)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("failed to count commits: %s", strings.TrimSpace(stderr.String()))
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse commit count: %w", err)
+	}
+	return count, nil
+}
+
+// nativeDiffNameOnlyCount counts the number of changed files between two commits.
+// Equivalent to: git diff --name-only hash1 hash2 | wc -l
+func nativeDiffNameOnlyCount(ctx context.Context, repoPath, hash1, hash2 string) (int, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "diff", "--name-only", hash1, hash2)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get diff name-only: %s", strings.TrimSpace(stderr.String()))
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return 0, nil
+	}
+	return len(strings.Split(raw, "\n")), nil
+}
+
+// nativeGetCommitFullMessage returns the full commit message (subject + body) for a commit.
+func nativeGetCommitFullMessage(ctx context.Context, repoPath, hash string) (string, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "log", "-1", "--format=%B", hash)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get commit message: %s", strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
+}

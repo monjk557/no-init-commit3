@@ -2,6 +2,34 @@ package commits
 
 import "time"
 
+// CommitDetailResponse는 단일 커밋의 메타데이터 응답 구조를 나타냅니다.
+type CommitDetailResponse struct {
+	Success   bool               `json:"success"`
+	Sha       string             `json:"sha"`
+	Message   string             `json:"message"`
+	Author    CommitAuthorDetail `json:"author"`
+	Committer CommitAuthorDetail `json:"committer"`
+	Parents   []string           `json:"parents"`
+	TreeHash  string             `json:"tree_hash"`
+}
+
+// CommitAuthorDetail는 커밋 작성자/실행자의 상세 정보입니다.
+type CommitAuthorDetail struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Date  string `json:"date"`
+}
+
+// ComparisonSummaryResponse는 두 커밋 간 비교 요약 응답입니다.
+type ComparisonSummaryResponse struct {
+	Success          bool   `json:"success"`
+	MergeBase        string `json:"merge_base"`
+	SourceSha        string `json:"source_sha"`
+	TargetSha        string `json:"target_sha"`
+	CommitCount      int    `json:"commit_count"`
+	ChangedFileCount int    `json:"changed_file_count"`
+}
+
 // CommitsRequestParams는 커밋 로그 엔드포인트의 요청 파라미터를 나타냅니다.
 type CommitsRequestParams struct {
 	Owner string

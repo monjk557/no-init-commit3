@@ -297,6 +297,8 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 	// Commits endpoints
 	ownerRepoGroup.GET("/commits", commitsHandler.HandleCommitsAPI)
+	ownerRepoGroup.GET("/commits/compare/summary", commitsHandler.HandleComparisonSummary)
+	ownerRepoGroup.GET("/commits/:sha", commitsHandler.HandleGetCommitDetail)
 	ownerRepoGroup.POST("/commits", commitsHandler.HandleMultiFileCommit)
 
 	// Tags endpoints
@@ -313,6 +315,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/diff/branches", diffsHandler.HandleBranchDiffQuery) // query parameter 방식 (슬래시 포함 브랜치명 지원)
 	ownerRepoGroup.GET("/diff/file", diffsHandler.HandleFileDiff)
 	ownerRepoGroup.GET("/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
+	ownerRepoGroup.GET("/diff/expand-context", diffsHandler.HandleExpandContext)
 	ownerRepoGroup.GET("/diff/patch/:base/:head", diffsHandler.HandlePatch)
 
 	// Merge endpoints

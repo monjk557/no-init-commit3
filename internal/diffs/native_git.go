@@ -823,6 +823,68 @@ func parseFileStatus(line string) FileDiffStatus {
 	}
 }
 
+// nativeExpandContextLines는 blob에서 특정 라인 범위만 읽어 CONTEXT LineChange로 반환합니다.
+// git diff를 실행하지 않고 blob 단일 읽기만 수행하므로 매우 경량입니다.
+func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, fromOld, toOld, fromNew int) (*ExpandContextResponse, error) {
+	// blob 내용 읽기 (git show ref:path)
+	refHash, err := nativeResolveRef(ctx, repoPath, ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve ref '%s': %w", ref, err)
+	}
+
+	content, err := nativeRunGitCmd(ctx, repoPath, nativeGitTimeout, "show", refHash+":"+path)
+	if err != nil {
+		return nil, fmt.Errorf("file not found: %s at %s", path, ref)
+	}
+
+	lines := SplitLines(content)
+	totalLines := len(lines)
+
+	// 범위 클램핑
+	if fromOld < 1 {
+		fromOld = 1
+	}
+	if toOld > totalLines {
+		toOld = totalLines
+	}
+	if fromOld > toOld {
+		return &ExpandContextResponse{
+			Success:  true,
+			Lines:    []LineChange{},
+			Path:     path,
+			StartOld: fromOld,
+			StartNew: fromNew,
+			Count:    0,
+		}, nil
+	}
+
+	// LineChange 생성 (0-based 인덱스 변환)
+	result := make([]LineChange, 0, toOld-fromOld+1)
+	oldLine := fromOld
+	newLine := fromNew
+	for i := fromOld - 1; i < toOld; i++ {
+		text := " " + lines[i] // space prefix = CONTEXT convention
+		result = append(result, LineChange{
+			Type:           LineChangeTypeContext,
+			BlobLineNumber: intPtr(oldLine),
+			Text:           text,
+			Left:           intPtr(oldLine),
+			Right:          intPtr(newLine),
+		})
+		oldLine++
+		newLine++
+	}
+
+	return &ExpandContextResponse{
+		Success:  true,
+		Lines:    result,
+		Path:     path,
+		StartOld: fromOld,
+		StartNew: fromNew,
+		Count:    len(result),
+	}, nil
+}
+
 // isZeroHash는 해시가 모두 0인지 확인합니다.
 func isZeroHash(hash string) bool {
 	for _, c := range hash {

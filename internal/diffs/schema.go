@@ -145,6 +145,16 @@ const (
 	LineChangeTypeHunk    LineChangeType = "HUNK"    // hunk 헤더. text에 "@@ -n,m +n,m @@" — diffLines 한 번 순회로 렌더
 )
 
+// ExpandContextResponse는 hunk 사이 숨겨진 context 라인 확장 응답입니다.
+type ExpandContextResponse struct {
+	Success  bool         `json:"success"`
+	Lines    []LineChange `json:"lines"`     // CONTEXT 타입 LineChange 목록
+	Path     string       `json:"path"`      // 파일 경로
+	StartOld int          `json:"start_old"` // 반환된 첫 번째 old 라인 번호
+	StartNew int          `json:"start_new"` // 반환된 첫 번째 new 라인 번호
+	Count    int          `json:"count"`     // 반환된 라인 수
+}
+
 // DiffSizeLimits는 diff 크기 제한을 정의합니다
 const (
 	// MaxFileSize는 단일 파일의 최대 크기 (5MB)

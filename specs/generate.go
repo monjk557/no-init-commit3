@@ -568,6 +568,14 @@ func responseSchemaRef(method, specPath string) string {
 		if method == "POST" {
 			return "MultiFileCommitResponse"
 		}
+	case "/repos/{owner}/{repo}/commits/compare/summary":
+		if method == "GET" {
+			return "ComparisonSummaryResponse"
+		}
+	case "/repos/{owner}/{repo}/commits/{sha}":
+		if method == "GET" {
+			return "CommitDetailResponse"
+		}
 	case "/repos/{owner}/{repo}/tags":
 		if method == "GET" {
 			return "TagsResponse"
@@ -611,6 +619,8 @@ func responseSchemaRef(method, specPath string) string {
 		return "SingleCommitDiffResponse"
 	case "/repos/{owner}/{repo}/diff/commits/{base}/{head}":
 		return "DiffResponse"
+	case "/repos/{owner}/{repo}/diff/expand-context":
+		return "ExpandContextResponse"
 	case "/repos/{owner}/{repo}/diff/file":
 		return "FileDiff"
 	case "/repos/{owner}/{repo}/diff/file/branches/{base}/{head}":

@@ -251,6 +251,47 @@ paths:
                 $ref: '#/components/schemas/MultiFileCommitResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/commits/compare/summary:
+    get:
+      summary: HandleComparisonSummary
+      operationId: handlecomparisonsummary
+      tags:
+        - Commits
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComparisonSummaryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/commits/{sha}:
+    get:
+      summary: HandleGetCommitDetail
+      operationId: handlegetcommitdetail
+      tags:
+        - Commits
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: sha
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/context:
     post:
       summary: HandleContext
@@ -370,6 +411,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DiffResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/diff/expand-context:
+    get:
+      summary: HandleExpandContext
+      operationId: handleexpandcontext
+      tags:
+        - Diff
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpandContextResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/file:
@@ -971,6 +1030,46 @@ components:
         - date
         - email
         - name
+    CommitAuthorDetail:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+      required:
+        - date
+        - email
+        - name
+    CommitDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        sha:
+          type: string
+        message:
+          type: string
+        author:
+          $ref: '#/components/schemas/CommitAuthorDetail'
+        committer:
+          $ref: '#/components/schemas/CommitAuthorDetail'
+        parents:
+          type: array
+          items:
+            type: string
+        tree_hash:
+          type: string
+      required:
+        - author
+        - committer
+        - message
+        - parents
+        - sha
+        - success
+        - tree_hash
     CommitInfo:
       type: object
       properties:
@@ -1083,6 +1182,28 @@ components:
         - pagination
         - results
         - success
+    ComparisonSummaryResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        merge_base:
+          type: string
+        source_sha:
+          type: string
+        target_sha:
+          type: string
+        commit_count:
+          type: integer
+        changed_file_count:
+          type: integer
+      required:
+        - changed_file_count
+        - commit_count
+        - merge_base
+        - source_sha
+        - success
+        - target_sha
     ComputationMeta:
       type: object
       properties:
@@ -1433,6 +1554,30 @@ components:
         - total_deletions
     DiffTooLargeError:
       type: object
+    ExpandContextResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineChange'
+        path:
+          type: string
+        start_old:
+          type: integer
+        start_new:
+          type: integer
+        count:
+          type: integer
+      required:
+        - count
+        - lines
+        - path
+        - start_new
+        - start_old
+        - success
     FileChange:
       type: object
       properties:

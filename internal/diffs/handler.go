@@ -483,6 +483,78 @@ func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// HandleExpandContext는 GET /repos/:owner/:repo/diff/expand-context를 처리합니다.
+// hunk 사이 숨겨진 context 라인만 blob에서 읽어 반환하는 경량 API입니다.
+// git diff를 실행하지 않으므로 파일 크기에 관계없이 빠릅니다.
+func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	params, err := h.validateAndExtractParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	filePath := c.Query("path")
+	base := c.Query("base")
+	head := c.Query("head")
+	fromOldStr := c.Query("from_old")
+	toOldStr := c.Query("to_old")
+	fromNewStr := c.Query("from_new")
+
+	if filePath == "" || base == "" || head == "" || fromOldStr == "" || toOldStr == "" || fromNewStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "required parameters: path, base, head, from_old, to_old, from_new"})
+		return
+	}
+
+	fromOld, err := strconv.Atoi(fromOldStr)
+	if err != nil || fromOld < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_old must be a positive integer"})
+		return
+	}
+	toOld, err := strconv.Atoi(toOldStr)
+	if err != nil || toOld < fromOld {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "to_old must be >= from_old"})
+		return
+	}
+	fromNew, err := strconv.Atoi(fromNewStr)
+	if err != nil || fromNew < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_new must be a positive integer"})
+		return
+	}
+
+	// 최대 500 라인 제한
+	if toOld-fromOld+1 > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "line range too large (max 500 lines)"})
+		return
+	}
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// side 파라미터: deleted 파일은 base에서 읽어야 함 (기본: head)
+	ref := head
+	if side := c.Query("side"); side == "old" {
+		ref = base
+	}
+
+	response, err := nativeExpandContextLines(ctx, repoPath, ref, filePath, fromOld, toOld, fromNew)
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": errStr})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": errStr})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 // HandlePatch는 GET /repos/:owner/:repo/patch/:base/:head를 처리합니다
 func (h *DiffHandler) HandlePatch(c *gin.Context) {
 	// 공통 파라미터 추출 및 검증
