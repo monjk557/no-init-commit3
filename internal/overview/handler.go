@@ -614,6 +614,19 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		return
 	}
 
+	// 바이너리 파일: content 없이 메타데이터만 반환
+	contentType := blob.DetectContentType(blobContent, path)
+	if blob.IsBinaryContent(blobContent, contentType) {
+		c.JSON(http.StatusOK, blob.BlobBinaryResponse{
+			Success:     true,
+			IsBinary:    true,
+			ContentType: contentType,
+			Size:        len(blobContent),
+			Path:        path,
+		})
+		return
+	}
+
 	lines := strings.Count(strings.ReplaceAll(string(blobContent), "\r\n", "\n"), "\n") + 1
 	size := int64(len(blobContent))
 

@@ -800,6 +800,25 @@ components:
         - date
         - email
         - name
+    BlobBinaryResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        is_binary:
+          type: boolean
+        content_type:
+          type: string
+        size:
+          type: integer
+        path:
+          type: string
+      required:
+        - content_type
+        - is_binary
+        - path
+        - size
+        - success
     BlobErrorResponse:
       type: object
       properties:

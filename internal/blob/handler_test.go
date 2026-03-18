@@ -606,7 +606,6 @@ func Test_Blob_DirectoryPath_Returns400(t *testing.T) {
 // Test_Blob_BinaryFile_ReturnsBase64 바이너리 파일은 바이너리로 처리된다 (X-Content-Encoding: binary).
 func Test_Blob_BinaryFile_ReturnsBase64(t *testing.T) {
 	_, _ = setupTestHandler(t)
-	// setupTestHandler creates README etc; we need a binary file - create custom repo with binary
 	tempDir := t.TempDir()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))

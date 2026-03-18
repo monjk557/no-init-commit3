@@ -486,6 +486,12 @@ func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) {
 // HandleExpandContext는 GET /repos/:owner/:repo/diff/expand-context를 처리합니다.
 // hunk 사이 숨겨진 context 라인만 blob에서 읽어 반환하는 경량 API입니다.
 // git diff를 실행하지 않으므로 파일 크기에 관계없이 빠릅니다.
+//
+// 파라미터 (query string):
+//   - path, base, head: 필수
+//   - start_old, start_new, count, direction: 오케스트레이터 호환 파라미터
+//   - from_old, to_old, from_new: 레거시 파라미터 (start_old/start_new/count 우선)
+//   - side: "old"이면 base에서 읽음 (deleted 파일용)
 func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -498,29 +504,90 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
 	filePath := c.Query("path")
 	base := c.Query("base")
 	head := c.Query("head")
-	fromOldStr := c.Query("from_old")
-	toOldStr := c.Query("to_old")
-	fromNewStr := c.Query("from_new")
 
-	if filePath == "" || base == "" || head == "" || fromOldStr == "" || toOldStr == "" || fromNewStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "required parameters: path, base, head, from_old, to_old, from_new"})
+	if filePath == "" || base == "" || head == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "required parameters: path, base, head"})
 		return
 	}
 
-	fromOld, err := strconv.Atoi(fromOldStr)
-	if err != nil || fromOld < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_old must be a positive integer"})
-		return
-	}
-	toOld, err := strconv.Atoi(toOldStr)
-	if err != nil || toOld < fromOld {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "to_old must be >= from_old"})
-		return
-	}
-	fromNew, err := strconv.Atoi(fromNewStr)
-	if err != nil || fromNew < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_new must be a positive integer"})
-		return
+	var fromOld, toOld, fromNew int
+
+	// 오케스트레이터 호환: start_old, start_new, count, direction
+	if startOldStr := c.Query("start_old"); startOldStr != "" {
+		startOld, err := strconv.Atoi(startOldStr)
+		if err != nil || startOld < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "start_old must be a positive integer"})
+			return
+		}
+
+		startNewStr := c.Query("start_new")
+		if startNewStr == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "start_new is required when using start_old"})
+			return
+		}
+		startNew, err := strconv.Atoi(startNewStr)
+		if err != nil || startNew < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "start_new must be a positive integer"})
+			return
+		}
+
+		count := 20 // 기본값
+		if countStr := c.Query("count"); countStr != "" {
+			count, err = strconv.Atoi(countStr)
+			if err != nil || count < 1 {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "count must be a positive integer"})
+				return
+			}
+		}
+
+		direction := c.DefaultQuery("direction", "down")
+
+		if direction == "up" {
+			// 위로 확장: start_old 위쪽 count 라인
+			fromOld = startOld - count
+			if fromOld < 1 {
+				fromOld = 1
+			}
+			toOld = startOld - 1
+			if toOld < 1 {
+				toOld = 1
+			}
+			fromNew = startNew - (startOld - fromOld)
+			if fromNew < 1 {
+				fromNew = 1
+			}
+		} else {
+			// 아래로 확장 (기본): start_old부터 count 라인
+			fromOld = startOld
+			toOld = startOld + count - 1
+			fromNew = startNew
+		}
+	} else {
+		// 레거시 파라미터: from_old, to_old, from_new
+		fromOldStr := c.Query("from_old")
+		toOldStr := c.Query("to_old")
+		fromNewStr := c.Query("from_new")
+
+		if fromOldStr == "" || toOldStr == "" || fromNewStr == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "required parameters: path, base, head, and either (start_old, start_new, count) or (from_old, to_old, from_new)"})
+			return
+		}
+
+		fromOld, err = strconv.Atoi(fromOldStr)
+		if err != nil || fromOld < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_old must be a positive integer"})
+			return
+		}
+		toOld, err = strconv.Atoi(toOldStr)
+		if err != nil || toOld < fromOld {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "to_old must be >= from_old"})
+			return
+		}
+		fromNew, err = strconv.Atoi(fromNewStr)
+		if err != nil || fromNew < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_new must be a positive integer"})
+			return
+		}
 	}
 
 	// 최대 500 라인 제한

@@ -10,6 +10,16 @@ type BlobRequestParams struct {
 	UserID string
 }
 
+// BlobBinaryResponse는 바이너리 파일일 때 content 없이 메타데이터만 반환하는 응답입니다.
+// 클라이언트는 is_binary 필드로 바이너리 여부를 분기합니다.
+type BlobBinaryResponse struct {
+	Success     bool   `json:"success"`      // 항상 true
+	IsBinary    bool   `json:"is_binary"`    // 항상 true
+	ContentType string `json:"content_type"` // MIME type
+	Size        int    `json:"size"`         // 파일 크기 (bytes)
+	Path        string `json:"path"`         // 파일 경로
+}
+
 // BlobErrorResponse represents a standardized error response for blob endpoints.
 // 규약: 모든 JSON 에러 응답은 success=false, error 필수.
 type BlobErrorResponse struct {

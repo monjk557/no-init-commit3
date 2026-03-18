@@ -78,7 +78,7 @@ func NewManager(cfg *config.Config, version string) (*Manager, error) {
 		obsConfig.Tracing = TracingConfig{
 			Enabled:          cfg.Observability.Tracing.Enabled,
 			ExporterEndpoint: cfg.Observability.Tracing.Endpoint,
-			ServiceName:      cfg.Observability.Tracing.ServiceName,
+			ServiceName:      ServiceName,
 			ServiceVersion:   cfg.Observability.Tracing.ServiceVersion,
 		}
 	}

@@ -35,13 +35,13 @@ func (s *BlobService) GetBlobContent(ctx context.Context, repoPath, path, ref st
 	}
 
 	// Content-Type 감지
-	contentType := detectContentType(content, path)
+	contentType := DetectContentType(content, path)
 
 	return content, contentType, nil
 }
 
-// detectContentType는 파일 내용과 이름을 기반으로 Content-Type을 결정합니다.
-func detectContentType(content []byte, filename string) string {
+// DetectContentType는 파일 내용과 이름을 기반으로 Content-Type을 결정합니다.
+func DetectContentType(content []byte, filename string) string {
 	// 파일 확장자로 먼저 시도
 	ext := filepath.Ext(filename)
 	if contentType := mime.TypeByExtension(ext); contentType != "" {
