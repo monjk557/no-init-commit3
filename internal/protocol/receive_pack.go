@@ -6,29 +6,30 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
-	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/lfs"
+	lfsstorage "github.com/collabops/git-executor/internal/lfs/storage"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
 )
 
-// ReceivePackRequest represents a parsed receive-pack request from the client.
-// Used by SSH protocol handler.
+// ReceivePackRequest represents a parsed receive-pack request from the client
 type ReceivePackRequest struct {
 	Commands     []RefUpdateCommand
 	Capabilities []string
 	PackfileData []byte
 }
 
-// RefUpdateCommand represents a single reference update command in a push.
-// Used by SSH protocol handler.
+// RefUpdateCommand represents a single reference update command in a push
 type RefUpdateCommand struct {
 	RefName string // Reference name (e.g., refs/heads/main)
 	OldHash string // Current hash (zero hash for create)
@@ -42,6 +43,7 @@ type ReceivePackHandler struct {
 	capabilities *ServerCapabilities
 	eventsClient events.RedisStreamClient
 	config       *config.Config
+	lfsStorage   lfsstorage.Backend // LFS 오브젝트 존재 확인용 (nil이면 검증 건너뜀)
 }
 
 // NewReceivePackHandler creates a new receive-pack handler for the executor
@@ -65,19 +67,32 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 		}
 	}
 
+	// LFS가 활성화된 경우 스토리지 백엔드 초기화 (포인터 검증용)
+	var lfsBackend lfsstorage.Backend
+	if cfg.LFS.Enabled && cfg.LFS.GCSBucket != "" {
+		gcsBackend, gcsErr := lfsstorage.NewGCSBackend(
+			context.Background(),
+			cfg.LFS.GCSBucket,
+			cfg.LFS.URLExpiry,
+			nil, // logger는 선택사항, 프로토콜 핸들러에서는 간소화
+		)
+		if gcsErr == nil {
+			lfsBackend = gcsBackend
+		}
+	}
+
 	h := &ReceivePackHandler{
 		pathConfig:   pathConfig,
 		errorHandler: errorHandler,
 		capabilities: capabilities,
 		eventsClient: eventsClient,
 		config:       cfg,
+		lfsStorage:   lfsBackend,
 	}
 	return h, nil
 }
 
-const zeroHash = "0000000000000000000000000000000000000000"
-
-// HandleInfoRefs handles Smart HTTP discovery for receive-pack (push) using native git.
+// HandleInfoRefs handles Smart HTTP discovery for receive-pack (push).
 func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Request) {
 	owner := URLParam(r, "owner")
 	repo := URLParam(r, "repo")
@@ -102,27 +117,27 @@ func (h *ReceivePackHandler) HandleInfoRefs(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
 	w.Header().Set("Cache-Control", "no-cache")
 
-	// Smart HTTP service header
-	pktW := performance.NewOptimizedPktLineWriter(w)
-	_ = pktW.WriteLine("# service=git-receive-pack")
-	_ = pktW.Flush()
+	// Smart HTTP service announcement
+	pktWriter := performance.NewOptimizedPktLineWriter(w)
+	_ = pktWriter.WriteLine("# service=git-receive-pack")
+	_ = pktWriter.Flush()
 
-	// Delegate ref/capability advertisement to native git
-	cmd := exec.CommandContext(r.Context(), "git", "receive-pack", "--stateless-rpc", "--advertise-refs", repoPath)
-	cmd.Stdout = w
-	cmd.Env = gitProtocolEnv(r)
-
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("[receive-pack] info/refs error: %v\n", err)
+	// v1 ref advertisement + capabilities using native git
+	caps := []string{
+		"report-status",
+		"delete-refs",
+		"thin-pack",
+		"atomic",
 	}
+	_ = WriteV1Advert(w, repoPath, caps...)
 }
 
-// HandleReceivePack handles Git receive-pack POST requests using native git.
 func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	owner := URLParam(r, "owner")
 	repo := URLParam(r, "repo")
+
 	userID := r.Header.Get("X-USER-ID")
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
@@ -144,70 +159,355 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		repoLock.Unlock()
 	}()
 
-	bodyBytes, err := decompressRequestBody(r.Body)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
-		return
-	}
-
-	// Snapshot refs before push for event detection
-	beforeRefs := snapshotRefs(ctx, repoPath)
-
 	w.Header().Del("Content-Encoding")
 	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Transfer-Encoding", "chunked")
 
-	cmd := exec.CommandContext(ctx, "git", "receive-pack", "--stateless-rpc", repoPath)
-	cmd.Stdin = bytes.NewReader(bodyBytes)
-	cmd.Stdout = w
-	cmd.Env = gitProtocolEnv(r)
+	w.WriteHeader(http.StatusOK)
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	pktWriter := performance.NewOptimizedPktLineWriter(w)
 
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("[receive-pack] error: %v, stderr: %s\n", err, stderr.String())
-		return
-	}
-
-	// Detect ref changes and emit events
-	afterRefs := snapshotRefs(ctx, repoPath)
-	h.emitRefChangeEvents(ctx, repoPath, beforeRefs, afterRefs, owner, repo, userID)
-}
-
-// snapshotRefs captures current ref state for change detection.
-func snapshotRefs(ctx context.Context, repoPath string) map[string]string {
-	refs, err := gitcmd.ListRefs(ctx, repoPath)
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
 	}
-	m := make(map[string]string, len(refs))
-	for _, ref := range refs {
-		m[ref.RefName] = ref.ObjectName
-	}
-	return m
-}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-// emitRefChangeEvents compares before/after ref snapshots and emits events for changes.
-func (h *ReceivePackHandler) emitRefChangeEvents(ctx context.Context, repoPath string, before, after map[string]string, owner, repoName, userID string) {
-	if h.eventsClient == nil {
+	cmds, err := h.readSection(r.Body)
+	if err != nil {
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
 	}
 
-	for refName, newOID := range after {
-		oldOID, existed := before[refName]
-		if existed && oldOID == newOID {
-			continue
-		}
-		if !strings.HasPrefix(refName, "refs/heads/") {
-			continue
-		}
-		oldHashStr := ""
-		if existed {
-			oldHashStr = oldOID
-		}
-		h.addCommitEventToStream(ctx, repoPath, oldHashStr, newOID, refName, owner, repoName, userID, events.EventTypePush)
+	if len(cmds) == 0 {
+		_ = pktWriter.Flush()
+		return
 	}
+
+	// v1 fallback: first line is not command=
+	if !strings.HasPrefix(cmds[0], "command=") {
+		receiveReq, err := h.parseV1ReceivePack(bodyBytes)
+		if err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.Flush()
+			return
+		}
+
+		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, pktWriter); err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.Flush()
+			return
+		}
+		return
+	}
+
+	if strings.HasPrefix(cmds[0], "command=ls-refs") {
+		lsRefsOpts, err := h.readSection(r.Body)
+		if err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			return
+		}
+		allCmds := append(cmds, lsRefsOpts...)
+		lsRefsReq, err := ParseLsRefsSection(allCmds)
+		if err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			return
+		}
+
+		if err := handleLsRefsNative(ctx, repoPath, lsRefsReq, pktWriter); err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			return
+		}
+
+		_ = pktWriter.Flush()
+		return
+	} else if !strings.HasPrefix(cmds[0], "command=push") {
+		_ = pktWriter.WriteLine("ERR unknown command")
+		return
+	}
+
+	// command=push handling
+	pushOpts, err := h.readSection(r.Body)
+	if err != nil {
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
+	}
+	allCmds := append(cmds, pushOpts...)
+
+	receiveReq, err := h.parsePushSection(allCmds, r.Body)
+	if err != nil {
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
+	}
+
+	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, pktWriter)
+	if err != nil {
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		return
+	}
+}
+
+func (h *ReceivePackHandler) readSection(body io.Reader) ([]string, error) {
+	return readPktLineSection(body)
+}
+
+func (h *ReceivePackHandler) parseV1ReceivePack(body []byte) (*ReceivePackRequest, error) {
+	req := &ReceivePackRequest{
+		Commands:     make([]RefUpdateCommand, 0),
+		Capabilities: make([]string, 0),
+	}
+
+	rd := bytes.NewReader(body)
+	lenBuf := make([]byte, 4)
+	first := true
+
+	for {
+		if _, err := io.ReadFull(rd, lenBuf); err != nil {
+			if err == io.EOF {
+				return req, nil
+			}
+			return nil, err
+		}
+
+		n, err := strconv.ParseInt(string(lenBuf), 16, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pkt-line length: %w", err)
+		}
+		if n == 0 {
+			remaining, _ := io.ReadAll(rd)
+			if len(remaining) > 0 {
+				req.PackfileData = remaining
+			}
+			return req, nil
+		}
+		if n < 4 {
+			return nil, fmt.Errorf("invalid pkt-line length: %d", n)
+		}
+
+		dataLen := int(n) - 4
+		data := make([]byte, dataLen)
+		if _, err := io.ReadFull(rd, data); err != nil {
+			return nil, err
+		}
+
+		line := strings.TrimSuffix(string(data), "\n")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		var capsPart string
+		if first && strings.Contains(line, "\x00") {
+			parts := strings.SplitN(line, "\x00", 2)
+			line = parts[0]
+			capsPart = parts[1]
+		}
+		if first && capsPart != "" {
+			req.Capabilities = append(req.Capabilities, strings.Fields(capsPart)...)
+		}
+		first = false
+
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		req.Commands = append(req.Commands, RefUpdateCommand{
+			RefName: fields[2],
+			OldHash: fields[0],
+			NewHash: fields[1],
+		})
+	}
+}
+
+func (h *ReceivePackHandler) parsePushSection(cmds []string, body io.Reader) (*ReceivePackRequest, error) {
+	req := &ReceivePackRequest{
+		Commands:     make([]RefUpdateCommand, 0),
+		Capabilities: make([]string, 0),
+	}
+
+	var currentOldOid, currentNewOid, currentRefName string
+
+	for _, cmd := range cmds {
+		c := strings.TrimSpace(cmd)
+		if c == "" {
+			continue
+		}
+
+		switch {
+		case c == "command=push":
+		case strings.HasPrefix(c, "agent="):
+		case strings.HasPrefix(c, "old-oid "):
+			currentOldOid = strings.TrimSpace(c[8:])
+		case strings.HasPrefix(c, "new-oid "):
+			currentNewOid = strings.TrimSpace(c[8:])
+		case strings.HasPrefix(c, "ref-name "):
+			currentRefName = strings.TrimSpace(c[9:])
+			if currentOldOid != "" && currentNewOid != "" && currentRefName != "" {
+				cmd := RefUpdateCommand{
+					RefName: currentRefName,
+					OldHash: currentOldOid,
+					NewHash: currentNewOid,
+				}
+				req.Commands = append(req.Commands, cmd)
+				currentOldOid = ""
+				currentNewOid = ""
+			}
+		default:
+		}
+	}
+
+	remaining, err := io.ReadAll(body)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("error reading packfile: %w", err)
+	}
+
+	if len(remaining) > 0 {
+		req.PackfileData = remaining
+	}
+
+	return req, nil
+}
+
+const zeroHash = "0000000000000000000000000000000000000000"
+
+func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, pktWriter *pktLineWriter) error {
+	if pktWriter == nil {
+		pktWriter = newPktLineWriter(w)
+	}
+
+	if len(req.Commands) == 0 {
+		if err := pktWriter.WriteLine("unpack ok"); err != nil {
+			return fmt.Errorf("failed to write unpack status: %w", err)
+		}
+		return pktWriter.Flush()
+	}
+
+	if len(req.PackfileData) > 0 {
+		// Use native git index-pack to process packfile (handles thin packs automatically)
+		reader := bytes.NewReader(req.PackfileData)
+		_, err := gitcmd.IndexPackFromReader(ctx, repoPath, reader)
+		if err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
+			// V1 report-status requires ng lines for each ref; without them
+			// the client reports "remote failed to report status".
+			for _, cmd := range req.Commands {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ng %s unpack failed", cmd.RefName))
+			}
+			return pktWriter.Flush()
+		}
+	}
+
+	if err := pktWriter.WriteLine("unpack ok"); err != nil {
+		return fmt.Errorf("failed to write unpack status: %w", err)
+	}
+
+	// LFS 포인터 검증: push된 blob 중 LFS 포인터가 있으면 GCS에 실제 오브젝트 존재 확인
+	if h.lfsStorage != nil {
+		if err := h.validateLFSPointers(ctx, repoPath, req.Commands, owner, repoName); err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ng %s %s", req.Commands[0].RefName, err.Error()))
+			return pktWriter.Flush()
+		}
+	}
+
+	// Process ref updates
+	for _, cmd := range req.Commands {
+		err := h.processRefUpdate(ctx, repoPath, cmd, owner, repoName, userID)
+		if err != nil {
+			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
+			if err := pktWriter.WriteLine(statusLine); err != nil {
+				return fmt.Errorf("failed to write ref error status: %w", err)
+			}
+		} else {
+			statusLine := fmt.Sprintf("ok %s", cmd.RefName)
+			if err := pktWriter.WriteLine(statusLine); err != nil {
+				return fmt.Errorf("failed to write ref success status: %w", err)
+			}
+		}
+	}
+
+	if err := pktWriter.Flush(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repoPath string, cmd RefUpdateCommand, owner, repoName, userID string) error {
+	if !isValidRefName(cmd.RefName) {
+		return fmt.Errorf("invalid reference name: %s", cmd.RefName)
+	}
+
+	isCreate := cmd.OldHash == zeroHash
+	isDelete := cmd.NewHash == zeroHash
+
+	// Verify current ref state (CAS check)
+	if !isCreate {
+		currentOID, err := gitcmd.VerifyRef(ctx, repoPath, cmd.RefName)
+		if err != nil {
+			return fmt.Errorf("reference %s does not exist", cmd.RefName)
+		}
+		if currentOID != cmd.OldHash {
+			return fmt.Errorf("reference %s has been modified (expected %s, got %s)", cmd.RefName, cmd.OldHash, currentOID)
+		}
+	}
+
+	// Verify new object exists
+	if !isDelete {
+		if _, err := gitcmd.ObjectExists(ctx, repoPath, cmd.NewHash); err != nil {
+			return fmt.Errorf("object %s not found in repository", cmd.NewHash)
+		}
+	}
+
+	// Apply ref update using native git update-ref
+	updates := []gitcmd.RefUpdateCmd{{
+		RefName: cmd.RefName,
+		OldOID:  cmd.OldHash,
+		NewOID:  cmd.NewHash,
+	}}
+	if err := gitcmd.AtomicRefUpdate(ctx, repoPath, updates); err != nil {
+		return fmt.Errorf("failed to update reference %s: %w", cmd.RefName, err)
+	}
+
+	// Emit event for branch updates
+	if !isDelete && cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
+		oldHashStr := ""
+		if cmd.OldHash != zeroHash {
+			oldHashStr = cmd.OldHash
+		}
+		h.addCommitEventToStream(ctx, repoPath, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID, events.EventTypePush)
+	}
+
+	return nil
+}
+
+func isValidRefName(refName string) bool {
+	if refName == "" {
+		return false
+	}
+
+	if !strings.HasPrefix(refName, "refs/") {
+		return false
+	}
+
+	for _, r := range refName {
+		if r >= 0 && r <= 31 {
+			return false
+		}
+	}
+
+	invalidChars := []string{" ", "~", "^", ":", "?", "*", "[", "\\", "..", "//", "@{"}
+	for _, char := range invalidChars {
+		if strings.Contains(refName, char) {
+			return false
+		}
+	}
+
+	if strings.HasSuffix(refName, "/") || strings.HasSuffix(refName, ".lock") {
+		return false
+	}
+
+	return true
 }
 
 func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repoPath string, oldHash string, commitHash string, refName, owner, repoName, userID string, eventType events.CommitEventType) {
@@ -215,11 +515,13 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repoPat
 		return
 	}
 
+	// Get commit info using native git
 	commit, err := gitcmd.GetCommitInfo(ctx, repoPath, commitHash)
 	if err != nil {
 		return
 	}
 
+	// Get relative path for event
 	fullRepoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
 	if err != nil {
 		return
@@ -247,4 +549,75 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repoPat
 			_ = err
 		}
 	}()
+}
+
+// validateLFSPointers는 push된 커밋에서 LFS 포인터 파일을 찾고,
+// 포인터가 가리키는 OID가 GCS에 실제 존재하는지 확인합니다.
+// 누락된 LFS 오브젝트가 있으면 에러를 반환하여 push를 거부합니다.
+func (h *ReceivePackHandler) validateLFSPointers(ctx context.Context, repoPath string, commands []RefUpdateCommand, owner, repo string) error {
+	for _, cmd := range commands {
+		if cmd.NewHash == zeroHash {
+			continue // 삭제는 검증 불필요
+		}
+
+		// 새 커밋에서 추가/변경된 blob 목록 추출
+		var output []byte
+		var err error
+		if cmd.OldHash == zeroHash {
+			// 새 브랜치: 전체 트리의 blob 확인
+			output, err = gitcmd.DiffTree(ctx, repoPath, "--no-commit-id", "-r", "--diff-filter=A", cmd.NewHash)
+		} else {
+			output, err = gitcmd.DiffTree(ctx, repoPath, "-r", "--diff-filter=AM", cmd.OldHash, cmd.NewHash)
+		}
+		if err != nil {
+			continue // diff 실패 시 검증 건너뜀 (push는 허용)
+		}
+
+		var missingOIDs []string
+		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+		for _, line := range lines {
+			if line == "" {
+				continue
+			}
+			// diff-tree 출력: ":oldmode newmode oldhash newhash status\tpath"
+			fields := strings.Fields(line)
+			if len(fields) < 6 {
+				continue
+			}
+			blobHash := fields[3]
+			if blobHash == zeroHash {
+				continue
+			}
+
+			// blob 내용을 읽어 LFS 포인터인지 확인 (작은 blob만)
+			blobContent, err := gitcmd.CatBlob(ctx, repoPath, blobHash)
+			if err != nil {
+				continue
+			}
+
+			// LFS 포인터는 최대 200바이트 미만의 작은 텍스트 파일
+			if len(blobContent) > 200 {
+				continue
+			}
+
+			if lfs.IsLFSPointer(blobContent) {
+				oid, _, ok := lfs.ParseLFSPointer(blobContent)
+				if !ok {
+					continue
+				}
+
+				// GCS에서 실제 오브젝트 존재 확인
+				exists, err := h.lfsStorage.Exists(ctx, owner, repo, oid)
+				if err != nil || !exists {
+					missingOIDs = append(missingOIDs, oid[:12])
+				}
+			}
+		}
+
+		if len(missingOIDs) > 0 {
+			return fmt.Errorf("LFS objects missing from storage: %s (run 'git lfs push' first)", strings.Join(missingOIDs, ", "))
+		}
+	}
+
+	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/lfs"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -99,6 +100,23 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 		statusCode := h.getErrorStatusCode(err)
 		h.sendError(c, err, statusCode)
 		return
+	}
+
+	// LFS 포인터 감지 및 메타데이터 반환
+	if lfs.IsLFSPointer(content) {
+		oid, size, ok := lfs.ParseLFSPointer(content)
+		if ok {
+			c.Header("Content-Type", "application/json")
+			c.JSON(http.StatusOK, gin.H{
+				"success":        true,
+				"is_lfs_pointer": true,
+				"lfs": gin.H{
+					"oid":  oid,
+					"size": size,
+				},
+			})
+			return
+		}
 	}
 
 	// 헤더 설정

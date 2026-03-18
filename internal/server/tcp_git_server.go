@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -325,6 +326,8 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *connection.ProgressAwareConnec
 		return s.handleUploadPack(conn, owner, repo)
 	case "git-receive-pack":
 		return s.handleReceivePack(conn, owner, repo)
+	case "git-lfs-authenticate":
+		return s.handleLFSAuthenticate(conn, owner, repo)
 	default:
 		return fmt.Errorf("unsupported Git service: %s", service)
 	}
@@ -718,6 +721,53 @@ func (s *DuplexTCPServer) runAutoGC(repoPath, tenantID string) {
 			zap.String("repo", tenantID),
 			zap.Duration("duration", duration))
 	}
+}
+
+// handleLFSAuthenticate는 SSH 경유 LFS 인증 요청을 처리합니다.
+// Git LFS 클라이언트가 SSH push/pull 시 `git-lfs-authenticate <repo> upload/download`를 호출하면
+// LFS Batch API의 URL과 인증 정보를 JSON으로 반환합니다.
+func (s *DuplexTCPServer) handleLFSAuthenticate(conn *connection.ProgressAwareConnection, owner, repo string) error {
+	if !s.config.LFS.Enabled {
+		writer := conn.GetWriter()
+		_, _ = writer.WriteString("error: LFS is not enabled on this server\n")
+		_ = writer.Flush()
+		return fmt.Errorf("LFS not enabled")
+	}
+
+	// LFS 서버의 HTTP 엔드포인트 URL 구성
+	// 클라이언트는 이 URL을 사용해 Batch API 요청을 보냄
+	serverPort := s.config.Server.Port
+	basePath := strings.TrimRight(s.config.Server.BasePath, "/")
+	lfsHref := fmt.Sprintf("http://127.0.0.1:%d%s/repos/%s/%s/info/lfs", serverPort, basePath, owner, repo)
+
+	// LFS authenticate 응답 (Git LFS 프로토콜 스펙)
+	authResp := map[string]interface{}{
+		"href": lfsHref,
+		"header": map[string]string{
+			"Content-Type": "application/vnd.git-lfs+json",
+		},
+		"expires_in": 3600,
+	}
+
+	respBytes, err := json.Marshal(authResp)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LFS auth response: %w", err)
+	}
+
+	writer := conn.GetWriter()
+	_, err = writer.Write(respBytes)
+	if err != nil {
+		return fmt.Errorf("failed to write LFS auth response: %w", err)
+	}
+	_, _ = writer.WriteString("\n")
+	_ = writer.Flush()
+
+	s.logger.Info("LFS authenticate completed",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("href", lfsHref))
+
+	return nil
 }
 
 // readPktLine reads a single pkt-line frame from the reader.

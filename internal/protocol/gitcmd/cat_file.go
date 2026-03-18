@@ -104,6 +104,33 @@ func parseIdentity(s string) (name, email string, t time.Time) {
 	return name, email, t
 }
 
+// CatBlob reads the content of a blob object from the repository.
+func CatBlob(ctx context.Context, repoPath string, oid string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "blob", oid)
+	cmd.Dir = repoPath
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("cat-file blob %s: %w (stderr: %s)", oid, err, stderr.String())
+	}
+	return out, nil
+}
+
+// DiffTree runs `git diff-tree` and returns the raw output.
+func DiffTree(ctx context.Context, repoPath string, args ...string) ([]byte, error) {
+	gitArgs := append([]string{"diff-tree"}, args...)
+	cmd := exec.CommandContext(ctx, "git", gitArgs...)
+	cmd.Dir = repoPath
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("diff-tree: %w (stderr: %s)", err, stderr.String())
+	}
+	return out, nil
+}
+
 // ObjectExists checks if an object exists in the repository and returns its type.
 // Returns the object type ("commit", "tree", "blob", "tag") or error if not found.
 func ObjectExists(ctx context.Context, repoPath string, oid string) (string, error) {

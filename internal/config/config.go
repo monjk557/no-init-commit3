@@ -20,7 +20,35 @@ type Config struct {
 	Events          EventsConfig
 	Orchestrator    OrchestratorConfig
 	MergeProtection MergeProtectionConfig
+	LFS             LFSConfig
 	Maintenance     MaintenanceConfig
+}
+
+// LFSConfig는 Git LFS 기능 설정입니다.
+type LFSConfig struct {
+	// 기능 활성화 여부
+	Enabled bool `json:"enabled"`
+
+	// GCS 버킷 이름 (LFS 오브젝트 저장소)
+	GCSBucket string `json:"gcs_bucket"`
+
+	// GCP 프로젝트 ID (ADC 자동 감지 시 생략 가능)
+	GCSProject string `json:"gcs_project"`
+
+	// Signed URL 유효시간
+	URLExpiry time.Duration `json:"url_expiry"`
+
+	// 단일 오브젝트 최대 크기
+	MaxObjectSize int64 `json:"max_object_size"`
+
+	// 메타데이터 SQLite DB 경로
+	MetadataDBPath string `json:"metadata_db_path"`
+
+	// 워크스페이스별 스토리지 한도 (bytes, 0 = 무제한)
+	StorageLimitPerOwner int64 `json:"storage_limit_per_owner"`
+
+	// 워크스페이스별 월간 대역폭 한도 (bytes, 0 = 무제한)
+	BandwidthLimitPerMonth int64 `json:"bandwidth_limit_per_month"`
 }
 
 // MaintenanceConfig controls Git repository maintenance scheduling.
@@ -199,6 +227,7 @@ func Load() (*Config, error) {
 	}
 	orchestratorConfig := parseOrchestratorConfig()
 	mergeProtectionConfig := parseMergeProtectionConfig()
+	lfsConfig := parseLFSConfig(gitConfig.RepoRoot)
 	maintenanceConfig := parseMaintenanceConfig()
 
 	config := &Config{
@@ -209,6 +238,7 @@ func Load() (*Config, error) {
 		Events:          eventsConfig,
 		Orchestrator:    orchestratorConfig,
 		MergeProtection: mergeProtectionConfig,
+		LFS:             lfsConfig,
 		Maintenance:     maintenanceConfig,
 	}
 
@@ -508,6 +538,62 @@ func parseStringSliceFromEnv(key string, defaultValue []string) []string {
 }
 
 // ------------------------------------------------------------
+// LFSConfig 파싱 (환경변수 + 하드코딩)
+// ------------------------------------------------------------
+func parseLFSConfig(repoRoot string) LFSConfig {
+	enabled := parseBoolFromEnv("LFS_ENABLED", false)
+
+	gcsBucket := os.Getenv("LFS_GCS_BUCKET")
+	gcsProject := os.Getenv("LFS_GCS_PROJECT")
+
+	urlExpiry := 15 * time.Minute
+	if v := os.Getenv("LFS_URL_EXPIRY"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			urlExpiry = d
+		}
+	}
+
+	// 단일 오브젝트 최대 5GB
+	maxObjectSize := int64(5 * 1024 * 1024 * 1024)
+	if v := os.Getenv("LFS_MAX_OBJECT_SIZE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			maxObjectSize = n
+		}
+	}
+
+	metadataDBPath := os.Getenv("LFS_METADATA_DB_PATH")
+	if metadataDBPath == "" {
+		metadataDBPath = repoRoot + "/.lfs-meta.db"
+	}
+
+	// 워크스페이스당 스토리지 한도 (기본 10GB, 0 = 무제한)
+	storageLimitPerOwner := int64(10 * 1024 * 1024 * 1024)
+	if v := os.Getenv("LFS_STORAGE_LIMIT_PER_OWNER"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			storageLimitPerOwner = n
+		}
+	}
+
+	// 월간 대역폭 한도 (기본 50GB, 0 = 무제한)
+	bandwidthLimitPerMonth := int64(50 * 1024 * 1024 * 1024)
+	if v := os.Getenv("LFS_BANDWIDTH_LIMIT_PER_MONTH"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			bandwidthLimitPerMonth = n
+		}
+	}
+
+	return LFSConfig{
+		Enabled:                enabled,
+		GCSBucket:              gcsBucket,
+		GCSProject:             gcsProject,
+		URLExpiry:              urlExpiry,
+		MaxObjectSize:          maxObjectSize,
+		MetadataDBPath:         metadataDBPath,
+		StorageLimitPerOwner:   storageLimitPerOwner,
+		BandwidthLimitPerMonth: bandwidthLimitPerMonth,
+	}
+}
+
 // MaintenanceConfig 파싱 (환경변수 + 하드코딩)
 // ------------------------------------------------------------
 func parseMaintenanceConfig() MaintenanceConfig {
@@ -595,6 +681,16 @@ func validate(config *Config) error {
 	}
 	if !fallbackStrategyValid {
 		errors = append(errors, fmt.Sprintf("merge_protection.fallback_strategy must be one of: %v", validFallbackStrategies))
+	}
+
+	// LFS 설정 유효성 검사
+	if config.LFS.Enabled {
+		if config.LFS.GCSBucket == "" {
+			errors = append(errors, "lfs.gcs_bucket is required when LFS is enabled")
+		}
+		if config.LFS.MaxObjectSize <= 0 {
+			errors = append(errors, "lfs.max_object_size must be > 0")
+		}
 	}
 
 	if len(errors) > 0 {

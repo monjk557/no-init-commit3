@@ -453,6 +453,10 @@ func nativeRevListCountRange(ctx context.Context, repoPath, from, excludeAncesto
 
 // nativeDiffNameOnlyCount counts the number of changed files between two commits.
 // Equivalent to: git diff --name-only hash1 hash2 | wc -l
+// diffTreeMaxFiles mirrors the maxFiles cap used in merge preview's compareRepositoryTrees.
+// Both APIs must report identical file counts for the same inputs.
+const diffTreeMaxFiles = 10000
+
 func nativeDiffNameOnlyCount(ctx context.Context, repoPath, hash1, hash2 string) (int, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
@@ -468,7 +472,11 @@ func nativeDiffNameOnlyCount(ctx context.Context, repoPath, hash1, hash2 string)
 	if raw == "" {
 		return 0, nil
 	}
-	return len(strings.Split(raw, "\n")), nil
+	count := len(strings.Split(raw, "\n"))
+	if count > diffTreeMaxFiles {
+		count = diffTreeMaxFiles
+	}
+	return count, nil
 }
 
 // nativeGetCommitFullMessage returns the full commit message (subject + body) for a commit.

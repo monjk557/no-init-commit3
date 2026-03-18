@@ -21,6 +21,7 @@ import (
 	repocontext "github.com/collabops/git-executor/internal/context"
 	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/langstats"
+	"github.com/collabops/git-executor/internal/lfs"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/merge"
 	"github.com/collabops/git-executor/internal/observability"
@@ -336,6 +337,40 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 	// Language stats endpoint
 	ownerRepoGroup.GET("/languages", langStatsHandler.HandleGetLanguageStats)
+
+	// LFS endpoints (GCS Signed URL 기반)
+	// Git LFS 클라이언트는 remote URL에서 LFS 엔드포인트를 유추합니다.
+	// 예: remote=https://server/repos/owner/repo → POST .../info/lfs/objects/batch
+	// .git suffix가 포함된 URL도 지원해야 합니다.
+	if s.config.LFS.Enabled {
+		lfsHandler, err := lfs.NewHandler(s.config)
+		if err != nil {
+			s.logger.Error("Failed to create LFS handler", zap.Error(err))
+		} else {
+			// /:owner/:repo/info/lfs/* 경로 등록
+			lfsGroup := ownerRepoGroup.Group("/info/lfs")
+			s.registerLFSRoutes(lfsGroup, lfsHandler)
+
+			// /:owner/:repo.git/info/lfs/* 경로도 등록 (.git suffix 대응)
+			// Git LFS 클라이언트가 .git suffix URL을 사용하는 경우 처리
+			dotGitGroup := apiGroup.Group("/:owner/:repo.git")
+			dotGitLfsGroup := dotGitGroup.Group("/info/lfs")
+			s.registerLFSRoutes(dotGitLfsGroup, lfsHandler)
+
+			// 사용량 조회 엔드포인트 (워크스페이스 레벨)
+			router.GET("/workspaces/:owner/lfs/usage", lfsHandler.HandleGetUsage)
+		}
+	}
+}
+
+// registerLFSRoutes는 LFS 엔드포인트를 라우터 그룹에 등록합니다.
+func (s *Server) registerLFSRoutes(group *gin.RouterGroup, handler *lfs.Handler) {
+	group.POST("/objects/batch", handler.HandleBatch)
+	group.POST("/objects/verify", handler.HandleVerify)
+	group.POST("/locks", handler.HandleCreateLock)
+	group.GET("/locks", handler.HandleListLocks)
+	group.POST("/locks/verify", handler.HandleVerifyLocks)
+	group.POST("/locks/:id/unlock", handler.HandleDeleteLock)
 }
 
 // setupSwaggerRoutes - Swagger 문서 라우트 설정 (API 문서화용)

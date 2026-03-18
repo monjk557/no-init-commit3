@@ -491,6 +491,66 @@ paths:
                 $ref: '#/components/schemas/LanguageStatsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/locks:
+    post:
+      summary: HandleCreateLock
+      operationId: handlecreatelock
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    get:
+      summary: HandleListLocks
+      operationId: handlelistlocks
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/locks/verify:
+    post:
+      summary: HandleVerifyLocks
+      operationId: handleverifylocks
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/locks/{id}/unlock:
+    post:
+      summary: HandleDeleteLock
+      operationId: handledeletelock
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/merges:
     post:
       summary: HandleMerge
@@ -549,6 +609,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MergePreviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/objects/batch:
+    post:
+      summary: HandleBatch
+      operationId: handlebatch
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/objects/verify:
+    post:
+      summary: HandleVerify
+      operationId: handleverify
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview:
@@ -753,6 +841,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TreeEntriesRecursiveResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/workspaces/{owner}/lfs/usage:
+    get:
+      summary: HandleGetUsage
+      operationId: handlegetusage
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
 
