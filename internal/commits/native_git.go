@@ -457,12 +457,12 @@ func nativeDiffNameOnlyCount(ctx context.Context, repoPath, hash1, hash2 string)
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "diff", "--name-only", hash1, hash2)
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "diff-tree", "-r", "--no-commit-id", "-M", hash1, hash2)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get diff name-only: %s", strings.TrimSpace(stderr.String()))
+		return 0, fmt.Errorf("failed to get diff-tree count: %s", strings.TrimSpace(stderr.String()))
 	}
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
