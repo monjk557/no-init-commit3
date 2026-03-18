@@ -51,23 +51,10 @@ func (s *Service) GetContext(ctx context.Context, repoPath, oldRev, newRev strin
 		workflows = make(map[string]string)
 	}
 
-	// 4. old_rev..new_rev 범위의 커밋 SHA 목록 조회
-	commitSHAs, err := nativeRevList(ctx, repoPath, oldRev, newRev)
-	if err != nil {
-		s.logger.Warn("Failed to get commit SHAs from bare repo",
-			zap.String("repo_path", repoPath),
-			zap.String("old_rev", oldRev),
-			zap.String("new_rev", newRev),
-			zap.Error(err),
-		)
-		commitSHAs = []string{}
-	}
-
 	return &ContextResponse{
-		Success:    true,
-		DiffFiles:  diffFiles,
-		Workflows:  workflows,
-		CommitSHAs: commitSHAs,
+		Success:   true,
+		DiffFiles: diffFiles,
+		Workflows: workflows,
 	}, nil
 }
 

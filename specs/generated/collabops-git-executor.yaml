@@ -1318,12 +1318,7 @@ components:
         workflows:
           type: object
           additionalProperties: true
-        commit_shas:
-          type: array
-          items:
-            type: string
       required:
-        - commit_shas
         - diff_files
         - success
         - workflows
