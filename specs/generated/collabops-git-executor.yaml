@@ -838,7 +838,11 @@ components:
       properties:
         success:
           type: boolean
+        is_binary:
+          type: boolean
         content:
+          type: string
+        content_type:
           type: string
         lines:
           type: integer
@@ -862,6 +866,7 @@ components:
         - branches
         - commits
         - content
+        - is_binary
         - latest_commit
         - lines
         - size
@@ -1313,7 +1318,12 @@ components:
         workflows:
           type: object
           additionalProperties: true
+        commit_shas:
+          type: array
+          items:
+            type: string
       required:
+        - commit_shas
         - diff_files
         - success
         - workflows

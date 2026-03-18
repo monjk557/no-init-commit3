@@ -136,7 +136,9 @@ type TreeOverviewResponse struct {
 // BlobOverviewResponse is the response type for blob overview API
 type BlobOverviewResponse struct {
 	Success      bool                     `json:"success"`
+	IsBinary     bool                     `json:"is_binary"`
 	Content      string                   `json:"content"`
+	ContentType  string                   `json:"content_type,omitempty"`
 	Lines        int                      `json:"lines"`
 	Size         int64                    `json:"size"`
 	Tree         []GitTreeEntryWithCommit `json:"tree"`

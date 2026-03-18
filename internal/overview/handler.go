@@ -614,21 +614,8 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		return
 	}
 
-	// 바이너리 파일: content 없이 메타데이터만 반환
 	contentType := blob.DetectContentType(blobContent, path)
-	if blob.IsBinaryContent(blobContent, contentType) {
-		c.JSON(http.StatusOK, blob.BlobBinaryResponse{
-			Success:     true,
-			IsBinary:    true,
-			ContentType: contentType,
-			Size:        len(blobContent),
-			Path:        path,
-		})
-		return
-	}
-
-	lines := strings.Count(strings.ReplaceAll(string(blobContent), "\r\n", "\n"), "\n") + 1
-	size := int64(len(blobContent))
+	isBinary := blob.IsBinaryContent(blobContent, contentType)
 
 	// 부모 디렉터리 트리 (native git ls-tree)
 	parentPath := ""
@@ -661,11 +648,20 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		commitsList = []GitCommit{}
 	}
 
+	var content string
+	var lines int
+	if !isBinary {
+		content = string(blobContent)
+		lines = strings.Count(strings.ReplaceAll(content, "\r\n", "\n"), "\n") + 1
+	}
+
 	response := BlobOverviewResponse{
 		Success:      true,
-		Content:      string(blobContent),
+		IsBinary:     isBinary,
+		Content:      content,
+		ContentType:  contentType,
 		Lines:        lines,
-		Size:         size,
+		Size:         int64(len(blobContent)),
 		Tree:         treeEntries,
 		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
 		LatestCommit: latestCommit,

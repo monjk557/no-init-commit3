@@ -93,6 +93,38 @@ func nativeShowFile(ctx context.Context, repoPath, sha, filePath string) (string
 	return string(out), nil
 }
 
+// nativeRevList는 old_rev..new_rev 범위의 커밋 SHA 목록을 반환합니다.
+func nativeRevList(ctx context.Context, repoPath, oldRev, newRev string) ([]string, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if isNullSHA(oldRev) {
+		// 최초 push: newRev까지의 모든 커밋
+		cmd = exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-list", newRev)
+	} else {
+		// old_rev 이후 ~ new_rev까지의 커밋
+		cmd = exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-list", oldRev+".."+newRev)
+	}
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git rev-list failed: %s: %w", strings.TrimSpace(stderr.String()), err)
+	}
+
+	var shas []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			shas = append(shas, line)
+		}
+	}
+
+	return shas, nil
+}
+
 // nativeValidateSHA는 SHA가 레포에 존재하는지 확인합니다.
 func nativeValidateSHA(ctx context.Context, repoPath, sha string) error {
 	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

@@ -9,7 +9,8 @@ type ContextRequest struct {
 
 // ContextResponse: diff 파일 목록 및 워크플로우 내용
 type ContextResponse struct {
-	Success   bool              `json:"success"`
-	DiffFiles []string          `json:"diff_files"` // 변경된 파일 경로 목록
-	Workflows map[string]string `json:"workflows"`  // .collabops/workflows/*.yaml 파일명→내용
+	Success    bool              `json:"success"`
+	DiffFiles  []string          `json:"diff_files"`  // 변경된 파일 경로 목록
+	Workflows  map[string]string `json:"workflows"`   // .collabops/workflows/*.yaml 파일명→내용
+	CommitSHAs []string          `json:"commit_shas"` // old_rev..new_rev 범위의 커밋 SHA 목록
 }
