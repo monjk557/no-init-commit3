@@ -20,6 +20,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	repocontext "github.com/collabops/git-executor/internal/context"
 	"github.com/collabops/git-executor/internal/diffs"
+	"github.com/collabops/git-executor/internal/fork"
 	"github.com/collabops/git-executor/internal/langstats"
 	"github.com/collabops/git-executor/internal/lfs"
 	"github.com/collabops/git-executor/internal/logging"
@@ -337,6 +338,16 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 	// Language stats endpoint
 	ownerRepoGroup.GET("/languages", langStatsHandler.HandleGetLanguageStats)
+
+	// Fork endpoints
+	forkHandler, err := fork.NewForkHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create fork handler", zap.Error(err))
+		return
+	}
+	ownerRepoGroup.POST("/forks", forkHandler.HandleForkRepository)
+	ownerRepoGroup.GET("/fork", forkHandler.HandleGetForkInfo)
+	ownerRepoGroup.POST("/fork/sync", forkHandler.HandleSyncUpstream)
 
 	// LFS endpoints (GCS Signed URL 기반)
 	// Git LFS 클라이언트는 remote URL에서 LFS 엔드포인트를 유추합니다.

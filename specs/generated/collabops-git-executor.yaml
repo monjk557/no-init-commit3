@@ -473,6 +473,48 @@ paths:
           description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/fork:
+    get:
+      summary: HandleGetForkInfo
+      operationId: handlegetforkinfo
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/fork/sync:
+    post:
+      summary: HandleSyncUpstream
+      operationId: handlesyncupstream
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/forks:
+    post:
+      summary: HandleForkRepository
+      operationId: handleforkrepository
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/languages:
     get:
       summary: HandleGetLanguageStats
