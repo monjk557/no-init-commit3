@@ -68,7 +68,7 @@ func (h *CommitsHandler) convertGitCommitToMetadata(commit Commit) CommitMetadat
 		SHA:     commit.Sha,
 		Author:  commit.Author.Name,
 		Email:   commit.Author.Email,
-		Date:    commit.Author.Date.UTC().Format("2006-01-02 15:04:05"),
+		Date:    commit.Author.Date.UTC().Format("2006-01-02T15:04:05Z"),
 		Message: commit.Message,
 		Parents: commit.ParentHashes,
 	}
