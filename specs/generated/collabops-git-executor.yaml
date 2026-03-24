@@ -473,6 +473,20 @@ paths:
           description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/diff/search/files:
+    get:
+      summary: HandleDiffFileSearch
+      operationId: handledifffilesearch
+      tags:
+        - Diff
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/fork:
     get:
       summary: HandleGetForkInfo
@@ -883,6 +897,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TreeEntriesRecursiveResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/tree/search:
+    get:
+      summary: HandleTreeSearch
+      operationId: handletreesearch
+      tags:
+        - Tree
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/workspaces/{owner}/lfs/usage:
@@ -1676,6 +1704,57 @@ components:
       required:
         - includes
         - request_type
+    DiffFileSearchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        query:
+          type: string
+        type:
+          type: string
+        base:
+          type: string
+        head:
+          type: string
+        merge_base:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiffFileSearchResult'
+        total_count:
+          type: integer
+      required:
+        - base
+        - files
+        - head
+        - query
+        - success
+        - total_count
+        - type
+    DiffFileSearchResult:
+      type: object
+      properties:
+        path:
+          type: string
+        old_path:
+          type: string
+        status:
+          type: string
+          enum: [added, deleted, modified, renamed]
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        is_binary:
+          type: boolean
+      required:
+        - additions
+        - deletions
+        - is_binary
+        - path
+        - status
     DiffResponse:
       type: object
       properties:
@@ -2939,6 +3018,27 @@ components:
         - repository
         - success
         - tree
+    TreeSearchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        query:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreeEntry'
+        total_count:
+          type: integer
+        truncated:
+          type: boolean
+      required:
+        - entries
+        - query
+        - success
+        - total_count
+        - truncated
     TreeWithCommitOverviewResponse:
       type: object
       properties:
