@@ -86,6 +86,61 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 	return result, nil
 }
 
+// SearchFiles는 저장소의 트리에서 파일명을 검색합니다.
+// git ls-tree -r --name-only로 전체 파일 목록을 가져온 뒤 대소문자 무관 부분 일치로 필터링합니다.
+func SearchFiles(repoPath, ref, query string, limit int) ([]TreeEntry, int, error) {
+	ctx := context.Background()
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", "-r", "--name-only", ref)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if strings.Contains(errMsg, "Not a valid object name") || strings.Contains(errMsg, "fatal") {
+			return nil, 0, fmt.Errorf("failed to resolve reference: %s", ref)
+		}
+		return nil, 0, fmt.Errorf("git ls-tree failed: %s: %w", errMsg, err)
+	}
+
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return []TreeEntry{}, 0, nil
+	}
+
+	queryLower := strings.ToLower(query)
+	lines := strings.Split(raw, "\n")
+	var results []TreeEntry
+	totalMatches := 0
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		path := gitutil.UnquoteGitPath(line)
+		if !strings.Contains(strings.ToLower(path), queryLower) {
+			continue
+		}
+		totalMatches++
+		if len(results) < limit {
+			// 파일명만 추출
+			name := path
+			if idx := strings.LastIndex(path, "/"); idx >= 0 {
+				name = path[idx+1:]
+			}
+			results = append(results, TreeEntry{
+				Type: "blob",
+				Name: name,
+				Path: path,
+			})
+		}
+	}
+
+	return results, totalMatches, nil
+}
+
 // sortTreeEntries sorts entries: trees first, then blobs, alphabetical within type.
 func sortTreeEntries(entries []TreeEntry) {
 	sort.Slice(entries, func(i, j int) bool {

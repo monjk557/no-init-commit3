@@ -674,3 +674,126 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 		return
 	}
 }
+
+// HandleDiffFileSearch는 GET /repos/:owner/:repo/diff/search/files를 처리합니다.
+// diff에서 변경된 파일 중 파일명을 대소문자 무관 부분 일치로 검색합니다.
+// 파라미터:
+//   - base, head: 필수 (커밋 SHA 또는 브랜치명)
+//   - query: 필수 (검색어)
+//   - type: "commit" (기본) 또는 "branch" (merge-base 기준 diff)
+func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// 공통 파라미터 추출 및 검증
+	params, err := h.validateAndExtractParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	base := c.Query("base")
+	head := c.Query("head")
+	query := c.Query("query")
+	diffType := c.DefaultQuery("type", "commit") // "commit" or "branch"
+
+	if base == "" || head == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base, head"})
+		return
+	}
+	if query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameter: query"})
+		return
+	}
+	if diffType != "commit" && diffType != "branch" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "type must be 'commit' or 'branch'"})
+		return
+	}
+
+	params.Base = base
+	params.Head = head
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// diff 파일 목록 가져오기
+	var fileMetas []nativeFileMeta
+	var mergeBase string
+
+	if diffType == "branch" {
+		// branch diff: merge-base 기준
+		baseHash, err := nativeResolveRef(ctx, repoPath, base)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve base: %s", base)})
+			return
+		}
+		headHash, err := nativeResolveRef(ctx, repoPath, head)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve head: %s", head)})
+			return
+		}
+		mb, err := nativeMergeBase(ctx, repoPath, baseHash, headHash)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "failed to find merge base"})
+			return
+		}
+		mergeBase = mb
+		fileMetas, err = nativeGetDiffFileList(ctx, repoPath, mb, headHash)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+	} else {
+		// commit diff: base..head
+		baseHash, err := nativeResolveRef(ctx, repoPath, base)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve base: %s", base)})
+			return
+		}
+		headHash, err := nativeResolveRef(ctx, repoPath, head)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve head: %s", head)})
+			return
+		}
+		fileMetas, err = nativeGetDiffFileList(ctx, repoPath, baseHash, headHash)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+	}
+
+	// 파일명 검색 (대소문자 무관 부분 일치 — path와 old_path 모두 검색)
+	queryLower := strings.ToLower(query)
+	var results []DiffFileSearchResult
+	for _, meta := range fileMetas {
+		pathMatch := strings.Contains(strings.ToLower(meta.Path), queryLower)
+		oldPathMatch := meta.OldPath != "" && strings.Contains(strings.ToLower(meta.OldPath), queryLower)
+		if pathMatch || oldPathMatch {
+			results = append(results, DiffFileSearchResult{
+				Path:      meta.Path,
+				OldPath:   meta.OldPath,
+				Status:    meta.Status,
+				Additions: meta.Additions,
+				Deletions: meta.Deletions,
+				IsBinary:  meta.IsBinary,
+			})
+		}
+	}
+
+	if results == nil {
+		results = []DiffFileSearchResult{}
+	}
+
+	c.JSON(http.StatusOK, &DiffFileSearchResponse{
+		Success:    true,
+		Query:      query,
+		Type:       diffType,
+		Base:       base,
+		Head:       head,
+		MergeBase:  mergeBase,
+		Files:      results,
+		TotalCount: len(results),
+	})
+}

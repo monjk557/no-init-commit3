@@ -296,6 +296,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 
 	// Tree endpoints
 	ownerRepoGroup.GET("/tree", treeHandler.HandleTreeAPI)
+	ownerRepoGroup.GET("/tree/search", treeHandler.HandleTreeSearch)
 
 	// Commits endpoints
 	ownerRepoGroup.GET("/commits", commitsHandler.HandleCommitsAPI)
@@ -319,6 +320,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
 	ownerRepoGroup.GET("/diff/expand-context", diffsHandler.HandleExpandContext)
 	ownerRepoGroup.GET("/diff/patch/:base/:head", diffsHandler.HandlePatch)
+	ownerRepoGroup.GET("/diff/search/files", diffsHandler.HandleDiffFileSearch)
 
 	// Merge endpoints
 	ownerRepoGroup.GET("/merges/preview", mergePreviewHandler.HandleMergePreview)

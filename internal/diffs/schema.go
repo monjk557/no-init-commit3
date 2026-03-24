@@ -183,3 +183,25 @@ type DiffTooLargeError struct {
 func (e *DiffTooLargeError) Error() string {
 	return fmt.Sprintf("This diff is too large to display: %s", e.Reason)
 }
+
+// DiffFileSearchResult는 diff에서 검색된 파일 항목입니다.
+type DiffFileSearchResult struct {
+	Path      string         `json:"path"`
+	OldPath   string         `json:"old_path,omitempty"`
+	Status    FileDiffStatus `json:"status"`
+	Additions int            `json:"additions"`
+	Deletions int            `json:"deletions"`
+	IsBinary  bool           `json:"is_binary"`
+}
+
+// DiffFileSearchResponse는 diff 파일 검색 응답입니다.
+type DiffFileSearchResponse struct {
+	Success    bool                   `json:"success"`
+	Query      string                 `json:"query"`
+	Type       string                 `json:"type"` // "commit" or "branch"
+	Base       string                 `json:"base"`
+	Head       string                 `json:"head"`
+	MergeBase  string                 `json:"merge_base,omitempty"`
+	Files      []DiffFileSearchResult `json:"files"`
+	TotalCount int                    `json:"total_count"`
+}

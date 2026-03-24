@@ -158,3 +158,64 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) {
 		c.JSON(http.StatusOK, response)
 	}
 }
+
+// HandleTreeSearch handles GET /repos/:owner/:repo/tree/search?ref=&query=
+// 트리에서 파일명을 대소문자 무관 부분 일치로 검색합니다.
+func (h *TreeHandler) HandleTreeSearch(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	ref := c.Query("ref")
+	query := c.Query("query")
+
+	if query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "query parameter is required"})
+		return
+	}
+
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	// limit 파라미터
+	limit := DefaultSearchLimit
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			if parsed > MaxSearchLimit {
+				limit = MaxSearchLimit
+			} else {
+				limit = parsed
+			}
+		}
+	}
+
+	// 저장소 경로 검증
+	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Invalid repository path"})
+		return
+	}
+
+	exists, err := h.repoManager.RepositoryExists(repoPath)
+	if err != nil || !exists {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
+		return
+	}
+
+	entries, totalMatches, err := SearchFiles(repoPath, ref, query, limit)
+	if err != nil {
+		if strings.Contains(err.Error(), "failed to resolve reference") {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, &TreeSearchResponse{
+		Success:    true,
+		Query:      query,
+		Entries:    entries,
+		TotalCount: totalMatches,
+		Truncated:  totalMatches > limit,
+	})
+}

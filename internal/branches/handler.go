@@ -139,7 +139,8 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
 	})
 }
 
-// HandleGetBranches handles GET /repos/{owner}/{repo}/branches for getting branches
+// HandleGetBranches handles GET /repos/{owner}/{repo}/branches for getting branches.
+// Supports optional ?search=<keyword> to filter branches by name (case-insensitive substring match).
 func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -150,6 +151,7 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 	// 파라미터 추출 및 검증
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
+	searchQuery := c.Query("search")              // 브랜치 이름 검색 (대소문자 무관 부분 일치)
 	sortParam := c.DefaultQuery("sort", "newest") // "newest" (기본), "oldest", "name"
 	sort := ParseBranchSort(sortParam)
 
@@ -196,6 +198,18 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 	// nil 체크: 빈 배열 보장
 	if allBranches == nil {
 		allBranches = []BranchInfo{}
+	}
+
+	// search 필터 적용 (대소문자 무관 부분 일치)
+	if searchQuery != "" {
+		searchLower := strings.ToLower(searchQuery)
+		filtered := make([]BranchInfo, 0, len(allBranches))
+		for _, b := range allBranches {
+			if strings.Contains(strings.ToLower(b.Name), searchLower) {
+				filtered = append(filtered, b)
+			}
+		}
+		allBranches = filtered
 	}
 
 	totalCount := len(allBranches)
