@@ -688,6 +688,7 @@ func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo
 		UserID:        userID,
 		CommitMessage: commitInfo.Message,
 		Timestamp:     commitInfo.CommitterDate,
+		PushedAt:      time.Now(),
 	}
 
 	// Publish asynchronously to avoid blocking

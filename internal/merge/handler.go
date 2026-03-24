@@ -558,6 +558,7 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(_ context.Context, repo
 		UserID:        userID,
 		CommitMessage: commit.Message,
 		Timestamp:     commit.Committer.When,
+		PushedAt:      time.Now(),
 	}
 
 	go func() {

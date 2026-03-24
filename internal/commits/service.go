@@ -708,6 +708,7 @@ func (s *CommitsService) addCommitEventToStream(ctx context.Context, repoPath, o
 		UserID:        userID,
 		CommitMessage: commit.Message,
 		Timestamp:     commit.Committer.Date,
+		PushedAt:      time.Now(),
 	}
 
 	s.logger.Debug("Creating commit event with user context",

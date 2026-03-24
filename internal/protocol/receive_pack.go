@@ -539,6 +539,7 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repoPat
 		UserID:        userID,
 		CommitMessage: commit.Message,
 		Timestamp:     commit.CommitterDate,
+		PushedAt:      time.Now(),
 	}
 
 	go func() {

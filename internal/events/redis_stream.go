@@ -35,7 +35,8 @@ type CommitEvent struct {
 	Pusher        string          // Pusher identifier (e.g., "git")
 	UserID        string          // User ID from X-USER-ID header
 	CommitMessage string          // Commit message
-	Timestamp     time.Time       // Event timestamp
+	Timestamp     time.Time       // Event timestamp (commit time)
+	PushedAt      time.Time       // Push received timestamp
 }
 
 // eventData represents the JSON structure for Redis Stream data field
@@ -50,6 +51,7 @@ type eventData struct {
 	OldRev        string `json:"old_rev,omitempty"`
 	OldRef        string `json:"old_ref,omitempty"` // For rename: previous ref name
 	UserID        string `json:"user_id,omitempty"`
+	PushedAt      string `json:"pushed_at,omitempty"`
 }
 
 // RedisStreamClient provides an interface for publishing commit events to Redis Stream
@@ -263,6 +265,9 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 	}
 	if event.UserID != "" {
 		data.UserID = event.UserID
+	}
+	if !event.PushedAt.IsZero() {
+		data.PushedAt = event.PushedAt.Format(time.RFC3339)
 	}
 
 	// Marshal to JSON

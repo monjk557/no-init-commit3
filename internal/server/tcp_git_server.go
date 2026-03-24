@@ -846,6 +846,7 @@ func (s *DuplexTCPServer) addCommitEventToStream(repoPath, oldHash, commitHash, 
 		UserID:        userID,
 		CommitMessage: commitInfo.Message,
 		Timestamp:     commitInfo.CommitterDate,
+		PushedAt:      time.Now(),
 	}
 
 	// Publish asynchronously to avoid blocking
