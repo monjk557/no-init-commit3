@@ -411,7 +411,7 @@ func TestAddDeleteEventToStream(t *testing.T) {
 
 	event := &CommitEvent{
 		RepoPath:      "/test/repo.git",
-		EventType:     EventTypeDelete,
+		EventType:     EventTypeBranchDelete,
 		CommitHash:    "delete123hash",
 		RefName:       "refs/heads/removed-branch",
 		Pusher:        "git",
@@ -450,9 +450,9 @@ func TestAddDeleteEventToStream(t *testing.T) {
 			continue
 		}
 
-		if eventData["old_rev"] == event.CommitHash && eventData["event_type"] == string(EventTypeDelete) {
+		if eventData["old_rev"] == event.CommitHash && eventData["event_type"] == string(EventTypeBranchDelete) {
 			found = true
-			assert.Equal(t, string(EventTypeDelete), eventData["event_type"])
+			assert.Equal(t, string(EventTypeBranchDelete), eventData["event_type"])
 			assert.Equal(t, event.CommitHash, eventData["old_rev"])
 			assert.Equal(t, "", eventData["new_rev"])
 			assert.Equal(t, event.RefName, eventData["ref"])

@@ -601,7 +601,7 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		userID := c.GetHeader("X-USER-ID")
 		event := &events.CommitEvent{
 			RepoPath:      relativePath,
-			EventType:     events.EventTypeDelete,
+			EventType:     events.EventTypeBranchDelete,
 			CommitHash:    result.CommitHash,
 			OldRev:        result.CommitHash,
 			RefName:       "refs/heads/" + branchName,

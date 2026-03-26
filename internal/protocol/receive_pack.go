@@ -478,6 +478,11 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repoPath stri
 		h.addCommitEventToStream(ctx, repoPath, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID, events.EventTypePush)
 	}
 
+	// Emit event for branch deletion
+	if isDelete && strings.HasPrefix(cmd.RefName, "refs/heads/") {
+		h.publishBranchDeleteEvent(ctx, repoPath, cmd.OldHash, cmd.RefName, owner, repoName, userID)
+	}
+
 	return nil
 }
 
@@ -549,6 +554,40 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repoPat
 		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
 			_ = err
 		}
+	}()
+}
+
+// publishBranchDeleteEvent publishes a branch_delete event to Redis Stream.
+// Unlike addCommitEventToStream, this does not call GetCommitInfo because
+// the ref has already been deleted and the commit hash is the old (pre-delete) value.
+func (h *ReceivePackHandler) publishBranchDeleteEvent(ctx context.Context, repoPath string, oldHash string, refName, owner, repoName, userID string) {
+	if h.eventsClient == nil {
+		return
+	}
+
+	fullRepoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repoName)
+	if err != nil {
+		return
+	}
+
+	relativePath := events.GetRelativeRepoPath(fullRepoPath, h.pathConfig.GetRepoRoot())
+
+	event := &events.CommitEvent{
+		RepoPath:   relativePath,
+		EventType:  events.EventTypeBranchDelete,
+		CommitHash: oldHash,
+		OldRev:     oldHash,
+		RefName:    refName,
+		Pusher:     "git",
+		UserID:     userID,
+		Timestamp:  time.Now(),
+		PushedAt:   time.Now(),
+	}
+
+	go func() {
+		evCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = h.eventsClient.AddCommitEventToStream(evCtx, event)
 	}()
 }
 

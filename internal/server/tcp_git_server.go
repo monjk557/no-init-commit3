@@ -692,7 +692,7 @@ func (s *DuplexTCPServer) publishRefChangeEvents(
 		s.logger.Info("Ref deleted",
 			zap.String("ref", refName),
 			zap.String("old", oldHash))
-		s.addCommitEventToStream(repoPath, oldHash, zeroHash, refName, owner, repo, userID, events.EventTypePush)
+		s.publishBranchDeleteEvent(repoPath, oldHash, refName, owner, repo, userID)
 	}
 }
 
@@ -858,6 +858,41 @@ func (s *DuplexTCPServer) addCommitEventToStream(repoPath, oldHash, commitHash, 
 			s.logger.Warn("Failed to publish commit event",
 				zap.String("repo_path", repoPath),
 				zap.String("commit_hash", commitHash),
+				zap.Error(err))
+		}
+	}()
+}
+
+// publishBranchDeleteEvent publishes a branch_delete event to Redis Stream.
+// Unlike addCommitEventToStream, this does not call GetCommitInfo because
+// the ref has already been deleted and the commit hash is the old (pre-delete) value.
+func (s *DuplexTCPServer) publishBranchDeleteEvent(repoPath, oldHash, refName, owner, repoName, userID string) {
+	if s.eventsClient == nil {
+		return
+	}
+
+	relativePath := events.GetRelativeRepoPath(repoPath, s.config.Git.RepoRoot)
+
+	event := &events.CommitEvent{
+		RepoPath:   relativePath,
+		EventType:  events.EventTypeBranchDelete,
+		CommitHash: oldHash,
+		OldRev:     oldHash,
+		RefName:    refName,
+		Pusher:     "git",
+		UserID:     userID,
+		Timestamp:  time.Now(),
+		PushedAt:   time.Now(),
+	}
+
+	go func() {
+		evCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := s.eventsClient.AddCommitEventToStream(evCtx, event); err != nil {
+			s.logger.Warn("Failed to publish branch delete event",
+				zap.String("repo_path", repoPath),
+				zap.String("ref", refName),
 				zap.Error(err))
 		}
 	}()
