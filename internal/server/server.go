@@ -29,6 +29,7 @@ import (
 	"github.com/collabops/git-executor/internal/overview"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
+	"github.com/collabops/git-executor/internal/revert"
 	"github.com/collabops/git-executor/internal/state"
 	"github.com/collabops/git-executor/internal/tags"
 	"github.com/collabops/git-executor/internal/tree"
@@ -277,6 +278,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 
+	revertHandler, err := revert.NewRevertHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create revert handler", zap.Error(err))
+		return
+	}
+
 	ownerRepoGroup := apiGroup.Group("/:owner/:repo")
 	ownerRepoGroup.Use(ginContextMiddleware())
 	ownerRepoGroup.Use(jsonResponseMiddleware.RequestMetadataMiddleware())
@@ -326,6 +333,9 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/merges/preview", mergePreviewHandler.HandleMergePreview)
 	ownerRepoGroup.GET("/merges/diff", mergePreviewHandler.HandleMergeDiff)
 	ownerRepoGroup.POST("/merges", mergeOpsHandler.HandleMerge)
+
+	// Revert endpoint
+	ownerRepoGroup.POST("/revert", revertHandler.HandleRevert)
 
 	// Overview endpoints
 	ownerRepoGroup.GET("/overview", overviewHandler.HandleGetRepositoryOverview)

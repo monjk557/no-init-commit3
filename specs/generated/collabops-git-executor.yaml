@@ -803,6 +803,20 @@ paths:
                 $ref: '#/components/schemas/TreeWithCommitOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/revert:
+    post:
+      summary: HandleRevert
+      operationId: handlerevert
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/state:
     get:
       summary: HandleGetRepositoryState
