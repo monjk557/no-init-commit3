@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/collabops/git-executor/internal/logging"
@@ -34,8 +35,8 @@ func NewStateService(logger *logging.Logger) (*StateService, error) {
 }
 
 // GetRepositoryState calculates and returns repository state using native git.
+// Parallelized: HEAD info, references, commit count, and repo size run concurrently.
 func (s *StateService) GetRepositoryState(owner, repo, repoPath string) (*RepositoryStateData, error) {
-	// Check if repository exists
 	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("repository does not exist: %s/%s", owner, repo)
 	}
@@ -49,7 +50,6 @@ func (s *StateService) GetRepositoryState(owner, repo, repoPath string) (*Reposi
 		gitDir = filepath.Join(repoPath, ".git")
 	}
 
-	// Get file info for timestamps
 	fileInfo, err := os.Stat(repoPath)
 	if err != nil {
 		s.logger.Warn("Failed to get file info",
@@ -57,10 +57,57 @@ func (s *StateService) GetRepositoryState(owner, repo, repoPath string) (*Reposi
 			zap.Error(err))
 	}
 
-	// Get HEAD info
+	// Phase 1: HEAD info (needed by phases 2 & 3)
 	headBranch, headHash := s.nativeGetHeadInfo(ctx, gitDir)
 
-	// Initialize response
+	// Phase 2: Parallel — head commit, references, commit count, repo size
+	var (
+		wg          sync.WaitGroup
+		headInfo    *HeadInfo
+		references  *References
+		commitCount int
+		repoSize    int64
+		repoSizeOk  bool
+	)
+
+	// goroutine 1: HEAD commit details
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if headHash != "" {
+			headInfo = s.buildHeadInfo(ctx, gitDir, headBranch, headHash)
+		}
+	}()
+
+	// goroutine 2: references (branches + tags from single for-each-ref, no per-ref git log)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		references = s.buildReferences(ctx, gitDir, headBranch)
+	}()
+
+	// goroutine 3: commit count
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if headHash != "" {
+			commitCount = s.nativeCountCommits(ctx, gitDir, headHash)
+		}
+	}()
+
+	// goroutine 4: repo size via git count-objects
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if size, err := s.nativeRepoSize(ctx, gitDir); err == nil {
+			repoSize = size
+			repoSizeOk = true
+		}
+	}()
+
+	wg.Wait()
+
+	// Assemble response
 	stateData := &RepositoryStateData{
 		Success:        true,
 		RepositoryName: repo,
@@ -74,18 +121,48 @@ func (s *StateService) GetRepositoryState(owner, repo, repoPath string) (*Reposi
 		},
 	}
 
-	// Build HEAD information
-	if headHash != "" {
-		headInfo := s.buildHeadInfo(ctx, gitDir, headBranch, headHash)
+	if headInfo != nil {
 		stateData.Head = *headInfo
 	}
 
-	// Build references
-	references := s.buildReferences(ctx, gitDir, headBranch)
-	stateData.References = *references
+	if references != nil {
+		stateData.References = *references
+	}
 
-	// Build repository info
-	repoInfo := s.buildRepositoryInfo(ctx, gitDir, repoPath, isBare, fileInfo, headBranch, headHash)
+	// Build repository info from already-collected data (no extra git calls)
+	repoInfo := &RepositoryInfo{
+		Path:   repoPath,
+		IsBare: isBare,
+	}
+
+	if fileInfo != nil {
+		repoInfo.CreatedAt = fileInfo.ModTime()
+		repoInfo.LastModified = fileInfo.ModTime()
+	}
+
+	if repoSizeOk {
+		repoInfo.Size = repoSize
+	}
+
+	if isBare {
+		repoInfo.GitDirectory = repoPath
+	} else {
+		repoInfo.GitDirectory = filepath.Join(repoPath, ".git")
+	}
+
+	repoInfo.HasWorktree = false
+
+	if headBranch != "" && strings.HasPrefix(headBranch, "refs/heads/") {
+		repoInfo.DefaultBranch = strings.TrimPrefix(headBranch, "refs/heads/")
+	}
+
+	// Reuse counts from references (no redundant git calls)
+	if references != nil {
+		repoInfo.BranchCount = references.Count.Branches
+		repoInfo.TagCount = references.Count.Tags
+	}
+	repoInfo.CommitCount = commitCount
+
 	stateData.RepositoryInfo = *repoInfo
 
 	return stateData, nil
@@ -96,7 +173,6 @@ func (s *StateService) nativeGetHeadInfo(ctx context.Context, gitDir string) (st
 	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	// Get symbolic ref (branch name)
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "symbolic-ref", "-q", "HEAD")
 	out, err := cmd.Output()
 	branch := ""
@@ -104,7 +180,6 @@ func (s *StateService) nativeGetHeadInfo(ctx context.Context, gitDir string) (st
 		branch = strings.TrimSpace(string(out))
 	}
 
-	// Get HEAD commit hash
 	cmdCtx2, cancel2 := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel2()
 	cmd2 := exec.CommandContext(cmdCtx2, "git", "--git-dir", gitDir, "rev-parse", "HEAD")
@@ -126,7 +201,6 @@ func (s *StateService) buildHeadInfo(ctx context.Context, gitDir, headBranch, he
 	}
 
 	if !isDetached {
-		// Symbolic ref → branch
 		shortName := strings.TrimPrefix(headBranch, "refs/heads/")
 		headInfo.Type = "branch"
 		headInfo.Name = shortName
@@ -143,7 +217,6 @@ func (s *StateService) buildHeadInfo(ctx context.Context, gitDir, headBranch, he
 		headInfo.Reference = "HEAD"
 	}
 
-	// Get commit info
 	commitInfo := s.nativeGetCommitInfo(ctx, gitDir, headHash)
 	headInfo.Commit = commitInfo
 	headInfo.CommitInfo = commitInfo
@@ -157,7 +230,6 @@ func (s *StateService) nativeGetCommitInfo(ctx context.Context, gitDir, hash str
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	// format: hash\tauthor_name\tauthor_email\tauthor_date\tcommitter_name\tcommitter_email\tcommitter_date\tsubject
 	format := "%H\t%an\t%ae\t%aI\t%cn\t%ce\t%cI\t%s"
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "log", "-1", "--format="+format, hash)
 	var stderr bytes.Buffer
@@ -189,7 +261,8 @@ func (s *StateService) nativeGetCommitInfo(ctx context.Context, gitDir, hash str
 	}
 }
 
-// buildReferences builds References from repository using native git for-each-ref.
+// buildReferences builds References from a single for-each-ref call.
+// Commit metadata is extracted directly from the format — no per-ref git log calls.
 func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch string) *References {
 	refs := &References{
 		Branches: []ReferenceInfo{},
@@ -205,8 +278,8 @@ func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch s
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	// Get all refs with commit info
-	format := "%(refname)\t%(refname:short)\t%(objectname)\t%(*objectname)\t%(authordate:iso8601-strict)\t%(authorname)\t%(authoremail)\t%(subject)"
+	// Single for-each-ref call: extract all commit metadata inline
+	format := "%(refname)\t%(refname:short)\t%(objectname)\t%(*objectname)\t%(authordate:iso8601-strict)\t%(authorname)\t%(authoremail)\t%(subject)\t%(committerdate:iso8601-strict)\t%(committername)\t%(committeremail)"
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir,
 		"for-each-ref", "refs/heads/", "refs/tags/", "refs/remotes/",
 		"--format="+format)
@@ -226,7 +299,7 @@ func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch s
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 8)
+		parts := strings.SplitN(line, "\t", 11)
 		if len(parts) < 8 {
 			continue
 		}
@@ -235,10 +308,20 @@ func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch s
 		shortName := parts[1]
 		hash := parts[2]
 		derefHash := parts[3]
-		dateStr := parts[4]
-		// authorName := parts[5] (available if needed)
-		// authorEmail := parts[6] (available if needed)
+		authorDate := parts[4]
+		authorName := parts[5]
+		authorEmail := parts[6]
 		subject := parts[7]
+
+		// Extract committer fields (may be absent for lightweight tags)
+		committerDate := ""
+		committerName := ""
+		committerEmail := ""
+		if len(parts) >= 11 {
+			committerDate = parts[8]
+			committerName = parts[9]
+			committerEmail = parts[10]
+		}
 
 		// For annotated tags, use deref hash
 		commitHash := hash
@@ -248,7 +331,7 @@ func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch s
 
 		isHead := fullName == headBranch
 
-		lastMod := dateStr
+		lastMod := authorDate
 		if lastMod == "" {
 			lastMod = time.Now().Format(time.RFC3339)
 		}
@@ -262,9 +345,23 @@ func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch s
 			LastModified: lastMod,
 		}
 
-		// Build commit info if we have enough data
-		if hash != "" && subject != "" {
-			ci := s.nativeGetCommitInfo(ctx, gitDir, commitHash)
+		// Build CommitInfo directly from for-each-ref output (no extra git log call)
+		if commitHash != "" && subject != "" {
+			ci := CommitInfo{
+				SHA:     commitHash,
+				Message: subject,
+				Author: AuthorInfo{
+					Name:  authorName,
+					Email: strings.Trim(authorEmail, "<>"),
+					Date:  authorDate,
+				},
+				Committer: AuthorInfo{
+					Name:  committerName,
+					Email: strings.Trim(committerEmail, "<>"),
+					Date:  committerDate,
+				},
+				CreatedAt: authorDate,
+			}
 			refInfo.Commit = &ci
 		}
 
@@ -285,67 +382,6 @@ func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch s
 	return refs
 }
 
-// buildRepositoryInfo builds RepositoryInfo using native git.
-func (s *StateService) buildRepositoryInfo(ctx context.Context, gitDir, repoPath string, isBare bool, fileInfo os.FileInfo, headBranch, headHash string) *RepositoryInfo {
-	repoInfo := &RepositoryInfo{
-		Path:   repoPath,
-		IsBare: isBare,
-	}
-
-	// Set timestamps
-	if fileInfo != nil {
-		repoInfo.CreatedAt = fileInfo.ModTime()
-		repoInfo.LastModified = fileInfo.ModTime()
-	}
-
-	// Get repository size
-	if size, err := s.getDirectorySize(repoPath); err == nil {
-		repoInfo.Size = size
-	}
-
-	// Set git directory path
-	if isBare {
-		repoInfo.GitDirectory = repoPath
-	} else {
-		repoInfo.GitDirectory = filepath.Join(repoPath, ".git")
-	}
-
-	repoInfo.HasWorktree = false
-
-	// Get default branch from HEAD
-	if headBranch != "" && strings.HasPrefix(headBranch, "refs/heads/") {
-		repoInfo.DefaultBranch = strings.TrimPrefix(headBranch, "refs/heads/")
-	}
-
-	// Count branches and tags using for-each-ref (fast)
-	repoInfo.BranchCount = s.nativeCountRefs(ctx, gitDir, "refs/heads/")
-	repoInfo.TagCount = s.nativeCountRefs(ctx, gitDir, "refs/tags/")
-
-	// Count commits using rev-list --count
-	if headHash != "" {
-		repoInfo.CommitCount = s.nativeCountCommits(ctx, gitDir, headHash)
-	}
-
-	return repoInfo
-}
-
-// nativeCountRefs counts refs under a prefix using for-each-ref.
-func (s *StateService) nativeCountRefs(ctx context.Context, gitDir, prefix string) int {
-	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "for-each-ref", prefix, "--format=x")
-	out, err := cmd.Output()
-	if err != nil {
-		return 0
-	}
-	raw := strings.TrimSpace(string(out))
-	if raw == "" {
-		return 0
-	}
-	return len(strings.Split(raw, "\n"))
-}
-
 // nativeCountCommits counts commits reachable from a ref using rev-list --count.
 func (s *StateService) nativeCountCommits(ctx context.Context, gitDir, ref string) int {
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
@@ -363,6 +399,39 @@ func (s *StateService) nativeCountCommits(ctx context.Context, gitDir, ref strin
 	return count
 }
 
+// nativeRepoSize returns the repository size in bytes using git count-objects.
+// Much faster than filepath.Walk for large repositories.
+func (s *StateService) nativeRepoSize(ctx context.Context, gitDir string) (int64, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "count-objects", "-v")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("git count-objects: %w", err)
+	}
+
+	var totalSize int64
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		// size: loose object size in KiB
+		// size-pack: packed object size in KiB
+		if strings.HasPrefix(line, "size:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "size:"))
+			if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+				totalSize += n * 1024
+			}
+		} else if strings.HasPrefix(line, "size-pack:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "size-pack:"))
+			if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+				totalSize += n * 1024
+			}
+		}
+	}
+
+	return totalSize, nil
+}
+
 // isBareRepository checks if a repository is bare
 func (s *StateService) isBareRepository(path string) bool {
 	gitDir := filepath.Join(path, ".git")
@@ -377,21 +446,4 @@ func (s *StateService) isBareRepository(path string) bool {
 	_, headErr := os.Stat(headPath)
 
 	return configErr == nil && headErr == nil
-}
-
-// getDirectorySize calculates the total size of a directory
-func (s *StateService) getDirectorySize(path string) (int64, error) {
-	var size int64
-
-	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !info.IsDir() {
-			size += info.Size()
-		}
-		return nil
-	})
-
-	return size, err
 }
