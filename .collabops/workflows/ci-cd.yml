@@ -127,7 +127,7 @@ jobs:
           CONTEXT="/workspace/source"
           DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
           /kaniko/executor \
-            --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
+            --registry-mirror=registry-proxy.collabops-onprem-stage.svc.cluster.local:5000 \
             --context="${CONTEXT}" \
             --dockerfile="${DOCKERFILE}" \
             --destination=tar:///workspace/source/git-executor-pr.tar \
@@ -296,7 +296,7 @@ jobs:
             echo "📋 Hotfix: ${REF_TAG}, ${COMMIT_SHA}"
             echo "Building and pushing hotfix tags: ${REF_TAG}, ${COMMIT_SHA}"
             /kaniko/executor \
-              --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
+              --registry-mirror=registry-proxy.collabops-onprem-stage.svc.cluster.local:5000 \
               --context="${CONTEXT}" \
               --dockerfile="${DOCKERFILE}" \
               --destination="${IMAGE_BASE}:${REF_TAG}" \
@@ -305,7 +305,7 @@ jobs:
             echo "📋 Main: ${COMMIT_SHA}, latest"
             echo "Building and pushing main tags: ${COMMIT_SHA}, latest"
             /kaniko/executor \
-              --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
+              --registry-mirror=registry-proxy.collabops-onprem-stage.svc.cluster.local:5000 \
               --context="${CONTEXT}" \
               --dockerfile="${DOCKERFILE}" \
               --destination="${IMAGE_BASE}:${COMMIT_SHA}" \
@@ -410,7 +410,7 @@ jobs:
           KST_TIME=$(TZ='KST-9' date '+%Y-%m-%d %H:%M:%S KST')
 
           curl -sS -X POST -H 'Content-type: application/json' \
-            --data "{\"text\": \"🚀 **${IMAGE}** image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\n👤 Contributor: ${ACTOR} | 🕐 Time: ${KST_TIME}\"}" \
+            --data "{\"text\": \"🚀 *${IMAGE}* image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\n👤 Contributor: ${ACTOR} | 🕐 Time: ${KST_TIME}\"}" \
             "${SLACK_WEBHOOK_URL}"
 
 

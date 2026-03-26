@@ -262,7 +262,7 @@ jobs:
 
           echo "📋 Building and pushing specs image..."
           /kaniko/executor \
-            --build-arg="GAR_MIRROR=${GAR_MIRROR}" \
+            --registry-mirror=registry-proxy.collabops-onprem-stage.svc.cluster.local:5000 \
             --context="${CONTEXT}" \
             --dockerfile="${DOCKERFILE}" \
             --target=specs \
