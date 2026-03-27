@@ -35,6 +35,7 @@ info:
     - **Repository State**: Query repository metadata and current state
     - **Merge Operations**: Perform Git merges with conflict detection
     - **Merge Preview**: Non-destructive merge analysis and conflict detection
+    - **Revert Operations**: Create a branch with a revert commit that undoes a prior merge or commit
     - **Overview Operations**: Get comprehensive repository overviews
 
     ## Authentication
@@ -169,6 +170,8 @@ tags:
     description: Diff and comparison
   - name: Merge
     description: Git merge and merge preview
+  - name: Revert
+    description: Revert commits on a new branch
   - name: Overview
     description: Comprehensive repository overview
 `
@@ -329,6 +332,7 @@ func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
 		"internal/blob/schema.go",
 		"internal/diffs/schema.go",
 		"internal/merge/schema.go",
+		"internal/revert/schema.go",
 		"internal/state/schema.go",
 		"internal/overview/schema.go",
 		"internal/context/schema.go",
@@ -532,6 +536,8 @@ func requestSchemaRef(method, specPath string) string {
 			return "CreateTagRequest"
 		case "/repos/{owner}/{repo}/merges":
 			return "MergeRequest"
+		case "/repos/{owner}/{repo}/revert":
+			return "RevertRequest"
 		case "/repos/{owner}/{repo}/context":
 			return "ContextRequest"
 		}
@@ -586,6 +592,10 @@ func responseSchemaRef(method, specPath string) string {
 	case "/repos/{owner}/{repo}/merges":
 		if method == "POST" {
 			return "MergeResponse"
+		}
+	case "/repos/{owner}/{repo}/revert":
+		if method == "POST" {
+			return "RevertResponse"
 		}
 	case "/repos/{owner}/{repo}/merges/preview":
 		return "MergePreviewResponse"
@@ -660,6 +670,8 @@ func getTagFromPath(path string) string {
 		return "Diff"
 	} else if strings.Contains(path, "/merges") {
 		return "Merge"
+	} else if strings.Contains(path, "/revert") {
+		return "Revert"
 	} else if strings.Contains(path, "/overview") {
 		return "Overview"
 	} else if strings.Contains(path, "/state") {

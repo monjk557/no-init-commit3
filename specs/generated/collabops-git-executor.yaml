@@ -16,6 +16,7 @@ info:
     - **Repository State**: Query repository metadata and current state
     - **Merge Operations**: Perform Git merges with conflict detection
     - **Merge Preview**: Non-destructive merge analysis and conflict detection
+    - **Revert Operations**: Create a branch with a revert commit that undoes a prior merge or commit
     - **Overview Operations**: Get comprehensive repository overviews
 
     ## Authentication
@@ -808,13 +809,23 @@ paths:
       summary: HandleRevert
       operationId: handlerevert
       tags:
-        - Repository Management
+        - Revert
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevertRequest'
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevertResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/state:
@@ -2877,6 +2888,43 @@ components:
         - timestamp
     RequestParams:
       type: object
+    RevertRequest:
+      type: object
+      properties:
+        commit_sha:
+          type: string
+        target_ref:
+          type: string
+        branch_name:
+          type: string
+        parent_number:
+          type: integer
+        message:
+          type: string
+        author:
+          $ref: '#/components/schemas/AuthorInfo'
+        committer:
+          $ref: '#/components/schemas/AuthorInfo'
+      required:
+        - commit_sha
+        - target_ref
+    RevertResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        revert_branch:
+          type: string
+        revert_commit:
+          $ref: '#/components/schemas/CommitInfo'
+        reverted_commit:
+          $ref: '#/components/schemas/CommitInfo'
+        message:
+          type: string
+      required:
+        - message
+        - revert_branch
+        - success
     SimpleBranchInfo:
       type: object
     SingleCommitDiffResponse:
@@ -3186,5 +3234,7 @@ tags:
     description: Diff and comparison
   - name: Merge
     description: Git merge and merge preview
+  - name: Revert
+    description: Revert commits on a new branch
   - name: Overview
     description: Comprehensive repository overview
