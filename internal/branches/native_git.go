@@ -227,6 +227,21 @@ func NativeResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 	return strings.TrimSpace(string(out)), nil
 }
 
+// NativeMergeBase finds the merge base of two commits.
+func NativeMergeBase(ctx context.Context, repoPath, hash1, hash2 string) (string, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "merge-base", hash1, hash2)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("no common ancestor found between commits")
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // NativeUpdateRef sets a ref to point to a given hash.
 // Equivalent to: git update-ref <refName> <hash>
 func NativeUpdateRef(ctx context.Context, repoPath, refName, hash string) error {

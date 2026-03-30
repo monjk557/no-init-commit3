@@ -145,6 +145,20 @@ paths:
           description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/branches/validate-reopen:
+    post:
+      summary: HandleValidateReopen
+      operationId: handlevalidatereopen
+      tags:
+        - Branches
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/validate/{name}:
     get:
       summary: HandleValidateBranchName
@@ -3162,6 +3176,34 @@ components:
         - operation
         - previous_hash
         - success
+    ValidateReopenRequest:
+      type: object
+      properties:
+        source_branch_name:
+          type: string
+        target_branch_name:
+          type: string
+        stored_source_commit_sha:
+          type: string
+      required:
+        - source_branch_name
+        - target_branch_name
+    ValidateReopenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        source_commit_sha:
+          type: string
+        target_commit_sha:
+          type: string
+        lineage_valid:
+          type: boolean
+      required:
+        - lineage_valid
+        - source_commit_sha
+        - success
+        - target_commit_sha
 
 
   responses:

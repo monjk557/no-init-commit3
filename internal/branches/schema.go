@@ -171,3 +171,18 @@ type BranchAheadBehind struct {
 	Ahead  int
 	Behind int
 }
+
+// ValidateReopenRequest는 CR reopen 전 브랜치 검증 요청입니다.
+type ValidateReopenRequest struct {
+	SourceBranchName      string `json:"source_branch_name" binding:"required"`
+	TargetBranchName      string `json:"target_branch_name" binding:"required"`
+	StoredSourceCommitSHA string `json:"stored_source_commit_sha,omitempty"`
+}
+
+// ValidateReopenResponse는 CR reopen 브랜치 검증 응답입니다.
+type ValidateReopenResponse struct {
+	Success         bool   `json:"success"`
+	SourceCommitSHA string `json:"source_commit_sha"`
+	TargetCommitSHA string `json:"target_commit_sha"`
+	LineageValid    bool   `json:"lineage_valid"`
+}

@@ -320,6 +320,92 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) {
 	})
 }
 
+// HandleValidateReopen handles POST /repos/{owner}/{repo}/branches/validate-reopen.
+// CR reopen 전 source/target 브랜치 존재 여부와 lineage(계보) 검증을 한 번에 수행합니다.
+func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	var req ValidateReopenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return
+	}
+
+	// 1) source/target 브랜치 존재 확인 (병렬)
+	type branchResult struct {
+		exists bool
+		hash   string
+		err    error
+	}
+	sourceCh := make(chan branchResult, 1)
+	targetCh := make(chan branchResult, 1)
+
+	go func() {
+		exists, hash, err := NativeCheckBranchExists(ctx, repoPath, req.SourceBranchName)
+		sourceCh <- branchResult{exists, hash, err}
+	}()
+	go func() {
+		exists, hash, err := NativeCheckBranchExists(ctx, repoPath, req.TargetBranchName)
+		targetCh <- branchResult{exists, hash, err}
+	}()
+
+	sourceRes := <-sourceCh
+	targetRes := <-targetCh
+
+	if sourceRes.err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "failed to check source branch"})
+		return
+	}
+	if !sourceRes.exists {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("source branch '%s' no longer exists", req.SourceBranchName)})
+		return
+	}
+	if targetRes.err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "failed to check target branch"})
+		return
+	}
+	if !targetRes.exists {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("target branch '%s' no longer exists", req.TargetBranchName)})
+		return
+	}
+
+	currentSourceTip := sourceRes.hash
+	currentTargetTip := targetRes.hash
+
+	// 2) lineage 검증: stored SHA와 현재 tip이 다르면 ancestor 관계 확인
+	lineageValid := true
+	if req.StoredSourceCommitSHA != "" && currentSourceTip != req.StoredSourceCommitSHA {
+		mergeBase, err := NativeMergeBase(ctx, repoPath, req.StoredSourceCommitSHA, currentSourceTip)
+		if err != nil || mergeBase != req.StoredSourceCommitSHA {
+			lineageValid = false
+		}
+	}
+
+	if !lineageValid {
+		c.JSON(http.StatusConflict, gin.H{
+			"success": false,
+			"error":   "source branch has been recreated from a different merge base",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, ValidateReopenResponse{
+		Success:          true,
+		SourceCommitSHA:  currentSourceTip,
+		TargetCommitSHA:  currentTargetTip,
+		LineageValid:     true,
+	})
+}
+
 // HandleCreateBranch handles POST /repos/{owner}/{repo}/branches for creating new branches.
 func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 	ctx := c.Request.Context()
