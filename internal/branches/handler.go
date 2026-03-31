@@ -399,10 +399,10 @@ func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, ValidateReopenResponse{
-		Success:          true,
-		SourceCommitSHA:  currentSourceTip,
-		TargetCommitSHA:  currentTargetTip,
-		LineageValid:     true,
+		Success:         true,
+		SourceCommitSHA: currentSourceTip,
+		TargetCommitSHA: currentTargetTip,
+		LineageValid:    true,
 	})
 }
 

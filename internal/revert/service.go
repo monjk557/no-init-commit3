@@ -12,6 +12,18 @@ import (
 	"time"
 )
 
+// BranchExistsError is returned when a revert branch already exists.
+// It carries the existing branch name and tip commit info so that
+// callers (handler) can include them in the HTTP response.
+type BranchExistsError struct {
+	BranchName string
+	TipCommit  *CommitInfo
+}
+
+func (e *BranchExistsError) Error() string {
+	return fmt.Sprintf("revert branch '%s' already exists for this commit", e.BranchName)
+}
+
 // maxSparseCheckoutFiles is the threshold for using sparse-checkout.
 // If a commit touches more files than this, fall back to full checkout
 // to avoid diminishing returns and command-line length issues.
@@ -195,9 +207,13 @@ func performRevert(ctx context.Context, repoPath string, req *RevertRequest) (*R
 	}
 	refName := "refs/heads/" + branchName
 
-	// Check if branch already exists — prevent silent overwrites
+	// Check if branch already exists — return existing branch info instead of a bare error
 	if existingHash, err := revParse(ctx, repoPath, refName); err == nil && existingHash != "" {
-		return nil, fmt.Errorf("branch %s already exists", branchName)
+		var tipInfo *CommitInfo
+		if tip, err := catFileCommit(ctx, repoPath, existingHash); err == nil {
+			tipInfo = tip.toCommitInfo()
+		}
+		return nil, &BranchExistsError{BranchName: branchName, TipCommit: tipInfo}
 	}
 
 	if err := updateRef(ctx, repoPath, refName, revertCommitHash); err != nil {

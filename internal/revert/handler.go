@@ -2,6 +2,7 @@ package revert
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -90,6 +91,18 @@ func (h *RevertHandler) HandleRevert(c *gin.Context) {
 
 	result, err := performRevert(ctx, repoPath, &req)
 	if err != nil {
+		var branchExistsErr *BranchExistsError
+		if errors.As(err, &branchExistsErr) {
+			c.JSON(http.StatusConflict, gin.H{
+				"success":       false,
+				"error":         branchExistsErr.Error(),
+				"code":          "BRANCH_ALREADY_EXISTS",
+				"revert_branch": branchExistsErr.BranchName,
+				"revert_commit": branchExistsErr.TipCommit,
+			})
+			return
+		}
+
 		errMsg := err.Error()
 		switch {
 		case strings.Contains(errMsg, "conflicts"):
@@ -103,12 +116,6 @@ func (h *RevertHandler) HandleRevert(c *gin.Context) {
 				"success": false,
 				"error":   errMsg,
 				"code":    "COMMIT_NOT_FOUND",
-			})
-		case strings.Contains(errMsg, "already exists"):
-			c.JSON(http.StatusConflict, gin.H{
-				"success": false,
-				"error":   errMsg,
-				"code":    "BRANCH_ALREADY_EXISTS",
 			})
 		case strings.Contains(errMsg, "invalid parent_number"):
 			c.JSON(http.StatusBadRequest, gin.H{
