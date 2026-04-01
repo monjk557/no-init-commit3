@@ -73,7 +73,7 @@ type CommitsErrorResponse struct {
 
 // 기본 페이지네이션 값들
 const (
-	DefaultCommitsLimit = 30
+	DefaultCommitsLimit = 35
 	MaxCommitsLimit     = 100
 	MinCommitsLimit     = 1
 )

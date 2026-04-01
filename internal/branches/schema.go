@@ -62,7 +62,7 @@ type PaginationInfo struct {
 
 // 기본 페이지네이션 값들
 const (
-	DefaultBranchesLimit = 30
+	DefaultBranchesLimit = 35
 	MaxBranchesLimit     = 100
 	MinBranchesLimit     = 1
 )

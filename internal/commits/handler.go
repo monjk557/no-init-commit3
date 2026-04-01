@@ -152,11 +152,11 @@ func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context) {
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	sourceRef := c.Query("source")
-	targetRef := c.Query("target")
+	sourceRef := c.Query("source_ref")
+	targetRef := c.Query("target_ref")
 
 	if sourceRef == "" || targetRef == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "both 'source' and 'target' query parameters are required"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "both 'source_ref' and 'target_ref' query parameters are required"})
 		return
 	}
 
