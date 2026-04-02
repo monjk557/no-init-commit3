@@ -43,10 +43,10 @@ func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortFiel
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	// format: refname:short\tsha\tdate\trefname
+	// format: refname:short\tsha\tdate\trefname\tcommitteremail
 	// NOTE: Using tab separator instead of %x00 because Apple Git's for-each-ref
 	// does not interpret %x00 as null byte (unlike git log --format).
-	format := "%(refname:short)\t%(objectname)\t%(committerdate:iso8601-strict)\t%(refname)"
+	format := "%(refname:short)\t%(objectname)\t%(committerdate:iso8601-strict)\t%(refname)\t%(committeremail)"
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"for-each-ref", "refs/heads/",
 		"--format="+format,
@@ -74,8 +74,8 @@ func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortFiel
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) < 4 {
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 5 {
 			continue
 		}
 
@@ -83,15 +83,17 @@ func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortFiel
 		commitSHA := parts[1]
 		dateStr := parts[2]
 		refPath := parts[3]
+		committerEmail := strings.Trim(parts[4], "<>")
 
 		date, _ := time.Parse(time.RFC3339, dateStr)
 
 		branch := BranchInfo{
-			Name:      name,
-			CommitSHA: commitSHA,
-			RefPath:   refPath,
-			IsHead:    headRef == refPath || headRef == "refs/heads/"+name,
-			Date:      date,
+			Name:           name,
+			CommitSHA:      commitSHA,
+			RefPath:        refPath,
+			IsHead:         headRef == refPath || headRef == "refs/heads/"+name,
+			Date:           date,
+			CommitterEmail: committerEmail,
 		}
 
 		branches = append(branches, branch)

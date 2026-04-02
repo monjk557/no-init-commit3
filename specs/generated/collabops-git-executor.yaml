@@ -126,6 +126,20 @@ paths:
                 $ref: '#/components/schemas/CreateBranchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/branches/bulk:
+    delete:
+      summary: HandleBulkDeleteBranches
+      operationId: handlebulkdeletebranches
+      tags:
+        - Branches
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/resolve/{ref}:
     get:
       summary: HandleResolveBranch
@@ -1183,6 +1197,50 @@ components:
         - success
         - total_count
         - yours
+    BulkDeleteBranchResult:
+      type: object
+      properties:
+        branch_name:
+          type: string
+        commit_hash:
+          type: string
+        success:
+          type: boolean
+        error:
+          type: string
+      required:
+        - branch_name
+        - success
+    BulkDeleteBranchesRequest:
+      type: object
+      properties:
+        branches:
+          type: array
+          items:
+            type: string
+      required:
+        - branches
+    BulkDeleteBranchesResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        total:
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/BulkDeleteBranchResult'
+      required:
+        - failed
+        - results
+        - succeeded
+        - success
+        - total
     ChangeRequestInfo:
       type: object
       properties:

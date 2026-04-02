@@ -34,12 +34,13 @@ type CreateBranchData struct {
 // BranchInfo는 Git 브랜치에 대한 정보를 나타냅니다 (단위 테스트 호환성용).
 // 브랜치 이름, 커밋 SHA, 참조 경로 및 HEAD 여부를 포함합니다.
 type BranchInfo struct {
-	Name       string      `json:"name"`
-	CommitSHA  string      `json:"commit_sha"`
-	RefPath    string      `json:"ref_path"`
-	IsHead     bool        `json:"is_head"`
-	LastCommit *CommitInfo `json:"last_commit,omitempty"`
-	Date       time.Time   `json:"date"`
+	Name           string      `json:"name"`
+	CommitSHA      string      `json:"commit_sha"`
+	RefPath        string      `json:"ref_path"`
+	IsHead         bool        `json:"is_head"`
+	LastCommit     *CommitInfo `json:"last_commit,omitempty"`
+	Date           time.Time   `json:"date"`
+	CommitterEmail string      `json:"committer_email"`
 }
 
 // GetBranchesResponse는 브랜치 목록 응답을 나타냅니다.
@@ -66,6 +67,33 @@ const (
 	MaxBranchesLimit     = 100
 	MinBranchesLimit     = 1
 )
+
+// 브랜치 상태 분류 기준 (overview 패키지와 동일)
+const (
+	StaleDaysThreshold = 120 // 마지막 커밋으로부터 120일 이상이면 stale
+)
+
+// BulkDeleteBranchesRequest는 대량 브랜치 삭제를 위한 요청을 나타냅니다.
+type BulkDeleteBranchesRequest struct {
+	Branches []string `json:"branches" binding:"required,min=1"`
+}
+
+// BulkDeleteBranchResult는 개별 브랜치 삭제 결과를 나타냅니다.
+type BulkDeleteBranchResult struct {
+	BranchName string `json:"branch_name"`
+	CommitHash string `json:"commit_hash,omitempty"`
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
+}
+
+// BulkDeleteBranchesResponse는 대량 브랜치 삭제 응답을 나타냅니다.
+type BulkDeleteBranchesResponse struct {
+	Success   bool                     `json:"success"`
+	Total     int                      `json:"total"`
+	Succeeded int                      `json:"succeeded"`
+	Failed    int                      `json:"failed"`
+	Results   []BulkDeleteBranchResult `json:"results"`
+}
 
 // CreateBranchDetails는 브랜치 생성의 추가 세부 정보를 포함합니다.
 type CreateBranchDetails struct {

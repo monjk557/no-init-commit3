@@ -154,6 +154,14 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 	searchQuery := c.Query("search")              // 브랜치 이름 검색 (대소문자 무관 부분 일치)
 	sortParam := c.DefaultQuery("sort", "newest") // "newest" (기본), "oldest", "name"
 	sort := ParseBranchSort(sortParam)
+	emailFilter := c.Query("email")   // committer email 필터 (대소문자 무관)
+	statusFilter := c.Query("status") // "active" 또는 "stale"
+
+	// status 파라미터 검증
+	if statusFilter != "" && statusFilter != "active" && statusFilter != "stale" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid status: must be 'active' or 'stale'"})
+		return
+	}
 
 	// limit 파라미터 파싱 및 검증
 	limit := DefaultBranchesLimit
@@ -206,6 +214,31 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		filtered := make([]BranchInfo, 0, len(allBranches))
 		for _, b := range allBranches {
 			if strings.Contains(strings.ToLower(b.Name), searchLower) {
+				filtered = append(filtered, b)
+			}
+		}
+		allBranches = filtered
+	}
+
+	// email 필터 적용 (대소문자 무관)
+	if emailFilter != "" {
+		emailLower := strings.ToLower(emailFilter)
+		filtered := make([]BranchInfo, 0, len(allBranches))
+		for _, b := range allBranches {
+			if strings.EqualFold(b.CommitterEmail, emailLower) {
+				filtered = append(filtered, b)
+			}
+		}
+		allBranches = filtered
+	}
+
+	// status 필터 적용 (active: 120일 미만, stale: 120일 이상)
+	if statusFilter != "" {
+		filtered := make([]BranchInfo, 0, len(allBranches))
+		for _, b := range allBranches {
+			daysSinceLastCommit := int(time.Since(b.Date).Hours() / 24)
+			isStale := daysSinceLastCommit >= StaleDaysThreshold
+			if (statusFilter == "stale" && isStale) || (statusFilter == "active" && !isStale) {
 				filtered = append(filtered, b)
 			}
 		}
@@ -714,4 +747,90 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		"operation":   "delete",
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+// HandleBulkDeleteBranches handles DELETE /repos/{owner}/{repo}/branches/bulk
+// 여러 브랜치를 한 번에 삭제합니다.
+func (h *BranchOperationsHandler) HandleBulkDeleteBranches(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	var req BulkDeleteBranchesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: branches array is required"})
+		return
+	}
+
+	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
+	if !ok {
+		return
+	}
+
+	results := make([]BulkDeleteBranchResult, 0, len(req.Branches))
+	succeeded := 0
+	failed := 0
+
+	for _, branchName := range req.Branches {
+		if err := h.validateBranchName(branchName); err != nil {
+			results = append(results, BulkDeleteBranchResult{
+				BranchName: branchName,
+				Success:    false,
+				Error:      fmt.Sprintf("invalid branch name: %v", err),
+			})
+			failed++
+			continue
+		}
+
+		result, err := h.service.DeleteBranch(ctx, repoCtx.repoPath, branchName)
+		if err != nil {
+			results = append(results, BulkDeleteBranchResult{
+				BranchName: branchName,
+				Success:    false,
+				Error:      err.Error(),
+			})
+			failed++
+			continue
+		}
+
+		results = append(results, BulkDeleteBranchResult{
+			BranchName: result.BranchName,
+			CommitHash: result.CommitHash,
+			Success:    true,
+		})
+		succeeded++
+
+		// Publish branch delete event (non-blocking)
+		if h.eventsClient != nil {
+			relativePath := events.GetRelativeRepoPath(repoCtx.repoPath, h.pathConfig.GetRepoRoot())
+			userID := c.GetHeader("X-USER-ID")
+			event := &events.CommitEvent{
+				RepoPath:   relativePath,
+				EventType:  events.EventTypeBranchDelete,
+				CommitHash: result.CommitHash,
+				OldRev:     result.CommitHash,
+				RefName:    "refs/heads/" + branchName,
+				UserID:     userID,
+				Timestamp:  time.Now(),
+			}
+			go func(e *events.CommitEvent, bn string) {
+				evCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if pubErr := h.eventsClient.AddCommitEventToStream(evCtx, e); pubErr != nil {
+					h.logger.Warn("Failed to publish bulk branch delete event",
+						zap.String("branch", bn),
+						zap.Error(pubErr))
+				}
+			}(event, branchName)
+		}
+	}
+
+	c.JSON(http.StatusOK, BulkDeleteBranchesResponse{
+		Success:   failed == 0,
+		Total:     len(req.Branches),
+		Succeeded: succeeded,
+		Failed:    failed,
+		Results:   results,
+	})
 }
