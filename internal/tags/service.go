@@ -41,16 +41,21 @@ func getTagDate(tag Tag) time.Time {
 // buildPagination은 페이지네이션 정보를 생성합니다.
 func buildPagination(totalCount, currentPage, pageSize int, baseURL string) PaginationInfo {
 	totalPages := (totalCount + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
 
 	var next, previous *string
 
 	if currentPage < totalPages {
-		nextURL := fmt.Sprintf("%s?page=%d&page_size=%d", baseURL, currentPage+1, pageSize)
+		nextSkip := (currentPage) * pageSize
+		nextURL := fmt.Sprintf("%s?limit=%d&skip=%d", baseURL, pageSize, nextSkip)
 		next = &nextURL
 	}
 
 	if currentPage > 1 {
-		prevURL := fmt.Sprintf("%s?page=%d&page_size=%d", baseURL, currentPage-1, pageSize)
+		prevSkip := (currentPage - 2) * pageSize
+		prevURL := fmt.Sprintf("%s?limit=%d&skip=%d", baseURL, pageSize, prevSkip)
 		previous = &prevURL
 	}
 
