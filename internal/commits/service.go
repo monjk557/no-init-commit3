@@ -63,12 +63,18 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, 
 }
 
 // convertGitCommitToMetadata는 Commit을 CommitMetadata로 변환합니다.
-func (h *CommitsHandler) convertGitCommitToMetadata(commit Commit) CommitMetadata {
+// groupBy가 "committer_date"이면 Date 필드에 committer date를 사용합니다.
+func (h *CommitsHandler) convertGitCommitToMetadata(commit Commit, groupBy string) CommitMetadata {
+	date := commit.Author.Date.UTC().Format("2006-01-02T15:04:05Z")
+	if groupBy == "committer_date" {
+		date = commit.Committer.Date.UTC().Format("2006-01-02T15:04:05Z")
+	}
+
 	return CommitMetadata{
 		SHA:     commit.Sha,
 		Author:  commit.Author.Name,
 		Email:   commit.Author.Email,
-		Date:    commit.Author.Date.UTC().Format("2006-01-02T15:04:05Z"),
+		Date:    date,
 		Message: commit.Message,
 		Parents: commit.ParentHashes,
 	}
@@ -84,6 +90,7 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 	targetRef := c.Query("target_ref")
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
+	groupBy := c.Query("group_by")
 
 	if owner == "" || repo == "" {
 		return nil, fmt.Errorf("missing required parameters: owner or repo")
@@ -95,6 +102,10 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 
 	if (sourceRef != "" && targetRef == "") || (sourceRef == "" && targetRef != "") {
 		return nil, fmt.Errorf("both source_ref and target_ref must be provided together")
+	}
+
+	if groupBy != "" && groupBy != "committer_date" {
+		return nil, fmt.Errorf("invalid group_by parameter: must be 'committer_date' or empty")
 	}
 
 	limit := DefaultCommitsLimit
@@ -129,6 +140,7 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*Commi
 		TargetRef: targetRef,
 		Limit:     limit,
 		Skip:      skip,
+		GroupBy:   groupBy,
 	}, nil
 }
 
@@ -178,16 +190,24 @@ func GetCommitsFromMergeBase(
 }
 
 // groupCommitsByDate는 커밋을 날짜별로 그룹화합니다.
-func (h *CommitsHandler) groupCommitsByDate(commits []Commit) []CommitsByDate {
+// groupBy가 "committer_date"이면 committer date 기준, 그 외에는 author date 기준(하위호환)으로 그룹화합니다.
+func (h *CommitsHandler) groupCommitsByDate(commits []Commit, groupBy string) []CommitsByDate {
 	if len(commits) == 0 {
 		return []CommitsByDate{}
 	}
 
+	useCommitterDate := groupBy == "committer_date"
+
 	dateMap := make(map[string][]CommitMetadata)
 
 	for _, commit := range commits {
-		dateStr := commit.Author.Date.UTC().Format("2006-01-02")
-		commitMeta := h.convertGitCommitToMetadata(commit)
+		var dateStr string
+		if useCommitterDate {
+			dateStr = commit.Committer.Date.UTC().Format("2006-01-02")
+		} else {
+			dateStr = commit.Author.Date.UTC().Format("2006-01-02")
+		}
+		commitMeta := h.convertGitCommitToMetadata(commit, groupBy)
 		dateMap[dateStr] = append(dateMap[dateStr], commitMeta)
 	}
 

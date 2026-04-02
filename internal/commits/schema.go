@@ -40,6 +40,10 @@ type CommitsRequestParams struct {
 	TargetRef string
 	Limit     int
 	Skip      int
+	// GroupBy는 커밋 날짜 그룹핑 기준을 지정합니다.
+	// "committer_date": committer date 기준 그룹핑 (rebase 등 반영)
+	// 기본값(빈 문자열): author date 기준 그룹핑 (하위호환)
+	GroupBy string
 }
 
 // CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.

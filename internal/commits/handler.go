@@ -123,7 +123,7 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		commits = []Commit{}
 	}
 
-	grouped := h.groupCommitsByDate(commits)
+	grouped := h.groupCommitsByDate(commits, params.GroupBy)
 	if grouped == nil {
 		grouped = []CommitsByDate{}
 	}
