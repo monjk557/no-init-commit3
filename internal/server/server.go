@@ -300,7 +300,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/branches", branchesHandler.HandleGetBranches)
 	ownerRepoGroup.POST("/branches", branchesHandler.HandleCreateBranch)
 	ownerRepoGroup.PATCH("/branches/*branch", branchesHandler.HandleUpdateBranch)
-	ownerRepoGroup.DELETE("/branches/bulk", branchesHandler.HandleBulkDeleteBranches)
+	ownerRepoGroup.POST("/branches/bulk-delete", branchesHandler.HandleBulkDeleteBranches)
 	ownerRepoGroup.DELETE("/branches/*branch", branchesHandler.HandleDeleteBranch)
 
 	// Tree endpoints
