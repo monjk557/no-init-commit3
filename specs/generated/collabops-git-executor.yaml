@@ -159,6 +159,20 @@ paths:
           description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/branches/stats:
+    post:
+      summary: HandleBranchStats
+      operationId: handlebranchstats
+      tags:
+        - Branches
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/validate-reopen:
     post:
       summary: HandleValidateReopen
@@ -1140,6 +1154,36 @@ components:
         - name
         - updated
         - updated_by
+    BranchStatsItem:
+      type: object
+      properties:
+        ahead:
+          type: integer
+        behind:
+          type: integer
+      required:
+        - ahead
+        - behind
+    BranchStatsRequest:
+      type: object
+      properties:
+        branches:
+          type: array
+          items:
+            type: string
+      required:
+        - branches
+    BranchStatsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        stats:
+          type: object
+          additionalProperties: true
+      required:
+        - stats
+        - success
     BranchesListResponse:
       type: object
       properties:

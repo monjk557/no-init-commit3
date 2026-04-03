@@ -283,6 +283,73 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// HandleBranchStats handles POST /repos/{owner}/{repo}/branches/stats
+// 요청된 브랜치들의 ahead/behind를 default branch 기준으로 배치 계산합니다.
+func (h *BranchOperationsHandler) HandleBranchStats(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	var req BranchStatsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+
+	if len(req.Branches) > MaxBranchesLimit {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("too many branches: max %d", MaxBranchesLimit)})
+		return
+	}
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		return
+	}
+
+	// default branch 확인
+	headRef := nativeGetHead(ctx, repoPath)
+	defaultBranch := strings.TrimPrefix(headRef, "refs/heads/")
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	// goroutine 병렬 계산
+	type result struct {
+		name string
+		item BranchStatsItem
+	}
+
+	resultCh := make(chan result, len(req.Branches))
+
+	for _, branch := range req.Branches {
+		go func(name string) {
+			if name == defaultBranch {
+				resultCh <- result{name: name, item: BranchStatsItem{Ahead: 0, Behind: 0}}
+				return
+			}
+			ab, err := NativeCalculateAheadBehind(ctx, repoPath, name, defaultBranch)
+			if err != nil {
+				resultCh <- result{name: name, item: BranchStatsItem{Ahead: 0, Behind: 0}}
+				return
+			}
+			resultCh <- result{name: name, item: BranchStatsItem{Ahead: ab.Ahead, Behind: ab.Behind}}
+		}(branch)
+	}
+
+	stats := make(map[string]BranchStatsItem, len(req.Branches))
+	for range req.Branches {
+		r := <-resultCh
+		stats[r.name] = r.item
+	}
+
+	c.JSON(http.StatusOK, BranchStatsResponse{
+		Success: true,
+		Stats:   stats,
+	})
+}
+
 // buildPagination은 페이지네이션 정보를 생성합니다.
 func buildPagination(totalCount, currentPage, pageSize int, baseURL string) PaginationInfo {
 	totalPages := (totalCount + pageSize - 1) / pageSize

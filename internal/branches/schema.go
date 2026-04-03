@@ -95,6 +95,23 @@ type BulkDeleteBranchesResponse struct {
 	Results   []BulkDeleteBranchResult `json:"results"`
 }
 
+// BranchStatsRequest는 배치 브랜치 stats 요청을 나타냅니다.
+type BranchStatsRequest struct {
+	Branches []string `json:"branches" binding:"required,min=1"`
+}
+
+// BranchStatsItem은 개별 브랜치의 ahead/behind 정보를 나타냅니다.
+type BranchStatsItem struct {
+	Ahead  int `json:"ahead"`
+	Behind int `json:"behind"`
+}
+
+// BranchStatsResponse는 배치 브랜치 stats 응답을 나타냅니다.
+type BranchStatsResponse struct {
+	Success bool                       `json:"success"`
+	Stats   map[string]BranchStatsItem `json:"stats"`
+}
+
 // CreateBranchDetails는 브랜치 생성의 추가 세부 정보를 포함합니다.
 type CreateBranchDetails struct {
 	Checkout  bool   `json:"checkout"`
