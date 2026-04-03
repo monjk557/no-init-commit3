@@ -123,6 +123,12 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		commits = []Commit{}
 	}
 
+	// limit+1로 요청했으므로, 초과분이 있으면 다음 페이지 존재
+	hasNext := len(commits) > params.Limit
+	if hasNext {
+		commits = commits[:params.Limit]
+	}
+
 	grouped := h.groupCommitsByDate(commits, params.GroupBy)
 	if grouped == nil {
 		grouped = []CommitsByDate{}
@@ -131,6 +137,7 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 	response := CommitsResponse{
 		Success:   true,
 		Results:   grouped,
+		HasNext:   hasNext,
 		Message:   "Commits fetched successfully",
 		MergeBase: mergeBase,
 		Pagination: PaginationInfo{

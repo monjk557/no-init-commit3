@@ -1466,11 +1466,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CommitsByDate'
+        has_next:
+          type: boolean
         merge_base:
           type: string
         pagination:
           $ref: '#/components/schemas/PaginationInfo'
       required:
+        - has_next
         - message
         - pagination
         - results

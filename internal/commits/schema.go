@@ -52,6 +52,7 @@ type CommitsResponse struct {
 	Success    bool            `json:"success"`
 	Message    string          `json:"message"`
 	Results    []CommitsByDate `json:"results"` // 날짜별로 그룹화된 커밋 목록 (날짜 기준 내림차순)
+	HasNext    bool            `json:"has_next"`
 	MergeBase  string          `json:"merge_base,omitempty"`
 	Pagination PaginationInfo  `json:"pagination"`
 }
