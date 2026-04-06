@@ -723,7 +723,7 @@ func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
 
 		daysSinceLastCommit := int(time.Since(bi.CommitterDate).Hours() / 24)
 
-		isStale := daysSinceLastCommit >= 120
+		isStale := daysSinceLastCommit >= 90
 		isYours := false
 		if userEmail != "" {
 			isYours = strings.EqualFold(bi.AuthorEmail, userEmail) ||

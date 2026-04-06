@@ -70,7 +70,7 @@ const (
 
 // 브랜치 상태 분류 기준 (overview 패키지와 동일)
 const (
-	StaleDaysThreshold = 120 // 마지막 커밋으로부터 120일 이상이면 stale
+	StaleDaysThreshold = 90 // 마지막 커밋으로부터 90일 이상이면 stale
 )
 
 // BulkDeleteBranchesRequest는 대량 브랜치 삭제를 위한 요청을 나타냅니다.

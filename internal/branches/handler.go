@@ -232,7 +232,7 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		allBranches = filtered
 	}
 
-	// status 필터 적용 (active: 120일 미만, stale: 120일 이상)
+	// status 필터 적용 (active: 90일 미만, stale: 90일 이상)
 	if statusFilter != "" {
 		filtered := make([]BranchInfo, 0, len(allBranches))
 		for _, b := range allBranches {
