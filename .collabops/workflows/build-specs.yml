@@ -21,6 +21,7 @@ env:
   REGION: asia-northeast3
   REPOSITORY: git-executor
   IMAGE: collabops-git-executor-specs
+  LOCAL_REGISTRY: collabops-registry.collabops-onprem-stage.svc.cluster.local:5000
 
 jobs:
   generate-openapi-specs:
@@ -260,16 +261,20 @@ jobs:
           CONTEXT="/workspace/source"
           DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
 
+          LOCAL_IMAGE_BASE="${LOCAL_REGISTRY}/${REPOSITORY}/${IMAGE}"
+
           echo "📋 Building and pushing specs image..."
           /kaniko/executor \
             --registry-mirror=registry-proxy.collabops-onprem-stage.svc.cluster.local:5000 \
+            --insecure-registry=${LOCAL_REGISTRY} \
             --context="${CONTEXT}" \
             --dockerfile="${DOCKERFILE}" \
             --target=specs \
             --customPlatform=linux/amd64 \
             --destination="${IMAGE_BASE}:${COMMIT_SHA}" \
             --destination="${IMAGE_BASE}:latest" \
-            --destination="${IMAGE_BASE}:${COLLABOPS_REF_NAME}"
+            --destination="${IMAGE_BASE}:${COLLABOPS_REF_NAME}" \
+            --destination="${LOCAL_IMAGE_BASE}:latest"
 
       - name: Verify image deployment
         image: ${{ env.GAR_MIRROR }}/google/cloud-sdk:527.0.0-slim

@@ -11,6 +11,7 @@ env:
   REGION: asia-northeast3
   REPOSITORY: git-executor
   IMAGE: collabops-git-executor
+  LOCAL_REGISTRY: collabops-registry.collabops-onprem-stage.svc.cluster.local:5000
 
 jobs:
   test:
@@ -292,24 +293,30 @@ jobs:
           CONTEXT="/workspace/source"
           DOCKERFILE="${CONTEXT}/config/docker/Dockerfile"
 
+          LOCAL_IMAGE_BASE="${LOCAL_REGISTRY}/${REPOSITORY}/${IMAGE}"
+
           if echo "${COLLABOPS_REF}" | grep -q 'refs/heads/hotfix/'; then
             echo "📋 Hotfix: ${REF_TAG}, ${COMMIT_SHA}"
             echo "Building and pushing hotfix tags: ${REF_TAG}, ${COMMIT_SHA}"
             /kaniko/executor \
               --registry-mirror=registry-proxy.collabops-onprem-stage.svc.cluster.local:5000 \
+              --insecure-registry=${LOCAL_REGISTRY} \
               --context="${CONTEXT}" \
               --dockerfile="${DOCKERFILE}" \
               --destination="${IMAGE_BASE}:${REF_TAG}" \
-              --destination="${IMAGE_BASE}:${COMMIT_SHA}"
+              --destination="${IMAGE_BASE}:${COMMIT_SHA}" \
+              --destination="${LOCAL_IMAGE_BASE}:latest"
           else
             echo "📋 Main: ${COMMIT_SHA}, latest"
             echo "Building and pushing main tags: ${COMMIT_SHA}, latest"
             /kaniko/executor \
               --registry-mirror=registry-proxy.collabops-onprem-stage.svc.cluster.local:5000 \
+              --insecure-registry=${LOCAL_REGISTRY} \
               --context="${CONTEXT}" \
               --dockerfile="${DOCKERFILE}" \
               --destination="${IMAGE_BASE}:${COMMIT_SHA}" \
-              --destination="${IMAGE_BASE}:latest"
+              --destination="${IMAGE_BASE}:latest" \
+              --destination="${LOCAL_IMAGE_BASE}:latest"
           fi
 
       - name: Verify All Images Push
