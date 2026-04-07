@@ -2049,10 +2049,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LineChange'
-        hunks:
-          type: array
-          items:
-            $ref: '#/components/schemas/Hunk'
         is_binary:
           type: boolean
         loadStatus:
@@ -2060,14 +2056,10 @@ components:
           enum: [loaded, collapsed, too_large, binary]
         old_path:
           type: string
-        metadata:
-          type: object
-          additionalProperties: true
       required:
         - additions
         - deletions
         - diffLines
-        - hunks
         - is_binary
         - loadStatus
         - path

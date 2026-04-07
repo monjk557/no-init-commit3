@@ -37,10 +37,6 @@ type nativeFileMeta struct {
 	Additions int
 	Deletions int
 	IsBinary  bool
-	OldMode   string
-	NewMode   string
-	OldHash   string
-	NewHash   string
 }
 
 // ---------------------------------------------------------------------------
@@ -287,23 +283,6 @@ func nativeBuildDiffResponse(ctx context.Context, repoPath, baseHash, headHash, 
 		if meta.OldPath != "" {
 			fileDiff.OldPath = meta.OldPath
 		}
-		// 메타데이터 설정
-		metadata := make(map[string]interface{})
-		if meta.OldMode != "" && meta.OldMode != "000000" {
-			metadata["old_mode"] = meta.OldMode
-		}
-		if meta.NewMode != "" && meta.NewMode != "000000" {
-			metadata["new_mode"] = meta.NewMode
-		}
-		if meta.OldHash != "" && !isZeroHash(meta.OldHash) {
-			metadata["old_hash"] = meta.OldHash
-		}
-		if meta.NewHash != "" && !isZeroHash(meta.NewHash) {
-			metadata["new_hash"] = meta.NewHash
-		}
-		if len(metadata) > 0 {
-			fileDiff.Metadata = metadata
-		}
 		fileDiffs = append(fileDiffs, fileDiff)
 	}
 
@@ -521,18 +500,9 @@ func nativeGetDiffFileList(ctx context.Context, repoPath, base, head string) ([]
 		return nil, fmt.Errorf("git diff --numstat: %w", err)
 	}
 
-	// 3. --raw로 mode/hash 메타데이터 가져오기
-	rawOut, err := nativeRunGitCmd(ctx, repoPath, nativeGitTimeout,
-		"diff", "-M", "--raw", diffRange)
-	if err != nil {
-		// raw는 선택적 - 실패해도 계속 진행
-		rawOut = ""
-	}
-
 	// 파싱
 	statusEntries := parseNameStatus(strings.TrimSpace(nameStatusOut))
 	numstatEntries := parseNumstat(strings.TrimSpace(numstatOut))
-	rawEntries := parseRawDiff(strings.TrimSpace(rawOut))
 
 	// 파일 메타데이터 빌드 (name-status 기반으로 정렬 유지)
 	result := make([]nativeFileMeta, 0, len(statusEntries))
@@ -548,14 +518,6 @@ func nativeGetDiffFileList(ctx context.Context, repoPath, base, head string) ([]
 			meta.Additions = numstatEntries[i].additions
 			meta.Deletions = numstatEntries[i].deletions
 			meta.IsBinary = numstatEntries[i].isBinary
-		}
-
-		// raw에서 mode/hash 매칭
-		if i < len(rawEntries) {
-			meta.OldMode = rawEntries[i].oldMode
-			meta.NewMode = rawEntries[i].newMode
-			meta.OldHash = rawEntries[i].oldHash
-			meta.NewHash = rawEntries[i].newHash
 		}
 
 		// 확장자 기반 바이너리 체크 (보완)
@@ -579,13 +541,6 @@ type numstatEntry struct {
 	additions int
 	deletions int
 	isBinary  bool
-}
-
-type rawDiffEntry struct {
-	oldMode string
-	newMode string
-	oldHash string
-	newHash string
 }
 
 // parseNameStatus는 git diff --name-status 출력을 파싱합니다.
@@ -663,47 +618,6 @@ func parseNumstat(output string) []numstatEntry {
 		} else {
 			entry.additions, _ = strconv.Atoi(parts[0])
 			entry.deletions, _ = strconv.Atoi(parts[1])
-		}
-
-		result = append(result, entry)
-	}
-
-	return result
-}
-
-// parseRawDiff는 git diff --raw 출력을 파싱합니다.
-// 형식: :old_mode new_mode old_hash new_hash status\tpath[\tpath2]
-func parseRawDiff(output string) []rawDiffEntry {
-	if output == "" {
-		return nil
-	}
-
-	lines := strings.Split(output, "\n")
-	result := make([]rawDiffEntry, 0, len(lines))
-
-	for _, line := range lines {
-		if !strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		// ':'를 제거하고 tab으로 분리
-		line = line[1:]
-		tabParts := strings.SplitN(line, "\t", 2)
-		if len(tabParts) < 1 {
-			continue
-		}
-
-		// 메타 부분 파싱: "old_mode new_mode old_hash new_hash status"
-		metaParts := strings.Fields(tabParts[0])
-		if len(metaParts) < 5 {
-			continue
-		}
-
-		entry := rawDiffEntry{
-			oldMode: metaParts[0],
-			newMode: metaParts[1],
-			oldHash: metaParts[2],
-			newHash: metaParts[3],
 		}
 
 		result = append(result, entry)
@@ -883,16 +797,6 @@ func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, f
 		StartNew: fromNew,
 		Count:    len(result),
 	}, nil
-}
-
-// isZeroHash는 해시가 모두 0인지 확인합니다.
-func isZeroHash(hash string) bool {
-	for _, c := range hash {
-		if c != '0' {
-			return false
-		}
-	}
-	return len(hash) > 0
 }
 
 // isBinaryByExtensionForDiff는 파일 확장자로 바이너리 여부를 판단합니다.

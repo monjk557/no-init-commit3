@@ -82,16 +82,15 @@ type Hunk struct {
 
 // FileDiff는 단일 파일의 변경사항을 나타냅니다
 type FileDiff struct {
-	Path       string                 `json:"path"`
-	Status     FileDiffStatus         `json:"status"` // "added", "deleted", "modified", "renamed"
-	Additions  int                    `json:"additions"`
-	Deletions  int                    `json:"deletions"`
-	Changes    []LineChange           `json:"diffLines"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
-	Hunks      []Hunk                 `json:"hunks"`     // hunk 목록 (항상 포함, 없으면 [])
-	IsBinary   bool                   `json:"is_binary"`
-	LoadStatus FileLoadStatus         `json:"loadStatus"`         // 파일 diff 로드 상태: loaded, collapsed, too_large, binary
-	OldPath    string                 `json:"old_path,omitempty"` // 이름 변경시 사용
-	Metadata   map[string]interface{} `json:"metadata,omitempty"` // 파일 메타데이터 (해시, 모드)
+	Path       string         `json:"path"`
+	Status     FileDiffStatus `json:"status"` // "added", "deleted", "modified", "renamed"
+	Additions  int            `json:"additions"`
+	Deletions  int            `json:"deletions"`
+	Changes    []LineChange   `json:"diffLines"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
+	Hunks      []Hunk         `json:"-"`         // 내부 전용 (expand-context 등), JSON 응답에서 제외
+	IsBinary   bool           `json:"is_binary"`
+	LoadStatus FileLoadStatus `json:"loadStatus"`         // 파일 diff 로드 상태: loaded, collapsed, too_large, binary
+	OldPath    string         `json:"old_path,omitempty"` // 이름 변경시 사용
 }
 
 // LineChange는 diff의 단일 라인 변경을 나타냅니다.
