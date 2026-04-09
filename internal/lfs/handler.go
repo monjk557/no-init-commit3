@@ -3,6 +3,7 @@ package lfs
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,22 +30,38 @@ type Handler struct {
 }
 
 // NewHandler는 새로운 LFS 핸들러를 생성합니다.
-// GCS 백엔드, 메타데이터 DB, 미터링을 초기화합니다.
+// 설정에 따라 GCS 또는 로컬 파일시스템 백엔드를 초기화합니다.
 func NewHandler(cfg *config.Config) (*Handler, error) {
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
-	// GCS 스토리지 백엔드 초기화 (ADC/Workload Identity 인증)
-	gcsBackend, err := storage.NewGCSBackend(
-		context.Background(),
-		cfg.LFS.GCSBucket,
-		cfg.LFS.URLExpiry,
-		logger.Logger,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCS backend: %w", err)
+	// 스토리지 백엔드 초기화
+	var backend storage.Backend
+	switch cfg.LFS.StorageBackend {
+	case "local":
+		backend, err = storage.NewLocalBackend(
+			cfg.LFS.LocalPath,
+			cfg.LFS.BaseURL,
+			cfg.LFS.URLExpiry,
+			logger.Logger,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create local backend: %w", err)
+		}
+	case "gcs":
+		backend, err = storage.NewGCSBackend(
+			context.Background(),
+			cfg.LFS.GCSBucket,
+			cfg.LFS.URLExpiry,
+			logger.Logger,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create GCS backend: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported LFS storage backend: %s", cfg.LFS.StorageBackend)
 	}
 
 	// 메타데이터 저장소 초기화
@@ -60,7 +77,7 @@ func NewHandler(cfg *config.Config) (*Handler, error) {
 	}
 
 	service := NewLFSService(ServiceConfig{
-		Storage:                gcsBackend,
+		Storage:                backend,
 		Metadata:               metadataRepo,
 		Metering:               meteringCollector,
 		Logger:                 logger.Logger,
@@ -74,6 +91,84 @@ func NewHandler(cfg *config.Config) (*Handler, error) {
 		logger:  logger,
 		service: service,
 	}, nil
+}
+
+// IsLocalBackend는 현재 핸들러가 로컬 스토리지 백엔드를 사용하는지 반환합니다.
+func (h *Handler) IsLocalBackend() bool {
+	return h.config.LFS.StorageBackend == "local"
+}
+
+// HandleStorageUpload는 PUT /{owner}/{repo}/info/lfs/objects/storage/{oid} 요청을 처리합니다.
+// 로컬 백엔드 전용: 클라이언트가 파일 데이터를 서버에 직접 업로드합니다.
+func (h *Handler) HandleStorageUpload(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := cleanRepoParam(c.Param("repo"))
+	oid := c.Param("oid")
+
+	localBackend, ok := h.service.storage.(*storage.LocalBackend)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "storage upload is only available for local backend"})
+		return
+	}
+
+	written, err := localBackend.StoreObject(owner, repo, oid, c.Request.Body)
+	if err != nil {
+		h.logger.Error("failed to store LFS object",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("oid", oid),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to store object"})
+		return
+	}
+
+	h.logger.Info("LFS object uploaded",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("oid", oid),
+		zap.Int64("size", written))
+
+	c.Status(http.StatusOK)
+}
+
+// HandleStorageDownload는 GET /{owner}/{repo}/info/lfs/objects/storage/{oid} 요청을 처리합니다.
+// 로컬 백엔드 전용: 서버에서 클라이언트로 파일 데이터를 직접 전송합니다.
+func (h *Handler) HandleStorageDownload(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := cleanRepoParam(c.Param("repo"))
+	oid := c.Param("oid")
+
+	localBackend, ok := h.service.storage.(*storage.LocalBackend)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "storage download is only available for local backend"})
+		return
+	}
+
+	f, err := localBackend.OpenObject(owner, repo, oid)
+	if err != nil {
+		h.logger.Error("failed to open LFS object",
+			zap.String("oid", oid),
+			zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"message": "object not found"})
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to stat object"})
+		return
+	}
+
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Length", strconv.FormatInt(info.Size(), 10))
+	c.Status(http.StatusOK)
+
+	if _, err := io.Copy(c.Writer, f); err != nil {
+		h.logger.Error("failed to stream LFS object",
+			zap.String("oid", oid),
+			zap.Error(err))
+	}
 }
 
 // cleanRepoParam는 repo 파라미터에서 .git suffix를 제거합니다.

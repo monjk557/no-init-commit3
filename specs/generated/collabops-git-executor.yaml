@@ -724,6 +724,43 @@ paths:
           description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/objects/storage/{oid}:
+    put:
+      summary: HandleStorageUpload
+      operationId: handlestorageupload
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: oid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    get:
+      summary: HandleStorageDownload
+      operationId: handlestoragedownload
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: oid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/objects/verify:
     post:
       summary: HandleVerify

@@ -364,7 +364,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/fork", forkHandler.HandleGetForkInfo)
 	ownerRepoGroup.POST("/fork/sync", forkHandler.HandleSyncUpstream)
 
-	// LFS endpoints (GCS Signed URL 기반)
+	// LFS endpoints
 	// Git LFS 클라이언트는 remote URL에서 LFS 엔드포인트를 유추합니다.
 	// 예: remote=https://server/repos/owner/repo → POST .../info/lfs/objects/batch
 	// .git suffix가 포함된 URL도 지원해야 합니다.
@@ -383,6 +383,12 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 			dotGitLfsGroup := dotGitGroup.Group("/info/lfs")
 			s.registerLFSRoutes(dotGitLfsGroup, lfsHandler)
 
+			// 로컬 백엔드 전용: 파일 업로드/다운로드 프록시 엔드포인트
+			if lfsHandler.IsLocalBackend() {
+				s.registerLFSStorageRoutes(lfsGroup, lfsHandler)
+				s.registerLFSStorageRoutes(dotGitLfsGroup, lfsHandler)
+			}
+
 			// 사용량 조회 엔드포인트 (워크스페이스 레벨)
 			router.GET("/workspaces/:owner/lfs/usage", lfsHandler.HandleGetUsage)
 		}
@@ -397,6 +403,12 @@ func (s *Server) registerLFSRoutes(group *gin.RouterGroup, handler *lfs.Handler)
 	group.GET("/locks", handler.HandleListLocks)
 	group.POST("/locks/verify", handler.HandleVerifyLocks)
 	group.POST("/locks/:id/unlock", handler.HandleDeleteLock)
+}
+
+// registerLFSStorageRoutes는 로컬 백엔드용 파일 업로드/다운로드 엔드포인트를 등록합니다.
+func (s *Server) registerLFSStorageRoutes(group *gin.RouterGroup, handler *lfs.Handler) {
+	group.PUT("/objects/storage/:oid", handler.HandleStorageUpload)
+	group.GET("/objects/storage/:oid", handler.HandleStorageDownload)
 }
 
 // setupSwaggerRoutes - Swagger 문서 라우트 설정 (API 문서화용)

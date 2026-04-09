@@ -29,13 +29,23 @@ type LFSConfig struct {
 	// 기능 활성화 여부
 	Enabled bool `json:"enabled"`
 
-	// GCS 버킷 이름 (LFS 오브젝트 저장소)
+	// 스토리지 백엔드 종류 ("gcs" 또는 "local")
+	StorageBackend string `json:"storage_backend"`
+
+	// GCS 버킷 이름 (StorageBackend=gcs일 때 필수)
 	GCSBucket string `json:"gcs_bucket"`
 
 	// GCP 프로젝트 ID (ADC 자동 감지 시 생략 가능)
 	GCSProject string `json:"gcs_project"`
 
-	// Signed URL 유효시간
+	// 로컬 스토리지 경로 (StorageBackend=local일 때 필수)
+	LocalPath string `json:"local_path"`
+
+	// git-executor 외부 접근 URL (StorageBackend=local일 때 필수)
+	// 로컬 백엔드는 클라이언트가 이 URL을 통해 업로드/다운로드합니다.
+	BaseURL string `json:"base_url"`
+
+	// Signed URL / 로컬 URL 유효시간
 	URLExpiry time.Duration `json:"url_expiry"`
 
 	// 단일 오브젝트 최대 크기
@@ -543,8 +553,23 @@ func parseStringSliceFromEnv(key string, defaultValue []string) []string {
 func parseLFSConfig(repoRoot string) LFSConfig {
 	enabled := parseBoolFromEnv("LFS_ENABLED", false)
 
+	// 스토리지 백엔드 (기본: "local", air-gap 환경 우선)
+	storageBackend := os.Getenv("LFS_STORAGE_BACKEND")
+	if storageBackend == "" {
+		storageBackend = "local"
+	}
+
 	gcsBucket := os.Getenv("LFS_GCS_BUCKET")
 	gcsProject := os.Getenv("LFS_GCS_PROJECT")
+
+	// 로컬 스토리지 경로 (기본: {repoRoot}/.lfs-objects)
+	localPath := os.Getenv("LFS_LOCAL_PATH")
+	if localPath == "" {
+		localPath = repoRoot + "/.lfs-objects"
+	}
+
+	// 로컬 백엔드용 git-executor 외부 접근 URL
+	baseURL := os.Getenv("LFS_BASE_URL")
 
 	urlExpiry := 15 * time.Minute
 	if v := os.Getenv("LFS_URL_EXPIRY"); v != "" {
@@ -584,8 +609,11 @@ func parseLFSConfig(repoRoot string) LFSConfig {
 
 	return LFSConfig{
 		Enabled:                enabled,
+		StorageBackend:         storageBackend,
 		GCSBucket:              gcsBucket,
 		GCSProject:             gcsProject,
+		LocalPath:              localPath,
+		BaseURL:                baseURL,
 		URLExpiry:              urlExpiry,
 		MaxObjectSize:          maxObjectSize,
 		MetadataDBPath:         metadataDBPath,
@@ -685,8 +713,20 @@ func validate(config *Config) error {
 
 	// LFS 설정 유효성 검사
 	if config.LFS.Enabled {
-		if config.LFS.GCSBucket == "" {
-			errors = append(errors, "lfs.gcs_bucket is required when LFS is enabled")
+		switch config.LFS.StorageBackend {
+		case "gcs":
+			if config.LFS.GCSBucket == "" {
+				errors = append(errors, "lfs.gcs_bucket is required when LFS storage backend is 'gcs'")
+			}
+		case "local":
+			if config.LFS.LocalPath == "" {
+				errors = append(errors, "lfs.local_path is required when LFS storage backend is 'local'")
+			}
+			if config.LFS.BaseURL == "" {
+				errors = append(errors, "lfs.base_url is required when LFS storage backend is 'local'")
+			}
+		default:
+			errors = append(errors, fmt.Sprintf("lfs.storage_backend must be 'gcs' or 'local', got '%s'", config.LFS.StorageBackend))
 		}
 		if config.LFS.MaxObjectSize <= 0 {
 			errors = append(errors, "lfs.max_object_size must be > 0")

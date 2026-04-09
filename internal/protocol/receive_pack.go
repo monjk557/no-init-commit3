@@ -69,15 +69,30 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 
 	// LFS가 활성화된 경우 스토리지 백엔드 초기화 (포인터 검증용)
 	var lfsBackend lfsstorage.Backend
-	if cfg.LFS.Enabled && cfg.LFS.GCSBucket != "" {
-		gcsBackend, gcsErr := lfsstorage.NewGCSBackend(
-			context.Background(),
-			cfg.LFS.GCSBucket,
-			cfg.LFS.URLExpiry,
-			nil, // logger는 선택사항, 프로토콜 핸들러에서는 간소화
-		)
-		if gcsErr == nil {
-			lfsBackend = gcsBackend
+	if cfg.LFS.Enabled {
+		switch cfg.LFS.StorageBackend {
+		case "local":
+			localBackend, localErr := lfsstorage.NewLocalBackend(
+				cfg.LFS.LocalPath,
+				cfg.LFS.BaseURL,
+				cfg.LFS.URLExpiry,
+				nil,
+			)
+			if localErr == nil {
+				lfsBackend = localBackend
+			}
+		case "gcs":
+			if cfg.LFS.GCSBucket != "" {
+				gcsBackend, gcsErr := lfsstorage.NewGCSBackend(
+					context.Background(),
+					cfg.LFS.GCSBucket,
+					cfg.LFS.URLExpiry,
+					nil,
+				)
+				if gcsErr == nil {
+					lfsBackend = gcsBackend
+				}
+			}
 		}
 	}
 
