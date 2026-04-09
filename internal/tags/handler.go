@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
 )
@@ -155,7 +156,7 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) {
 func (h *TagsHandler) HandleDeleteTag(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	tagName := c.Param("tag")
+	tagName := strings.TrimPrefix(protocol.SafeParam(c, "tag"), "/")
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
