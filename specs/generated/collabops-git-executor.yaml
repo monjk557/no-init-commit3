@@ -2130,15 +2130,15 @@ components:
       properties:
         success:
           type: boolean
-        branches:
+        results:
           type: array
           items:
             $ref: '#/components/schemas/BranchInfo'
         pagination:
           $ref: '#/components/schemas/PaginationInfo'
       required:
-        - branches
         - pagination
+        - results
         - success
     GitAuthor:
       type: object

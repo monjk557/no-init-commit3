@@ -268,8 +268,8 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 
 	// 페이지네이션 정보와 함께 응답 생성
 	response := GetBranchesResponse{
-		Success:  true,
-		Branches: branches,
+		Success: true,
+		Results: branches,
 		Pagination: PaginationInfo{
 			Count:       totalCount,
 			Next:        buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).Next,

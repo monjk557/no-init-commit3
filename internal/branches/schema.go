@@ -46,7 +46,7 @@ type BranchInfo struct {
 // GetBranchesResponse는 브랜치 목록 응답을 나타냅니다.
 type GetBranchesResponse struct {
 	Success    bool           `json:"success"`
-	Branches   []BranchInfo   `json:"branches"`
+	Results    []BranchInfo   `json:"results"`
 	Pagination PaginationInfo `json:"pagination"`
 }
 

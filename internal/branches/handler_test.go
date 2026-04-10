@@ -434,7 +434,7 @@ func Test_GetBranches_PaginationOutOfRange_ReturnsEmptyArray(t *testing.T) {
 	require.True(t, resp.Success)
 
 	// null이 아닌 빈 배열인지 확인
-	branchesBytes, err := json.Marshal(resp.Branches)
+	branchesBytes, err := json.Marshal(resp.Results)
 	require.NoError(t, err)
 	require.Equal(t, "[]", string(branchesBytes), "branches should be empty array, not null")
 }
@@ -461,8 +461,8 @@ func Test_GetBranches_DefaultRepo_ReturnsArrayNotNull(t *testing.T) {
 	require.True(t, resp.Success)
 
 	// 배열이 null이 아닌지 확인 (master 브랜치가 있으므로 최소 1개)
-	require.NotNil(t, resp.Branches, "branches should not be nil")
-	require.GreaterOrEqual(t, len(resp.Branches), 1, "should have at least master branch")
+	require.NotNil(t, resp.Results, "branches should not be nil")
+	require.GreaterOrEqual(t, len(resp.Results), 1, "should have at least master branch")
 }
 
 // Test_GetBranches_SortByName_ReturnsSorted
@@ -1672,7 +1672,7 @@ func Test_GetBranches_EmptyRepo_ReturnsEmptyArray(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 	// master 브랜치가 있으므로 최소 1개는 있음
-	require.NotNil(t, resp.Branches)
+	require.NotNil(t, resp.Results)
 }
 
 // Test_GetBranches_WithBranches_ReturnsAll
@@ -1707,7 +1707,7 @@ func Test_GetBranches_WithBranches_ReturnsAll(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 	// master + 3개 브랜치 = 최소 4개
-	require.GreaterOrEqual(t, len(resp.Branches), 4)
+	require.GreaterOrEqual(t, len(resp.Results), 4)
 }
 
 // Test_GetBranches_Pagination_ReturnsCorrectPage
@@ -1742,7 +1742,7 @@ func Test_GetBranches_Pagination_ReturnsCorrectPage(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 	// limit=2이므로 최대 2개 반환
-	require.LessOrEqual(t, len(resp.Branches), 2)
+	require.LessOrEqual(t, len(resp.Results), 2)
 }
 
 // =============================================================================
