@@ -39,6 +39,10 @@ func main() {
 	// 전역 로거 설정 - 애플리케이션 전체에서 사용할 수 있도록 설정
 	logging.SetGlobal(logger)
 
+	logger.Info("Application environment loaded",
+		zap.String("app_env", string(cfg.Env)),
+		zap.Bool("is_onprem", cfg.Env.IsOnprem()))
+
 	// 헬스체크 모드 처리 - health-check 플래그가 있으면 상태 확인 후 종료
 	if *healthCheck {
 		// TODO: 실제 헬스체크 로직 구현 필요

@@ -8,8 +8,29 @@ import (
 	"time"
 )
 
+// AppEnv represents the application environment
+type AppEnv string
+
+const (
+	AppEnvLocal  AppEnv = "local"
+	AppEnvStage  AppEnv = "stage"
+	AppEnvProd   AppEnv = "prod"
+	AppEnvOnprem AppEnv = "onprem"
+)
+
+// IsOnprem returns true if the environment is on-premises (air-gap)
+func (e AppEnv) IsOnprem() bool {
+	return e == AppEnvOnprem
+}
+
+// IsProduction returns true if the environment is production-grade (prod or onprem)
+func (e AppEnv) IsProduction() bool {
+	return e == AppEnvProd || e == AppEnvOnprem
+}
+
 // Config represents the complete application configuration
 type Config struct {
+	Env             AppEnv
 	Server          ServerConfig
 	Git             GitConfig
 	Logging         LoggingConfig
@@ -214,8 +235,25 @@ type EnvironmentProtectionConfig struct {
 	CriticalPaths      []string `json:"critical_paths"`       // Paths that must never be deleted
 }
 
+// parseAppEnv parses APP_ENV from the environment variable
+func parseAppEnv() AppEnv {
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	switch env {
+	case "prod":
+		return AppEnvProd
+	case "stage":
+		return AppEnvStage
+	case "onprem":
+		return AppEnvOnprem
+	default:
+		return AppEnvLocal
+	}
+}
+
 // Load는 환경변수에서 설정을 로드합니다
 func Load() (*Config, error) {
+
+	appEnv := parseAppEnv()
 
 	// ServerConfig, GitConfig는 환경변수에서 파싱합니다.
 	serverConfig, err := parseServerConfig()
@@ -241,6 +279,7 @@ func Load() (*Config, error) {
 	maintenanceConfig := parseMaintenanceConfig()
 
 	config := &Config{
+		Env:             appEnv,
 		Server:          serverConfig,
 		Git:             gitConfig,
 		Logging:         loggingConfig,
@@ -252,12 +291,34 @@ func Load() (*Config, error) {
 		Maintenance:     maintenanceConfig,
 	}
 
+	// onprem 환경 오버라이드: 운영 + 내부망 제약 적용
+	if appEnv.IsOnprem() {
+		applyOnpremOverrides(config)
+	}
+
 	// 설정 유효성 검사
 	if err := validate(config); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
 	return config, nil
+}
+
+// applyOnpremOverrides는 onprem 환경에서 필요한 설정을 강제 적용합니다.
+// onprem = prod 수준의 보안/안정성 + 내부망 제약 (HTTPS 없음, 외부 서비스 접근 불가, 자체 인프라)
+func applyOnpremOverrides(config *Config) {
+	// API 문서 비활성화 (운영 환경 — 보안)
+	config.Server.EnableDocs = false
+
+	// LFS 스토리지: GCS 사용 불가 → local 강제
+	if config.LFS.Enabled && config.LFS.StorageBackend == "gcs" {
+		config.LFS.StorageBackend = "local"
+		config.LFS.GCSBucket = ""
+		config.LFS.GCSProject = ""
+	}
+
+	// 외부 Observability exporter 비활성화 (내부망에서 외부 서비스 접근 불가)
+	config.Observability.Tracing.Endpoint = ""
 }
 
 // ------------------------------------------------------------
