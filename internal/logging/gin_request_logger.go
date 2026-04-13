@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -80,10 +81,21 @@ func GinRequestLogger(logger *Logger) gin.HandlerFunc {
 
 		metadata := map[string]interface{}{}
 
+		// OpenTelemetry trace context 추출 — Loki↔Tempo 연동
+		var traceID, spanID string
+		span := trace.SpanFromContext(c.Request.Context())
+		sc := span.SpanContext()
+		if sc.HasTraceID() {
+			traceID = sc.TraceID().String()
+			spanID = sc.SpanID().String()
+		}
+
 		fields := []zap.Field{
 			zap.String("event", "http_request"),
 			zap.String("request_id", requestID),
 			zap.String("global_trace_id", globalTraceID),
+			zap.String("trace_id", traceID),
+			zap.String("span_id", spanID),
 			zap.String("method", method),
 			zap.String("path", path),
 			zap.Any("metadata", metadata),

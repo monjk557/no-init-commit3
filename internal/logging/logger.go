@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
@@ -130,6 +131,20 @@ func (l *Logger) WithCorrelationID(correlationID string) *zap.Logger {
 	return l.With(zap.String("correlation_id", correlationID))
 }
 
+// traceFieldsFromContext는 OpenTelemetry span context에서 trace_id와 span_id를 추출합니다.
+// Loki↔Tempo 연동을 위해 모든 JSON 로그 라인에 포함됩니다.
+func traceFieldsFromContext(ctx context.Context) []zap.Field {
+	span := trace.SpanFromContext(ctx)
+	sc := span.SpanContext()
+	if sc.HasTraceID() {
+		return []zap.Field{
+			zap.String("trace_id", sc.TraceID().String()),
+			zap.String("span_id", sc.SpanID().String()),
+		}
+	}
+	return nil
+}
+
 // WithContext returns a logger with context values
 func (l *Logger) WithContext(ctx context.Context) *zap.Logger {
 	logger := l.Logger
@@ -142,6 +157,11 @@ func (l *Logger) WithContext(ctx context.Context) *zap.Logger {
 	// Add correlation ID if present
 	if correlationID, ok := ctx.Value(CorrelationIDKey).(string); ok && correlationID != "" {
 		logger = logger.With(zap.String("correlation_id", correlationID))
+	}
+
+	// Add OpenTelemetry trace context (trace_id, span_id)
+	if fields := traceFieldsFromContext(ctx); len(fields) > 0 {
+		logger = logger.With(fields...)
 	}
 
 	return logger
