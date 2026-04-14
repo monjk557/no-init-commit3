@@ -3310,6 +3310,19 @@ components:
         - operation
         - previous_hash
         - success
+    ValidateBranchNameResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        is_available:
+          type: boolean
+        suggested_name:
+          type: string
+      required:
+        - is_available
+        - success
+        - suggested_name
     ValidateReopenRequest:
       type: object
       properties:

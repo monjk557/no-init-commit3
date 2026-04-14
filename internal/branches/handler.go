@@ -4,6 +4,8 @@ package branches
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -110,14 +112,43 @@ func (h *BranchOperationsHandler) validateAndGetRepoPath(ctx context.Context, c 
 	}, true
 }
 
-// HandleGetBranchesByName handles GET /repos/{owner}/{repo}/branches for getting branches
+// suggestBranchMaxAttempts는 대체 브랜치 이름을 찾기 위한 최대 시도 횟수입니다.
+const suggestBranchMaxAttempts = 5
+
+// randomSuffix는 4바이트(8 hex chars) 난수 suffix를 생성합니다.
+func randomSuffix() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// fallback: 타임스탬프 기반
+		return fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFFFF)
+	}
+	return hex.EncodeToString(b)
+}
+
+// suggestAvailableName은 요청된 이름이 이미 존재할 때 난수 suffix를 붙여 사용 가능한 이름을 제안합니다.
+func suggestAvailableName(ctx context.Context, repoPath, baseName string) *string {
+	for i := 0; i < suggestBranchMaxAttempts; i++ {
+		candidate := baseName + "-" + randomSuffix()
+		exists, _, err := NativeCheckBranchExists(ctx, repoPath, candidate)
+		if err != nil {
+			continue
+		}
+		if !exists {
+			return &candidate
+		}
+	}
+	return nil
+}
+
+// HandleValidateBranchName handles GET /repos/{owner}/{repo}/branches/validate/*name
+// 브랜치 이름의 사용 가능 여부를 확인하고, 이미 존재하면 난수 suffix 기반 대체 이름을 제안합니다.
 func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	name := protocol.SafeParam(c, "name")
+	name := strings.TrimPrefix(protocol.SafeParam(c, "name"), "/")
 
 	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
@@ -133,9 +164,19 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":      true,
-		"is_available": !exists,
+	if !exists {
+		c.JSON(http.StatusOK, ValidateBranchNameResponse{
+			Success:     true,
+			IsAvailable: true,
+		})
+		return
+	}
+
+	// 이미 존재하면 난수 suffix 기반 대체 이름 제안
+	c.JSON(http.StatusOK, ValidateBranchNameResponse{
+		Success:       true,
+		IsAvailable:   false,
+		SuggestedName: suggestAvailableName(ctx, repoPath, name),
 	})
 }
 

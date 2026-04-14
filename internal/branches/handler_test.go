@@ -1,6 +1,7 @@
 package branches
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -376,6 +377,72 @@ func Test_ValidateBranchName_AlreadyExists_ReturnsFalse(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp["success"].(bool))
 	require.False(t, resp["is_available"].(bool), "existing branch name should not be available")
+
+	// suggested_name이 존재하고 원래 이름을 prefix로 포함해야 함
+	suggested, ok := resp["suggested_name"].(string)
+	require.True(t, ok, "response should contain suggested_name when branch exists")
+	require.True(t, strings.HasPrefix(suggested, "existing-branch-"), "suggested_name should start with original name")
+	require.NotEqual(t, "existing-branch", suggested, "suggested_name should differ from original")
+}
+
+// Test_ValidateBranchName_SuggestedNameIsAvailable
+// 제안된 이름은 실제로 사용 가능해야 함
+func Test_ValidateBranchName_SuggestedNameIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	// 브랜치 미리 생성
+	repo := openRepo(t, repoPath)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	branchRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature/test"), head.Hash())
+	require.NoError(t, repo.Storer.SetReference(branchRef))
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/feature/test", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.False(t, resp["is_available"].(bool))
+
+	suggested := resp["suggested_name"].(string)
+	require.True(t, strings.HasPrefix(suggested, "feature/test-"))
+
+	// suggested name이 실제로 존재하지 않는지 확인
+	exists, _, err := NativeCheckBranchExists(context.Background(), repoPath, suggested)
+	require.NoError(t, err)
+	require.False(t, exists, "suggested name should not exist in repository")
+}
+
+// Test_ValidateBranchName_Available_NoSuggestedName
+// 사용 가능한 이름에는 suggested_name이 포함되지 않아야 함
+func Test_ValidateBranchName_Available_NoSuggestedName(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/brand-new-branch", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp["is_available"].(bool))
+	require.Nil(t, resp["suggested_name"], "available branch should have suggested_name as null")
 }
 
 // Test_ValidateBranchName_RepoNotFound_Returns404

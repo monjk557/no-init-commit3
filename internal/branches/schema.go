@@ -217,6 +217,14 @@ type BranchAheadBehind struct {
 	Behind int
 }
 
+// ValidateBranchNameResponse는 브랜치 이름 사용 가능 여부 검증 응답입니다.
+// 이름이 이미 존재하면 난수 suffix 기반 대체 이름을 제안합니다.
+type ValidateBranchNameResponse struct {
+	Success       bool    `json:"success"`
+	IsAvailable   bool    `json:"is_available"`
+	SuggestedName *string `json:"suggested_name"`
+}
+
 // ValidateReopenRequest는 CR reopen 전 브랜치 검증 요청입니다.
 type ValidateReopenRequest struct {
 	SourceBranchName      string `json:"source_branch_name" binding:"required"`
