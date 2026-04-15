@@ -241,6 +241,17 @@ type PaginationInfo struct {
 	PrevPageURL string `json:"prev_page_url,omitempty"` // 이전 페이지 URL (있는 경우)
 }
 
+// LatestCommitForPathResponse is the response type for single path latest commit API
+type LatestCommitForPathResponse struct {
+	Success    bool               `json:"success"`
+	Repository string             `json:"repository"`
+	Owner      string             `json:"owner"`
+	Name       string             `json:"name"`
+	Path       string             `json:"path"`
+	Commit     *GitCommit         `json:"commit"`
+	Meta       *LatestCommitsMeta `json:"meta,omitempty"`
+}
+
 // TreeDirectoryRequest는 디렉토리 조회 요청 파라미터입니다.
 type TreeDirectoryRequest struct {
 	// 기본 파라미터

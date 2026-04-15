@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/blob"
-	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
@@ -75,13 +74,12 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 
 // repositoryContext는 저장소 관련 공통 컨텍스트를 담는 구조체입니다.
 type repositoryContext struct {
-	owner        string
-	repo         string
-	ref          string
-	path         string
-	repoPath     string
-	repoWrapper  *repositories.RepositoryWrapper
-	branchesList []BranchInfo
+	owner       string
+	repo        string
+	ref         string
+	path        string
+	repoPath    string
+	repoWrapper *repositories.RepositoryWrapper
 }
 
 // validateAndOpenRepository는 저장소 검증 및 열기를 수행하는 공통 로직입니다.
@@ -118,21 +116,6 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		return nil, false
 	}
 
-	// 브랜치 가져오기 (native git 사용)
-	branchesList, err := branches.GetBranches(ctx, repoPath)
-	if err != nil {
-		h.logger.Error("overview: GetBranches failed",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.String("repoPath", repoPath),
-			zap.Error(err),
-		)
-		repoLock.RUnlock()
-		_ = repoWrapper.Close()
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return nil, false
-	}
-
 	// ref가 제공된 경우 검증 (ref를 해석 가능한지 확인)
 	if ref != "" && ref != "HEAD" {
 		_, err := repoWrapper.ResolveReference(ref)
@@ -144,25 +127,12 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		}
 	}
 
-	// branches.SimpleBranchInfo를 overview.BranchInfo로 변환
-	// 슬라이스 용량을 미리 할당하여 재할당 방지
-	overviewBranches := make([]BranchInfo, 0, len(branchesList))
-	for _, b := range branchesList {
-		overviewBranches = append(overviewBranches, BranchInfo{
-			Name:      b.Name,
-			Hash:      b.Hash,
-			IsRemote:  b.IsRemote,
-			IsCurrent: b.IsCurrent,
-		})
-	}
-
 	return &repositoryContext{
-		owner:        owner,
-		repo:         repo,
-		ref:          ref,
-		repoPath:     repoPath,
-		repoWrapper:  repoWrapper,
-		branchesList: overviewBranches,
+		owner:       owner,
+		repo:        repo,
+		ref:         ref,
+		repoPath:    repoPath,
+		repoWrapper: repoWrapper,
 	}, true
 }
 
@@ -195,20 +165,6 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 		return nil, false
 	}
 
-	// 브랜치 목록: native git for-each-ref (go-git GetBranches 대체)
-	branchesList, err := NativeGetBranches(ctx, repoPath)
-	if err != nil {
-		h.logger.Error("overview: NativeGetBranches failed",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.String("repoPath", repoPath),
-			zap.Error(err),
-		)
-		repoLock.RUnlock()
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return nil, false
-	}
-
 	// ref 검증: native git rev-parse (go-git ResolveReference 대체)
 	if ref != "" && ref != "HEAD" {
 		if _, err := nativeResolveRef(ctx, repoPath, ref); err != nil {
@@ -219,11 +175,10 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 	}
 
 	return &repositoryContext{
-		owner:        owner,
-		repo:         repo,
-		ref:          ref,
-		repoPath:     repoPath,
-		branchesList: branchesList,
+		owner:    owner,
+		repo:     repo,
+		ref:      ref,
+		repoPath: repoPath,
 	}, true
 }
 
@@ -367,11 +322,11 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 }
 
 // isObjectNotFoundForPack returns true if the result suggests object-not-found due to pack not yet visible (e.g. after push).
-func isObjectNotFoundForPack(res overviewResult, branchesList []BranchInfo) bool {
+func isObjectNotFoundForPack(res overviewResult) bool {
 	if res.treeErr != nil && strings.Contains(strings.ToLower(res.treeErr.Error()), "object not found") {
 		return true
 	}
-	if !res.latestCommitFound && len(branchesList) > 0 {
+	if !res.latestCommitFound {
 		return true
 	}
 	return false
@@ -390,7 +345,6 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	path := c.Query("path")
 
 	var repoCtx *repositoryContext
-	var branchesList []BranchInfo
 	var res overviewResult
 	repoPath := ""
 
@@ -406,7 +360,6 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			return
 		}
 		repoPath = repoCtx.repoPath
-		branchesList = repoCtx.branchesList
 
 		// native git으로 refHash resolve
 		refHash := ""
@@ -417,7 +370,7 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		// Native git 태스크 실행 (go-git repo open 불필요)
 		res = h.runOverviewTasks(ctx, repoPath, repoCtx.ref, path, refHash)
 
-		if !isObjectNotFoundForPack(res, branchesList) {
+		if !isObjectNotFoundForPack(res) {
 			break
 		}
 
@@ -443,14 +396,14 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			Path:          repoPath,
 			Tree:          []GitTreeEntryWithCommit{},
 			LatestCommits: GitCommit{},
-			Branches:      convertBranchesToGitBranches(branchesList),
+			Branches:      []GitBranch{},
 			Tags:          []GitTag{},
 			Count: RepositoryCount{
 				Commits:  0,
-				Branches: len(branchesList),
+				Branches: 0,
 				Tags:     0,
 				Remotes:  0,
-				Total:    len(branchesList),
+				Total:    0,
 			},
 			Readme: "",
 			LanguageDistribution: LanguageDistribution{
@@ -499,14 +452,14 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		Path:          repoPath,
 		Tree:          res.treeEntriesWithCommit,
 		LatestCommits: latestCommit,
-		Branches:      convertBranchesToGitBranches(branchesList),
+		Branches:      []GitBranch{},
 		Tags:          res.nativeTagsList,
 		Count: RepositoryCount{
 			Commits:            res.commitsCount,
-			Branches:           len(branchesList),
+			Branches:           0,
 			Tags:               len(res.nativeTagsList),
 			Remotes:            len(res.remotesList),
-			Total:              res.commitsCount + len(branchesList) + len(res.nativeTagsList) + len(res.remotesList),
+			Total:              res.commitsCount + len(res.nativeTagsList) + len(res.remotesList),
 			CommitsApproximate: res.commitsApproximate,
 		},
 		Readme: res.readmeContent,
@@ -575,7 +528,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		Name:         repo,
 		Path:         path,
 		Tree:         treeEntries,
-		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
+		Branches:     []GitBranch{},
 		LatestCommit: latestCommit,
 		Commits:      commitsList,
 	}
@@ -663,7 +616,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		Lines:        lines,
 		Size:         int64(len(blobContent)),
 		Tree:         treeEntries,
-		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
+		Branches:     []GitBranch{},
 		LatestCommit: latestCommit,
 		Commits:      commitsList,
 	}
@@ -903,6 +856,59 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// HandleGetLatestCommitForPath는 단일 경로의 최신 커밋을 반환하는 GET /api/v1/repository/{owner}/{repo}/overview/commit/latest 요청을 처리합니다.
+// overview API의 병목을 분산시키기 위해 tree 로딩 없이 특정 경로의 last commit만 조회합니다.
+func (h *RepositoryOverviewHandler) HandleGetLatestCommitForPath(c *gin.Context) {
+	ctx := c.Request.Context()
+	start := time.Now()
+	m := observability.GetApplicationMetrics()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	ref := c.Query("ref")
+	path := c.Query("path")
+
+	if strings.TrimSpace(path) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing required query parameter: path"})
+		return
+	}
+
+	repoCtx, ok := h.validateRepositoryNative(ctx, c, owner, repo, ref)
+	if !ok {
+		return
+	}
+	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
+
+	paths := []string{strings.Trim(path, "/")}
+	commitMap, meta := GetLatestCommitsNative(ctx, repoCtx.repoPath, repoCtx.ref, paths)
+
+	var commit *GitCommit
+	if c, ok := commitMap[paths[0]]; ok {
+		commit = c
+	}
+
+	if h.logger != nil {
+		h.logger.Debug("commit/latest native git",
+			zap.String("repo", fmt.Sprintf("%s/%s", owner, repo)),
+			zap.String("path", path),
+			zap.Bool("found", commit != nil),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+	}
+
+	_ = m // metrics 확장 시 사용
+
+	c.JSON(http.StatusOK, LatestCommitForPathResponse{
+		Success:    true,
+		Repository: fmt.Sprintf("%s/%s", owner, repo),
+		Owner:      owner,
+		Name:       repo,
+		Path:       paths[0],
+		Commit:     commit,
+		Meta:       &meta,
+	})
 }
 
 func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context) {
