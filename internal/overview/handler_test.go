@@ -664,7 +664,7 @@ func Test_Overview_EmptyRepo_ReturnsEmptyData(t *testing.T) {
 	require.Empty(t, resp.Tree)
 }
 
-func Test_Overview_BranchesFieldIsEmpty(t *testing.T) {
+func Test_Overview_IncludesDefaultBranch(t *testing.T) {
 	t.Parallel()
 
 	handler, tempDir, cleanup := setupTestHandler(t)
@@ -686,10 +686,18 @@ func Test_Overview_BranchesFieldIsEmpty(t *testing.T) {
 	var resp RepositoryOverviewResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Empty(t, resp.Branches, "repo overview no longer computes branches")
+	require.NotEmpty(t, resp.Branches, "overview must include branches")
+	foundCurrent := false
+	for _, b := range resp.Branches {
+		if b.IsCurrent {
+			foundCurrent = true
+			break
+		}
+	}
+	require.True(t, foundCurrent, "default/current branch should be marked (IsCurrent)")
 }
 
-func Test_Overview_BranchCountIsZero(t *testing.T) {
+func Test_Overview_IncludesBranchCount(t *testing.T) {
 	t.Parallel()
 
 	handler, tempDir, cleanup := setupTestHandler(t)
@@ -711,7 +719,8 @@ func Test_Overview_BranchCountIsZero(t *testing.T) {
 	var resp RepositoryOverviewResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.Equal(t, 0, resp.Count.Branches, "repo overview no longer computes branch count")
+	require.Equal(t, len(resp.Branches), resp.Count.Branches)
+	require.GreaterOrEqual(t, resp.Count.Branches, 1)
 }
 
 func Test_Overview_IncludesCommitCount(t *testing.T) {
@@ -818,7 +827,37 @@ func Test_Overview_DefaultBranchMissing_Returns404OrFallbackExplicitly(t *testin
 }
 
 func Test_Overview_DefaultBranchIsMasterOrMain_ResolvedByRepoMetadata_NotByString(t *testing.T) {
-	t.Skip("repo overview no longer computes branches; branch info is served by branches overview endpoint")
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	createTestRepositoryForHandler(t, tempDir, owner, repo)
+
+	router := gin.New()
+	overviewRoute(router, handler)
+
+	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp RepositoryOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+	require.NotEmpty(t, resp.Branches)
+	var currentName string
+	for _, b := range resp.Branches {
+		if b.IsCurrent {
+			currentName = b.Name
+			break
+		}
+	}
+	require.NotEmpty(t, currentName, "current branch name comes from repo HEAD, not hardcoded main/master")
+	require.Contains(t, []string{"main", "master"}, currentName, "typical default is main or master")
 }
 
 func Test_BranchOps_DefaultBranchRename_MasterToMain_ConsistencyAcrossAPIs(t *testing.T) {
