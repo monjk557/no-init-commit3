@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/go-enry/go-enry/v2/data"
 )
 
@@ -76,7 +77,7 @@ func resolveRef(ctx context.Context, repoPath, ref string) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", target)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse failed: %w", err)
 	}

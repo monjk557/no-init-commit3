@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // CommitInfo holds parsed commit metadata.
@@ -28,7 +30,7 @@ func GetCommitInfo(ctx context.Context, repoPath string, oid string) (*CommitInf
 	cmd.Dir = repoPath
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git cat-file commit %s: %w (stderr: %s)", oid, err, stderr.String())
 	}
@@ -110,7 +112,8 @@ func CatBlob(ctx context.Context, repoPath string, oid string) ([]byte, error) {
 	cmd.Dir = repoPath
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
 	if err != nil {
 		return nil, fmt.Errorf("cat-file blob %s: %w (stderr: %s)", oid, err, stderr.String())
 	}
@@ -124,7 +127,7 @@ func DiffTree(ctx context.Context, repoPath string, args ...string) ([]byte, err
 	cmd.Dir = repoPath
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("diff-tree: %w (stderr: %s)", err, stderr.String())
 	}
@@ -138,7 +141,7 @@ func ObjectExists(ctx context.Context, repoPath string, oid string) (string, err
 	cmd.Dir = repoPath
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("object %s not found: %w", oid, err)
 	}

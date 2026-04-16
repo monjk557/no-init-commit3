@@ -347,3 +347,162 @@ func Test_HTTP_UploadPack_ClientDisconnect_ReleasesRepoLock(t *testing.T) {
 	assert.True(t, rr.Code == 200 || rr.Code == 400)
 	_ = gitRepo
 }
+
+// --- OOM-prevention: parseV1CommandsFromSection tests ---
+
+func TestParseV1CommandsFromSection_SingleCommand(t *testing.T) {
+	h := &ReceivePackHandler{}
+	lines := []string{
+		"abc123 def456 refs/heads/main",
+	}
+
+	req := h.parseV1CommandsFromSection(lines)
+
+	if len(req.Commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(req.Commands))
+	}
+	cmd := req.Commands[0]
+	if cmd.OldHash != "abc123" {
+		t.Errorf("OldHash = %q, want %q", cmd.OldHash, "abc123")
+	}
+	if cmd.NewHash != "def456" {
+		t.Errorf("NewHash = %q, want %q", cmd.NewHash, "def456")
+	}
+	if cmd.RefName != "refs/heads/main" {
+		t.Errorf("RefName = %q, want %q", cmd.RefName, "refs/heads/main")
+	}
+}
+
+func TestParseV1CommandsFromSection_MultipleCommands(t *testing.T) {
+	h := &ReceivePackHandler{}
+	lines := []string{
+		"aaa111 bbb222 refs/heads/main",
+		"ccc333 ddd444 refs/heads/feature",
+		"eee555 fff666 refs/tags/v1.0",
+	}
+
+	req := h.parseV1CommandsFromSection(lines)
+
+	if len(req.Commands) != 3 {
+		t.Fatalf("expected 3 commands, got %d", len(req.Commands))
+	}
+	if req.Commands[0].RefName != "refs/heads/main" {
+		t.Errorf("command[0].RefName = %q, want %q", req.Commands[0].RefName, "refs/heads/main")
+	}
+	if req.Commands[1].RefName != "refs/heads/feature" {
+		t.Errorf("command[1].RefName = %q, want %q", req.Commands[1].RefName, "refs/heads/feature")
+	}
+	if req.Commands[2].RefName != "refs/tags/v1.0" {
+		t.Errorf("command[2].RefName = %q, want %q", req.Commands[2].RefName, "refs/tags/v1.0")
+	}
+}
+
+func TestParseV1CommandsFromSection_CapabilitiesOnFirstLine(t *testing.T) {
+	h := &ReceivePackHandler{}
+	lines := []string{
+		"aaa111 bbb222 refs/heads/main\x00report-status delete-refs",
+		"ccc333 ddd444 refs/heads/feature",
+	}
+
+	req := h.parseV1CommandsFromSection(lines)
+
+	if len(req.Commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d", len(req.Commands))
+	}
+	if req.Commands[0].RefName != "refs/heads/main" {
+		t.Errorf("command[0].RefName = %q, want %q", req.Commands[0].RefName, "refs/heads/main")
+	}
+	if len(req.Capabilities) != 2 {
+		t.Fatalf("expected 2 capabilities, got %d", len(req.Capabilities))
+	}
+	if req.Capabilities[0] != "report-status" {
+		t.Errorf("capabilities[0] = %q, want %q", req.Capabilities[0], "report-status")
+	}
+	if req.Capabilities[1] != "delete-refs" {
+		t.Errorf("capabilities[1] = %q, want %q", req.Capabilities[1], "delete-refs")
+	}
+}
+
+func TestParseV1CommandsFromSection_EmptyAndWhitespaceLines(t *testing.T) {
+	h := &ReceivePackHandler{}
+	lines := []string{
+		"",
+		"   ",
+		"aaa111 bbb222 refs/heads/main",
+		"",
+	}
+
+	req := h.parseV1CommandsFromSection(lines)
+
+	if len(req.Commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(req.Commands))
+	}
+	if req.Commands[0].RefName != "refs/heads/main" {
+		t.Errorf("RefName = %q, want %q", req.Commands[0].RefName, "refs/heads/main")
+	}
+}
+
+func TestParseV1CommandsFromSection_LessThanThreeFields(t *testing.T) {
+	h := &ReceivePackHandler{}
+	lines := []string{
+		"onlyonefield",
+		"two fields",
+		"aaa111 bbb222 refs/heads/main",
+	}
+
+	req := h.parseV1CommandsFromSection(lines)
+
+	if len(req.Commands) != 1 {
+		t.Fatalf("expected 1 command (skipping short lines), got %d", len(req.Commands))
+	}
+	if req.Commands[0].RefName != "refs/heads/main" {
+		t.Errorf("RefName = %q, want %q", req.Commands[0].RefName, "refs/heads/main")
+	}
+}
+
+// --- OOM-prevention: hasPackfileCommands tests ---
+
+func TestHasPackfileCommands_AllNonZeroNewHash(t *testing.T) {
+	h := &ReceivePackHandler{}
+	cmds := []RefUpdateCommand{
+		{OldHash: zeroHash, NewHash: "abc123", RefName: "refs/heads/main"},
+		{OldHash: "def456", NewHash: "ghi789", RefName: "refs/heads/feature"},
+	}
+
+	if !h.hasPackfileCommands(cmds) {
+		t.Error("expected true when all commands have non-zero NewHash")
+	}
+}
+
+func TestHasPackfileCommands_AllDeletes(t *testing.T) {
+	h := &ReceivePackHandler{}
+	cmds := []RefUpdateCommand{
+		{OldHash: "abc123", NewHash: zeroHash, RefName: "refs/heads/old-branch"},
+		{OldHash: "def456", NewHash: zeroHash, RefName: "refs/heads/stale"},
+	}
+
+	if h.hasPackfileCommands(cmds) {
+		t.Error("expected false when all commands are deletes (zero NewHash)")
+	}
+}
+
+func TestHasPackfileCommands_MixedCreatesAndDeletes(t *testing.T) {
+	h := &ReceivePackHandler{}
+	cmds := []RefUpdateCommand{
+		{OldHash: "abc123", NewHash: zeroHash, RefName: "refs/heads/old-branch"},
+		{OldHash: zeroHash, NewHash: "def456", RefName: "refs/heads/new-branch"},
+	}
+
+	if !h.hasPackfileCommands(cmds) {
+		t.Error("expected true when at least one command has non-zero NewHash")
+	}
+}
+
+func TestHasPackfileCommands_EmptyList(t *testing.T) {
+	h := &ReceivePackHandler{}
+	var cmds []RefUpdateCommand
+
+	if h.hasPackfileCommands(cmds) {
+		t.Error("expected false for empty command list")
+	}
+}

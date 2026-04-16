@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 const (
@@ -35,7 +37,7 @@ func nativeDiffFiles(ctx context.Context, repoPath, oldRev, newRev string) ([]st
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git diff-tree failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
@@ -59,7 +61,7 @@ func nativeListTreeFiles(ctx context.Context, repoPath, sha, pathPrefix string) 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		// 경로가 존재하지 않으면 빈 목록 반환
 		return nil, nil
@@ -85,7 +87,8 @@ func nativeShowFile(ctx context.Context, repoPath, sha, filePath string) (string
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
 	if err != nil {
 		return "", fmt.Errorf("git show %s failed: %s: %w", spec, strings.TrimSpace(stderr.String()), err)
 	}

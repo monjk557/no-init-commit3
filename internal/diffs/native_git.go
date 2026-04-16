@@ -381,7 +381,7 @@ func nativeRunGitCmd(ctx context.Context, repoPath string, timeout time.Duration
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git %s: %s: %w", args[0], strings.TrimSpace(stderr.String()), err)
 	}

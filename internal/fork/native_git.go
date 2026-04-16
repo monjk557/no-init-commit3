@@ -7,13 +7,15 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // nativeCloneBare clones a bare repository from source to destination.
 // Uses git clone --bare which copies all refs and objects.
 func nativeCloneBare(ctx context.Context, sourcePath, destPath string) error {
 	cmd := exec.CommandContext(ctx, "git", "clone", "--bare", sourcePath, destPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git clone --bare failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -22,7 +24,7 @@ func nativeCloneBare(ctx context.Context, sourcePath, destPath string) error {
 // nativeRemoteAdd adds a named remote to a bare repository.
 func nativeRemoteAdd(ctx context.Context, repoPath, name, url string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "remote", "add", name, url)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git remote add failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -31,7 +33,7 @@ func nativeRemoteAdd(ctx context.Context, repoPath, name, url string) error {
 // nativeRemoteSetURL sets the URL of an existing remote.
 func nativeRemoteSetURL(ctx context.Context, repoPath, name, url string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "remote", "set-url", name, url)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git remote set-url failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -40,7 +42,7 @@ func nativeRemoteSetURL(ctx context.Context, repoPath, name, url string) error {
 // nativeRemoteGetURL returns the URL of a named remote.
 func nativeRemoteGetURL(ctx context.Context, repoPath, name string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "remote", "get-url", name)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git remote get-url failed: %w", err)
 	}
@@ -50,7 +52,7 @@ func nativeRemoteGetURL(ctx context.Context, repoPath, name string) (string, err
 // nativeRemoteRemove removes a named remote from a bare repository.
 func nativeRemoteRemove(ctx context.Context, repoPath, name string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "remote", "remove", name)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git remote remove failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -59,7 +61,7 @@ func nativeRemoteRemove(ctx context.Context, repoPath, name string) error {
 // nativeFetchUpstream fetches all refs from the upstream remote.
 func nativeFetchUpstream(ctx context.Context, repoPath, remoteName string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "fetch", remoteName)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git fetch %s failed: %s: %w", remoteName, string(out), err)
 	}
 	return nil
@@ -76,7 +78,7 @@ type refInfo struct {
 func nativeForEachRef(ctx context.Context, repoPath, pattern string) ([]refInfo, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "for-each-ref",
 		"--format=%(objectname) %(refname:short)", pattern)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref failed: %w", err)
 	}
@@ -103,7 +105,7 @@ func nativeForEachRef(ctx context.Context, repoPath, pattern string) ([]refInfo,
 // nativeRevListCount counts commits reachable from ref.
 func nativeRevListCount(ctx context.Context, repoPath, ref string) (int, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-list", "--count", ref)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("git rev-list --count failed: %w", err)
 	}
@@ -117,7 +119,7 @@ func nativeRevListCount(ctx context.Context, repoPath, ref string) (int, error) 
 // nativeRevListCountBetween counts commits between base and head (base..head).
 func nativeRevListCountBetween(ctx context.Context, repoPath, base, head string) (int, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-list", "--count", base+".."+head)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("git rev-list --count %s..%s failed: %w", base, head, err)
 	}
@@ -131,7 +133,7 @@ func nativeRevListCountBetween(ctx context.Context, repoPath, base, head string)
 // nativeMergeBase finds the merge base (common ancestor) of two commits.
 func nativeMergeBase(ctx context.Context, repoPath, commit1, commit2 string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "merge-base", commit1, commit2)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git merge-base failed: %w", err)
 	}
@@ -141,7 +143,7 @@ func nativeMergeBase(ctx context.Context, repoPath, commit1, commit2 string) (st
 // nativeUpdateRef sets a reference to the given hash.
 func nativeUpdateRef(ctx context.Context, repoPath, refName, hash string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "update-ref", refName, hash)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git update-ref failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -150,7 +152,7 @@ func nativeUpdateRef(ctx context.Context, repoPath, refName, hash string) error 
 // nativeSymbolicRef returns the target of HEAD.
 func nativeSymbolicRef(ctx context.Context, repoPath string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "symbolic-ref", "-q", "HEAD")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return "", nil
@@ -163,7 +165,7 @@ func nativeSymbolicRef(ctx context.Context, repoPath string) (string, error) {
 // nativeSetSymbolicRef sets HEAD to point to the given branch ref.
 func nativeSetSymbolicRef(ctx context.Context, repoPath, target string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "symbolic-ref", "HEAD", target)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git symbolic-ref failed: %s: %w", string(out), err)
 	}
 	return nil

@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // GetShallowBoundary computes which commits should become shallow grafts on the client.
@@ -83,7 +85,7 @@ func revListMaxCount(ctx context.Context, repoPath string, wants, haves []string
 	cmd.Stdin = &stdinBuf
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git rev-list --max-count: %w (stderr: %s)", err, stderr.String())
 	}
@@ -121,7 +123,7 @@ func CountObjects(ctx context.Context, repoPath string, wants, haves []string, d
 	cmd.Stdin = &stdinBuf
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("git rev-list --count: %w (stderr: %s)", err, stderr.String())
 	}

@@ -7,6 +7,8 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // RefUpdateCmd represents a single reference update in a transaction.
@@ -140,7 +142,7 @@ func VerifyRef(ctx context.Context, repoPath string, refName string) (string, er
 	cmd.Dir = repoPath
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse --verify %s: %w (stderr: %s)", refName, err, stderr.String())
 	}

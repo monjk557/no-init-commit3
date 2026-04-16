@@ -32,7 +32,7 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", target)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if strings.Contains(errMsg, "not a tree") {
@@ -96,7 +96,7 @@ func SearchFiles(repoPath, ref, query string, limit int) ([]TreeEntry, int, erro
 	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", "-r", "--name-only", ref)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if strings.Contains(errMsg, "Not a valid object name") || strings.Contains(errMsg, "fatal") {

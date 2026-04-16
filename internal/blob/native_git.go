@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 const nativeGitTimeout = 5 * time.Second
@@ -28,7 +30,8 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
 	if err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 
@@ -76,11 +79,11 @@ func NativeResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		// ref가 브랜치 이름일 수 있으므로 refs/heads/ 접두사로 재시도
 		cmd2 := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", "refs/heads/"+target)
-		out2, err2 := cmd2.Output()
+		out2, err2 := gitutil.OutputWithLimit(cmd2, gitutil.DefaultMaxOutput)
 		if err2 == nil {
 			return strings.TrimSpace(string(out2)), nil
 		}
@@ -102,7 +105,7 @@ func NativeIsDirectory(ctx context.Context, repoPath, ref, path string) (bool, e
 
 	spec := target + ":" + path
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "cat-file", "-t", spec)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return false, err
 	}

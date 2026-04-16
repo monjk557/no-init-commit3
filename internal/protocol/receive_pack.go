@@ -3,12 +3,10 @@
 package protocol
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,9 +22,9 @@ import (
 
 // ReceivePackRequest represents a parsed receive-pack request from the client
 type ReceivePackRequest struct {
-	Commands     []RefUpdateCommand
-	Capabilities []string
-	PackfileData []byte
+	Commands       []RefUpdateCommand
+	Capabilities   []string
+	PackfileReader io.Reader // streams packfile data directly — never buffered in memory
 }
 
 // RefUpdateCommand represents a single reference update command in a push
@@ -183,13 +181,9 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 
 	pktWriter := performance.NewOptimizedPktLineWriter(w)
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
+	// Stream the request body instead of buffering it entirely in memory.
+	// readSection reads only the small pkt-line commands; the remaining
+	// r.Body stream (packfile data) is passed directly to git index-pack.
 	cmds, err := h.readSection(r.Body)
 	if err != nil {
 		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
@@ -203,11 +197,10 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 
 	// v1 fallback: first line is not command=
 	if !strings.HasPrefix(cmds[0], "command=") {
-		receiveReq, err := h.parseV1ReceivePack(bodyBytes)
-		if err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.Flush()
-			return
+		receiveReq := h.parseV1CommandsFromSection(cmds)
+		// After readSection consumed the flush, the remaining r.Body IS the packfile.
+		if h.hasPackfileCommands(receiveReq.Commands) {
+			receiveReq.PackfileReader = r.Body
 		}
 
 		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, pktWriter); err != nil {
@@ -251,10 +244,10 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	}
 	allCmds := append(cmds, pushOpts...)
 
-	receiveReq, err := h.parsePushSection(allCmds, r.Body)
-	if err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-		return
+	receiveReq := h.parsePushCommands(allCmds)
+	// After reading all command sections, remaining r.Body IS the packfile.
+	if h.hasPackfileCommands(receiveReq.Commands) {
+		receiveReq.PackfileReader = r.Body
 	}
 
 	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, pktWriter)
@@ -268,74 +261,57 @@ func (h *ReceivePackHandler) readSection(body io.Reader) ([]string, error) {
 	return readPktLineSection(body)
 }
 
-func (h *ReceivePackHandler) parseV1ReceivePack(body []byte) (*ReceivePackRequest, error) {
+// parseV1CommandsFromSection parses V1 ref update commands from lines already
+// read by readSection. This avoids re-reading the body from the beginning and
+// allows the remaining body stream to be used directly as the packfile source.
+func (h *ReceivePackHandler) parseV1CommandsFromSection(lines []string) *ReceivePackRequest {
 	req := &ReceivePackRequest{
-		Commands:     make([]RefUpdateCommand, 0),
+		Commands:     make([]RefUpdateCommand, 0, len(lines)),
 		Capabilities: make([]string, 0),
 	}
 
-	rd := bytes.NewReader(body)
-	lenBuf := make([]byte, 4)
-	first := true
-
-	for {
-		if _, err := io.ReadFull(rd, lenBuf); err != nil {
-			if err == io.EOF {
-				return req, nil
-			}
-			return nil, err
-		}
-
-		n, err := strconv.ParseInt(string(lenBuf), 16, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid pkt-line length: %w", err)
-		}
-		if n == 0 {
-			remaining, _ := io.ReadAll(rd)
-			if len(remaining) > 0 {
-				req.PackfileData = remaining
-			}
-			return req, nil
-		}
-		if n < 4 {
-			return nil, fmt.Errorf("invalid pkt-line length: %d", n)
-		}
-
-		dataLen := int(n) - 4
-		data := make([]byte, dataLen)
-		if _, err := io.ReadFull(rd, data); err != nil {
-			return nil, err
-		}
-
-		line := strings.TrimSuffix(string(data), "\n")
+	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		var capsPart string
-		if first && strings.Contains(line, "\x00") {
+		// First line may contain capabilities after \x00 separator.
+		if i == 0 && strings.Contains(line, "\x00") {
 			parts := strings.SplitN(line, "\x00", 2)
 			line = parts[0]
-			capsPart = parts[1]
+			if parts[1] != "" {
+				req.Capabilities = append(req.Capabilities, strings.Fields(parts[1])...)
+			}
 		}
-		if first && capsPart != "" {
-			req.Capabilities = append(req.Capabilities, strings.Fields(capsPart)...)
-		}
-		first = false
 
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			continue
 		}
 		req.Commands = append(req.Commands, RefUpdateCommand{
-			RefName: fields[2],
 			OldHash: fields[0],
 			NewHash: fields[1],
+			RefName: fields[2],
 		})
 	}
+
+	return req
 }
 
-func (h *ReceivePackHandler) parsePushSection(cmds []string, body io.Reader) (*ReceivePackRequest, error) {
+// hasPackfileCommands returns true if any command creates or updates a ref
+// (i.e., needs packfile data). Delete-only operations have no packfile.
+func (h *ReceivePackHandler) hasPackfileCommands(cmds []RefUpdateCommand) bool {
+	for _, cmd := range cmds {
+		if cmd.NewHash != zeroHash {
+			return true
+		}
+	}
+	return false
+}
+
+// parsePushCommands parses V2 push commands from pkt-line section lines.
+// The packfile reader is set separately in HandleReceivePack.
+func (h *ReceivePackHandler) parsePushCommands(cmds []string) *ReceivePackRequest {
 	req := &ReceivePackRequest{
 		Commands:     make([]RefUpdateCommand, 0),
 		Capabilities: make([]string, 0),
@@ -359,12 +335,12 @@ func (h *ReceivePackHandler) parsePushSection(cmds []string, body io.Reader) (*R
 		case strings.HasPrefix(c, "ref-name "):
 			currentRefName = strings.TrimSpace(c[9:])
 			if currentOldOid != "" && currentNewOid != "" && currentRefName != "" {
-				cmd := RefUpdateCommand{
+				refCmd := RefUpdateCommand{
 					RefName: currentRefName,
 					OldHash: currentOldOid,
 					NewHash: currentNewOid,
 				}
-				req.Commands = append(req.Commands, cmd)
+				req.Commands = append(req.Commands, refCmd)
 				currentOldOid = ""
 				currentNewOid = ""
 			}
@@ -372,16 +348,7 @@ func (h *ReceivePackHandler) parsePushSection(cmds []string, body io.Reader) (*R
 		}
 	}
 
-	remaining, err := io.ReadAll(body)
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("error reading packfile: %w", err)
-	}
-
-	if len(remaining) > 0 {
-		req.PackfileData = remaining
-	}
-
-	return req, nil
+	return req
 }
 
 const zeroHash = "0000000000000000000000000000000000000000"
@@ -398,10 +365,9 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 		return pktWriter.Flush()
 	}
 
-	if len(req.PackfileData) > 0 {
-		// Use native git index-pack to process packfile (handles thin packs automatically)
-		reader := bytes.NewReader(req.PackfileData)
-		_, err := gitcmd.IndexPackFromReader(ctx, repoPath, reader)
+	if req.PackfileReader != nil {
+		// Stream packfile directly to git index-pack — never buffered in memory.
+		_, err := gitcmd.IndexPackFromReader(ctx, repoPath, req.PackfileReader)
 		if err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
 			// V1 report-status requires ng lines for each ref; without them

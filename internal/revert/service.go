@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // BranchExistsError is returned when a revert branch already exists.
@@ -37,7 +39,7 @@ func runGit(ctx context.Context, repoPath string, args ...string) ([]byte, error
 	cmd := exec.CommandContext(ctx, "git", fullArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git %s failed: %s: %w", args[0], strings.TrimSpace(stderr.String()), err)
 	}
@@ -321,7 +323,7 @@ func revertViaWorktree(ctx context.Context, repoPath, commitHash, targetRef stri
 	writeCmd.Dir = wtDir
 	var writeStderr bytes.Buffer
 	writeCmd.Stderr = &writeStderr
-	treeOut, err := writeCmd.Output()
+	treeOut, err := gitutil.OutputWithLimit(writeCmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", false, fmt.Errorf("git write-tree failed: %s: %w",
 			strings.TrimSpace(writeStderr.String()), err)
@@ -402,7 +404,7 @@ func createSparseWorktree(ctx context.Context, repoPath, wtDir, targetRef string
 func resolveSparsePath(ctx context.Context, wtDir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
 	cmd.Dir = wtDir
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve worktree git dir: %w", err)
 	}
@@ -507,7 +509,7 @@ func commitTree(ctx context.Context, repoPath, treeHash string, parents []string
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git commit-tree failed: %s: %w",
 			strings.TrimSpace(stderr.String()), err)

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // RefEntry represents a single Git reference returned by ListRefs.
@@ -38,7 +40,7 @@ func ListRefs(ctx context.Context, repoPath string, patterns ...string) ([]RefEn
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repoPath
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref: %w", err)
 	}
@@ -78,7 +80,7 @@ func ResolveHEAD(ctx context.Context, repoPath string) (*HEADInfo, error) {
 	// Check if HEAD is symbolic
 	symCmd := exec.CommandContext(ctx, "git", "symbolic-ref", "HEAD")
 	symCmd.Dir = repoPath
-	symOut, symErr := symCmd.Output()
+	symOut, symErr := gitutil.OutputWithLimit(symCmd, gitutil.DefaultMaxOutput)
 	if symErr == nil {
 		// HEAD is symbolic
 		info.IsSymbolic = true
@@ -90,7 +92,7 @@ func ResolveHEAD(ctx context.Context, repoPath string) (*HEADInfo, error) {
 	revCmd.Dir = repoPath
 	var stderr bytes.Buffer
 	revCmd.Stderr = &stderr
-	revOut, revErr := revCmd.Output()
+	revOut, revErr := gitutil.OutputWithLimit(revCmd, gitutil.DefaultMaxOutput)
 	if revErr != nil {
 		// HEAD may be unborn (no commits yet)
 		return info, fmt.Errorf("git rev-parse HEAD: %w (stderr: %s)", revErr, stderr.String())

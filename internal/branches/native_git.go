@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 const nativeGitTimeout = 5 * time.Second
@@ -54,7 +56,7 @@ func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortFiel
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
@@ -116,7 +118,7 @@ func NativeGetSimpleBranches(ctx context.Context, repoPath string) ([]SimpleBran
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
@@ -166,7 +168,7 @@ func NativeCheckBranchExists(ctx context.Context, repoPath, branchName string) (
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		// 브랜치가 없는 경우
 		return false, "", nil
@@ -190,7 +192,7 @@ func NativeCalculateAheadBehind(ctx context.Context, repoPath, branchRef, baseRe
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git rev-list failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
@@ -221,7 +223,7 @@ func NativeResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 	}
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", target)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve reference: %s", ref)
 	}
@@ -237,7 +239,7 @@ func NativeMergeBase(ctx context.Context, repoPath, hash1, hash2 string) (string
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "merge-base", hash1, hash2)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("no common ancestor found between commits")
 	}
@@ -313,7 +315,7 @@ func nativeGetHead(ctx context.Context, repoPath string) string {
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "symbolic-ref", "HEAD")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return ""
 	}

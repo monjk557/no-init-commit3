@@ -110,7 +110,7 @@ func nativeCheckRepoExists(ctx context.Context, repoPath string) error {
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", "--git-dir")
-	_, err := cmd.Output()
+	_, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return fmt.Errorf("git rev-parse --git-dir failed: %w", err)
 	}
@@ -128,7 +128,7 @@ func nativeResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 	}
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", target)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse failed: %w", err)
 	}
@@ -161,7 +161,7 @@ func nativeGitLogForPath(ctx context.Context, repoPath, ref, path string) (*GitC
 	}
 
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git log for %s: %w", path, err)
 	}
@@ -232,7 +232,7 @@ func NativeGetCommits(ctx context.Context, repoPath, ref string, limit int) ([]G
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"log", fmt.Sprintf("-%d", limit), "--format="+gitLogFormat, target)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git log commits: %w", err)
 	}
@@ -277,7 +277,7 @@ func NativeGetTreeEntries(ctx context.Context, repoPath, ref, path string) ([]Gi
 	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", "-l", treeSpec)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		// Include stderr for proper error classification (e.g., "not a tree object", "does not exist").
 		return nil, fmt.Errorf("git ls-tree failed: %s: %w", strings.TrimSpace(stderr.String()), err)
@@ -332,7 +332,7 @@ func NativeGetLatestCommit(ctx context.Context, repoPath, ref string) (*GitCommi
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"log", "-1", "--format="+gitLogFormat, target)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git log latest commit: %w", err)
 	}
@@ -357,7 +357,7 @@ func NativeCountCommits(ctx context.Context, repoPath, ref string) (count int, a
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"rev-list", "--count", target)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, false, fmt.Errorf("git rev-list --count: %w", err)
 	}
@@ -385,7 +385,7 @@ func NativeGetTags(ctx context.Context, repoPath string, limit int) ([]GitTag, e
 	format := "%(refname:short)\t%(objectname:short)\t%(objecttype)"
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"tag", "-l", "--sort=-creatordate", "--format="+format)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git tag -l: %w", err)
 	}
@@ -422,7 +422,7 @@ func NativeGetRemotes(ctx context.Context, repoPath string) ([]RemoteInfo, error
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "remote", "-v")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git remote -v: %w", err)
 	}
@@ -482,7 +482,7 @@ func NativeGetBranchesForOverview(ctx context.Context, repoPath string) ([]nativ
 	// Get default branch (HEAD target)
 	defaultBranch := ""
 	headCmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "symbolic-ref", "--short", "HEAD")
-	headOut, err := headCmd.Output()
+	headOut, err := gitutil.OutputWithLimit(headCmd, gitutil.DefaultMaxOutput)
 	if err == nil {
 		defaultBranch = strings.TrimSpace(string(headOut))
 	}
@@ -498,7 +498,7 @@ func NativeGetBranchesForOverview(ctx context.Context, repoPath string) ([]nativ
 	)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, defaultBranch, fmt.Errorf("git for-each-ref: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
@@ -540,7 +540,7 @@ func NativeCalculateAheadBehind(ctx context.Context, repoPath, branchRef, baseRe
 		"rev-list", "--count", "--left-right",
 		fmt.Sprintf("refs/heads/%s...refs/heads/%s", baseRef, branchRef),
 	)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, 0, fmt.Errorf("git rev-list --count --left-right: %w", err)
 	}
@@ -570,7 +570,8 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "show", spec)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
 	if err != nil {
 		return nil, fmt.Errorf("git show %s: %s: %w", spec, strings.TrimSpace(stderr.String()), err)
 	}
@@ -586,7 +587,7 @@ func NativeGetBranches(ctx context.Context, repoPath string) ([]BranchInfo, erro
 	// HEAD의 symbolic target을 읽어 IsCurrent 판별에 사용
 	headRef := ""
 	headCmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "symbolic-ref", "-q", "HEAD")
-	if out, err := headCmd.Output(); err == nil {
+	if out, err := gitutil.OutputWithLimit(headCmd, gitutil.DefaultMaxOutput); err == nil {
 		headRef = strings.TrimSpace(string(out))
 	}
 
@@ -594,7 +595,7 @@ func NativeGetBranches(ctx context.Context, repoPath string) ([]BranchInfo, erro
 	// does not interpret %x00 as null byte (unlike git log --format).
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"for-each-ref", "--format=%(refname)\t%(objectname)", "--sort=-committerdate", "refs/heads/")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref: %w", err)
 	}

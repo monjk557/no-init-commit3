@@ -597,24 +597,21 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 		repoLock.Unlock()
 	}()
 
-	// 4. Process packfile if present using native git index-pack
-	if len(receiveReq.PackfileData) > 0 {
-		if bytes.HasPrefix(receiveReq.PackfileData, []byte("PACK")) {
-			packReader := bytes.NewReader(receiveReq.PackfileData)
-			indexCtx, indexCancel := context.WithTimeout(ctx, 10*time.Minute)
-			_, indexErr := gitcmd.IndexPackFromReader(indexCtx, sshReq.RepoPath, packReader)
-			indexCancel()
-			if indexErr != nil {
-				pw := &PktWriter{W: writer, WithLF: false}
-				_ = pw.WriteLine(fmt.Sprintf("unpack %s", indexErr.Error()))
-				// V1 report-status requires ng lines for each ref; without them
-				// the client reports "remote failed to report status".
-				for _, cmd := range receiveReq.Commands {
-					_ = pw.WriteLine(fmt.Sprintf("ng %s unpack failed", cmd.RefName))
-				}
-				_ = pw.Flush()
-				return
+	// 4. Process packfile if present using native git index-pack — streamed, not buffered.
+	if receiveReq.PackfileReader != nil {
+		indexCtx, indexCancel := context.WithTimeout(ctx, 10*time.Minute)
+		_, indexErr := gitcmd.IndexPackFromReader(indexCtx, sshReq.RepoPath, receiveReq.PackfileReader)
+		indexCancel()
+		if indexErr != nil {
+			pw := &PktWriter{W: writer, WithLF: false}
+			_ = pw.WriteLine(fmt.Sprintf("unpack %s", indexErr.Error()))
+			// V1 report-status requires ng lines for each ref; without them
+			// the client reports "remote failed to report status".
+			for _, cmd := range receiveReq.Commands {
+				_ = pw.WriteLine(fmt.Sprintf("ng %s unpack failed", cmd.RefName))
 			}
+			_ = pw.Flush()
+			return
 		}
 	}
 
@@ -778,17 +775,9 @@ func (h *SSHProtocolHandler) parseSSHReceivePackRequest(body io.Reader) (*Receiv
 		}
 	}
 
-	// Read remaining packfile data if any
+	// Stream packfile data: combine any already-buffered prefix with the remaining reader.
 	if inPackfile || packfileBuffer.Len() > 0 {
-		// Read all remaining data as packfile
-		remaining, err := io.ReadAll(reader)
-		if err != nil && err != io.EOF {
-			return nil, fmt.Errorf("error reading packfile: %w", err)
-		}
-		if len(remaining) > 0 {
-			packfileBuffer.Write(remaining)
-		}
-		req.PackfileData = packfileBuffer.Bytes()
+		req.PackfileReader = io.MultiReader(&packfileBuffer, reader)
 	}
 
 	return req, nil

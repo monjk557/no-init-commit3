@@ -45,7 +45,7 @@ func nativeResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", "--verify", ref)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		return "", fmt.Errorf("failed to resolve ref '%s': %s", ref, errMsg)
@@ -60,7 +60,7 @@ func nativeSymbolicRef(ctx context.Context, repoPath string) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "symbolic-ref", "-q", "HEAD")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		// Detached HEAD or no HEAD → return empty
 		return "", nil
@@ -90,7 +90,7 @@ func nativeGetTreeHash(ctx context.Context, repoPath, commitHash string) (string
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-parse", "--verify", commitHash+"^{tree}")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tree hash: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -106,7 +106,7 @@ func nativeHashObject(ctx context.Context, repoPath string, content []byte) (str
 	cmd.Stdin = bytes.NewReader(content)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to hash object: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -128,7 +128,7 @@ func nativeMkTree(ctx context.Context, repoPath string, entries []nativeMkTreeEn
 	cmd.Stdin = &input
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to create tree: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -168,7 +168,7 @@ func nativeCommitTree(ctx context.Context, repoPath, treeHash string, parents []
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to create commit: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -212,7 +212,7 @@ func nativeLsTree(ctx context.Context, repoPath, treeHash string) ([]nativeLsTre
 	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", "-r", treeHash)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tree: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -254,7 +254,7 @@ func nativeLsTreePath(ctx context.Context, repoPath, treeHash, path string) (boo
 	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "ls-tree", treeHash, "--", path)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return false, fmt.Errorf("failed to check path: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -279,7 +279,7 @@ func nativeHasRefs(ctx context.Context, repoPath, prefix string) (bool, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "for-each-ref", "--count=1", prefix, "--format=x")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return false, nil
 	}
@@ -294,7 +294,7 @@ func nativeMergeBase(ctx context.Context, repoPath, hash1, hash2 string) (string
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "merge-base", hash1, hash2)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg == "" {
@@ -330,7 +330,7 @@ func nativeGetCommitLog(ctx context.Context, repoPath, ref string, limit, skip i
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		return nil, fmt.Errorf("failed to get commit log: %s", errMsg)
@@ -393,7 +393,7 @@ func nativeRevListCount(ctx context.Context, repoPath, ref string) (int, error) 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-list", "--count", ref)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count commits: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -412,7 +412,7 @@ func nativeCatFileType(ctx context.Context, repoPath, hash string) (string, erro
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "cat-file", "-t", hash)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("object not found: %s", hash)
 	}
@@ -440,7 +440,7 @@ func nativeRevListCountRange(ctx context.Context, repoPath, from, excludeAncesto
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "rev-list", "--count", from, "^"+excludeAncestorsOf)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count commits: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -464,7 +464,7 @@ func nativeDiffNameOnlyCount(ctx context.Context, repoPath, hash1, hash2 string)
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "diff-tree", "-r", "--no-commit-id", "-M", hash1, hash2)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get diff-tree count: %s", strings.TrimSpace(stderr.String()))
 	}
@@ -487,7 +487,7 @@ func nativeGetCommitFullMessage(ctx context.Context, repoPath, hash string) (str
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "log", "-1", "--format=%B", hash)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to get commit message: %s", strings.TrimSpace(stderr.String()))
 	}

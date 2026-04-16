@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // nativeSignature represents a Git author/committer for native git operations.
@@ -28,7 +30,7 @@ type nativeMkTreeEntry struct {
 // nativeInitBare initializes a new bare git repository at path.
 func nativeInitBare(ctx context.Context, path string) error {
 	cmd := exec.CommandContext(ctx, "git", "init", "--bare", path)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git init --bare failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -37,7 +39,7 @@ func nativeInitBare(ctx context.Context, path string) error {
 // nativeSetSymbolicRef sets HEAD to point to the given branch ref.
 func nativeSetSymbolicRef(ctx context.Context, repoPath, target string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "symbolic-ref", "HEAD", target)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git symbolic-ref failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -47,7 +49,7 @@ func nativeSetSymbolicRef(ctx context.Context, repoPath, target string) error {
 // Returns empty string if HEAD is detached.
 func nativeSymbolicRef(ctx context.Context, repoPath string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "symbolic-ref", "-q", "HEAD")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		// Exit code 1 = detached HEAD (not an error)
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
@@ -62,7 +64,7 @@ func nativeSymbolicRef(ctx context.Context, repoPath string) (string, error) {
 func nativeHashObject(ctx context.Context, repoPath string, content []byte) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "hash-object", "-w", "--stdin")
 	cmd.Stdin = bytes.NewReader(content)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git hash-object failed: %w", err)
 	}
@@ -78,7 +80,7 @@ func nativeMkTree(ctx context.Context, repoPath string, entries []nativeMkTreeEn
 
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "mktree")
 	cmd.Stdin = &buf
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git mktree failed: %w", err)
 	}
@@ -112,7 +114,7 @@ func nativeCommitTree(ctx context.Context, repoPath, treeHash string, parents []
 	}
 	cmd.Env = env
 
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git commit-tree failed: %w", err)
 	}
@@ -122,7 +124,7 @@ func nativeCommitTree(ctx context.Context, repoPath, treeHash string, parents []
 // nativeUpdateRef sets a reference to the given hash.
 func nativeUpdateRef(ctx context.Context, repoPath, refName, hash string) error {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "update-ref", refName, hash)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitutil.CombinedOutputWithLimit(cmd, gitutil.DefaultMaxOutput); err != nil {
 		return fmt.Errorf("git update-ref failed: %s: %w", string(out), err)
 	}
 	return nil
@@ -131,7 +133,7 @@ func nativeUpdateRef(ctx context.Context, repoPath, refName, hash string) error 
 // nativeResolveRef resolves a ref to its SHA hash.
 func nativeResolveRef(ctx context.Context, repoPath, ref string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-parse", ref)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve ref '%s': %w", ref, err)
 	}
@@ -141,7 +143,7 @@ func nativeResolveRef(ctx context.Context, repoPath, ref string) (string, error)
 // nativeRevParseVerify verifies and resolves a ref. Returns hash and whether it exists.
 func nativeRevParseVerify(ctx context.Context, repoPath, ref string) (string, bool) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-parse", "--verify", ref)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", false
 	}
@@ -151,7 +153,7 @@ func nativeRevParseVerify(ctx context.Context, repoPath, ref string) (string, bo
 // nativeCatFileType returns the type of an object ("commit", "tree", "blob", "tag").
 func nativeCatFileType(ctx context.Context, repoPath, hash string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "cat-file", "-t", hash)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git cat-file -t failed for %s: %w", hash, err)
 	}
@@ -161,7 +163,7 @@ func nativeCatFileType(ctx context.Context, repoPath, hash string) (string, erro
 // nativeForEachRefCount counts references matching a prefix pattern.
 func nativeForEachRefCount(ctx context.Context, repoPath, prefix string) (int, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "for-each-ref", "--format=%(refname)", prefix)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("git for-each-ref failed: %w", err)
 	}
@@ -175,7 +177,7 @@ func nativeForEachRefCount(ctx context.Context, repoPath, prefix string) (int, e
 // nativeRevListCount counts the number of commits reachable from ref.
 func nativeRevListCount(ctx context.Context, repoPath, ref string) (int, error) {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-list", "--count", ref)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("git rev-list --count failed: %w", err)
 	}
@@ -189,7 +191,7 @@ func nativeRevListCount(ctx context.Context, repoPath, ref string) (int, error) 
 // nativeHasAnyRefs checks if the repository has any refs at all.
 func nativeHasAnyRefs(ctx context.Context, repoPath string) bool {
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "for-each-ref", "--count=1", "--format=%(refname)")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return false
 	}
@@ -202,7 +204,7 @@ func nativeHasAnyRefs(ctx context.Context, repoPath string) bool {
 func nativeDereferenceTag(ctx context.Context, repoPath, tagRef string) (string, error) {
 	// Try ^{commit} to dereference annotated tags
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-parse", tagRef+"^{commit}")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("failed to dereference tag %s: %w", tagRef, err)
 	}

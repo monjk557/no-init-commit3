@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -88,7 +90,7 @@ func runGit(ctx context.Context, repoPath string, args ...string) ([]byte, error
 	cmd := exec.CommandContext(ctx, "git", fullArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git %s failed: %s: %w", args[0], strings.TrimSpace(stderr.String()), err)
 	}
@@ -102,7 +104,7 @@ func runGitWithStdin(ctx context.Context, repoPath string, stdin []byte, args ..
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("git %s failed: %s: %w", args[0], strings.TrimSpace(stderr.String()), err)
 	}
@@ -299,7 +301,7 @@ func gitCommitTree(ctx context.Context, repoPath string, treeHash string, parent
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return "", fmt.Errorf("git commit-tree failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}

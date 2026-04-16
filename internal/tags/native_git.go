@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/collabops/git-executor/internal/gitutil"
 )
 
 const nativeGitTimeout = 5 * time.Second
@@ -38,7 +40,7 @@ func NativeGetTagsSorted(ctx context.Context, repoPath string, limit, skip int, 
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, 0, fmt.Errorf("git for-each-ref failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
@@ -86,7 +88,7 @@ func NativeVerifyCommitExists(ctx context.Context, repoPath, hash string) error 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "cat-file", "-t", hash)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return fmt.Errorf("commit not found: %s", hash)
 	}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/logging"
 	"go.uber.org/zap"
 )
@@ -174,7 +175,7 @@ func (s *StateService) nativeGetHeadInfo(ctx context.Context, gitDir string) (st
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "symbolic-ref", "-q", "HEAD")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	branch := ""
 	if err == nil {
 		branch = strings.TrimSpace(string(out))
@@ -183,7 +184,7 @@ func (s *StateService) nativeGetHeadInfo(ctx context.Context, gitDir string) (st
 	cmdCtx2, cancel2 := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel2()
 	cmd2 := exec.CommandContext(cmdCtx2, "git", "--git-dir", gitDir, "rev-parse", "HEAD")
-	out2, err2 := cmd2.Output()
+	out2, err2 := gitutil.OutputWithLimit(cmd2, gitutil.DefaultMaxOutput)
 	hash := ""
 	if err2 == nil {
 		hash = strings.TrimSpace(string(out2))
@@ -234,7 +235,7 @@ func (s *StateService) nativeGetCommitInfo(ctx context.Context, gitDir, hash str
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "log", "-1", "--format="+format, hash)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return CommitInfo{SHA: hash}
 	}
@@ -285,7 +286,7 @@ func (s *StateService) buildReferences(ctx context.Context, gitDir, headBranch s
 		"--format="+format)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return refs
 	}
@@ -388,7 +389,7 @@ func (s *StateService) nativeCountCommits(ctx context.Context, gitDir, ref strin
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "rev-list", "--count", ref)
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0
 	}
@@ -406,7 +407,7 @@ func (s *StateService) nativeRepoSize(ctx context.Context, gitDir string) (int64
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", gitDir, "count-objects", "-v")
-	out, err := cmd.Output()
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, fmt.Errorf("git count-objects: %w", err)
 	}

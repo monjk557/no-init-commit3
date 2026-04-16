@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -105,7 +106,10 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	bodyBytes, err := decompressRequestBody(r.Body)
+	// Limit request body to prevent OOM from oversized upload-pack negotiation.
+	// Negotiation data (wants/haves) is typically < 1 MB.
+	limitedBody := gitutil.LimitReadCloser(r.Body, gitutil.MaxRequestBodyBytes)
+	bodyBytes, err := decompressRequestBody(limitedBody)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("ERR %s", err.Error()), http.StatusBadRequest)
 		return
