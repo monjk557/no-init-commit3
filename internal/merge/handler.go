@@ -220,21 +220,47 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			return
 		}
 
+		dryRunMessage := "Dry run completed - no changes made"
+		if conflictAnalysis.IsAlreadyMerged {
+			dryRunMessage = "Source is already merged into target - no merge needed"
+		}
+
 		c.JSON(http.StatusOK, &MergeResponse{
-			Success:         !conflictAnalysis.HasConflicts || req.ForceConflict,
+			Success:         conflictAnalysis.CanMerge,
 			IsFastForward:   conflictAnalysis.IsFastForward,
 			HasConflicts:    conflictAnalysis.HasConflicts,
 			ConflictCount:   conflictAnalysis.ConflictCount,
 			Strategy:        req.Strategy,
 			Method:          req.Method,
-			Message:         "Dry run completed - no changes made",
+			Message:         dryRunMessage,
 			ConflictSummary: conflictAnalysis,
 			Details: map[string]interface{}{
-				"dry_run":         true,
-				"can_merge":       conflictAnalysis.CanMerge,
-				"estimated_time":  conflictAnalysis.EstimatedTime.String(),
-				"recommendations": conflictAnalysis.Recommendations,
+				"dry_run":           true,
+				"can_merge":         conflictAnalysis.CanMerge,
+				"is_already_merged": conflictAnalysis.IsAlreadyMerged,
+				"estimated_time":    conflictAnalysis.EstimatedTime.String(),
+				"recommendations":   conflictAnalysis.Recommendations,
 			},
+		})
+		return
+	}
+
+	// Source already merged — return success with existing target commit info (idempotent)
+	if conflictAnalysis.IsAlreadyMerged {
+		h.logger.Info("Source already merged into target, returning existing commit info",
+			zap.String("source", req.SourceRef),
+			zap.String("target", req.TargetRef))
+		c.JSON(http.StatusOK, &MergeResponse{
+			Success:         true,
+			MergeCommit:     conflictAnalysis.TargetCommit,
+			IsFastForward:   false,
+			IsAlreadyMerged: true,
+			HasConflicts:    false,
+			ConflictCount:   0,
+			Strategy:        req.Strategy,
+			Method:          req.Method,
+			Message:         fmt.Sprintf("Source '%s' is already merged into target '%s'", req.SourceRef, req.TargetRef),
+			ConflictSummary: conflictAnalysis,
 		})
 		return
 	}

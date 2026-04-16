@@ -57,15 +57,16 @@ type MergeRequest struct {
 // MergeResponse represents the response for merge operations
 type MergeResponse struct {
 	Success         bool                   `json:"success"`
-	MergeCommit     *CommitInfo            `json:"merge_commit"`     // Created merge commit info
-	IsFastForward   bool                   `json:"is_fast_forward"`  // Whether merge was fast-forward
-	HasConflicts    bool                   `json:"has_conflicts"`    // Whether conflicts were detected
-	ConflictCount   int                    `json:"conflict_count"`   // Number of conflicts
-	Strategy        MergeStrategy          `json:"strategy"`         // Strategy used
-	Method          MergeMethod            `json:"method"`           // Merge method used (merge, squash, rebase)
-	Message         string                 `json:"message"`          // Operation result message
-	Details         map[string]interface{} `json:"details"`          // Additional details
-	ConflictSummary *MergeAnalysisResult   `json:"conflict_summary"` // Detailed conflict analysis
+	MergeCommit     *CommitInfo            `json:"merge_commit"`      // Created merge commit info
+	IsFastForward   bool                   `json:"is_fast_forward"`   // Whether merge was fast-forward
+	IsAlreadyMerged bool                   `json:"is_already_merged"` // Whether source was already merged into target
+	HasConflicts    bool                   `json:"has_conflicts"`     // Whether conflicts were detected
+	ConflictCount   int                    `json:"conflict_count"`    // Number of conflicts
+	Strategy        MergeStrategy          `json:"strategy"`          // Strategy used
+	Method          MergeMethod            `json:"method"`            // Merge method used (merge, squash, rebase)
+	Message         string                 `json:"message"`           // Operation result message
+	Details         map[string]interface{} `json:"details"`           // Additional details
+	ConflictSummary *MergeAnalysisResult   `json:"conflict_summary"`  // Detailed conflict analysis
 }
 
 // MergeResult represents the internal result of a merge operation
@@ -182,6 +183,7 @@ type MergeAnalysisResult struct {
 	CanMerge          bool                     `json:"can_merge"`          // Whether merge is possible
 	HasConflicts      bool                     `json:"has_conflicts"`      // Whether conflicts exist
 	IsFastForward     bool                     `json:"is_fast_forward"`    // Whether merge is fast-forward
+	IsAlreadyMerged   bool                     `json:"is_already_merged"`  // Whether source is already merged into target
 	ConflictCount     int                      `json:"conflict_count"`     // Total number of conflicts
 	FileConflicts     []FileConflict           `json:"file_conflicts"`     // Detailed file conflicts
 	MergeBase         *CommitInfo              `json:"merge_base"`         // Common ancestor commit

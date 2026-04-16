@@ -90,6 +90,33 @@ func (cd *ConflictDetector) AnalyzeMerge(ctx context.Context, req *MergeAnalysis
 		}, nil
 	}
 
+	// Check if source is already merged into target (source is ancestor of target)
+	isAlreadyMerged, err := gitMergeBaseIsAncestor(ctx, repoPath, sourceHash, targetHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check already-merged: %w", err)
+	}
+
+	if isAlreadyMerged {
+		cd.logger.Info("Source is already merged into target",
+			zap.String("source", sourceHash),
+			zap.String("target", targetHash))
+		return &MergeAnalysisResult{
+			CanMerge:          false,
+			HasConflicts:      false,
+			IsFastForward:     false,
+			IsAlreadyMerged:   true,
+			ConflictCount:     0,
+			FileConflicts:     []FileConflict{},
+			SourceCommit:      nativeCommitToInfo(sourceCommit),
+			TargetCommit:      nativeCommitToInfo(targetCommit),
+			Strategy:          req.Strategy,
+			AutoResolvable:    0,
+			SeverityBreakdown: make(map[ConflictSeverity]int),
+			EstimatedTime:     0,
+			Recommendations:   []string{"Source branch is already merged into target - no merge needed"},
+		}, nil
+	}
+
 	// Find merge base
 	mergeBaseHash, err := gitMergeBase(ctx, repoPath, sourceHash, targetHash)
 	if err != nil {
