@@ -21,24 +21,17 @@ jobs:
         image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
-          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
           COLLABOPS_REF: ${{ collabops.ref }}
           COMMIT_SHA: ${{ collabops.sha }}
         run: |
           set -eu
-          apt-get update && apt-get install -y --no-install-recommends git openssh-client
-          mkdir -p ~/.ssh
-          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
-          if [ -n "${GIT_HOST}" ]; then
-            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
-          fi
+          apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+          git config --global http.sslVerify false
           BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
           [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
-          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" clone --depth 1 --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
           cd /workspace/source
-          git fetch origin "${COMMIT_SHA}"
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" fetch origin "${COMMIT_SHA}"
           git checkout "${COMMIT_SHA}"
 
       - name: Install dependencies and tools
@@ -82,24 +75,17 @@ jobs:
         image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
-          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
           COLLABOPS_REF: ${{ collabops.ref }}
           COMMIT_SHA: ${{ collabops.sha }}
         run: |
           set -eu
-          apt-get update && apt-get install -y --no-install-recommends git openssh-client
-          mkdir -p ~/.ssh
-          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
-          if [ -n "${GIT_HOST}" ]; then
-            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
-          fi
+          apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+          git config --global http.sslVerify false
           BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
           [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
-          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" clone --depth 1 --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
           cd /workspace/source
-          git fetch origin "${COMMIT_SHA}"
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" fetch origin "${COMMIT_SHA}"
           git checkout "${COMMIT_SHA}"
 
       - name: Google Cloud Auth
@@ -145,24 +131,17 @@ jobs:
         image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
         env:
           GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
-          GIT_SSH_PRIVATE_KEY: ${{ secrets.GIT_SSH_PRIVATE_KEY }}
           COLLABOPS_REF: ${{ collabops.ref }}
           COMMIT_SHA: ${{ collabops.sha }}
         run: |
           set -eu
-          apt-get update && apt-get install -y --no-install-recommends git openssh-client
-          mkdir -p ~/.ssh
-          echo "${GIT_SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          GIT_HOST=$(echo "${GIT_REPO_URL}" | sed -n 's/.*@\([^:/]*\).*/\1/p')
-          if [ -n "${GIT_HOST}" ]; then
-            ssh-keyscan -H "${GIT_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
-          fi
+          apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+          git config --global http.sslVerify false
           BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
           [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
-          git clone --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" clone --depth 1 --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
           cd /workspace/source
-          git fetch origin "${COMMIT_SHA}"
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" fetch origin "${COMMIT_SHA}"
           git checkout "${COMMIT_SHA}"
 
       - name: Extract metadata and prepare tags
