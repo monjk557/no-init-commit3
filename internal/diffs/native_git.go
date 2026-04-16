@@ -26,7 +26,7 @@ import (
 const (
 	nativeGitTimeout    = 10 * time.Second
 	nativeGitRefTimeout = 3 * time.Second
-	emptyTreeHash       = "4b825dc642cb6eb9a060e54bf899d69f82cf279"
+	emptyTreeHash       = "4b825dc642cb6eb9a060e54bf899d69f82cf2793"
 )
 
 // nativeFileMeta는 git diff에서 추출한 파일별 메타데이터입니다.
