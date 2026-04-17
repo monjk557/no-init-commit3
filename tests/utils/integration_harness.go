@@ -130,7 +130,7 @@ func NewIntegrationTestHarness(t *testing.T) *IntegrationTestHarness {
 	}
 
 	// Initialize server
-	srv, err := server.New(cfg)
+	srv, err := server.New(cfg, nil)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}

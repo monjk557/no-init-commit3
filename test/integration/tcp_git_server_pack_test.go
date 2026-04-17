@@ -73,7 +73,7 @@ func SetupTCPGitServerTest(t *testing.T) *TCPGitServerTestSuite {
 	}
 
 	// Create TCP server
-	tcpServer, err := server.NewDuplexTCPServer(cfg)
+	tcpServer, err := server.NewDuplexTCPServer(cfg, nil)
 	require.NoError(t, err)
 	require.NotNil(t, tcpServer)
 
@@ -81,7 +81,7 @@ func SetupTCPGitServerTest(t *testing.T) *TCPGitServerTestSuite {
 	cfg.Server.TCPGitPort = 5223
 
 	// Create TCP server with fixed port
-	tcpServer, err = server.NewDuplexTCPServer(cfg)
+	tcpServer, err = server.NewDuplexTCPServer(cfg, nil)
 	require.NoError(t, err)
 	err = tcpServer.Start()
 	require.NoError(t, err)

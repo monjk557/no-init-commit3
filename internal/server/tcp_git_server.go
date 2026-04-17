@@ -58,8 +58,9 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 	return n, fw.w.Flush()
 }
 
-// NewDuplexTCPServer creates a new duplex TCP server with progress-aware connection management
-func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
+// NewDuplexTCPServer creates a new duplex TCP server with progress-aware connection management.
+// cc 가 nil 이 아니면 외부에서 주입된 ConcurrencyController 를 사용한다 (HTTP 서버와 슬롯 공유).
+func NewDuplexTCPServer(config *config.Config, cc *connection.ConcurrencyController) (*DuplexTCPServer, error) {
 	// Initialize logger
 	logger, err := logging.NewLogger(config.Logging)
 	if err != nil {
@@ -82,23 +83,23 @@ func NewDuplexTCPServer(config *config.Config) (*DuplexTCPServer, error) {
 	// Initialize timeout policy
 	timeoutPolicy := connection.DefaultTimeoutPolicy()
 
-	// Initialize concurrency controller
-	concurrencyConfig := connection.DefaultConcurrencyConfig()
-	concurrencyController := connection.NewConcurrencyController(concurrencyConfig, metrics, logger.Logger)
+	// Use injected controller or create a local one (backward compat)
+	if cc == nil {
+		concurrencyConfig := connection.DefaultConcurrencyConfig()
+		cc = connection.NewConcurrencyController(concurrencyConfig, metrics, logger.Logger)
+	}
 
 	server := &DuplexTCPServer{
 		config:                config,
 		eventsClient:          eventsClient,
 		connections:           make(map[net.Conn]*connection.ProgressAwareConnection),
-		concurrencyController: concurrencyController,
+		concurrencyController: cc,
 		timeoutPolicy:         timeoutPolicy,
 		metrics:               metrics,
 		logger:                logger,
 	}
 
 	logger.Info("Progress-aware Git executor server initialized",
-		zap.Int("max_concurrent_clones", concurrencyConfig.MaxConcurrentClones),
-		zap.Int("max_concurrent_pushes", concurrencyConfig.MaxConcurrentPushes),
 		zap.Duration("operation_idle_timeout", timeoutPolicy.OperationIdleTimeout),
 		zap.Duration("operation_max_timeout", timeoutPolicy.OperationMaxTimeout))
 
@@ -155,10 +156,8 @@ func (s *DuplexTCPServer) Stop() error {
 		err = s.listener.Close()
 	}
 
-	// Stop concurrency controller
-	if s.concurrencyController != nil {
-		s.concurrencyController.Stop()
-	}
+	// NOTE: concurrencyController 는 main 에서 공유 인스턴스로 관리하므로 여기서 Stop 하지 않는다.
+	// main.go 에서 프로세스 종료 시 한 번만 Stop 호출.
 
 	// Close all active connections
 	s.mu.Lock()

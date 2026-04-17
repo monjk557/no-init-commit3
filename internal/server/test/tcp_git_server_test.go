@@ -62,7 +62,7 @@ func TestNewDuplexTCPServer(t *testing.T) {
 		},
 	}
 
-	server, err := server.NewDuplexTCPServer(testConfig)
+	server, err := server.NewDuplexTCPServer(testConfig, nil)
 	require.NoError(t, err)
 	require.NotNil(t, server)
 }

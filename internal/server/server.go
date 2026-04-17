@@ -18,6 +18,7 @@ import (
 	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/commits"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/connection"
 	repocontext "github.com/collabops/git-executor/internal/context"
 	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/fork"
@@ -50,15 +51,17 @@ func ginContextMiddleware() gin.HandlerFunc {
 
 // Server - 통합 모니터링을 갖춘 HTTP 서버 구조체
 type Server struct {
-	server               *http.Server           // 실제 HTTP 서버 인스턴스
-	config               *config.Config         // 애플리케이션 설정
-	logger               *logging.Logger        // 로거
-	observabilityManager *observability.Manager // 모니터링 매니저 (메트릭, 추적, 헬스체크)
-	shuttingDown         atomic.Bool            // SIGTERM 수신 시 true, /ready가 503 반환하여 신규 요청 제한
+	server                *http.Server                      // 실제 HTTP 서버 인스턴스
+	config                *config.Config                    // 애플리케이션 설정
+	logger                *logging.Logger                   // 로거
+	observabilityManager  *observability.Manager            // 모니터링 매니저 (메트릭, 추적, 헬스체크)
+	concurrencyController *connection.ConcurrencyController // HTTP/TCP 공유 동시성 컨트롤러
+	shuttingDown          atomic.Bool                       // SIGTERM 수신 시 true, /ready가 503 반환하여 신규 요청 제한
 }
 
-// New - 모니터링 기능을 갖춘 새 HTTP 서버 인스턴스 생성
-func New(cfg *config.Config) (*Server, error) {
+// New - 모니터링 기능을 갖춘 새 HTTP 서버 인스턴스 생성.
+// cc 가 nil 이 아니면 TCP 서버와 동시성 슬롯을 공유한다.
+func New(cfg *config.Config, cc *connection.ConcurrencyController) (*Server, error) {
 	// 심플 캐시는 첫 사용 시 자동으로 초기화됨
 
 	// Initialize observability manager (without permission client)
@@ -68,9 +71,10 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	return &Server{
-		config:               cfg,
-		logger:               obsManager.GetLogger(),
-		observabilityManager: obsManager,
+		config:                cfg,
+		logger:                obsManager.GetLogger(),
+		observabilityManager:  obsManager,
+		concurrencyController: cc,
 	}, nil
 }
 
@@ -516,6 +520,36 @@ func (s *Server) readyCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ready": true})
 }
 
+// gitConcurrencyGate returns a Gin middleware that gates clone/push operations
+// through the shared ConcurrencyController. On overload it returns 429 + Retry-After
+// instead of letting the server saturate and produce 503 via upstream proxies.
+func (s *Server) gitConcurrencyGate(opType connection.OperationType) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.concurrencyController == nil {
+			c.Next()
+			return
+		}
+
+		owner := c.Param("owner")
+		repo := c.Param("repo")
+		tenantID := fmt.Sprintf("%s/%s", owner, repo)
+		clientIP := c.ClientIP()
+
+		if err := s.concurrencyController.RequestOperation(c.Request.Context(), opType, tenantID, clientIP); err != nil {
+			c.Header("Retry-After", "5")
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"code":            "OVERLOADED",
+				"message":         fmt.Sprintf("%s operation denied: %s", opType, err.Error()),
+				"retry_after_sec": 5,
+			})
+			return
+		}
+
+		defer s.concurrencyController.ReleaseOperation(opType, tenantID, clientIP)
+		c.Next()
+	}
+}
+
 // setupProtocolRoutes configures Git Smart HTTP protocol routes
 func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 	// Initialize upload-pack handler (fetch operations)
@@ -562,15 +596,15 @@ func (s *Server) setupProtocolRoutes(router *gin.RouterGroup) {
 			}
 		})
 
-		// POST /repos/{owner}/{repo}/git-upload-pack
-		ownerRepoGroup.POST("/git-upload-pack", func(c *gin.Context) {
+		// POST /repos/{owner}/{repo}/git-upload-pack — 동시성 게이트(OperationClone) 적용
+		ownerRepoGroup.POST("/git-upload-pack", s.gitConcurrencyGate(connection.OperationClone), func(c *gin.Context) {
 			uploadPackHandler.HandleUploadPack(c.Writer, c.Request)
 		})
 
-		// Push operations (git push)
+		// Push operations (git push) — 동시성 게이트(OperationPush) 적용
 		// POST /repos/{owner}/{repo}/git-receive-pack
 		if receivePackHandler != nil {
-			ownerRepoGroup.POST("/git-receive-pack", gin.WrapF(receivePackHandler.HandleReceivePack))
+			ownerRepoGroup.POST("/git-receive-pack", s.gitConcurrencyGate(connection.OperationPush), gin.WrapF(receivePackHandler.HandleReceivePack))
 		}
 	}
 

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/connection"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/maintenance"
 	"github.com/collabops/git-executor/internal/server"
@@ -51,13 +52,21 @@ func main() {
 		os.Exit(0)
 	}
 
+	// 공유 동시성 컨트롤러 생성 — HTTP/TCP 서버가 같은 슬롯 풀을 사용
+	metrics := connection.NewMetricsCollector("git_executor")
+	concurrencyConfig := connection.DefaultConcurrencyConfig()
+	cc := connection.NewConcurrencyController(concurrencyConfig, metrics, logger.Logger)
+	logger.Info("Shared concurrency controller initialized",
+		zap.Int("max_concurrent_clones", concurrencyConfig.MaxConcurrentClones),
+		zap.Int("max_concurrent_pushes", concurrencyConfig.MaxConcurrentPushes))
+
 	// Git 서버 생성 - HTTP/SSH Git 프로토콜을 처리하는 서버 인스턴스 생성
-	srv, err := server.New(cfg)
+	srv, err := server.New(cfg, cc)
 	if err != nil {
 		logger.Error("Failed to create server", zap.Error(err))
 		os.Exit(1)
 	}
-	tcpSrv, err := server.NewDuplexTCPServer(cfg)
+	tcpSrv, err := server.NewDuplexTCPServer(cfg, cc)
 	if err != nil {
 		logger.Error("Failed to create TCP server", zap.Error(err))
 		os.Exit(1)
@@ -103,5 +112,8 @@ func main() {
 	if err := tcpSrv.Stop(); err != nil {
 		logger.Error("Failed to shutdown TCP server", zap.Error(err))
 	}
+
+	// 공유 동시성 컨트롤러를 마지막에 정리
+	cc.Stop()
 
 }
