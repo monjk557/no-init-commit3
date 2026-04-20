@@ -811,24 +811,6 @@ paths:
                 $ref: '#/components/schemas/BlobOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-  /repos/{owner}/{repo}/overview/branches:
-    get:
-      summary: HandleGetBranchesOverview
-      operationId: handlegetbranchesoverview
-      tags:
-        - Branches
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BranchesOverviewResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/latest-commits:
     post:
       summary: HandlePostLatestCommitsBatch
@@ -1154,6 +1136,29 @@ components:
       type: object
     BranchInfo:
       type: object
+      properties:
+        name:
+          type: string
+        commit_sha:
+          type: string
+        ref_path:
+          type: string
+        is_head:
+          type: boolean
+        last_commit:
+          $ref: '#/components/schemas/CommitInfo'
+        date:
+          type: string
+          format: date-time
+        committer_email:
+          type: string
+      required:
+        - commit_sha
+        - committer_email
+        - date
+        - is_head
+        - name
+        - ref_path
     BranchListItem:
       type: object
       properties:
@@ -1246,36 +1251,6 @@ components:
         - active
         - default
         - stale
-        - total_count
-        - yours
-    BranchesOverviewResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        default:
-          type: array
-          items:
-            $ref: '#/components/schemas/BranchListItem'
-        yours:
-          type: array
-          items:
-            $ref: '#/components/schemas/BranchListItem'
-        active:
-          type: array
-          items:
-            $ref: '#/components/schemas/BranchListItem'
-        stale:
-          type: array
-          items:
-            $ref: '#/components/schemas/BranchListItem'
-        total_count:
-          type: integer
-      required:
-        - active
-        - default
-        - stale
-        - success
         - total_count
         - yours
     BulkDeleteBranchResult:

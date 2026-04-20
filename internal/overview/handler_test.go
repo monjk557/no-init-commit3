@@ -660,11 +660,13 @@ func Test_Overview_EmptyRepo_ReturnsEmptyData(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 	require.Equal(t, 1, resp.Count.Commits)
-	require.Len(t, resp.Branches, 1)
+	// Overview no longer returns branches — clients call the dedicated branches API.
+	require.Empty(t, resp.Branches)
+	require.Equal(t, 0, resp.Count.Branches)
 	require.Empty(t, resp.Tree)
 }
 
-func Test_Overview_IncludesDefaultBranch(t *testing.T) {
+func Test_Overview_BranchesAlwaysEmpty(t *testing.T) {
 	t.Parallel()
 
 	handler, tempDir, cleanup := setupTestHandler(t)
@@ -686,41 +688,9 @@ func Test_Overview_IncludesDefaultBranch(t *testing.T) {
 	var resp RepositoryOverviewResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.NotEmpty(t, resp.Branches, "overview must include branches")
-	foundCurrent := false
-	for _, b := range resp.Branches {
-		if b.IsCurrent {
-			foundCurrent = true
-			break
-		}
-	}
-	require.True(t, foundCurrent, "default/current branch should be marked (IsCurrent)")
-}
-
-func Test_Overview_IncludesBranchCount(t *testing.T) {
-	t.Parallel()
-
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	owner := "testowner"
-	repo := "testrepo"
-	createTestRepositoryForHandler(t, tempDir, owner, repo)
-
-	router := gin.New()
-	overviewRoute(router, handler)
-
-	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp RepositoryOverviewResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.True(t, resp.Success)
-	require.Equal(t, len(resp.Branches), resp.Count.Branches)
-	require.GreaterOrEqual(t, resp.Count.Branches, 1)
+	// Contract: overview always returns empty branches; the dedicated branches API is the source of truth.
+	require.Empty(t, resp.Branches)
+	require.Equal(t, 0, resp.Count.Branches)
 }
 
 func Test_Overview_IncludesCommitCount(t *testing.T) {
@@ -848,16 +818,9 @@ func Test_Overview_DefaultBranchIsMasterOrMain_ResolvedByRepoMetadata_NotByStrin
 	var resp RepositoryOverviewResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.NotEmpty(t, resp.Branches)
-	var currentName string
-	for _, b := range resp.Branches {
-		if b.IsCurrent {
-			currentName = b.Name
-			break
-		}
-	}
-	require.NotEmpty(t, currentName, "current branch name comes from repo HEAD, not hardcoded main/master")
-	require.Contains(t, []string{"main", "master"}, currentName, "typical default is main or master")
+	// Overview no longer returns branches — the dedicated branches API is the source of truth.
+	require.Empty(t, resp.Branches, "overview must return empty branches; clients call the branches API separately")
+	require.Equal(t, 0, resp.Count.Branches)
 }
 
 func Test_BranchOps_DefaultBranchRename_MasterToMain_ConsistencyAcrossAPIs(t *testing.T) {
@@ -1670,9 +1633,9 @@ func Test_Overview_Parallel_ReturnsAllFields(t *testing.T) {
 	require.NotEmpty(t, resp.Owner)
 	require.NotEmpty(t, resp.Name)
 	require.NotEmpty(t, resp.Tree, "tree should have entries")
-	require.NotEmpty(t, resp.Branches, "branches should have entries")
+	require.Empty(t, resp.Branches, "overview must return empty branches")
 	require.GreaterOrEqual(t, resp.Count.Commits, 1, "commit count should be at least 1")
-	require.GreaterOrEqual(t, resp.Count.Branches, 1)
+	require.Equal(t, 0, resp.Count.Branches)
 	require.False(t, resp.Count.CommitsApproximate, "small repo should have exact count")
 }
 
@@ -1886,4 +1849,131 @@ func Test_OverviewEndpoints_TreesBeforeBlobs(t *testing.T) {
 		require.True(t, resp.Success)
 		assertTreesBeforeBlobs(t, resp.Tree)
 	})
+}
+
+// Test_TreeWithCommit_PerEntryLatestCommit_IsAccurate는 tree/commits 응답에서
+// 각 항목(blob/tree)의 latest_commit이 그 경로를 마지막으로 수정한 커밋과
+// 정확히 일치하는지 검증합니다.
+//
+// 시나리오: 동일 ref 위에서 파일별로 마지막 수정 커밋이 다를 때
+//   - C1: a.txt, b.txt, nested/c.txt 추가
+//   - C2: b.txt만 수정
+//   - C3: nested/c.txt만 수정 (가장 최신)
+//
+// 기대:
+//   - root tree/commits 호출 시 a.txt → C1, b.txt → C2, nested/ → C3
+func Test_TreeWithCommit_PerEntryLatestCommit_IsAccurate(t *testing.T) {
+	t.Parallel()
+
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "owner"
+	repo := "perentry"
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	workDir, err := os.MkdirTemp("", "perentry-work-*")
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(workDir) }()
+
+	workRepo, err := gogit.PlainInit(workDir, false)
+	require.NoError(t, err)
+	wt, err := workRepo.Worktree()
+	require.NoError(t, err)
+
+	base := fixedBaseTime()
+	author := func(when time.Time) *object.Signature {
+		return &object.Signature{Name: "Tester", Email: "t@example.com", When: when}
+	}
+
+	// C1: 세 파일 모두 추가
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a-v1\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b-v1\n"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "nested"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "nested", "c.txt"), []byte("c-v1\n"), 0644))
+	for _, p := range []string{"a.txt", "b.txt", "nested/c.txt"} {
+		_, err = wt.Add(p)
+		require.NoError(t, err)
+	}
+	c1, err := wt.Commit("C1: add a, b, nested/c", &gogit.CommitOptions{Author: author(base)})
+	require.NoError(t, err)
+
+	// C2: b.txt만 수정
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "b.txt"), []byte("b-v2\n"), 0644))
+	_, err = wt.Add("b.txt")
+	require.NoError(t, err)
+	c2, err := wt.Commit("C2: modify b", &gogit.CommitOptions{Author: author(base.Add(1 * time.Hour))})
+	require.NoError(t, err)
+
+	// C3: nested/c.txt만 수정
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "nested", "c.txt"), []byte("c-v2\n"), 0644))
+	_, err = wt.Add("nested/c.txt")
+	require.NoError(t, err)
+	c3, err := wt.Commit("C3: modify nested/c", &gogit.CommitOptions{Author: author(base.Add(2 * time.Hour))})
+	require.NoError(t, err)
+
+	// bare repo로 복사 (HEAD 커밋 + 모든 부모 + 트리/블롭)
+	gitRepo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	iter, err := workRepo.Log(&gogit.LogOptions{From: c3})
+	require.NoError(t, err)
+	require.NoError(t, iter.ForEach(func(c *object.Commit) error {
+		obj, err := workRepo.Storer.EncodedObject(plumbing.CommitObject, c.Hash)
+		if err != nil {
+			return err
+		}
+		if _, err := gitRepo.Storer.SetEncodedObject(obj); err != nil {
+			return err
+		}
+		return copyTreeRecursiveForHandlerTest(workRepo, gitRepo, c.TreeHash)
+	}))
+	require.NoError(t, gitRepo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), c3)))
+	require.NoError(t, gitRepo.Storer.SetReference(
+		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+
+	req := httptest.NewRequest("GET",
+		"/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp TreeWithCommitOverviewResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+
+	byPath := make(map[string]GitTreeEntryWithCommit, len(resp.Tree))
+	for _, e := range resp.Tree {
+		byPath[e.Path] = e
+	}
+
+	// blob (단일 파일 경로)별 검증
+	require.Contains(t, byPath, "a.txt")
+	require.NotNil(t, byPath["a.txt"].LatestCommit, "a.txt must have latest_commit")
+	require.Equal(t, c1.String(), byPath["a.txt"].LatestCommit.SHA,
+		"a.txt latest_commit must be C1 (only modified at add)")
+
+	require.Contains(t, byPath, "b.txt")
+	require.NotNil(t, byPath["b.txt"].LatestCommit, "b.txt must have latest_commit")
+	require.Equal(t, c2.String(), byPath["b.txt"].LatestCommit.SHA,
+		"b.txt latest_commit must be C2 (last touched it)")
+
+	// tree (디렉터리) 검증 — 하위 파일 변경 반영
+	require.Contains(t, byPath, "nested")
+	require.NotNil(t, byPath["nested"].LatestCommit, "nested/ must have latest_commit")
+	require.Equal(t, c3.String(), byPath["nested"].LatestCommit.SHA,
+		"nested/ latest_commit must be C3 (its child c.txt was last modified there)")
+
+	// 명시적으로 단일 blob path를 path 쿼리로 직접 조회하면 404 — 이는 의도된 계약
+	// (ls-tree는 tree object에서만 동작; blob path는 부모 디렉터리 listing에서 latest_commit 확인).
+	reqBlob := httptest.NewRequest("GET",
+		"/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main&path=a.txt", nil)
+	wBlob := httptest.NewRecorder()
+	router.ServeHTTP(wBlob, reqBlob)
+	require.Equal(t, http.StatusNotFound, wBlob.Code,
+		"path=<blob>은 직접 지원하지 않음 (parent tree listing의 latest_commit 사용)")
 }

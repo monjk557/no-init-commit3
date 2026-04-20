@@ -90,29 +90,7 @@ type GitTreeEntryWithCommit struct {
 	LatestCommit *GitCommit `json:"latest_commit,omitempty"` // 최신 커밋 정보
 }
 
-// 변환 함수들
-
-func convertBranchesToGitBranches(branches []BranchInfo) []GitBranch {
-	result := make([]GitBranch, len(branches))
-	for i := range branches {
-		result[i] = GitBranch{
-			Name:      branches[i].Name,
-			Hash:      branches[i].Hash,
-			IsRemote:  branches[i].IsRemote,
-			IsCurrent: branches[i].IsCurrent,
-		}
-	}
-	return result
-}
-
 // 내부 타입들
-
-type BranchInfo struct {
-	Name      string
-	Hash      string
-	IsRemote  bool
-	IsCurrent bool
-}
 
 type RemoteInfo struct {
 	Name      string
@@ -145,40 +123,6 @@ type BlobOverviewResponse struct {
 	Branches     []GitBranch              `json:"branches"`
 	LatestCommit *GitCommit               `json:"latest_commit"`
 	Commits      []GitCommit              `json:"commits"`
-}
-
-// BranchesOverviewResponse is the response type for branches overview API
-type BranchesOverviewResponse struct {
-	Success    bool             `json:"success"`
-	Default    []BranchListItem `json:"default"`
-	Yours      []BranchListItem `json:"yours"`
-	Active     []BranchListItem `json:"active"`
-	Stale      []BranchListItem `json:"stale"`
-	TotalCount int              `json:"total_count"`
-}
-
-// BranchListItem represents a single branch item in the branches overview
-type BranchListItem struct {
-	Name                string            `json:"name"`
-	Updated             string            `json:"updated"`
-	UpdatedBy           string            `json:"updated_by"`
-	CommitSHA           string            `json:"commit_sha"`
-	CommitMessage       string            `json:"commit_message"`
-	IsDefault           bool              `json:"is_default"`
-	Behind              int               `json:"behind"`
-	Ahead               int               `json:"ahead"`
-	ChangeRequest       ChangeRequestInfo `json:"change_request"`
-	CreatedBy           string            `json:"created_by"`
-	DaysSinceLastCommit int               `json:"days_since_last_commit"`
-	SortTime            time.Time         `json:"-"` // Internal field for sorting, excluded from JSON
-}
-
-// ChangeRequestInfo represents change request information for a branch
-type ChangeRequestInfo struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-	State string `json:"state"`
-	URL   string `json:"url"`
 }
 
 // TreeWithCommitOverviewResponse is the response type for tree with commit overview API

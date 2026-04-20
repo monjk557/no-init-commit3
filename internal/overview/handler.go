@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/blob"
-	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
@@ -75,13 +74,12 @@ func NewRepositoryOverviewHandler(cfg *config.Config) (*RepositoryOverviewHandle
 
 // repositoryContext는 저장소 관련 공통 컨텍스트를 담는 구조체입니다.
 type repositoryContext struct {
-	owner        string
-	repo         string
-	ref          string
-	path         string
-	repoPath     string
-	repoWrapper  *repositories.RepositoryWrapper
-	branchesList []BranchInfo
+	owner       string
+	repo        string
+	ref         string
+	path        string
+	repoPath    string
+	repoWrapper *repositories.RepositoryWrapper
 }
 
 // validateAndOpenRepository는 저장소 검증 및 열기를 수행하는 공통 로직입니다.
@@ -118,20 +116,7 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		return nil, false
 	}
 
-	// 브랜치 가져오기 (native git 사용)
-	branchesList, err := branches.GetBranches(ctx, repoPath)
-	if err != nil {
-		h.logger.Error("overview: GetBranches failed",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.String("repoPath", repoPath),
-			zap.Error(err),
-		)
-		repoLock.RUnlock()
-		_ = repoWrapper.Close()
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return nil, false
-	}
+	// 브랜치는 별도 API에서 제공하므로 overview에서는 조회하지 않습니다.
 
 	// ref가 제공된 경우 검증 (ref를 해석 가능한지 확인)
 	if ref != "" && ref != "HEAD" {
@@ -144,25 +129,12 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		}
 	}
 
-	// branches.SimpleBranchInfo를 overview.BranchInfo로 변환
-	// 슬라이스 용량을 미리 할당하여 재할당 방지
-	overviewBranches := make([]BranchInfo, 0, len(branchesList))
-	for _, b := range branchesList {
-		overviewBranches = append(overviewBranches, BranchInfo{
-			Name:      b.Name,
-			Hash:      b.Hash,
-			IsRemote:  b.IsRemote,
-			IsCurrent: b.IsCurrent,
-		})
-	}
-
 	return &repositoryContext{
-		owner:        owner,
-		repo:         repo,
-		ref:          ref,
-		repoPath:     repoPath,
-		repoWrapper:  repoWrapper,
-		branchesList: overviewBranches,
+		owner:       owner,
+		repo:        repo,
+		ref:         ref,
+		repoPath:    repoPath,
+		repoWrapper: repoWrapper,
 	}, true
 }
 
@@ -195,19 +167,7 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 		return nil, false
 	}
 
-	// 브랜치 목록: native git for-each-ref (go-git GetBranches 대체)
-	branchesList, err := NativeGetBranches(ctx, repoPath)
-	if err != nil {
-		h.logger.Error("overview: NativeGetBranches failed",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.String("repoPath", repoPath),
-			zap.Error(err),
-		)
-		repoLock.RUnlock()
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return nil, false
-	}
+	// 브랜치는 별도 API에서 제공하므로 overview에서는 조회하지 않습니다.
 
 	// ref 검증: native git rev-parse (go-git ResolveReference 대체)
 	if ref != "" && ref != "HEAD" {
@@ -219,11 +179,10 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 	}
 
 	return &repositoryContext{
-		owner:        owner,
-		repo:         repo,
-		ref:          ref,
-		repoPath:     repoPath,
-		branchesList: branchesList,
+		owner:    owner,
+		repo:     repo,
+		ref:      ref,
+		repoPath: repoPath,
 	}, true
 }
 
@@ -367,11 +326,8 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 }
 
 // isObjectNotFoundForPack returns true if the result suggests object-not-found due to pack not yet visible (e.g. after push).
-func isObjectNotFoundForPack(res overviewResult, branchesList []BranchInfo) bool {
+func isObjectNotFoundForPack(res overviewResult) bool {
 	if res.treeErr != nil && strings.Contains(strings.ToLower(res.treeErr.Error()), "object not found") {
-		return true
-	}
-	if !res.latestCommitFound && len(branchesList) > 0 {
 		return true
 	}
 	return false
@@ -390,7 +346,6 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 	path := c.Query("path")
 
 	var repoCtx *repositoryContext
-	var branchesList []BranchInfo
 	var res overviewResult
 	repoPath := ""
 
@@ -406,7 +361,6 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			return
 		}
 		repoPath = repoCtx.repoPath
-		branchesList = repoCtx.branchesList
 
 		// native git으로 refHash resolve
 		refHash := ""
@@ -417,7 +371,7 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		// Native git 태스크 실행 (go-git repo open 불필요)
 		res = h.runOverviewTasks(ctx, repoPath, repoCtx.ref, path, refHash)
 
-		if !isObjectNotFoundForPack(res, branchesList) {
+		if !isObjectNotFoundForPack(res) {
 			break
 		}
 
@@ -443,14 +397,14 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			Path:          repoPath,
 			Tree:          []GitTreeEntryWithCommit{},
 			LatestCommits: GitCommit{},
-			Branches:      convertBranchesToGitBranches(branchesList),
+			Branches:      []GitBranch{},
 			Tags:          []GitTag{},
 			Count: RepositoryCount{
 				Commits:  0,
-				Branches: len(branchesList),
+				Branches: 0,
 				Tags:     0,
 				Remotes:  0,
-				Total:    len(branchesList),
+				Total:    0,
 			},
 			Readme: "",
 			LanguageDistribution: LanguageDistribution{
@@ -499,14 +453,14 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		Path:          repoPath,
 		Tree:          res.treeEntriesWithCommit,
 		LatestCommits: latestCommit,
-		Branches:      convertBranchesToGitBranches(branchesList),
+		Branches:      []GitBranch{},
 		Tags:          res.nativeTagsList,
 		Count: RepositoryCount{
 			Commits:            res.commitsCount,
-			Branches:           len(branchesList),
+			Branches:           0,
 			Tags:               len(res.nativeTagsList),
 			Remotes:            len(res.remotesList),
-			Total:              res.commitsCount + len(branchesList) + len(res.nativeTagsList) + len(res.remotesList),
+			Total:              res.commitsCount + len(res.nativeTagsList) + len(res.remotesList),
 			CommitsApproximate: res.commitsApproximate,
 		},
 		Readme: res.readmeContent,
@@ -575,7 +529,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		Name:         repo,
 		Path:         path,
 		Tree:         treeEntries,
-		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
+		Branches:     []GitBranch{},
 		LatestCommit: latestCommit,
 		Commits:      commitsList,
 	}
@@ -663,170 +617,10 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		Lines:        lines,
 		Size:         int64(len(blobContent)),
 		Tree:         treeEntries,
-		Branches:     convertBranchesToGitBranches(repoCtx.branchesList),
+		Branches:     []GitBranch{},
 		LatestCommit: latestCommit,
 		Commits:      commitsList,
 	}
-
-	c.JSON(http.StatusOK, response)
-}
-
-// HandleGetBranchesOverview는 브랜치 개요를 위한 GET /api/v1/repository/{owner}/{repo}/overview/branches 요청을 처리합니다.
-// native git for-each-ref + rev-list를 사용합니다 (go-git 대체).
-func (h *RepositoryOverviewHandler) HandleGetBranchesOverview(c *gin.Context) {
-	ctx := c.Request.Context()
-	owner := c.Param("owner")
-	repo := c.Param("repo")
-	userEmail := c.Query("email")
-
-	// email 파라미터 필수 검증 (v1과 일관성 유지)
-	if userEmail == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Missing required parameter: email",
-		})
-		return
-	}
-
-	// 경로 구성 요소 검증
-	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
-	}
-
-	// 저장소 경로 가져오기
-	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
-	}
-
-	// native git for-each-ref로 브랜치 목록 + 메타데이터 조회
-	branchInfos, defaultBranch, err := NativeGetBranchesForOverview(ctx, repoPath)
-	if err != nil {
-		h.logger.Error("failed to get branches", zap.Error(err))
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
-	}
-
-	var defaultBranches []BranchListItem
-	var yoursBranches []BranchListItem
-	var activeBranches []BranchListItem
-	var staleBranches []BranchListItem
-	allBranchesCount := len(branchInfos)
-
-	for _, bi := range branchInfos {
-		author := bi.AuthorName
-		if author == "" {
-			author = bi.AuthorEmail
-		}
-
-		daysSinceLastCommit := int(time.Since(bi.CommitterDate).Hours() / 24)
-
-		isStale := daysSinceLastCommit >= 90
-		isYours := false
-		if userEmail != "" {
-			isYours = strings.EqualFold(bi.AuthorEmail, userEmail) ||
-				strings.EqualFold(bi.AuthorName, userEmail)
-		}
-
-		branchItem := BranchListItem{
-			Name:                bi.Name,
-			Updated:             bi.CommitterDate.Format("Jan 2, 2006"),
-			UpdatedBy:           author,
-			CommitSHA:           bi.CommitSHA,
-			CommitMessage:       bi.CommitMessage,
-			IsDefault:           bi.Name == defaultBranch,
-			Behind:              0,
-			Ahead:               0,
-			CreatedBy:           bi.AuthorEmail,
-			DaysSinceLastCommit: daysSinceLastCommit,
-			SortTime:            bi.CommitterDate,
-		}
-
-		// ahead/behind 계산 (native git rev-list --count --left-right)
-		if defaultBranch != "" && bi.Name != defaultBranch {
-			ahead, behind, abErr := NativeCalculateAheadBehind(ctx, repoPath, bi.Name, defaultBranch)
-			if abErr == nil {
-				branchItem.Ahead = ahead
-				branchItem.Behind = behind
-			}
-		}
-
-		// 그룹 분류
-		if branchItem.IsDefault {
-			defaultBranches = append(defaultBranches, branchItem)
-		} else {
-			if isYours {
-				yoursBranches = append(yoursBranches, branchItem)
-			}
-			if isStale {
-				staleBranches = append(staleBranches, branchItem)
-			} else {
-				activeBranches = append(activeBranches, branchItem)
-			}
-		}
-	}
-
-	// 최신 생성/업데이트 순(내림차순)으로 정렬하고 Yours/Active/Stale는 각 5개로 제한
-	sort.Slice(yoursBranches, func(i, j int) bool {
-		if yoursBranches[i].SortTime.Equal(yoursBranches[j].SortTime) {
-			return yoursBranches[i].Name > yoursBranches[j].Name
-		}
-		return yoursBranches[i].SortTime.After(yoursBranches[j].SortTime)
-	})
-	if len(yoursBranches) > 5 {
-		yoursBranches = yoursBranches[:5]
-	}
-
-	sort.Slice(activeBranches, func(i, j int) bool {
-		if activeBranches[i].SortTime.Equal(activeBranches[j].SortTime) {
-			return activeBranches[i].Name > activeBranches[j].Name
-		}
-		return activeBranches[i].SortTime.After(activeBranches[j].SortTime)
-	})
-	if len(activeBranches) > 5 {
-		activeBranches = activeBranches[:5]
-	}
-
-	sort.Slice(staleBranches, func(i, j int) bool {
-		if staleBranches[i].SortTime.Equal(staleBranches[j].SortTime) {
-			return staleBranches[i].Name > staleBranches[j].Name
-		}
-		return staleBranches[i].SortTime.After(staleBranches[j].SortTime)
-	})
-	if len(staleBranches) > 5 {
-		staleBranches = staleBranches[:5]
-	}
-
-	// nil 슬라이스를 빈 배열로 변환 (JSON에서 null 대신 [] 반환)
-	if defaultBranches == nil {
-		defaultBranches = []BranchListItem{}
-	}
-	if yoursBranches == nil {
-		yoursBranches = []BranchListItem{}
-	}
-	if activeBranches == nil {
-		activeBranches = []BranchListItem{}
-	}
-	if staleBranches == nil {
-		staleBranches = []BranchListItem{}
-	}
-
-	// 응답 생성
-	response := BranchesOverviewResponse{
-		Success:    true,
-		Default:    defaultBranches,
-		Yours:      yoursBranches,
-		Active:     activeBranches,
-		Stale:      staleBranches,
-		TotalCount: allBranchesCount,
-	}
-
-	h.logger.Info("Successfully retrieved branches overview",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("total_branches", allBranchesCount))
 
 	c.JSON(http.StatusOK, response)
 }

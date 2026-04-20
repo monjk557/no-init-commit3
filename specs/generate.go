@@ -607,8 +607,6 @@ func responseSchemaRef(method, specPath string) string {
 		return "RepositoryOverviewResponse"
 	case "/repos/{owner}/{repo}/overview/blob":
 		return "BlobOverviewResponse"
-	case "/repos/{owner}/{repo}/overview/branches":
-		return "BranchesOverviewResponse"
 	case "/repos/{owner}/{repo}/overview/latest-commits":
 		return "LatestCommitsBatchResponse"
 	case "/repos/{owner}/{repo}/overview/tree":
