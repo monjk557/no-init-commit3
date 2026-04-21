@@ -2887,8 +2887,6 @@ components:
           type: integer
         tags:
           type: integer
-        remotes:
-          type: integer
         total:
           type: integer
         commits_approximate:
@@ -2896,7 +2894,6 @@ components:
       required:
         - branches
         - commits
-        - remotes
         - tags
         - total
     RepositoryInfo:
@@ -2956,8 +2953,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GitTreeEntryWithCommit'
-        latest_commits:
-          $ref: '#/components/schemas/GitCommit'
         branches:
           type: array
           items:
@@ -2970,14 +2965,10 @@ components:
           $ref: '#/components/schemas/RepositoryCount'
         readme:
           type: string
-        language_distribution:
-          $ref: '#/components/schemas/LanguageDistribution'
       required:
         - branches
         - count
         - is_empty
-        - language_distribution
-        - latest_commits
         - message
         - name
         - owner

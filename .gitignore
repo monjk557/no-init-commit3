@@ -152,3 +152,8 @@ dev-debug.log
 # tasks.json
 git-executor
 .taskmaster
+
+# Claude Code — local/ephemeral only (keep team-shared configs trackable)
+.claude/worktrees/
+.claude/settings.local.json
+.claude/*.local.*

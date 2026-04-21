@@ -196,15 +196,11 @@ const overviewCommitCountCap = 100_000
 
 // overviewResult holds the result of running overview parallel tasks (for retry).
 type overviewResult struct {
-	// native git path: *GitCommit을 직접 사용
-	nativeLatestCommit    *GitCommit
-	latestCommitFound     bool
 	commitsCount          int
 	commitsApproximate    bool
 	treeEntriesWithCommit []GitTreeEntryWithCommit
 	treeErr               error
 	nativeTagsList        []GitTag
-	remotesList           []RemoteInfo
 	readmeContent         string
 }
 
@@ -225,20 +221,7 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		wg  sync.WaitGroup
 	)
 
-	// goroutine 1: latest commit (native git log -1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		commit, err := NativeGetLatestCommit(ctx, repoPath, ref)
-		mu.Lock()
-		if err == nil && commit != nil {
-			res.nativeLatestCommit = commit
-			res.latestCommitFound = true
-		}
-		mu.Unlock()
-	}()
-
-	// goroutine 2: commit count (native git rev-list --count) + cache
+	// commit count (native git rev-list --count) + cache
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -265,7 +248,7 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		mu.Unlock()
 	}()
 
-	// goroutine 3: tree entries (native git ls-tree — already exists)
+	// tree entries (native git ls-tree)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -276,7 +259,7 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		mu.Unlock()
 	}()
 
-	// goroutine 4: tags (native git tag -l)
+	// tags (native git tag -l)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -290,21 +273,7 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		mu.Unlock()
 	}()
 
-	// goroutine 5: remotes (native git remote -v)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		rl, err := NativeGetRemotes(ctx, repoPath)
-		mu.Lock()
-		if err != nil {
-			res.remotesList = []RemoteInfo{}
-		} else {
-			res.remotesList = rl
-		}
-		mu.Unlock()
-	}()
-
-	// goroutine 6: README blob (native git show)
+	// README blob (native git show)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -347,6 +316,7 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 
 	var repoCtx *repositoryContext
 	var res overviewResult
+	refHash := ""
 	repoPath := ""
 
 	for attempt := 0; attempt < 2; attempt++ {
@@ -362,13 +332,12 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		}
 		repoPath = repoCtx.repoPath
 
-		// native git으로 refHash resolve
-		refHash := ""
+		// native git으로 refHash resolve — 빈 저장소에서는 실패하며 refHash는 ""로 남음.
+		refHash = ""
 		if resolved, resolveErr := nativeResolveRef(ctx, repoPath, repoCtx.ref); resolveErr == nil {
 			refHash = resolved
 		}
 
-		// Native git 태스크 실행 (go-git repo open 불필요)
 		res = h.runOverviewTasks(ctx, repoPath, repoCtx.ref, path, refHash)
 
 		if !isObjectNotFoundForPack(res) {
@@ -385,35 +354,22 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	}
 
-	// 빈 저장소 처리 (latestCommit을 못 찾은 경우)
-	if !res.latestCommitFound {
-		response := RepositoryOverviewResponse{
-			Success:       true,
-			Message:       "Repository overview fetched successfully",
-			IsEmpty:       true,
-			Repository:    fmt.Sprintf("%s/%s", owner, repo),
-			Owner:         owner,
-			Name:          repo,
-			Path:          repoPath,
-			Tree:          []GitTreeEntryWithCommit{},
-			LatestCommits: GitCommit{},
-			Branches:      []GitBranch{},
-			Tags:          []GitTag{},
-			Count: RepositoryCount{
-				Commits:  0,
-				Branches: 0,
-				Tags:     0,
-				Remotes:  0,
-				Total:    0,
-			},
-			Readme: "",
-			LanguageDistribution: LanguageDistribution{
-				Languages:  []LanguageStats{},
-				TotalBytes: 0,
-				TotalFiles: 0,
-			},
-		}
-		c.JSON(http.StatusOK, response)
+	// Empty repo: HEAD/ref didn't resolve, so there are no objects to inspect.
+	if refHash == "" {
+		c.JSON(http.StatusOK, RepositoryOverviewResponse{
+			Success:    true,
+			Message:    "Repository overview fetched successfully",
+			IsEmpty:    true,
+			Repository: fmt.Sprintf("%s/%s", owner, repo),
+			Owner:      owner,
+			Name:       repo,
+			Path:       repoPath,
+			Tree:       []GitTreeEntryWithCommit{},
+			Branches:   []GitBranch{},
+			Tags:       []GitTag{},
+			Count:      RepositoryCount{},
+			Readme:     "",
+		})
 		return
 	}
 
@@ -437,41 +393,25 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		return
 	}
 
-	// Native GitCommit → 응답 GitCommit 변환
-	latestCommit := GitCommit{}
-	if res.nativeLatestCommit != nil {
-		latestCommit = *res.nativeLatestCommit
-	}
-
-	// 응답 구성
-	response := RepositoryOverviewResponse{
-		Success:       true,
-		Message:       "Repository overview fetched successfully",
-		Repository:    fmt.Sprintf("%s/%s", owner, repo),
-		Owner:         owner,
-		Name:          repo,
-		Path:          repoPath,
-		Tree:          res.treeEntriesWithCommit,
-		LatestCommits: latestCommit,
-		Branches:      []GitBranch{},
-		Tags:          res.nativeTagsList,
+	c.JSON(http.StatusOK, RepositoryOverviewResponse{
+		Success:    true,
+		Message:    "Repository overview fetched successfully",
+		Repository: fmt.Sprintf("%s/%s", owner, repo),
+		Owner:      owner,
+		Name:       repo,
+		Path:       repoPath,
+		Tree:       res.treeEntriesWithCommit,
+		Branches:   []GitBranch{},
+		Tags:       res.nativeTagsList,
 		Count: RepositoryCount{
 			Commits:            res.commitsCount,
 			Branches:           0,
 			Tags:               len(res.nativeTagsList),
-			Remotes:            len(res.remotesList),
-			Total:              res.commitsCount + len(res.nativeTagsList) + len(res.remotesList),
+			Total:              res.commitsCount + len(res.nativeTagsList),
 			CommitsApproximate: res.commitsApproximate,
 		},
 		Readme: res.readmeContent,
-		LanguageDistribution: LanguageDistribution{
-			Languages:  []LanguageStats{},
-			TotalBytes: 0,
-			TotalFiles: 0,
-		},
-	}
-
-	c.JSON(http.StatusOK, response)
+	})
 }
 
 // HandleGetTreeOverview는 트리 개요를 위한 GET /api/v1/repository/{owner}/{repo}/tree 요청을 처리합니다.

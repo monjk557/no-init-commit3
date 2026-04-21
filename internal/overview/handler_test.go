@@ -219,97 +219,6 @@ func copyTreeRecursiveForHandlerTest(workRepo, gitRepo *gogit.Repository, treeHa
 	return nil
 }
 
-func TestHandleGetRepositoryOverview_LanguageDistribution(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	owner := "testowner"
-	repo := "testrepo"
-	createTestRepositoryForHandler(t, tempDir, owner, repo)
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
-
-	// 당분간 overview에서는 언어 분포를 제공하지 않음
-	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
-	w := httptest.NewRecorder()
-
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response RepositoryOverviewResponse
-	err := json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response.Success)
-	assert.Equal(t, 0, response.LanguageDistribution.TotalFiles, "TotalFiles should be 0 while language distribution is disabled")
-	assert.Equal(t, int64(0), response.LanguageDistribution.TotalBytes, "TotalBytes should be 0 while language distribution is disabled")
-	assert.Empty(t, response.LanguageDistribution.Languages, "Languages should be empty while language distribution is disabled")
-}
-
-func TestHandleGetRepositoryOverview_LanguageDistribution_EmptyRepository(t *testing.T) {
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	owner := "testowner"
-	repo := "emptyrepo"
-	repoPath := filepath.Join(tempDir, owner, repo+".git")
-	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
-
-	gitRepo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
-
-	emptyTree := &object.Tree{}
-	treeObj := gitRepo.Storer.NewEncodedObject()
-	err = emptyTree.Encode(treeObj)
-	require.NoError(t, err)
-
-	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
-	require.NoError(t, err)
-
-	when := fixedBaseTime()
-	commit := &object.Commit{
-		Message:   "Initial empty commit",
-		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
-		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: when},
-		TreeHash:  treeHash,
-	}
-
-	commitObj := gitRepo.Storer.NewEncodedObject()
-	err = commit.Encode(commitObj)
-	require.NoError(t, err)
-
-	commitHash, err := gitRepo.Storer.SetEncodedObject(commitObj)
-	require.NoError(t, err)
-
-	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)
-	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
-
-	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
-	require.NoError(t, gitRepo.Storer.SetReference(headRef))
-
-	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
-
-	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
-	w := httptest.NewRecorder()
-
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response RepositoryOverviewResponse
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.True(t, response.Success)
-	assert.NotNil(t, response.LanguageDistribution, "LanguageDistribution should always be included")
-	assert.Equal(t, 0, response.LanguageDistribution.TotalFiles, "TotalFiles should be 0 for empty repository")
-	assert.Equal(t, int64(0), response.LanguageDistribution.TotalBytes, "TotalBytes should be 0 for empty repository")
-	assert.Empty(t, response.LanguageDistribution.Languages, "Languages should be empty for empty repository")
-}
-
 // createTestRepositoryWithMultiplePathCommits는 여러 경로에 서로 다른 시점에 커밋이 있는 저장소를 생성합니다.
 // 커밋 순서: root -> src -> docs -> src (src가 가장 최신)
 func createTestRepositoryWithMultiplePathCommits(t *testing.T, tempDir, owner, repo string) map[string]plumbing.Hash {
@@ -718,32 +627,6 @@ func Test_Overview_IncludesCommitCount(t *testing.T) {
 	require.GreaterOrEqual(t, resp.Count.Commits, 1)
 }
 
-func Test_Overview_IncludesLanguageDistribution(t *testing.T) {
-	t.Parallel()
-
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	owner := "testowner"
-	repo := "testrepo"
-	createTestRepositoryForHandler(t, tempDir, owner, repo)
-
-	router := gin.New()
-	overviewRoute(router, handler)
-
-	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp RepositoryOverviewResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.True(t, resp.Success)
-	require.NotNil(t, resp.LanguageDistribution)
-	require.NotNil(t, resp.LanguageDistribution.Languages)
-}
-
 // =============================================================================
 // 5.1A Default Branch (test_cases.md)
 // =============================================================================
@@ -830,67 +713,6 @@ func Test_BranchOps_DefaultBranchRename_MasterToMain_ConsistencyAcrossAPIs(t *te
 // =============================================================================
 // 5.2 Language Distribution (test_cases.md) — handler returns structure; service has real logic
 // =============================================================================
-
-func Test_LanguageDistribution_SingleLanguage_Returns100Percent(t *testing.T) {
-	t.Parallel()
-
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	owner := "testowner"
-	repo := "testrepo"
-	createTestRepositoryForHandler(t, tempDir, owner, repo)
-
-	router := gin.New()
-	overviewRoute(router, handler)
-
-	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp RepositoryOverviewResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.True(t, resp.Success)
-	require.NotNil(t, resp.LanguageDistribution)
-	// 당분간 overview 응답에서는 언어 분포를 비우고 반환함. 단일 언어 100%는 service_test.go에서 검증.
-	if len(resp.LanguageDistribution.Languages) > 0 {
-		require.Len(t, resp.LanguageDistribution.Languages, 1)
-		require.Equal(t, 100.0, resp.LanguageDistribution.Languages[0].Percentage)
-	}
-}
-
-func Test_LanguageDistribution_MultipleLanguages_ReturnsSorted(t *testing.T) {
-	t.Parallel()
-
-	handler, tempDir, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	owner := "testowner"
-	repo := "testrepo"
-	createTestRepositoryForHandler(t, tempDir, owner, repo)
-
-	router := gin.New()
-	overviewRoute(router, handler)
-
-	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp RepositoryOverviewResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.True(t, resp.Success)
-	require.NotNil(t, resp.LanguageDistribution)
-	if len(resp.LanguageDistribution.Languages) >= 2 {
-		for i := 1; i < len(resp.LanguageDistribution.Languages); i++ {
-			require.GreaterOrEqual(t, resp.LanguageDistribution.Languages[i-1].Percentage,
-				resp.LanguageDistribution.Languages[i].Percentage, "languages should be sorted by percentage desc")
-		}
-	}
-}
 
 func Test_LanguageDistribution_OthersCategory_GroupsSmallLanguages(t *testing.T) {
 	t.Parallel()

@@ -4,30 +4,30 @@ import (
 	"time"
 )
 
-// OverviewResponse is the response type for repository overview API
+// OverviewResponse is the response type for repository overview API.
+// latest_commits and language_distribution were dropped — the orchestrator
+// sources those from DRF. remotes was dropped — not meaningful for
+// server-hosted bare repos.
 type RepositoryOverviewResponse struct {
-	Success              bool                     `json:"success"`
-	Message              string                   `json:"message"`
-	IsEmpty              bool                     `json:"is_empty"`
-	Repository           string                   `json:"repository"`
-	Owner                string                   `json:"owner"`
-	Name                 string                   `json:"name"`
-	Path                 string                   `json:"path"`
-	Tree                 []GitTreeEntryWithCommit `json:"tree"`
-	LatestCommits        GitCommit                `json:"latest_commits"`
-	Branches             []GitBranch              `json:"branches"`
-	Tags                 []GitTag                 `json:"tags"`
-	Count                RepositoryCount          `json:"count"`
-	Readme               string                   `json:"readme"`
-	LanguageDistribution LanguageDistribution     `json:"language_distribution"`
+	Success    bool                     `json:"success"`
+	Message    string                   `json:"message"`
+	IsEmpty    bool                     `json:"is_empty"`
+	Repository string                   `json:"repository"`
+	Owner      string                   `json:"owner"`
+	Name       string                   `json:"name"`
+	Path       string                   `json:"path"`
+	Tree       []GitTreeEntryWithCommit `json:"tree"`
+	Branches   []GitBranch              `json:"branches"`
+	Tags       []GitTag                 `json:"tags"`
+	Count      RepositoryCount          `json:"count"`
+	Readme     string                   `json:"readme"`
 }
 
-// RepositoryCount provides counts of different repository types
+// RepositoryCount provides counts of different repository types.
 type RepositoryCount struct {
 	Commits            int  `json:"commits"`
 	Branches           int  `json:"branches"`
 	Tags               int  `json:"tags"`
-	Remotes            int  `json:"remotes"`
 	Total              int  `json:"total"`
 	CommitsApproximate bool `json:"commits_approximate,omitempty"` // true when commit count was capped
 }
