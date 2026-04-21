@@ -569,13 +569,14 @@ func Test_Overview_EmptyRepo_ReturnsEmptyData(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 	require.Equal(t, 1, resp.Count.Commits)
-	// Overview no longer returns branches — clients call the dedicated branches API.
+	// Overview returns an empty branches *list* — clients call the dedicated
+	// branches API for the full data — but the branch *count* is populated.
 	require.Empty(t, resp.Branches)
-	require.Equal(t, 0, resp.Count.Branches)
+	require.GreaterOrEqual(t, resp.Count.Branches, 1)
 	require.Empty(t, resp.Tree)
 }
 
-func Test_Overview_BranchesAlwaysEmpty(t *testing.T) {
+func Test_Overview_BranchesListAlwaysEmpty(t *testing.T) {
 	t.Parallel()
 
 	handler, tempDir, cleanup := setupTestHandler(t)
@@ -597,9 +598,10 @@ func Test_Overview_BranchesAlwaysEmpty(t *testing.T) {
 	var resp RepositoryOverviewResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	// Contract: overview always returns empty branches; the dedicated branches API is the source of truth.
+	// Contract: overview returns an empty branches[] array (dedicated branches
+	// API is the source of truth) but a non-zero branch count.
 	require.Empty(t, resp.Branches)
-	require.Equal(t, 0, resp.Count.Branches)
+	require.GreaterOrEqual(t, resp.Count.Branches, 1)
 }
 
 func Test_Overview_IncludesCommitCount(t *testing.T) {
@@ -701,9 +703,10 @@ func Test_Overview_DefaultBranchIsMasterOrMain_ResolvedByRepoMetadata_NotByStrin
 	var resp RepositoryOverviewResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	// Overview no longer returns branches — the dedicated branches API is the source of truth.
+	// Overview returns an empty branches[] array — the dedicated branches API
+	// is the source of truth — but the branch count is populated.
 	require.Empty(t, resp.Branches, "overview must return empty branches; clients call the branches API separately")
-	require.Equal(t, 0, resp.Count.Branches)
+	require.GreaterOrEqual(t, resp.Count.Branches, 1)
 }
 
 func Test_BranchOps_DefaultBranchRename_MasterToMain_ConsistencyAcrossAPIs(t *testing.T) {
@@ -1455,9 +1458,9 @@ func Test_Overview_Parallel_ReturnsAllFields(t *testing.T) {
 	require.NotEmpty(t, resp.Owner)
 	require.NotEmpty(t, resp.Name)
 	require.NotEmpty(t, resp.Tree, "tree should have entries")
-	require.Empty(t, resp.Branches, "overview must return empty branches")
+	require.Empty(t, resp.Branches, "overview returns empty branches list (count only)")
 	require.GreaterOrEqual(t, resp.Count.Commits, 1, "commit count should be at least 1")
-	require.Equal(t, 0, resp.Count.Branches)
+	require.GreaterOrEqual(t, resp.Count.Branches, 1, "branch count should reflect the repo's branches")
 	require.False(t, resp.Count.CommitsApproximate, "small repo should have exact count")
 }
 

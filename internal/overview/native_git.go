@@ -463,6 +463,22 @@ func NativeGetRemotes(ctx context.Context, repoPath string) ([]RemoteInfo, error
 	return result, nil
 }
 
+// NativeCountBranches returns the number of local branches (refs/heads/*).
+// Uses `git for-each-ref --format=1` so output is one byte per ref and the
+// count is a byte scan with no ref-name parsing.
+func NativeCountBranches(ctx context.Context, repoPath string) (int, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
+		"for-each-ref", "--format=1", "refs/heads/")
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		return 0, fmt.Errorf("git for-each-ref refs/heads/: %w", err)
+	}
+	return bytes.Count(out, []byte{'\n'}), nil
+}
+
 // NativeGetBlobContent는 native git으로 특정 ref:path의 blob 내용을 조회합니다.
 // README 파일 등 단일 blob을 빠르게 읽을 때 사용합니다.
 func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]byte, error) {

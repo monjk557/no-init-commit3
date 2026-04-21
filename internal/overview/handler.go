@@ -201,6 +201,7 @@ type overviewResult struct {
 	treeEntriesWithCommit []GitTreeEntryWithCommit
 	treeErr               error
 	nativeTagsList        []GitTag
+	branchesCount         int
 	readmeContent         string
 }
 
@@ -271,6 +272,20 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 			res.nativeTagsList = tl
 		}
 		mu.Unlock()
+	}()
+
+	// branch count (native git for-each-ref refs/heads/)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		n, err := NativeCountBranches(ctx, repoPath)
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			h.logger.Debug("branch count unavailable, defaulting to 0", zap.Error(err))
+			return
+		}
+		res.branchesCount = n
 	}()
 
 	// README blob (native git show)
@@ -405,9 +420,9 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		Tags:       res.nativeTagsList,
 		Count: RepositoryCount{
 			Commits:            res.commitsCount,
-			Branches:           0,
+			Branches:           res.branchesCount,
 			Tags:               len(res.nativeTagsList),
-			Total:              res.commitsCount + len(res.nativeTagsList),
+			Total:              res.commitsCount + res.branchesCount + len(res.nativeTagsList),
 			CommitsApproximate: res.commitsApproximate,
 		},
 		Readme: res.readmeContent,
