@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # 빌드 단계: 바이너리 빌드
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o git-executor ./cmd/git-executor
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o git-executor ./cmd/git-executor
 
 # Specs 서버 이미지 (nginx 기반) - 명시적으로 타겟 지정 필요
 FROM nginx:1.28.2-alpine AS specs
@@ -38,7 +38,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 CMD ["nginx", "-g", "daemon off;"]
 
 # 애플리케이션 런타임 이미지 (기본 타겟 - 기존 CI/CD와 호환)
-FROM alpine:3.19.9
+FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata curl git
 
