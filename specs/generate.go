@@ -749,6 +749,12 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, sch
 		for _, l := range propLines {
 			buf.WriteString("          " + l + "\n")
 		}
+		// Pointer-to-primitive 는 JSON null 을 반환할 수 있으므로 nullable 로 표시.
+		// $ref 와 함께는 nullable 을 쓸 수 없어서 primitive/array 인 경우로 한정한다
+		// (OpenAPI 3.0 에서 $ref + nullable 은 allOf 래핑이 필요함).
+		if strings.HasPrefix(field.Type, "*") && !isRefProperty(propLines) {
+			buf.WriteString("          nullable: true\n")
+		}
 		if field.Required {
 			required = append(required, fieldName)
 		}
@@ -763,6 +769,20 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, sch
 	}
 
 	return buf.String()
+}
+
+// isRefProperty 는 렌더된 property 라인들이 $ref 로 시작하는지 판정한다.
+// OpenAPI 3.0 에서 $ref 와 동일 레벨에 nullable 을 두는 것이 유효하지 않기 때문에
+// 포인터 필드라도 $ref 인 경우 nullable 을 추가하지 않는다.
+func isRefProperty(propLines []string) bool {
+	for _, l := range propLines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "" {
+			continue
+		}
+		return strings.HasPrefix(trimmed, "$ref:")
+	}
+	return false
 }
 
 func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo, schemaNameFn func(string) string) []string {

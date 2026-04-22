@@ -2206,10 +2206,13 @@ components:
           type: string
         mode:
           type: string
+          nullable: true
         hash:
           type: string
+          nullable: true
         size:
           type: integer
+          nullable: true
         latest_commit:
           $ref: '#/components/schemas/GitCommit'
       required:
@@ -2418,14 +2421,17 @@ components:
           enum: [ADD, DELETE, CONTEXT, HUNK]
         blobLineNumber:
           type: integer
+          nullable: true
         displayNoNewLineWarning:
           type: boolean
         text:
           type: string
         left:
           type: integer
+          nullable: true
         right:
           type: integer
+          nullable: true
       required:
         - blobLineNumber
         - displayNoNewLineWarning
@@ -2593,6 +2599,7 @@ components:
           type: boolean
         change_request_id:
           type: integer
+          nullable: true
         metadata:
           type: object
           additionalProperties: true
@@ -3291,6 +3298,7 @@ components:
           type: boolean
         suggested_name:
           type: string
+          nullable: true
       required:
         - is_available
         - success
