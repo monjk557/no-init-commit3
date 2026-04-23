@@ -1802,3 +1802,78 @@ func Test_TreeWithCommit_PerEntryLatestCommit_IsAccurate(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, wBlob.Code,
 		"path=<blob>은 직접 지원하지 않음 (parent tree listing의 latest_commit 사용)")
 }
+
+// =============================================================================
+// /overview/latest-commit — single-commit lightweight header endpoint
+// =============================================================================
+
+func TestHandleGetLatestCommitOverview(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	owner := "testowner"
+	repo := "testrepo"
+	commitHashes := createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
+
+	router := gin.New()
+	router.GET("/repos/:owner/:repo/overview/latest-commit", handler.HandleGetLatestCommitOverview)
+
+	t.Run("NoPath_ReturnsRefHeadCommit", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/repos/"+owner+"/"+repo+"/overview/latest-commit?ref=main", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+		var resp LatestCommitOverviewResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.True(t, resp.Success)
+		assert.Equal(t, owner+"/"+repo, resp.Repository)
+		assert.Equal(t, "main", resp.Ref)
+		assert.Empty(t, resp.Path)
+		require.NotNil(t, resp.Commit)
+		assert.Equal(t, commitHashes["src_latest"].String(), resp.Commit.SHA)
+		assert.Equal(t, "Add src/util.go", resp.Commit.Message)
+	})
+
+	t.Run("PathNarrowsToSubtreeLatest", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/repos/"+owner+"/"+repo+"/overview/latest-commit?ref=main&path=docs", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+		var resp LatestCommitOverviewResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.True(t, resp.Success)
+		assert.Equal(t, "docs", resp.Path)
+		require.NotNil(t, resp.Commit)
+		assert.Equal(t, commitHashes["docs"].String(), resp.Commit.SHA)
+	})
+
+	t.Run("MissingRefDefaultsToHEAD", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/repos/"+owner+"/"+repo+"/overview/latest-commit", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+		var resp LatestCommitOverviewResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "HEAD", resp.Ref)
+		require.NotNil(t, resp.Commit)
+		assert.Equal(t, commitHashes["src_latest"].String(), resp.Commit.SHA)
+	})
+
+	t.Run("InvalidRefReturns404", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/repos/"+owner+"/"+repo+"/overview/latest-commit?ref=nonexistent-branch", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusNotFound, w.Code)
+	})
+}

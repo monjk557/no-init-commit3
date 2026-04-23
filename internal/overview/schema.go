@@ -125,6 +125,21 @@ type BlobOverviewResponse struct {
 	Commits      []GitCommit              `json:"commits"`
 }
 
+// LatestCommitOverviewResponse is the response type for the lightweight
+// GET /overview/latest-commit API. It returns a single latest commit for a ref
+// (optionally narrowed by path) using `git log -1` — O(1) vs the per-path scan
+// of /overview/tree/commits. Used by the UI to render the commit header fast
+// without waiting for the full tree×commit overlay.
+type LatestCommitOverviewResponse struct {
+	Success    bool       `json:"success"`
+	Repository string     `json:"repository"`
+	Owner      string     `json:"owner"`
+	Name       string     `json:"name"`
+	Ref        string     `json:"ref"`
+	Path       string     `json:"path,omitempty"`
+	Commit     *GitCommit `json:"commit"`
+}
+
 // TreeWithCommitOverviewResponse is the response type for tree with commit overview API
 type TreeWithCommitOverviewResponse struct {
 	Success    bool                     `json:"success"`

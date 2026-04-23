@@ -654,6 +654,76 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	c.JSON(http.StatusOK, response)
 }
 
+// HandleGetLatestCommitOverview handles GET /api/v1/repository/{owner}/{repo}/overview/latest-commit.
+//
+// Returns the single most recent commit for the given ref (optionally narrowed
+// by path). Runs one `git log -1` — an order of magnitude faster than
+// /overview/tree/commits, which scans commits per tree entry. The UI uses this
+// endpoint to render the commit header before the full tree overlay arrives.
+func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context) {
+	ctx := c.Request.Context()
+	start := time.Now()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+	ref := c.Query("ref")
+	path := strings.Trim(c.Query("path"), "/")
+
+	repoCtx, ok := h.validateRepositoryNative(ctx, c, owner, repo, ref)
+	if !ok {
+		return
+	}
+	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
+
+	if path != "" {
+		if err := h.pathValidator.ValidateFilePath(path); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+	}
+
+	var (
+		commit *GitCommit
+		err    error
+	)
+	if path == "" {
+		commit, err = NativeGetLatestCommit(ctx, repoCtx.repoPath, repoCtx.ref)
+	} else {
+		commit, err = NativeGetLatestCommitForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
+	}
+	if err != nil {
+		h.logger.Warn("latest-commit native git failed",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("ref", repoCtx.ref),
+			zap.String("path", path),
+			zap.Error(err),
+		)
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "failed to resolve latest commit"})
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Debug("latest-commit native git",
+			zap.String("repo", fmt.Sprintf("%s/%s", owner, repo)),
+			zap.String("ref", repoCtx.ref),
+			zap.String("path", path),
+			zap.Bool("found", commit != nil),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+	}
+
+	c.JSON(http.StatusOK, LatestCommitOverviewResponse{
+		Success:    true,
+		Repository: fmt.Sprintf("%s/%s", owner, repo),
+		Owner:      owner,
+		Name:       repo,
+		Ref:        repoCtx.ref,
+		Path:       path,
+		Commit:     commit,
+	})
+}
+
 func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context) {
 	ctx := c.Request.Context()
 	start := time.Now()

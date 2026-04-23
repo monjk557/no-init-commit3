@@ -811,6 +811,24 @@ paths:
                 $ref: '#/components/schemas/BlobOverviewResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/overview/latest-commit:
+    get:
+      summary: HandleGetLatestCommitOverview
+      operationId: handlegetlatestcommitoverview
+      tags:
+        - Overview
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatestCommitOverviewResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/overview/latest-commits:
     post:
       summary: HandlePostLatestCommitsBatch
@@ -2343,6 +2361,30 @@ components:
         - success
         - total_bytes
         - total_files
+    LatestCommitOverviewResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        repository:
+          type: string
+        owner:
+          type: string
+        name:
+          type: string
+        ref:
+          type: string
+        path:
+          type: string
+        commit:
+          $ref: '#/components/schemas/GitCommit'
+      required:
+        - commit
+        - name
+        - owner
+        - ref
+        - repository
+        - success
     LatestCommitsBatchRequest:
       type: object
       properties:
