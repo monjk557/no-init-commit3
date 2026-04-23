@@ -271,6 +271,11 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) {
 		fullMessage = commit.Message // fallback to subject
 	}
 
+	parents := commit.ParentHashes
+	if parents == nil {
+		parents = []string{}
+	}
+
 	response := CommitDetailResponse{
 		Success: true,
 		Sha:     commit.Sha,
@@ -285,7 +290,7 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) {
 			Email: commit.Committer.Email,
 			Date:  commit.Committer.Date.UTC().Format("2006-01-02T15:04:05Z"),
 		},
-		Parents:  commit.ParentHashes,
+		Parents:  parents,
 		TreeHash: commit.TreeHash,
 	}
 
