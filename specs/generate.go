@@ -540,6 +540,8 @@ func requestSchemaRef(method, specPath string) string {
 			return "RevertRequest"
 		case "/repos/{owner}/{repo}/context":
 			return "ContextRequest"
+		case "/repos/{owner}/{repo}/diff/classify-anchors":
+			return "ClassifyAnchorsRequest"
 		}
 	case "PATCH":
 		if strings.Contains(specPath, "/branches/{branch}") {
@@ -635,6 +637,10 @@ func responseSchemaRef(method, specPath string) string {
 		return "FileDiff"
 	case "/repos/{owner}/{repo}/diff/file/branches/{base}/{head}":
 		return "DiffResponse"
+	case "/repos/{owner}/{repo}/diff/classify-anchors":
+		if method == "POST" {
+			return "ClassifyAnchorsResponse"
+		}
 	}
 	return ""
 }

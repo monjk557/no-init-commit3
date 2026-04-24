@@ -405,6 +405,30 @@ paths:
                 $ref: '#/components/schemas/DiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/diff/classify-anchors:
+    post:
+      summary: HandleClassifyAnchors
+      operationId: handleclassifyanchors
+      tags:
+        - Diff
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyAnchorsRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassifyAnchorsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/commit/{sha}:
     get:
       summary: HandleSingleCommitDiff
@@ -1063,6 +1087,34 @@ components:
         example: "testrepo"
 
   schemas:
+    AnchorRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+        start_line:
+          type: integer
+        end_line:
+          type: integer
+      required:
+        - end_line
+        - id
+        - path
+        - start_line
+    AnchorResult:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: object
+        new_path:
+          type: string
+      required:
+        - id
+        - status
     AuthorInfo:
       type: object
       properties:
@@ -1359,6 +1411,39 @@ components:
         - modified_files
         - renamed_files
         - total_files
+    ClassifyAnchorsRequest:
+      type: object
+      properties:
+        base_sha:
+          type: string
+        head_sha:
+          type: string
+        anchors:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnchorRequest'
+      required:
+        - anchors
+        - base_sha
+        - head_sha
+    ClassifyAnchorsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        base_sha:
+          type: string
+        head_sha:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnchorResult'
+      required:
+        - base_sha
+        - head_sha
+        - results
+        - success
     Commit:
       type: object
       properties:

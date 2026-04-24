@@ -335,6 +335,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.GET("/diff/expand-context", diffsHandler.HandleExpandContext)
 	ownerRepoGroup.GET("/diff/patch/:base/:head", diffsHandler.HandlePatch)
 	ownerRepoGroup.GET("/diff/search/files", diffsHandler.HandleDiffFileSearch)
+	ownerRepoGroup.POST("/diff/classify-anchors", diffsHandler.HandleClassifyAnchors)
 
 	// Merge endpoints
 	ownerRepoGroup.GET("/merges/preview", mergePreviewHandler.HandleMergePreview)

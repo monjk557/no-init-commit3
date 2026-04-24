@@ -204,3 +204,50 @@ type DiffFileSearchResponse struct {
 	Files      []DiffFileSearchResult `json:"files"`
 	TotalCount int                    `json:"total_count"`
 }
+
+// ========================================================================
+// ReviewComment line-anchor classification (Code Review 2.0 Phase B).
+// See classify.go for implementation.
+// ========================================================================
+
+// AnchorStatus는 ReviewComment 라인 anchor의 상태를 나타냅니다.
+type AnchorStatus string
+
+const (
+	// AnchorStatusActive: anchor 라인 범위가 base..head 사이에 변경되지 않음.
+	AnchorStatusActive AnchorStatus = "active"
+	// AnchorStatusStale: anchor 라인 범위 내에 hunk가 존재함 (내용 변경).
+	AnchorStatusStale AnchorStatus = "stale"
+	// AnchorStatusOrphaned: 파일 자체가 삭제/바이너리 변환됨. anchor 의미 상실.
+	AnchorStatusOrphaned AnchorStatus = "orphaned"
+)
+
+// AnchorRequest는 단일 ReviewComment의 anchor 정보입니다.
+type AnchorRequest struct {
+	ID        string `json:"id"`         // 결과 매칭용 식별자 (예: ReviewComment.id)
+	Path      string `json:"path"`       // anchor 작성 시점 파일 경로 (base 기준)
+	StartLine int    `json:"start_line"` // 1-based, inclusive
+	EndLine   int    `json:"end_line"`   // 1-based, inclusive
+}
+
+// AnchorResult는 classify 결과 단일 항목입니다.
+type AnchorResult struct {
+	ID      string       `json:"id"`
+	Status  AnchorStatus `json:"status"`
+	NewPath string       `json:"new_path,omitempty"` // rename 시 head 기준 새 경로
+}
+
+// ClassifyAnchorsRequest는 POST /diff/classify-anchors 요청 바디입니다.
+type ClassifyAnchorsRequest struct {
+	BaseSHA string          `json:"base_sha" binding:"required"`
+	HeadSHA string          `json:"head_sha" binding:"required"`
+	Anchors []AnchorRequest `json:"anchors" binding:"required"`
+}
+
+// ClassifyAnchorsResponse는 POST /diff/classify-anchors 응답입니다.
+type ClassifyAnchorsResponse struct {
+	Success bool           `json:"success"`
+	BaseSHA string         `json:"base_sha"`
+	HeadSHA string         `json:"head_sha"`
+	Results []AnchorResult `json:"results"`
+}
