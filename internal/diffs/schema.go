@@ -98,7 +98,7 @@ type LineChange struct {
 	Type                    LineChangeType `json:"type"`                    // "ADD", "DELETE", "CONTEXT", "HUNK"
 	BlobLineNumber          *int           `json:"blobLineNumber"`          // old 파일 라인 번호 (ADD일 경우 null)
 	DisplayNoNewLineWarning bool           `json:"displayNoNewLineWarning"` // "\ No newline at end of file" 경고
-	Text                    string         `json:"text"`                    // diff 접두사(공백/+/-)가 포함된 라인 내용
+	Text                    string         `json:"text"`                    // 라인 내용 (마커 접두사 없음 — 변경 종류는 Type 필드로 분기). HUNK 타입일 경우 "@@ -n,m +n,m @@" 헤더 전체.
 	Left                    *int           `json:"left"`                    // 구 파일 라인 번호 (ADD일 경우 null)
 	Right                   *int           `json:"right"`                   // 신 파일 라인 번호 (DELETE일 경우 null)
 	HunkIndex               int            `json:"-"`                       // 내부용: 이 라인이 속한 hunk 인덱스

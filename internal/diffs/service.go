@@ -134,10 +134,12 @@ func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineCha
 		if idx < 0 {
 			idx = 0
 		}
+		// Text는 마커 접두사(+/-/공백) 제외한 순수 라인 내용만 포함.
+		// 변경 종류는 Type 필드로 구분 (ADD/DELETE/CONTEXT).
 		lineChanges = append(lineChanges, LineChange{
 			Type:           changeType,
 			BlobLineNumber: blobLinePtr,
-			Text:           line,
+			Text:           line[1:],
 			Left:           leftPtr,
 			Right:          rightPtr,
 			HunkIndex:      idx,
@@ -203,20 +205,26 @@ func GenerateLineChanges(lines []string, contextLines int) []LineChange {
 		}
 
 		var changeType LineChangeType
+		var text string
 		switch line[0] {
 		case '+':
 			changeType = LineChangeTypeAdd
+			text = line[1:]
 		case '-':
 			changeType = LineChangeTypeDel
+			text = line[1:]
 		case ' ':
 			changeType = LineChangeTypeContext
+			text = line[1:]
 		default:
+			// 접두사가 없는 비정상 라인은 그대로 CONTEXT로 보존 (후처리 호환용).
 			changeType = LineChangeTypeContext
+			text = line
 		}
 
 		lineChanges = append(lineChanges, LineChange{
 			Type: changeType,
-			Text: line,
+			Text: text,
 		})
 	}
 

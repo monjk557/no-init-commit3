@@ -29,30 +29,24 @@ func (m *MyersDiffAdapter) OptimizedLineDiff(baseLines, headLines []string, cont
 
 	for _, edit := range edits {
 		var changeType LineChangeType
-		var content string
 
 		switch edit.Type {
 		case performance.EditEqual:
-			// Context line (unchanged)
 			changeType = LineChangeTypeContext
-			content = " " + edit.Content
 
 		case performance.EditDelete:
-			// Deleted line
 			changeType = LineChangeTypeDel
-			content = "-" + edit.Content
 			deletions++
 
 		case performance.EditInsert:
-			// Added line
 			changeType = LineChangeTypeAdd
-			content = "+" + edit.Content
 			additions++
 		}
 
+		// Text는 마커 접두사 없이 순수 라인 내용만 — 변경 종류는 Type으로 분기.
 		lineChanges = append(lineChanges, LineChange{
 			Type: changeType,
-			Text: content,
+			Text: edit.Content,
 		})
 	}
 

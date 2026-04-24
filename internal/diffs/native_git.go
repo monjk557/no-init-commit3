@@ -778,11 +778,11 @@ func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, f
 	oldLine := fromOld
 	newLine := fromNew
 	for i := fromOld - 1; i < toOld; i++ {
-		text := " " + lines[i] // space prefix = CONTEXT convention
+		// Text는 마커 접두사 없이 순수 라인 내용만 — Type=CONTEXT로 구분.
 		result = append(result, LineChange{
 			Type:           LineChangeTypeContext,
 			BlobLineNumber: intPtr(oldLine),
-			Text:           text,
+			Text:           lines[i],
 			Left:           intPtr(oldLine),
 			Right:          intPtr(newLine),
 		})
