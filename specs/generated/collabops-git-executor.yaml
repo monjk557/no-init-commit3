@@ -990,6 +990,20 @@ paths:
                 $ref: '#/components/schemas/CreateTagResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/tags/bulk-delete:
+    post:
+      summary: HandleBulkDeleteTags
+      operationId: handlebulkdeletetags
+      tags:
+        - Tags
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/tags/{tag}:
     delete:
       summary: HandleDeleteTag
@@ -1361,6 +1375,48 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BulkDeleteBranchResult'
+      required:
+        - failed
+        - results
+        - succeeded
+        - success
+        - total
+    BulkDeleteTagResult:
+      type: object
+      properties:
+        tag_name:
+          type: string
+        success:
+          type: boolean
+        error:
+          type: string
+      required:
+        - success
+        - tag_name
+    BulkDeleteTagsRequest:
+      type: object
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - tags
+    BulkDeleteTagsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        total:
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/BulkDeleteTagResult'
       required:
         - failed
         - results

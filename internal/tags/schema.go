@@ -60,3 +60,24 @@ type DeleteTagResponse struct {
 	Success bool `json:"success"`
 	Tag     *Tag `json:"tag"`
 }
+
+// BulkDeleteTagsRequest는 대량 태그 삭제를 위한 요청을 나타냅니다.
+type BulkDeleteTagsRequest struct {
+	Tags []string `json:"tags" binding:"required,min=1"`
+}
+
+// BulkDeleteTagResult는 개별 태그 삭제 결과를 나타냅니다.
+type BulkDeleteTagResult struct {
+	TagName string `json:"tag_name"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// BulkDeleteTagsResponse는 대량 태그 삭제 응답을 나타냅니다.
+type BulkDeleteTagsResponse struct {
+	Success   bool                  `json:"success"`
+	Total     int                   `json:"total"`
+	Succeeded int                   `json:"succeeded"`
+	Failed    int                   `json:"failed"`
+	Results   []BulkDeleteTagResult `json:"results"`
+}

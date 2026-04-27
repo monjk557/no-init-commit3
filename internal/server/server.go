@@ -321,6 +321,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	// Tags endpoints
 	ownerRepoGroup.GET("/tags", tagsHandler.HandleGetTags)
 	ownerRepoGroup.POST("/tags", tagsHandler.HandleCreateTag)
+	ownerRepoGroup.POST("/tags/bulk-delete", tagsHandler.HandleBulkDeleteTags)
 	ownerRepoGroup.DELETE("/tags/*tag", tagsHandler.HandleDeleteTag)
 
 	// Blob endpoints

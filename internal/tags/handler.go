@@ -178,3 +178,53 @@ func (h *TagsHandler) HandleDeleteTag(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "tag": tagName})
 }
+
+// HandleBulkDeleteTags handles POST /repos/{owner}/{repo}/tags/bulk-delete
+// 여러 태그를 한 번에 삭제합니다.
+func (h *TagsHandler) HandleBulkDeleteTags(c *gin.Context) {
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	var req BulkDeleteTagsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: tags array is required"})
+		return
+	}
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	results := make([]BulkDeleteTagResult, 0, len(req.Tags))
+	succeeded := 0
+	failed := 0
+
+	for _, tagName := range req.Tags {
+		if delErr := DeleteTag(ctx, repoPath, tagName); delErr != nil {
+			results = append(results, BulkDeleteTagResult{
+				TagName: tagName,
+				Success: false,
+				Error:   delErr.Error(),
+			})
+			failed++
+			continue
+		}
+
+		results = append(results, BulkDeleteTagResult{
+			TagName: tagName,
+			Success: true,
+		})
+		succeeded++
+	}
+
+	c.JSON(http.StatusOK, BulkDeleteTagsResponse{
+		Success:   failed == 0,
+		Total:     len(req.Tags),
+		Succeeded: succeeded,
+		Failed:    failed,
+		Results:   results,
+	})
+}
