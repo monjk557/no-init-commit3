@@ -250,6 +250,17 @@ func parseAppEnv() AppEnv {
 	}
 }
 
+// defaultLogLevelForEnv returns the default log level based on APP_ENV.
+// local/stage 는 debug, onprem/prod 는 info.
+func defaultLogLevelForEnv(env AppEnv) string {
+	switch env {
+	case AppEnvLocal, AppEnvStage:
+		return "debug"
+	default:
+		return "info"
+	}
+}
+
 // Load는 환경변수에서 설정을 로드합니다
 func Load() (*Config, error) {
 
@@ -266,8 +277,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse git config: %w", err)
 	}
 
-	// Loggint과 ObservabilityConfig는 환경변수에서 파싱하지 않고, 기본값을 사용합니다.
-	loggingConfig := parseLoggingConfig()
+	// LoggingConfig: LOG_LEVEL env 우선, 미설정 시 APP_ENV 기반 default.
+	// ObservabilityConfig 는 환경변수에서 파싱하지 않고 기본값 사용.
+	loggingConfig := parseLoggingConfig(appEnv)
 	observabilityConfig := parseObservabilityConfig()
 	eventsConfig, err := parseEventsConfig()
 	if err != nil {
@@ -400,10 +412,9 @@ func parseGitConfig() (GitConfig, error) {
 // ------------------------------------------------------------
 // LoggingConfig 파싱 (하드코딩)
 // ------------------------------------------------------------
-func parseLoggingConfig() LoggingConfig {
-
-	// 기본값 하드코딩
-	level := "info"
+func parseLoggingConfig(appEnv AppEnv) LoggingConfig {
+	// Log level 은 APP_ENV 에서 직접 결정 (local/stage=debug, onprem/prod=info)
+	level := defaultLogLevelForEnv(appEnv)
 	format := "json"
 	output := "stdout"
 	development := false
