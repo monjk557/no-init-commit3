@@ -7,9 +7,9 @@ all: generate
 generate:
 	@echo "🔍 Generating OpenAPI spec from Go schemas and handlers..."
 	@if [ -f "go.mod" ]; then \
-		go run specs/generate.go; \
+		go run ./specs; \
 	elif [ -f "../go.mod" ]; then \
-		cd .. && go run specs/generate.go; \
+		cd .. && go run ./specs; \
 	else \
 		echo "Error: Could not find go.mod. Please run from project root."; \
 		exit 1; \

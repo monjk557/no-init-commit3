@@ -135,9 +135,19 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkDeleteBranchesRequest'
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkDeleteBranchesResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/resolve/{ref}:
@@ -157,6 +167,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveBranchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/stats:
@@ -168,9 +182,19 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BranchStatsRequest'
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchStatsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/validate-reopen:
@@ -182,9 +206,19 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateReopenRequest'
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateReopenResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/validate/{name}:
@@ -204,9 +238,35 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateBranchNameResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches/{branch}:
+    delete:
+      summary: HandleDeleteBranch
+      operationId: handledeletebranch
+      tags:
+        - Branches
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: branch
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteBranchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
     patch:
       summary: HandleUpdateBranch
       operationId: handleupdatebranch
@@ -233,24 +293,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UpdateBranchResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-    delete:
-      summary: HandleDeleteBranch
-      operationId: handledeletebranch
-      tags:
-        - Branches
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-        - name: branch
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Success
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/commits:
@@ -364,7 +406,7 @@ paths:
       summary: HandleBranchDiffQuery
       operationId: handlebranchdiffquery
       tags:
-        - Branches
+        - Diff
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
@@ -382,7 +424,7 @@ paths:
       summary: HandleBranchDiff
       operationId: handlebranchdiff
       tags:
-        - Branches
+        - Diff
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
@@ -457,7 +499,7 @@ paths:
       summary: HandleCommitDiff
       operationId: handlecommitdiff
       tags:
-        - Commits
+        - Diff
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
@@ -513,7 +555,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FileDiff'
+                $ref: '#/components/schemas/DiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/patch/{base}/{head}:
@@ -552,48 +594,10 @@ paths:
       responses:
         '200':
           description: Success
-        '400':
-          $ref: '#/components/responses/BadRequest'
-  /repos/{owner}/{repo}/fork:
-    get:
-      summary: HandleGetForkInfo
-      operationId: handlegetforkinfo
-      tags:
-        - Repository Management
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-      responses:
-        '200':
-          description: Success
-        '400':
-          $ref: '#/components/responses/BadRequest'
-  /repos/{owner}/{repo}/fork/sync:
-    post:
-      summary: HandleSyncUpstream
-      operationId: handlesyncupstream
-      tags:
-        - Repository Management
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-      responses:
-        '200':
-          description: Success
-        '400':
-          $ref: '#/components/responses/BadRequest'
-  /repos/{owner}/{repo}/forks:
-    post:
-      summary: HandleForkRepository
-      operationId: handleforkrepository
-      tags:
-        - Repository Management
-      parameters:
-        - $ref: '#/components/parameters/Owner'
-        - $ref: '#/components/parameters/Repo'
-      responses:
-        '200':
-          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffFileSearchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/languages:
@@ -703,7 +707,7 @@ paths:
       summary: HandleMergeDiff
       operationId: handlemergediff
       tags:
-        - Diff
+        - Merge
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
@@ -822,7 +826,7 @@ paths:
       summary: HandleGetBlobOverview
       operationId: handlegetbloboverview
       tags:
-        - Blob
+        - Overview
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
@@ -862,6 +866,12 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LatestCommitsBatchRequest'
       responses:
         '200':
           description: Success
@@ -876,7 +886,7 @@ paths:
       summary: HandleGetTreeOverview
       operationId: handlegettreeoverview
       tags:
-        - Tree
+        - Overview
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
@@ -894,7 +904,7 @@ paths:
       summary: HandleGetTreeWithCommitOverview
       operationId: handlegettreewithcommitoverview
       tags:
-        - Commits
+        - Overview
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
@@ -999,9 +1009,19 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkDeleteTagsRequest'
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkDeleteTagsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/tags/{tag}:
@@ -1021,6 +1041,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteTagResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/tree:
@@ -1053,6 +1077,10 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeSearchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/workspaces/{owner}/lfs/usage:
@@ -1994,13 +2022,29 @@ components:
       required:
         - success
         - tag
+    DeleteBranchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        branch_name:
+          type: string
+        commit_hash:
+          type: string
+        operation:
+          type: string
+      required:
+        - branch_name
+        - commit_hash
+        - operation
+        - success
     DeleteTagResponse:
       type: object
       properties:
         success:
           type: boolean
         tag:
-          $ref: '#/components/schemas/Tag'
+          type: string
       required:
         - success
         - tag
@@ -3206,6 +3250,22 @@ components:
         - timestamp
     RequestParams:
       type: object
+    ResolveBranchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        name:
+          type: string
+        commit_sha:
+          type: string
+        ref_path:
+          type: string
+      required:
+        - commit_sha
+        - name
+        - ref_path
+        - success
     RevertRequest:
       type: object
       properties:
@@ -3473,6 +3533,20 @@ components:
           type: string
         fast_forward:
           type: boolean
+        forced:
+          type: boolean
+          nullable: true
+        old_branch_name:
+          type: string
+        new_branch_name:
+          type: string
+        ref_path:
+          type: string
+        head_updated:
+          type: boolean
+          nullable: true
+        message:
+          type: string
       required:
         - branch_name
         - commit_hash

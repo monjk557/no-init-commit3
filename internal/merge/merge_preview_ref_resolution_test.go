@@ -95,7 +95,7 @@ func setupMergePreviewTest(t *testing.T) *testMergePreviewSetup {
 	}
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merge/preview", handler.HandleMergePreview)
+	router.POST("/repos/:owner/:repo/merge/preview", adapt(handler.HandleMergePreview))
 
 	return &testMergePreviewSetup{
 		repo:      testRepo,

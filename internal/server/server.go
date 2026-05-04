@@ -294,71 +294,41 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	ownerRepoGroup.Use(jsonResponseMiddleware.ErrorHandler())
 
 	// Repository endpoints
-	ownerRepoGroup.POST("", repositoryHandler.HandleCreateRepository)
-	ownerRepoGroup.GET("/state", stateHandler.HandleGetRepositoryState)
+	repositories.RegisterRoutes(ownerRepoGroup, repositoryHandler)
+	state.RegisterRoutes(ownerRepoGroup, stateHandler)
 
 	// Branches endpoints
-	ownerRepoGroup.GET("/branches/validate/*name", branchesHandler.HandleValidateBranchName)
-	ownerRepoGroup.GET("/branches/resolve/*ref", branchesHandler.HandleResolveBranch)
-	ownerRepoGroup.POST("/branches/validate-reopen", branchesHandler.HandleValidateReopen)
-	ownerRepoGroup.GET("/branches", branchesHandler.HandleGetBranches)
-	ownerRepoGroup.POST("/branches", branchesHandler.HandleCreateBranch)
-	ownerRepoGroup.PATCH("/branches/*branch", branchesHandler.HandleUpdateBranch)
-	ownerRepoGroup.POST("/branches/stats", branchesHandler.HandleBranchStats)
-	ownerRepoGroup.POST("/branches/bulk-delete", branchesHandler.HandleBulkDeleteBranches)
-	ownerRepoGroup.DELETE("/branches/*branch", branchesHandler.HandleDeleteBranch)
+	branches.RegisterRoutes(ownerRepoGroup, branchesHandler)
 
 	// Tree endpoints
-	ownerRepoGroup.GET("/tree", treeHandler.HandleTreeAPI)
-	ownerRepoGroup.GET("/tree/search", treeHandler.HandleTreeSearch)
+	tree.RegisterRoutes(ownerRepoGroup, treeHandler)
 
 	// Commits endpoints
-	ownerRepoGroup.GET("/commits", commitsHandler.HandleCommitsAPI)
-	ownerRepoGroup.GET("/commits/compare/summary", commitsHandler.HandleComparisonSummary)
-	ownerRepoGroup.GET("/commits/:sha", commitsHandler.HandleGetCommitDetail)
-	ownerRepoGroup.POST("/commits", commitsHandler.HandleMultiFileCommit)
+	commits.RegisterRoutes(ownerRepoGroup, commitsHandler)
 
 	// Tags endpoints
-	ownerRepoGroup.GET("/tags", tagsHandler.HandleGetTags)
-	ownerRepoGroup.POST("/tags", tagsHandler.HandleCreateTag)
-	ownerRepoGroup.POST("/tags/bulk-delete", tagsHandler.HandleBulkDeleteTags)
-	ownerRepoGroup.DELETE("/tags/*tag", tagsHandler.HandleDeleteTag)
+	tags.RegisterRoutes(ownerRepoGroup, tagsHandler)
 
 	// Blob endpoints
 	ownerRepoGroup.GET("/blob", blobHandler.HandleBlobAPI)
 
 	// Diff endpoints
-	ownerRepoGroup.GET("/diff/commits/:base/:head", diffsHandler.HandleCommitDiff)
-	ownerRepoGroup.GET("/diff/branches/:base/:head", diffsHandler.HandleBranchDiff)
-	ownerRepoGroup.GET("/diff/branches", diffsHandler.HandleBranchDiffQuery) // query parameter 방식 (슬래시 포함 브랜치명 지원)
-	ownerRepoGroup.GET("/diff/file", diffsHandler.HandleFileDiff)
-	ownerRepoGroup.GET("/diff/commit/:sha", diffsHandler.HandleSingleCommitDiff)
-	ownerRepoGroup.GET("/diff/expand-context", diffsHandler.HandleExpandContext)
-	ownerRepoGroup.GET("/diff/patch/:base/:head", diffsHandler.HandlePatch)
-	ownerRepoGroup.GET("/diff/search/files", diffsHandler.HandleDiffFileSearch)
-	ownerRepoGroup.POST("/diff/classify-anchors", diffsHandler.HandleClassifyAnchors)
+	diffs.RegisterRoutes(ownerRepoGroup, diffsHandler)
 
 	// Merge endpoints
-	ownerRepoGroup.GET("/merges/preview", mergePreviewHandler.HandleMergePreview)
-	ownerRepoGroup.GET("/merges/diff", mergePreviewHandler.HandleMergeDiff)
-	ownerRepoGroup.POST("/merges", mergeOpsHandler.HandleMerge)
+	merge.RegisterRoutes(ownerRepoGroup, mergeOpsHandler, mergePreviewHandler)
 
 	// Revert endpoint
-	ownerRepoGroup.POST("/revert", revertHandler.HandleRevert)
+	revert.RegisterRoutes(ownerRepoGroup, revertHandler)
 
 	// Overview endpoints
-	ownerRepoGroup.GET("/overview", overviewHandler.HandleGetRepositoryOverview)
-	ownerRepoGroup.GET("/overview/tree", overviewHandler.HandleGetTreeOverview)
-	ownerRepoGroup.GET("/overview/tree/commits", overviewHandler.HandleGetTreeWithCommitOverview)
-	ownerRepoGroup.GET("/overview/blob", overviewHandler.HandleGetBlobOverview)
-	ownerRepoGroup.GET("/overview/latest-commit", overviewHandler.HandleGetLatestCommitOverview)
-	ownerRepoGroup.POST("/overview/latest-commits", overviewHandler.HandlePostLatestCommitsBatch)
+	overview.RegisterRoutes(ownerRepoGroup, overviewHandler)
 
 	// Context endpoint
-	ownerRepoGroup.POST("/context", contextHandler.HandleContext)
+	repocontext.RegisterRoutes(ownerRepoGroup, contextHandler)
 
 	// Language stats endpoint
-	ownerRepoGroup.GET("/languages", langStatsHandler.HandleGetLanguageStats)
+	langstats.RegisterRoutes(ownerRepoGroup, langStatsHandler)
 
 	// Fork endpoints
 	forkHandler, err := fork.NewForkHandler(s.config)
@@ -366,9 +336,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		s.logger.Error("Failed to create fork handler", zap.Error(err))
 		return
 	}
-	ownerRepoGroup.POST("/forks", forkHandler.HandleForkRepository)
-	ownerRepoGroup.GET("/fork", forkHandler.HandleGetForkInfo)
-	ownerRepoGroup.POST("/fork/sync", forkHandler.HandleSyncUpstream)
+	fork.RegisterRoutes(ownerRepoGroup, forkHandler)
 
 	// LFS endpoints
 	// Git LFS 클라이언트는 remote URL에서 LFS 엔드포인트를 유추합니다.

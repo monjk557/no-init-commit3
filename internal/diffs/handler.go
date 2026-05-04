@@ -1,13 +1,15 @@
-// Package protocol은 executor를 위한 Git diff REST API 엔드포인트를 구현합니다.
-// 이 파일은 구조화된 JSON 응답을 제공하는 diff 작업을 처리합니다.
+// Package diffs 는 executor를 위한 Git diff REST API 엔드포인트를 구현합니다.
+// 구조화된 JSON 응답을 제공하는 diff 작업을 처리합니다.
 package diffs
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/protocol"
@@ -28,13 +30,11 @@ func NewDiffHandler(cfg *config.Config) (*DiffHandler, error) {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
-	// Create logger
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
-	// 경로 설정 생성
 	pathConfig, err := repositories.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
@@ -46,287 +46,86 @@ func NewDiffHandler(cfg *config.Config) (*DiffHandler, error) {
 	}, nil
 }
 
-// HandleCommitDiff는 GET /repos/:owner/:repo/diff/commits/:base/:head를 처리합니다
-func (h *DiffHandler) HandleCommitDiff(c *gin.Context) {
+// extractContextLines 는 ?context= query 를 정수로 파싱한다 (기본 3).
+func extractContextLines(c *gin.Context) int {
+	contextLines := 3
+	if contextStr := c.Query("context"); contextStr != "" {
+		if v, err := strconv.Atoi(contextStr); err == nil && v >= 0 {
+			contextLines = v
+		}
+	}
+	return contextLines
+}
+
+// classifyDiffError 는 diff 에러를 status + responseOverride 또는 typed.HTTPError
+// 로 분류한다. DiffTooLarge → 413 + reason 필드, NOT_FOUND substring → 404 +
+// code 필드, 그 외 → 400.
+//
+// errors.As 를 사용해 wrap 된 *DiffTooLargeError 도 감지 (fmt.Errorf("...: %w",
+// dtlErr) 처럼 wrap 되어도 동작).
+func classifyDiffError(err error, defaultStatus int, code string) error {
+	var diffErr *DiffTooLargeError
+	if errors.As(err, &diffErr) {
+		return &responseOverride{
+			status: http.StatusRequestEntityTooLarge,
+			body: gin.H{
+				"success": false,
+				"error":   "This diff is too large to display",
+				"reason":  diffErr.Reason,
+			},
+		}
+	}
+	errStr := err.Error()
+	if code != "" && (strings.Contains(errStr, "object not found") ||
+		strings.Contains(errStr, "not found") ||
+		strings.Contains(errStr, "reference not found") ||
+		strings.Contains(errStr, "Invalid revision range") ||
+		strings.Contains(errStr, "bad revision")) {
+		return &responseOverride{
+			status: http.StatusNotFound,
+			body: gin.H{
+				"success": false,
+				"error":   err.Error(),
+				"code":    code,
+			},
+		}
+	}
+	return typed.NewHTTPError(defaultStatus, err.Error())
+}
+
+// HandleCommitDiff handles GET /diff/commits/:base/:head.
+func (h *DiffHandler) HandleCommitDiff(c *gin.Context) (DiffResponse, error) {
 	ctx := c.Request.Context()
 
-	// 공통 파라미터 추출 및 검증
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		h.logger.Error("Failed to validate and extract parameters", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
 	base := protocol.SafeParam(c, "base")
 	head := protocol.SafeParam(c, "head")
 	if base == "" || head == "" {
-		h.logger.Error("Missing required parameters: base or head")
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
-		return
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base or head")
 	}
-
-	// params에 URL 경로 파라미터 설정
 	params.Base = base
 	params.Head = head
 
-	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		h.logger.Error("Invalid repository path", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
-	contextLines := 3 // 기본값
-	if contextStr := c.Query("context"); contextStr != "" {
-		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
-			contextLines = ctx
-		}
-	}
+	contextLines := extractContextLines(c)
 
-	// diff 계산
 	diffResp, err := h.calculateCommitDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		// DiffTooLargeError인 경우 특별 처리
-		if diffErr, ok := err.(*DiffTooLargeError); ok {
-			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-				"success": false,
-				"error":   "This diff is too large to display",
-				"reason":  diffErr.Reason,
-			})
-			return
-		}
-		// object not found 에러는 404로 처리 (500 방지)
-		errStr := err.Error()
-		if strings.Contains(errStr, "object not found") ||
-			strings.Contains(errStr, "not found") ||
-			strings.Contains(errStr, "reference not found") ||
-			strings.Contains(errStr, "Invalid revision range") ||
-			strings.Contains(errStr, "bad revision") {
-			h.logger.Warn("Reference or object not found", zap.Error(err))
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-				"code":    "OBJECT_NOT_FOUND",
-			})
-			return
-		}
-		h.logger.Error("Failed to calculate commit diff", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffResponse{}, classifyDiffError(err, http.StatusInternalServerError, "OBJECT_NOT_FOUND")
 	}
 
-	// 페이지네이션 요청 확인
 	if c.Query("page") != "" || c.Query("page_size") != "" {
 		pagination := extractPaginationParams(c.Request)
 		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
-
-		response := &PaginatedDiffResponse{
-			Success: true,
-			DiffResponse: &DiffResponse{
-				Base:  diffResp.Base,
-				Head:  diffResp.Head,
-				Files: paginatedFiles,
-				Stats: DiffStats{
-					TotalAdditions: diffResp.Stats.TotalAdditions,
-					TotalDeletions: diffResp.Stats.TotalDeletions,
-					FilesChanged:   len(paginatedFiles), // 페이지네이션 응답에 맞게 업데이트
-				},
-			},
-			Pagination: &updatedPagination,
-		}
-		c.JSON(http.StatusOK, response)
-	} else {
-		c.JSON(http.StatusOK, diffResp)
-	}
-}
-
-// HandleBranchDiff는 GET /repos/:owner/:repo/diff/branches/:base/:head를 처리합니다
-func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	// 공통 파라미터 추출 및 검증
-	params, err := h.validateAndExtractParams(c)
-	if err != nil {
-		h.logger.Error("Failed to validate and extract parameters", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
-	base := protocol.SafeParam(c, "base")
-	head := protocol.SafeParam(c, "head")
-	if base == "" || head == "" {
-		h.logger.Error("Missing required parameters: base or head")
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
-		return
-	}
-
-	// params에 URL 경로 파라미터 설정
-	params.Base = base
-	params.Head = head
-
-	// 저장소 경로 검증
-	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
-	if err != nil {
-		h.logger.Error("Invalid repository path", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
-	contextLines := 3 // 기본값
-	if contextStr := c.Query("context"); contextStr != "" {
-		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
-			contextLines = ctx
-		}
-	}
-
-	// 브랜치 diff 계산
-	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
-	if err != nil {
-		// DiffTooLargeError인 경우 특별 처리
-		if diffErr, ok := err.(*DiffTooLargeError); ok {
-			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-				"success": false,
-				"error":   "This diff is too large to display",
-				"reason":  diffErr.Reason,
-			})
-			return
-		}
-		// object/reference not found 에러는 404로 처리 (500 방지)
-		errStr := err.Error()
-		if strings.Contains(errStr, "object not found") ||
-			strings.Contains(errStr, "not found") ||
-			strings.Contains(errStr, "reference not found") ||
-			strings.Contains(errStr, "Invalid revision range") ||
-			strings.Contains(errStr, "bad revision") {
-			h.logger.Warn("Reference or object not found", zap.Error(err))
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-				"code":    "REF_NOT_FOUND",
-			})
-			return
-		}
-		h.logger.Error("Failed to calculate branch diff", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	// 페이지네이션 요청 확인
-	if c.Query("page") != "" || c.Query("page_size") != "" {
-		pagination := extractPaginationParams(c.Request)
-		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
-
-		response := &PaginatedDiffResponse{
-			Success: true,
-			DiffResponse: &DiffResponse{
-				Base:  diffResp.Base,
-				Head:  diffResp.Head,
-				Files: paginatedFiles,
-				Stats: DiffStats{
-					TotalAdditions: diffResp.Stats.TotalAdditions,
-					TotalDeletions: diffResp.Stats.TotalDeletions,
-					FilesChanged:   len(paginatedFiles), // 페이지네이션 응답에 맞게 업데이트
-				},
-				Commits:       diffResp.Commits,
-				MergeBase:     diffResp.MergeBase,
-				EffectiveBase: diffResp.EffectiveBase,
-				DiffMode:      diffResp.DiffMode,
-			},
-			Pagination: &updatedPagination,
-		}
-		c.JSON(http.StatusOK, response)
-	} else {
-		c.JSON(http.StatusOK, diffResp)
-	}
-}
-
-// HandleBranchDiffQuery는 GET /repos/:owner/:repo/diff/branches?base=:base&head=:head를 처리합니다.
-// HandleBranchDiff와 동일한 응답을 반환하지만, 브랜치명을 query parameter로 받아
-// 슬래시(/)가 포함된 브랜치명(예: fix/some-branch)을 안전하게 처리합니다.
-func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	// 공통 파라미터 추출 및 검증
-	params, err := h.validateAndExtractParams(c)
-	if err != nil {
-		h.logger.Error("Failed to validate and extract parameters", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	// query parameter에서 base와 head 추출
-	base := c.Query("base")
-	head := c.Query("head")
-	if base == "" || head == "" {
-		h.logger.Error("Missing required query parameters: base or head")
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required query parameters: base or head"})
-		return
-	}
-
-	params.Base = base
-	params.Head = head
-
-	// 저장소 경로 검증
-	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
-	if err != nil {
-		h.logger.Error("Invalid repository path", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
-	contextLines := 3 // 기본값
-	if contextStr := c.Query("context"); contextStr != "" {
-		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
-			contextLines = ctx
-		}
-	}
-
-	// 브랜치 diff 계산 (HandleBranchDiff와 동일한 로직)
-	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
-	if err != nil {
-		if diffErr, ok := err.(*DiffTooLargeError); ok {
-			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-				"success": false,
-				"error":   "This diff is too large to display",
-				"reason":  diffErr.Reason,
-			})
-			return
-		}
-		errStr := err.Error()
-		if strings.Contains(errStr, "object not found") ||
-			strings.Contains(errStr, "not found") ||
-			strings.Contains(errStr, "reference not found") ||
-			strings.Contains(errStr, "Invalid revision range") ||
-			strings.Contains(errStr, "bad revision") {
-			h.logger.Warn("Reference or object not found", zap.Error(err))
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-				"code":    "REF_NOT_FOUND",
-			})
-			return
-		}
-		h.logger.Error("Failed to calculate branch diff", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	// 페이지네이션 요청 확인
-	if c.Query("page") != "" || c.Query("page_size") != "" {
-		pagination := extractPaginationParams(c.Request)
-		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
-
-		response := &PaginatedDiffResponse{
+		paginated := &PaginatedDiffResponse{
 			Success: true,
 			DiffResponse: &DiffResponse{
 				Base:  diffResp.Base,
@@ -337,198 +136,246 @@ func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) {
 					TotalDeletions: diffResp.Stats.TotalDeletions,
 					FilesChanged:   len(paginatedFiles),
 				},
-				Commits:       diffResp.Commits,
-				MergeBase:     diffResp.MergeBase,
-				EffectiveBase: diffResp.EffectiveBase,
-				DiffMode:      diffResp.DiffMode,
 			},
 			Pagination: &updatedPagination,
 		}
-		c.JSON(http.StatusOK, response)
-	} else {
-		c.JSON(http.StatusOK, diffResp)
+		return DiffResponse{}, &responseOverride{status: http.StatusOK, body: paginated}
 	}
+
+	return *diffResp, nil
 }
 
-// HandleFileDiff는 GET /repos/:owner/:repo/diff/file?path=:path&base=:base&head=:head를 처리합니다.
-//
-// 기본 비교 모드는 merge_base — CR 트리(file list)가 merge-base 기준으로 계산되므로
-// 단일 파일 diff도 같은 effective_base를 써야 변경 집합이 어긋나지 않습니다.
-// 호출자가 commit-vs-commit 직접 비교를 원하면 diff_mode=direct로 명시합니다.
-func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
+// HandleBranchDiff handles GET /diff/branches/:base/:head.
+func (h *DiffHandler) HandleBranchDiff(c *gin.Context) (DiffResponse, error) {
 	ctx := c.Request.Context()
 
-	// 공통 파라미터 추출 및 검증
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		h.logger.Error("Failed to validate and extract parameters", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// 쿼리 문자열에서 파일별 파라미터 추출
-	filePath := c.Query("path")
-	if filePath == "" {
-		h.logger.Error("Missing required parameter: path")
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameter: path"})
-		return
+	base := protocol.SafeParam(c, "base")
+	head := protocol.SafeParam(c, "head")
+	if base == "" || head == "" {
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base or head")
+	}
+	params.Base = base
+	params.Head = head
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
+	if err != nil {
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	contextLines := extractContextLines(c)
+
+	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
+	if err != nil {
+		return DiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "REF_NOT_FOUND")
+	}
+
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		pagination := extractPaginationParams(c.Request)
+		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
+		paginated := &PaginatedDiffResponse{
+			Success: true,
+			DiffResponse: &DiffResponse{
+				Base:  diffResp.Base,
+				Head:  diffResp.Head,
+				Files: paginatedFiles,
+				Stats: DiffStats{
+					TotalAdditions: diffResp.Stats.TotalAdditions,
+					TotalDeletions: diffResp.Stats.TotalDeletions,
+					FilesChanged:   len(paginatedFiles),
+				},
+				Commits:   diffResp.Commits,
+				MergeBase: diffResp.MergeBase,
+			},
+			Pagination: &updatedPagination,
+		}
+		return DiffResponse{}, &responseOverride{status: http.StatusOK, body: paginated}
+	}
+
+	return *diffResp, nil
+}
+
+// HandleBranchDiffQuery handles GET /diff/branches?base=&head= — query parameter
+// 방식 (슬래시 포함 브랜치명 지원).
+func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) (DiffResponse, error) {
+	ctx := c.Request.Context()
+
+	params, err := h.validateAndExtractParams(c)
+	if err != nil {
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	base := c.Query("base")
 	head := c.Query("head")
 	if base == "" || head == "" {
-		h.logger.Error("Missing required parameters: base or head")
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
-		return
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required query parameters: base or head")
 	}
-
 	params.Base = base
 	params.Head = head
 
-	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		h.logger.Error("Invalid repository path", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// 쿼리 파라미터에서 컨텍스트 라인과 형식 가져오기
-	contextLines := 3 // 기본값
-	if contextStr := c.Query("context"); contextStr != "" {
-		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
-			contextLines = ctx
+	contextLines := extractContextLines(c)
+
+	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
+	if err != nil {
+		return DiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "REF_NOT_FOUND")
+	}
+
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		pagination := extractPaginationParams(c.Request)
+		paginatedFiles, updatedPagination := paginateFiles(diffResp.Files, pagination)
+		paginated := &PaginatedDiffResponse{
+			Success: true,
+			DiffResponse: &DiffResponse{
+				Base:  diffResp.Base,
+				Head:  diffResp.Head,
+				Files: paginatedFiles,
+				Stats: DiffStats{
+					TotalAdditions: diffResp.Stats.TotalAdditions,
+					TotalDeletions: diffResp.Stats.TotalDeletions,
+					FilesChanged:   len(paginatedFiles),
+				},
+				Commits:   diffResp.Commits,
+				MergeBase: diffResp.MergeBase,
+			},
+			Pagination: &updatedPagination,
 		}
+		return DiffResponse{}, &responseOverride{status: http.StatusOK, body: paginated}
 	}
 
-	// full_context 파라미터 확인 (Pull Request 뷰용)
-	fullContext := c.Query("full_context") == "true"
-	if fullContext {
-		contextLines = 999999 // 전체 파일을 포함하기 위한 큰 숫자
+	return *diffResp, nil
+}
+
+// HandleFileDiff handles GET /diff/file?path=&base=&head=.
+//
+// 응답 type: DiffResponse (이전 legacy spec 은 "FileDiff" 라 명시했으나 runtime
+// 은 항상 DiffResponse 를 반환하던 schema/runtime 불일치 — runtime 과 일치
+// 시킴, tags Phase 2.7 과 동일 archetype).
+//
+// 기본 비교 모드는 merge_base — CR 트리(file list)가 merge-base 기준으로 계산되므로
+// 단일 파일 diff도 같은 effective_base를 써야 변경 집합이 어긋나지 않습니다 (Issue-2095).
+// 호출자가 commit-vs-commit 직접 비교를 원하면 diff_mode=direct로 명시.
+func (h *DiffHandler) HandleFileDiff(c *gin.Context) (DiffResponse, error) {
+	ctx := c.Request.Context()
+
+	params, err := h.validateAndExtractParams(c)
+	if err != nil {
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// diff_mode 결정 + base/head를 effective_base로 해석
+	filePath := c.Query("path")
+	if filePath == "" {
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: path")
+	}
+
+	base := c.Query("base")
+	head := c.Query("head")
+	if base == "" || head == "" {
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base or head")
+	}
+	params.Base = base
+	params.Head = head
+
+	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
+	if err != nil {
+		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	contextLines := extractContextLines(c)
+
+	if c.Query("full_context") == "true" {
+		contextLines = 999999
+	}
+
+	// diff_mode 결정 + base/head를 effective_base로 해석.
 	mode := parseDiffMode(c, DiffModeMergeBase)
 	rr, err := nativeResolveDiffRange(ctx, repoPath, base, head, mode)
 	if err != nil {
 		h.logger.Error("Failed to resolve diff range",
 			zap.String("base", base), zap.String("head", head), zap.String("diff_mode", string(mode)), zap.Error(err))
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"})
-		return
+		// legacy 호환 (CR-2805): 404 응답에 code: REF_NOT_FOUND 보존.
+		return DiffResponse{}, &responseOverride{
+			status: http.StatusNotFound,
+			body:   gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"},
+		}
 	}
 
-	// 파일 diff 계산
 	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, rr, contextLines)
 	if err != nil {
-		if diffErr, ok := err.(*DiffTooLargeError); ok {
-			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-				"success": false,
-				"error":   "This diff is too large to display",
-				"reason":  diffErr.Reason,
-			})
-			return
-		}
 		if IsFileDiffNotFound(err) {
 			h.logger.Info("File not present in either base or head",
 				zap.String("path", filePath),
 				zap.String("base", rr.BaseHash), zap.String("head", rr.HeadHash),
 				zap.String("effective_base", rr.EffectiveBase), zap.String("merge_base", rr.MergeBase))
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "FILE_NOT_FOUND"})
-			return
+			// legacy 호환 (CR-2805): 404 응답에 code: FILE_NOT_FOUND 보존.
+			return DiffResponse{}, &responseOverride{
+				status: http.StatusNotFound,
+				body:   gin.H{"success": false, "error": err.Error(), "code": "FILE_NOT_FOUND"},
+			}
 		}
 		h.logger.Error("Failed to calculate file diff",
 			zap.String("path", filePath),
 			zap.String("base", rr.BaseHash), zap.String("head", rr.HeadHash),
 			zap.String("effective_base", rr.EffectiveBase), zap.String("merge_base", rr.MergeBase),
 			zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "")
 	}
 
-	// 응답 envelope에 mode 메타 채우기 — 호출자가 trees/file diff 정렬 여부를 검증할 수 있도록
+	// 응답 envelope에 mode 메타 채우기 — 호출자가 trees/file diff 정렬 여부를 검증할 수 있도록.
 	diffResp.Base = base
 	diffResp.Head = head
 	diffResp.DiffMode = string(rr.Mode)
 	diffResp.EffectiveBase = rr.EffectiveBase
 	diffResp.MergeBase = rr.MergeBase
 
-	c.JSON(http.StatusOK, diffResp)
+	return *diffResp, nil
 }
 
-// HandleSingleCommitDiff는 GET /repos/:owner/:repo/commits/:sha/diff를 처리합니다
-func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) {
+// HandleSingleCommitDiff handles GET /diff/commit/:sha.
+func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) (SingleCommitDiffResponse, error) {
 	ctx := c.Request.Context()
 
-	// 공통 파라미터 추출 및 검증
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		h.logger.Error("Failed to validate and extract parameters", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return SingleCommitDiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// URL 경로에서 SHA 파라미터 가져오기
 	sha := c.Param("sha")
 	if sha == "" {
-		h.logger.Error("Missing required parameter: sha")
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameter: sha"})
-		return
+		return SingleCommitDiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: sha")
 	}
 
-	// 저장소 경로 가져오기
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		h.logger.Error("Invalid repository path", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return SingleCommitDiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// 쿼리 파라미터에서 컨텍스트 라인 수 가져오기
-	contextLines := 3 // 기본값
-	if contextStr := c.Query("context"); contextStr != "" {
-		if ctx, err := strconv.Atoi(contextStr); err == nil && ctx >= 0 {
-			contextLines = ctx
-		}
-	}
+	contextLines := extractContextLines(c)
 
-	// 단일 커밋 diff 계산
 	response, err := h.calculateSingleCommitDiff(ctx, repoPath, sha, contextLines)
 	if err != nil {
-		// DiffTooLargeError인 경우 특별 처리
-		if diffErr, ok := err.(*DiffTooLargeError); ok {
-			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-				"success": false,
-				"error":   "This diff is too large to display",
-				"reason":  diffErr.Reason,
-			})
-			return
-		}
-		h.logger.Error("Failed to calculate single commit diff", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return SingleCommitDiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "")
 	}
 
-	c.JSON(http.StatusOK, response)
+	return *response, nil
 }
 
-// HandleExpandContext는 GET /repos/:owner/:repo/diff/expand-context를 처리합니다.
-// hunk 사이 숨겨진 context 라인만 blob에서 읽어 반환하는 경량 API입니다.
-// git diff를 실행하지 않으므로 파일 크기에 관계없이 빠릅니다.
-//
-// 파라미터 (query string):
-//   - path, base, head: 필수
-//   - start_old, start_new, count, direction: 오케스트레이터 호환 파라미터
-//   - from_old, to_old, from_new: 레거시 파라미터 (start_old/start_new/count 우선)
-//   - side: "old"이면 base에서 읽음 (deleted 파일용)
-func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
+// HandleExpandContext handles GET /diff/expand-context — hunk 사이 숨겨진
+// context 라인을 blob 에서 직접 읽어 반환하는 경량 API.
+func (h *DiffHandler) HandleExpandContext(c *gin.Context) (ExpandContextResponse, error) {
 	ctx := c.Request.Context()
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	filePath := c.Query("path")
@@ -536,44 +383,37 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
 	head := c.Query("head")
 
 	if filePath == "" || base == "" || head == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "required parameters: path, base, head"})
-		return
+		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "required parameters: path, base, head")
 	}
 
 	var fromOld, toOld, fromNew int
 
-	// 오케스트레이터 호환: start_old, start_new, count, direction
 	if startOldStr := c.Query("start_old"); startOldStr != "" {
 		startOld, err := strconv.Atoi(startOldStr)
 		if err != nil || startOld < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "start_old must be a positive integer"})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_old must be a positive integer")
 		}
 
 		startNewStr := c.Query("start_new")
 		if startNewStr == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "start_new is required when using start_old"})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_new is required when using start_old")
 		}
 		startNew, err := strconv.Atoi(startNewStr)
 		if err != nil || startNew < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "start_new must be a positive integer"})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_new must be a positive integer")
 		}
 
-		count := 20 // 기본값
+		count := 20
 		if countStr := c.Query("count"); countStr != "" {
 			count, err = strconv.Atoi(countStr)
 			if err != nil || count < 1 {
-				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "count must be a positive integer"})
-				return
+				return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "count must be a positive integer")
 			}
 		}
 
 		direction := c.DefaultQuery("direction", "down")
 
 		if direction == "up" {
-			// 위로 확장: start_old 위쪽 count 라인
 			fromOld = startOld - count
 			if fromOld < 1 {
 				fromOld = 1
@@ -587,61 +427,54 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
 				fromNew = 1
 			}
 		} else {
-			// 아래로 확장 (기본): start_old부터 count 라인
 			fromOld = startOld
 			toOld = startOld + count - 1
 			fromNew = startNew
 		}
 	} else {
-		// 레거시 파라미터: from_old, to_old, from_new
 		fromOldStr := c.Query("from_old")
 		toOldStr := c.Query("to_old")
 		fromNewStr := c.Query("from_new")
 
 		if fromOldStr == "" || toOldStr == "" || fromNewStr == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "required parameters: path, base, head, and either (start_old, start_new, count) or (from_old, to_old, from_new)"})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "required parameters: path, base, head, and either (start_old, start_new, count) or (from_old, to_old, from_new)")
 		}
 
 		fromOld, err = strconv.Atoi(fromOldStr)
 		if err != nil || fromOld < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_old must be a positive integer"})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "from_old must be a positive integer")
 		}
 		toOld, err = strconv.Atoi(toOldStr)
 		if err != nil || toOld < fromOld {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "to_old must be >= from_old"})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "to_old must be >= from_old")
 		}
 		fromNew, err = strconv.Atoi(fromNewStr)
 		if err != nil || fromNew < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "from_new must be a positive integer"})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "from_new must be a positive integer")
 		}
 	}
 
-	// 최대 500 라인 제한
 	if toOld-fromOld+1 > 500 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "line range too large (max 500 lines)"})
-		return
+		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "line range too large (max 500 lines)")
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// diff_mode 결정 + effective_base 해석
-	// side=old일 때는 effective_base에서 context 라인을 읽어야 file diff hunk와 라인 번호가 정확히 맞춰짐.
+	// diff_mode 결정 + effective_base 해석 (Issue-2095).
+	// side=old일 때는 effective_base에서 context 라인을 읽어야 file diff hunk와 라인 번호가 정렬.
 	mode := parseDiffMode(c, DiffModeMergeBase)
 	rr, err := nativeResolveDiffRange(ctx, repoPath, base, head, mode)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"})
-		return
+		// legacy 호환 (CR-2805): ref resolve 실패는 404 + code: REF_NOT_FOUND.
+		return ExpandContextResponse{}, &responseOverride{
+			status: http.StatusNotFound,
+			body:   gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"},
+		}
 	}
 
-	// side 파라미터: deleted 파일은 base에서 읽어야 함 (기본: head)
 	ref := rr.HeadHash
 	if side := c.Query("side"); side == "old" {
 		ref = rr.EffectiveBase
@@ -651,19 +484,19 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "not found") {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": errStr})
-			return
+			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusNotFound, errStr)
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": errStr})
-		return
+		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusInternalServerError, errStr)
 	}
 
-	c.JSON(http.StatusOK, response)
+	return *response, nil
 }
 
-// HandlePatch는 GET /repos/:owner/:repo/patch/:base/:head를 처리합니다
+// HandlePatch handles GET /diff/patch/:base/:head — text/plain output.
+//
+// raw response (Content-Type: text/plain) 이라 typed wrapper 와 호환되지 않음.
+// gin.HandlerFunc 시그니처 유지 → routes.go 에서 RegisterRaw 로 등록.
 func (h *DiffHandler) HandlePatch(c *gin.Context) {
-	// 공통 파라미터 추출 및 검증
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
 		h.logger.Error("Failed to validate and extract parameters", zap.Error(err))
@@ -671,7 +504,6 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 		return
 	}
 
-	// URL 경로에서 base와 head 파라미터 추출 (v1과 동일하게 동작)
 	base := protocol.SafeParam(c, "base")
 	head := protocol.SafeParam(c, "head")
 	if base == "" || head == "" {
@@ -679,12 +511,9 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base or head"})
 		return
 	}
-
-	// params에 URL 경로 파라미터 설정
 	params.Base = base
 	params.Head = head
 
-	// 권한 검증 및 저장소 경로 가져오기
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
 		h.logger.Error("Invalid repository path", zap.Error(err))
@@ -692,7 +521,6 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 		return
 	}
 
-	// patch 콘텐츠 생성
 	patchContent, err := h.generatePatch(repoPath, params.Base, params.Head)
 	if err != nil {
 		h.logger.Error("Failed to generate patch", zap.Error(err))
@@ -700,35 +528,25 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 		return
 	}
 
-	// patch 콘텐츠에 적절한 헤더 설정
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.patch\"", params.Base, params.Head))
-
-	// patch 콘텐츠 작성
 	c.Status(http.StatusOK)
-	_, err = c.Writer.Write([]byte(patchContent))
-	if err != nil {
+	if _, err := c.Writer.Write([]byte(patchContent)); err != nil {
 		h.logger.Error("Failed to write patch response", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
 	}
 }
 
-// HandleDiffFileSearch는 GET /repos/:owner/:repo/diff/search/files를 처리합니다.
-// diff에서 변경된 파일 중 파일명을 대소문자 무관 부분 일치로 검색합니다.
-// 파라미터:
-//   - base, head: 필수 (커밋 SHA 또는 브랜치명)
-//   - query: 필수 (검색어)
-//   - diff_mode: "merge_base" (기본) 또는 "direct"
-//   - type: deprecated 별칭 — "branch"→merge_base, "commit"→direct (diff_mode가 우선)
-func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
+// HandleDiffFileSearch handles GET /diff/search/files.
+//
+// diff_mode 쿼리(merge_base 기본 / direct)로 file list 계산 기준을 통일 (Issue-2095).
+// 레거시 type=branch|commit 별칭은 diff_mode 미지정 시 fallback. 응답에 effective_base /
+// diff_mode 가 함께 노출돼 호출자가 file list와 file diff의 정렬 여부를 검증 가능.
+func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchResponse, error) {
 	ctx := c.Request.Context()
 
-	// 공통 파라미터 추출 및 검증
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	base := c.Query("base")
@@ -736,12 +554,10 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 	query := c.Query("query")
 
 	if base == "" || head == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base, head"})
-		return
+		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base, head")
 	}
 	if query == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameter: query"})
-		return
+		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: query")
 	}
 
 	// diff_mode 결정. 명시 우선; 없으면 레거시 type 별칭; 둘 다 없으면 merge_base.
@@ -749,8 +565,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 	if rawMode := strings.TrimSpace(c.Query("diff_mode")); rawMode != "" {
 		m := DiffMode(rawMode)
 		if !m.IsValid() {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "diff_mode must be 'merge_base' or 'direct'"})
-			return
+			return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "diff_mode must be 'merge_base' or 'direct'")
 		}
 		mode = m
 	} else if rawType := strings.TrimSpace(c.Query("type")); rawType != "" {
@@ -760,8 +575,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 		case "commit":
 			mode = DiffModeDirect
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "type must be 'commit' or 'branch'"})
-			return
+			return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "type must be 'commit' or 'branch'")
 		}
 	}
 
@@ -770,23 +584,23 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	rr, err := nativeResolveDiffRange(ctx, repoPath, base, head, mode)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"})
-		return
+		// legacy 호환 (CR-2805): ref resolve 실패는 404 + code: REF_NOT_FOUND.
+		return DiffFileSearchResponse{}, &responseOverride{
+			status: http.StatusNotFound,
+			body:   gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"},
+		}
 	}
 
 	fileMetas, err := nativeGetDiffFileList(ctx, repoPath, rr.EffectiveBase, rr.HeadHash)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
+		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// 파일명 검색 (대소문자 무관 부분 일치 — path와 old_path 모두 검색)
 	queryLower := strings.ToLower(query)
 	var results []DiffFileSearchResult
 	for _, meta := range fileMetas {
@@ -814,16 +628,16 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 		legacyType = "commit"
 	}
 
-	c.JSON(http.StatusOK, &DiffFileSearchResponse{
+	return DiffFileSearchResponse{
 		Success:       true,
 		Query:         query,
 		Type:          legacyType,
 		DiffMode:      string(rr.Mode),
-		EffectiveBase: rr.EffectiveBase,
 		Base:          base,
 		Head:          head,
+		EffectiveBase: rr.EffectiveBase,
 		MergeBase:     rr.MergeBase,
 		Files:         results,
 		TotalCount:    len(results),
-	})
+	}, nil
 }

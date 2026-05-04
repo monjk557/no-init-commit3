@@ -56,9 +56,12 @@ type CreateTagResponse struct {
 	Tag     *Tag `json:"tag"`
 }
 
+// DeleteTagResponse 는 DELETE /repos/{owner}/{repo}/tags/{tag} 의 응답.
+// Tag 는 삭제된 태그의 이름 (string) — runtime 응답과 일치 (이전 정의의
+// `*Tag` 는 path 에서 참조되지 않은 orphan 이었음).
 type DeleteTagResponse struct {
-	Success bool `json:"success"`
-	Tag     *Tag `json:"tag"`
+	Success bool   `json:"success"`
+	Tag     string `json:"tag"`
 }
 
 // BulkDeleteTagsRequest는 대량 태그 삭제를 위한 요청을 나타냅니다.

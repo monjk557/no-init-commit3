@@ -45,8 +45,9 @@ func setupRouterForPerf(t *testing.T) (*gin.Engine, string) {
 	require.NoError(t, err)
 	r := gin.New()
 	r.GET("/repos/:owner/:repo/blob", blobHandler.HandleBlobAPI)
-	r.GET("/repos/:owner/:repo/tree", treeHandler.HandleTreeAPI)
-	r.POST("/repos/:owner/:repo", repoHandler.HandleCreateRepository)
+	g := r.Group("/repos/:owner/:repo")
+	tree.RegisterRoutes(g, treeHandler)
+	repositories.RegisterRoutes(g, repoHandler)
 	return r, tempDir
 }
 

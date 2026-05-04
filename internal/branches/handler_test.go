@@ -41,7 +41,7 @@ func Test_CreateBranch_ValidRequest_ReturnsSuccess(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	// When: 유효한 브랜치 생성 요청
 	body := `{"name": "feature/new-feature", "source": "master"}`
@@ -70,7 +70,7 @@ func Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature/checkout-test", "source": "master", "checkout": true}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -102,7 +102,7 @@ func Test_CreateBranch_DuplicateName_Returns409(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(branchRef))
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	// When: 같은 이름의 브랜치 생성 시도
 	body := `{"name": "feature/existing", "source": "master", "force": false}`
@@ -132,7 +132,7 @@ func Test_CreateBranch_WithForce_OverwritesExisting(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(branchRef))
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature/force-test", "source": "master", "force": true}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -157,7 +157,7 @@ func Test_CreateBranch_InvalidBranchName_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "invalid/branch/name", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -178,7 +178,7 @@ func Test_CreateBranch_InvalidJSON_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader("{invalid json}"))
 	req.Header.Set("Content-Type", "application/json")
@@ -209,7 +209,7 @@ func Test_UpdateBranch_Rename_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(oldRef))
 
 	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+	router.PATCH("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleUpdateBranch))
 
 	body := `{"new_name": "new-branch", "force": false}`
 	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/old-branch", strings.NewReader(body))
@@ -235,7 +235,7 @@ func Test_UpdateBranch_NonExistent_Returns404(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+	router.PATCH("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleUpdateBranch))
 
 	body := `{"target": "master", "force": false}`
 	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/nonexistent", strings.NewReader(body))
@@ -268,7 +268,7 @@ func Test_DeleteBranch_Existing_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(branchRef))
 
 	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+	router.DELETE("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleDeleteBranch))
 
 	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/feature/to-delete", nil)
 	w := httptest.NewRecorder()
@@ -292,7 +292,7 @@ func Test_DeleteBranch_NonExistent_Returns404(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+	router.DELETE("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleDeleteBranch))
 
 	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -311,7 +311,7 @@ func Test_DeleteBranch_InvalidName_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+	router.DELETE("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleDeleteBranch))
 
 	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/invalid/branch/name", nil)
 	w := httptest.NewRecorder()
@@ -335,7 +335,7 @@ func Test_ValidateBranchName_Available_ReturnsTrue(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+	router.GET("/repos/:owner/:repo/branches/validate/*name", adapt(handler.HandleValidateBranchName))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/new-branch", nil)
 	w := httptest.NewRecorder()
@@ -365,7 +365,7 @@ func Test_ValidateBranchName_AlreadyExists_ReturnsFalse(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(branchRef))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+	router.GET("/repos/:owner/:repo/branches/validate/*name", adapt(handler.HandleValidateBranchName))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/existing-branch", nil)
 	w := httptest.NewRecorder()
@@ -401,7 +401,7 @@ func Test_ValidateBranchName_SuggestedNameIsAvailable(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(branchRef))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+	router.GET("/repos/:owner/:repo/branches/validate/*name", adapt(handler.HandleValidateBranchName))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/feature/test", nil)
 	w := httptest.NewRecorder()
@@ -431,7 +431,7 @@ func Test_ValidateBranchName_Available_NoSuggestedName(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+	router.GET("/repos/:owner/:repo/branches/validate/*name", adapt(handler.HandleValidateBranchName))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/validate/brand-new-branch", nil)
 	w := httptest.NewRecorder()
@@ -453,7 +453,7 @@ func Test_ValidateBranchName_RepoNotFound_Returns404(t *testing.T) {
 	handler, _ := newHandler(t)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+	router.GET("/repos/:owner/:repo/branches/validate/*name", adapt(handler.HandleValidateBranchName))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/nonexistent/branches/validate/some-branch", nil)
 	w := httptest.NewRecorder()
@@ -487,7 +487,7 @@ func Test_GetBranches_PaginationOutOfRange_ReturnsEmptyArray(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
 
 	// skip=10으로 범위를 벗어나는 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches?limit=10&skip=10", nil)
@@ -515,7 +515,7 @@ func Test_GetBranches_DefaultRepo_ReturnsArrayNotNull(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
 	w := httptest.NewRecorder()
@@ -679,7 +679,7 @@ func Test_CreateBranch_EndsWithDotLock_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature.lock", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -701,7 +701,7 @@ func Test_CreateBranch_ContainsAtBrace_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "foo@{1}", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -723,7 +723,7 @@ func Test_CreateBranch_DoubleDot_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature..bar", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -745,7 +745,7 @@ func Test_CreateBranch_Tilde_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature~1", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -767,7 +767,7 @@ func Test_CreateBranch_Space_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature branch", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -789,7 +789,7 @@ func Test_CreateBranch_LeadingWhitespace_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": " main", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -811,7 +811,7 @@ func Test_CreateBranch_TrailingWhitespace_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "main ", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -833,7 +833,7 @@ func Test_CreateBranch_InvalidSource_Returns404(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "new-branch", "source": "nonexistent-branch"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -892,7 +892,7 @@ func Test_CreateBranch_FromCommitSHA_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, bareRepo.Storer.SetReference(masterRef))
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	// When: SHA에서 브랜치 생성
 	body := `{"name": "branch-from-sha", "source": "` + commitHash.String() + `"}`
@@ -929,7 +929,7 @@ func Test_CreateBranch_FromTag_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(tagRef))
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	// When: 태그에서 브랜치 생성
 	body := `{"name": "branch-from-tag", "source": "v1.0.0"}`
@@ -957,7 +957,7 @@ func Test_CreateBranch_SlashInName_ReturnsSuccess(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature/foo", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -982,7 +982,7 @@ func Test_CreateBranch_MultipleSlashes_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature/foo/bar", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -1003,7 +1003,7 @@ func Test_CreateBranch_StartWithSlash_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "/feature", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -1024,7 +1024,7 @@ func Test_CreateBranch_EndWithSlash_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature/", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -1045,7 +1045,7 @@ func Test_CreateBranch_RefsHeads_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "refs/heads/feature", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -1066,7 +1066,7 @@ func Test_CreateBranch_SpecialChars_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	testCases := []struct {
 		name string
@@ -1098,7 +1098,7 @@ func Test_CreateBranch_ContainsBackslash_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	body := `{"name": "feature\\bar", "source": "master"}`
 	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
@@ -1119,7 +1119,7 @@ func Test_CreateBranch_ContainsQuestionAsteriskBracket_Returns400(t *testing.T) 
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	testCases := []struct {
 		name string
@@ -1152,7 +1152,7 @@ func Test_CreateBranch_NameIsDashOrDot_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.POST("/repository/:owner/:repo/branches", handler.HandleCreateBranch)
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
 
 	// "."는 validator에서 거부됨 (HasPrefix/HasSuffix)
 	body := `{"name": ".", "source": "master"}`
@@ -1201,7 +1201,7 @@ func Test_UpdateBranch_RenameToDuplicate_Returns409(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(existingRef))
 
 	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+	router.PATCH("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleUpdateBranch))
 
 	body := `{"new_name": "existing-branch", "force": false}`
 	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/old-branch", strings.NewReader(body))
@@ -1280,7 +1280,7 @@ func Test_UpdateBranch_FastForward_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, bareRepo.Storer.SetReference(featureRef))
 
 	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+	router.PATCH("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleUpdateBranch))
 
 	// When: fast-forward 업데이트 (commit1 -> commit2)
 	body := `{"target": "` + commit2.String() + `", "force": false}`
@@ -1407,7 +1407,7 @@ func Test_UpdateBranch_NonFastForward_Returns400(t *testing.T) {
 	require.NoError(t, bareRepo.Storer.SetReference(featureRef2))
 
 	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+	router.PATCH("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleUpdateBranch))
 
 	// When: non-fast-forward 업데이트 시도 (commit2 -> commit3, 분기됨)
 	body := `{"target": "` + commit3.String() + `", "force": false}`
@@ -1507,7 +1507,7 @@ func Test_UpdateBranch_NonFastForwardForce_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, bareRepo.Storer.SetReference(featureRef2))
 
 	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+	router.PATCH("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleUpdateBranch))
 
 	// When: force=true로 non-fast-forward 업데이트
 	body := `{"target": "` + commit3.String() + `", "force": true}`
@@ -1543,7 +1543,7 @@ func Test_UpdateBranch_RenameDefault_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(masterRef))
 
 	router := gin.New()
-	router.PATCH("/repository/:owner/:repo/branches/*branch", handler.HandleUpdateBranch)
+	router.PATCH("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleUpdateBranch))
 
 	body := `{"new_name": "main", "force": false}`
 	req := httptest.NewRequest("PATCH", "/repository/testowner/testrepo/branches/master", strings.NewReader(body))
@@ -1589,7 +1589,7 @@ func Test_DeleteBranch_WithSlash_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(branchRef))
 
 	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+	router.DELETE("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleDeleteBranch))
 
 	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/feature/foo", nil)
 	w := httptest.NewRecorder()
@@ -1612,7 +1612,7 @@ func Test_DeleteBranch_DefaultBranch_ReturnsSuccess(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+	router.DELETE("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleDeleteBranch))
 
 	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/master", nil)
 	w := httptest.NewRecorder()
@@ -1636,7 +1636,7 @@ func Test_DeleteBranch_CurrentHEAD_ReturnsSuccess(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(headRef))
 
 	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+	router.DELETE("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleDeleteBranch))
 
 	req := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/master", nil)
 	w := httptest.NewRecorder()
@@ -1663,7 +1663,7 @@ func Test_DeleteBranch_AlreadyDeleted_Returns404(t *testing.T) {
 
 	// 첫 번째 삭제
 	router := gin.New()
-	router.DELETE("/repository/:owner/:repo/branches/*branch", handler.HandleDeleteBranch)
+	router.DELETE("/repository/:owner/:repo/branches/*branch", adapt(handler.HandleDeleteBranch))
 
 	req1 := httptest.NewRequest("DELETE", "/repository/testowner/testrepo/branches/to-delete", nil)
 	w1 := httptest.NewRecorder()
@@ -1727,7 +1727,7 @@ func Test_GetBranches_EmptyRepo_ReturnsEmptyArray(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
 	w := httptest.NewRecorder()
@@ -1762,7 +1762,7 @@ func Test_GetBranches_WithBranches_ReturnsAll(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
 	w := httptest.NewRecorder()
@@ -1796,7 +1796,7 @@ func Test_GetBranches_Pagination_ReturnsCorrectPage(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", handler.HandleGetBranches)
+	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
 
 	// limit=2, skip=0으로 첫 페이지 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches?limit=2&skip=0", nil)
@@ -1825,7 +1825,7 @@ func Test_ResolveBranch_ExistingBranch_ReturnsSHA(t *testing.T) {
 	_ = initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", adapt(handler.HandleResolveBranch))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/master", nil)
 	w := httptest.NewRecorder()
@@ -1858,7 +1858,7 @@ func Test_ResolveBranch_BranchWithSlash_ReturnsSHA(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(branchRef))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", adapt(handler.HandleResolveBranch))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/feature/login", nil)
 	w := httptest.NewRecorder()
@@ -1883,7 +1883,7 @@ func Test_ResolveBranch_EmptyRef_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", adapt(handler.HandleResolveBranch))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/", nil)
 	w := httptest.NewRecorder()
@@ -1901,7 +1901,7 @@ func Test_ResolveBranch_RepoNotFound_Returns404(t *testing.T) {
 	handler, _ := newHandler(t)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", adapt(handler.HandleResolveBranch))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/nonexistent/branches/resolve/master", nil)
 	w := httptest.NewRecorder()
@@ -1920,7 +1920,7 @@ func Test_ResolveBranch_BranchNotFound_Returns404(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/resolve/*ref", handler.HandleResolveBranch)
+	router.GET("/repos/:owner/:repo/branches/resolve/*ref", adapt(handler.HandleResolveBranch))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches/resolve/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -1943,7 +1943,7 @@ func Test_ValidateBranchName_InvalidFormat_Returns400(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches/validate/*name", handler.HandleValidateBranchName)
+	router.GET("/repos/:owner/:repo/branches/validate/*name", adapt(handler.HandleValidateBranchName))
 
 	testCases := []struct {
 		name     string

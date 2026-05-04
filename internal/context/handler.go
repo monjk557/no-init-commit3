@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -46,42 +47,41 @@ func NewContextHandler(cfg *config.Config) (*ContextHandler, error) {
 	}, nil
 }
 
-// HandleContext는 POST /repos/:owner/:repo/context를 처리합니다
-func (h *ContextHandler) HandleContext(c *gin.Context) {
+// HandleContext는 POST /repos/{owner}/{repo}/context를 처리합니다.
+//
+// Typed handler — bind 실패 시 legacy 와 동일한 사용자 친화 메시지를 보존하기
+// 위해 RegisterNoBody + WithRequestBody 조합 (lenient bind archetype). bind 는
+// 본문에서 직접 수행한다.
+func (h *ContextHandler) HandleContext(c *gin.Context) (ContextResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
 	if owner == "" || repo == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing required parameters: owner or repo"})
-		return
+		return ContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "missing required parameters: owner or repo")
 	}
 
-	// 요청 바디 파싱
+	// 요청 바디 파싱 — 사용자 친화 메시지 유지를 위해 직접 bind.
 	var req ContextRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Error("Failed to parse request body", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: old_rev and new_rev are required"})
-		return
+		return ContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body: old_rev and new_rev are required")
 	}
 
 	// SHA 형식 검증
 	if !isNullSHA(req.OldRev) && !shaRegex.MatchString(req.OldRev) {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid old_rev: must be 40-character hex SHA"})
-		return
+		return ContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid old_rev: must be 40-character hex SHA")
 	}
 	if !shaRegex.MatchString(req.NewRev) {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid new_rev: must be 40-character hex SHA"})
-		return
+		return ContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid new_rev: must be 40-character hex SHA")
 	}
 
 	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
 		h.logger.Error("Invalid repository path", zap.Error(err))
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return ContextResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
 	// 컨텍스트 조회
@@ -92,9 +92,8 @@ func (h *ContextHandler) HandleContext(c *gin.Context) {
 			zap.String("repo", repo),
 			zap.Error(err),
 		)
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
+		return ContextResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	c.JSON(http.StatusOK, resp)
+	return *resp, nil
 }

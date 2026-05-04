@@ -140,6 +140,216 @@ git status              # ✅ Ready to commit
 **Good (Long-term):**
 "Design a distributed Git protocol optimization with chunked transfer, resume capability, and intelligent resource coordination across the entire system"
 
+## Typed Handler Architecture (REST API)
+
+Issue-2164 (Phase 0~2.14, 2026-05-03 완료) 에서 13 REST 도메인 / 45 endpoint
+를 typed handler 로 일괄 마이그레이션했다. **신규 REST endpoint 는 반드시
+이 패턴을 따라야 함**. 자세한 마이그레이션 가이드는
+`docs/architecture/typed-handler-resume-guide.md`,
+`docs/architecture/typed-handler-migration-plan.md` 참조.
+
+LFS 도메인은 별도 트랙 — Git LFS 가 별도 프로토콜이라 OpenAPI 와 무관.
+
+### 핵심 원칙
+
+1. **handler 시그니처는 `func(*gin.Context) (RespT, error)`** — `c.JSON` 직접
+   호출 금지. wrapper 가 결과/에러를 응답에 매핑.
+2. **schema 는 runtime 응답과 정확히 일치해야 함** — orphan/aspirational
+   schema 금지. 새 endpoint 는 named struct 응답을 schema.go 에 정의.
+   ad-hoc `gin.H{...}` 응답 금지.
+3. **모든 도메인은 `routes.go` 를 가짐** — `RegisterRoutes(g, h)` 가
+   server.go (runtime) 와 specs/spec_routes.go (spec 생성) 양쪽에서 호출되어
+   single source of truth 보장.
+
+### 도메인 추가 레시피 (5 단계)
+
+신규 endpoint 또는 새 도메인 추가 시:
+
+```
+internal/<domain>/
+├── handler.go          # typed 시그니처 (Resp, error)
+├── routes.go           # RegisterRoutes(g, h) — typed.RegisterX 호출
+├── schema.go           # named Request/Response struct
+└── handler_test.go     # adapt(handler.HandleX) 패턴
+```
+
+1. **handler.go** — 시그니처를 `func(*gin.Context) (RespT, error)` 로 정의.
+   에러는 `typed.NewHTTPError(status, msg)` 또는 `&responseErr/Override{}` 로
+   반환 (`c.JSON` 직접 호출 X).
+2. **routes.go** — `RegisterRoutes(g gin.IRouter, h *Handler)` 함수에서
+   `typed.RegisterX(g, path, tag, h.HandleY, opts...)` 호출. h 가 nil 이면
+   spec-only 모드 (등록만, 호출 없음).
+3. **server.go** — `<domain>.RegisterRoutes(group, handler)` 한 줄로 등록.
+   `g.METHOD(path, h.HandleX)` 직접 호출 금지.
+4. **specs/spec_routes.go** — `setupSpecRoutes` 의 마이그레이션된 도메인
+   목록에 `<domain>.RegisterRoutes(apiGroup, nil)` 추가.
+5. **테스트** — 같은 패키지에 `handler_typed_test.go` 추가하여
+   `invokeTyped[T]` + `adapt[T]` 제네릭 헬퍼 정의 (이미 13 도메인에 있음 —
+   복사하여 사용). router 등록은 `router.X(path, adapt(h.HandleY))` 패턴.
+
+### typed.RegisterX 결정 트리
+
+```
+endpoint 의 method?
+├── GET (body 없음)
+│    ├── query string 무시 / handler 본문에서 c.Query 직접 → RegisterGet
+│    └── 명시 query struct bind 원함 → RegisterGetWithQuery
+├── POST/PUT/PATCH (body 있음)
+│    ├── strict bind (gin validator 메시지 그대로 OK) → RegisterJSON
+│    └── lenient bind (커스텀 친화 메시지 보존) → RegisterNoBody + WithRequestBody
+├── POST/DELETE/PATCH (body 없음) → RegisterNoBody
+└── binary/text streaming (raw bytes/text out) → RegisterRaw + contentType
+```
+
+### Option / archetype 선택
+
+| 상황 | 도구 | 예시 도메인 |
+|---|---|---|
+| 정상 응답 status 200 외 (예: 201) | `WithStatus(http.StatusCreated)` | fork |
+| sentinel 에러 → 다중 status 매핑 | `WithErrorMapper(func(err error)(int,any))` | fork, revert, tags |
+| spec 에 다중 응답 status 명시 | `WithResponse(status, type, desc)` | fork |
+| custom Content-Type | `WithContentType(ct)` | (LFS 향) |
+| OpenAPI summary | `WithSummary("HandleX")` | **모든 typed endpoint 필수** |
+| spec 에서 숨김 (런타임 유지) | `WithExcludeFromSpec()` | fork (deprecated 후보), LFS |
+| OpenAPI deprecated 플래그 | `WithDeprecated()` | — |
+| RegisterNoBody 인데 spec 에 body schema | `WithRequestBody(reflect.TypeOf(ReqT{}))` | repositories, context, revert, tags, commits, branches, merge, overview, diffs |
+
+### 에러 처리 archetype
+
+**단일 status (대부분의 케이스)** — `typed.NewHTTPError`:
+```go
+if err := h.pathValidator.ValidateFilePath(...); err != nil {
+    return RespT{}, typed.NewHTTPError(http.StatusBadRequest,
+        fmt.Sprintf("Invalid path: %v", err))
+}
+```
+wrapper 가 자동으로 `gin.H{"success":false, "error": msg}` 응답.
+
+**sentinel → 다중 status** — `WithErrorMapper`:
+```go
+// handler 본문
+if err != nil { return RespT{}, err }  // raw
+
+// routes.go 의 mapper
+func myMapper(err error) (int, any) {
+    var he *typed.HTTPError
+    if errors.As(err, &he) {
+        return he.Status, gin.H{"success": false, "error": he.Message}
+    }
+    switch {
+    case errors.Is(err, ErrNotFound):  return 404, gin.H{...}
+    case errors.Is(err, ErrConflict):  return 409, gin.H{...}
+    }
+    return 500, gin.H{"success": false, "error": err.Error()}
+}
+```
+mapper 가 set 되어 있으면 wrapper 의 default `*HTTPError` 매핑은 적용 안 됨
+→ mapper 안에서 `errors.As(&he)` 로 직접 처리해야 함.
+
+**다중 필드 응답 (conflicts/code/reason 등) 또는 alternate success shape** —
+`responseErr` (merge) / `responseOverride` (diffs) wrapper:
+```go
+type responseOverride struct {
+    status int
+    body   any
+}
+func (e *responseOverride) Error() string { return "response override" }
+
+// handler
+return RespT{}, &responseOverride{
+    status: http.StatusConflict,
+    body: gin.H{
+        "success": false,
+        "error": "...",
+        "conflicts": [...],          // 다중 필드
+        "resolution_options": {...}, // 다중 필드
+    },
+}
+
+// mapper
+func mapper(err error) (int, any) {
+    var rich *responseOverride
+    if errors.As(err, &rich) {
+        return rich.status, rich.body  // 그대로
+    }
+    // ... typed.HTTPError 처리
+}
+```
+**용도**: 단순 `{success, error}` 가 아닌 응답 (conflict 정보, error_code,
+reason 필드 등) + 같은 200 OK 안에서 두 가지 다른 shape (예: paginated vs
+flat).
+
+### 테스트 헬퍼 (도메인 패키지마다 추가)
+
+`internal/<domain>/handler_typed_test.go`:
+```go
+package <domain>
+
+import (
+    "errors"
+    "net/http"
+    "github.com/gin-gonic/gin"
+    "github.com/collabops/git-executor/internal/api/typed"
+)
+
+// invokeTyped 는 typed handler 의 결과를 gin.Context 에 직접 쓴다 — wrapper
+// + ErrorMapper (responseOverride 처리) mirror.
+func invokeTyped[Resp any](c *gin.Context, fn func(*gin.Context) (Resp, error)) {
+    resp, err := fn(c)
+    if err != nil {
+        // (responseOverride 처리는 도메인별로 추가)
+        var he *typed.HTTPError
+        if errors.As(err, &he) {
+            c.JSON(he.Status, gin.H{"success": false, "error": he.Message})
+            return
+        }
+        c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusOK, resp)
+}
+
+func adapt[Resp any](fn func(*gin.Context) (Resp, error)) gin.HandlerFunc {
+    return func(c *gin.Context) { invokeTyped(c, fn) }
+}
+```
+
+테스트에서 `router.X(path, h.HandleY)` → `router.X(path, adapt(h.HandleY))` 로
+일괄 치환.
+
+### 알려진 함정
+
+1. **Summary 누락 → spec byte-equivalence 깨짐**: `WithSummary("HandleX")` 빠뜨리면
+   spec 의 `summary` 가 빈 문자열. legacy AST 가 함수명을 summary 로 썼으므로
+   동일 문자열 유지 필수.
+2. **lenient JSON bind**: `RegisterJSON` 의 strict bind 대신 handler 본문
+   에서 직접 `c.ShouldBindJSON(&req)` 후 친화 에러 메시지 (예:
+   `"Invalid JSON: %v"`) 반환. `RegisterNoBody + WithRequestBody` 조합.
+3. **gin.H ad-hoc 응답 → struct 승격**: 일부 legacy handler 가 named struct
+   대신 `gin.H{...}` 로 ad-hoc 응답. typed 시그니처는 named struct 강제.
+   `internal/<domain>/schema.go` 에 새 struct 정의 (예: tags
+   `DeleteTagResponse`, branches `ResolveBranchResponse`/`DeleteBranchResponse`).
+4. **schema-runtime 불일치 발견 시**: orphan/aspirational schema 가 런타임과
+   다르면 **schema 수정** 이 정직한 fix (tags Phase 2.7,
+   branches Phase 2.12 archetype). runtime 변경은 외부 client 영향 위험.
+5. **legacy `getTagFromPath` substring 매칭 호환**: 일부 path 가 substring
+   순서로 의도치 않은 tag 를 반환 (예: `/merges/diff` → "Diff" 아닌 substring
+   매칭). byte-equivalence 보존하려면 per-endpoint tag 명시 (overview,
+   merge, diffs).
+6. **gin `*name` wildcard**: `c.Param("name")` 이 leading `/` 를 포함.
+   handler 본문에서 `strings.TrimPrefix(name, "/")` 패턴 유지.
+7. **RegisterRoutes 가 nil handler 받음**: spec-only 모드. type inference
+   실패 방지 패턴:
+   ```go
+   var op func(*gin.Context) (Resp, error)
+   if h != nil { op = h.HandleX }
+   typed.RegisterGet(g, "/path", tag, op, ...)
+   ```
+8. **RegisterRaw 의 spec 처리**: text/binary 응답은 typed wrapper 우회.
+   `RegisterRaw(g, method, path, tag, gin.HandlerFunc, contentType, opts...)`
+   로 등록하면 spec 에는 `Content-Type` 만 노출되고 schema 없음 (예: diffs
+   `HandlePatch` text/plain).
+
 ## Worktree Workflow
 
 워크트리에서 작업 후 정리할 때 **반드시 아래 순서를 지킬 것**:

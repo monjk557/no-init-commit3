@@ -85,7 +85,7 @@ func TestHandleMergePreview_Returns404_When_SourceRefNotFound(t *testing.T) {
 	require.NoError(t, repo.Storer.RemoveReference(plumbing.NewBranchReferenceName(featureBranch)))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/merges/preview", handler.HandleMergePreview)
+	router.GET("/repos/:owner/:repo/merges/preview", adapt(handler.HandleMergePreview))
 
 	req := httptest.NewRequest(
 		http.MethodGet,
@@ -143,7 +143,7 @@ func TestHandleMerge_Returns409_When_ConflictDetected(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	bodyBytes, err := json.Marshal(&MergeRequest{
 		SourceRef: "feature",
@@ -221,7 +221,7 @@ func Test_Merge_ConcurrentTargetAdvanced_Returns409_CONCURRENT_UPDATE(t *testing
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	// When: merge 요청을 비동기로 보내고, 동시에 다른 goroutine에서 target 브랜치를 업데이트
 	mergeDone := make(chan struct{})
@@ -348,7 +348,7 @@ func Test_Merge_TargetDeletedDuringMerge_Returns409_CONCURRENT_UPDATE(t *testing
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	// When: merge 요청을 비동기로 보내고, 동시에 다른 goroutine에서 target 브랜치를 삭제
 	mergeDone := make(chan struct{})
@@ -460,7 +460,7 @@ func Test_Merge_FastForward_UpdatesRef(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	bodyBytes, err := json.Marshal(&MergeRequest{
 		SourceRef: "feature",
@@ -543,7 +543,7 @@ func Test_Merge_ThreeWay_CreatesMergeCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	bodyBytes, err := json.Marshal(&MergeRequest{
 		SourceRef: "feature",
@@ -628,7 +628,7 @@ func Test_Merge_WithConflicts_Returns422_MERGE_CONFLICT(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	bodyBytes, err := json.Marshal(&MergeRequest{
 		SourceRef:     "feature",
@@ -706,7 +706,7 @@ func Test_Merge_Squash_CreatesSingleCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	bodyBytes, err := json.Marshal(&MergeRequest{
 		SourceRef: "feature",
@@ -805,7 +805,7 @@ func Test_Merge_SourceAdvancedDuringMerge_Returns409_CONCURRENT_UPDATE(t *testin
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	// When: merge 요청을 비동기로 보내고, 동시에 다른 goroutine에서 source 브랜치를 업데이트
 	mergeDone := make(chan struct{})
@@ -935,11 +935,11 @@ func Test_MergePreview_PolicyAllows_ButMergeRejects_IsImpossible(t *testing.T) {
 
 	// Preview router
 	previewRouter := gin.New()
-	previewRouter.POST("/repos/:owner/:repo/merge/preview", previewHandler.HandleMergePreview)
+	previewRouter.POST("/repos/:owner/:repo/merge/preview", adapt(previewHandler.HandleMergePreview))
 
 	// Merge router
 	mergeRouter := gin.New()
-	mergeRouter.POST("/repos/:owner/:repo/merges", mergeHandler.HandleMerge)
+	mergeRouter.POST("/repos/:owner/:repo/merges", adapt(mergeHandler.HandleMerge))
 
 	// When: preview 호출
 	previewURL := fmt.Sprintf("/repos/%s/%s/merge/preview?source_ref=feature&target_ref=main", owner, repoName)
@@ -1037,11 +1037,11 @@ func Test_MergePreview_PolicyRejects_MergeAlsoRejects_SameErrorCode(t *testing.T
 
 	// Preview router
 	previewRouter := gin.New()
-	previewRouter.POST("/repos/:owner/:repo/merge/preview", previewHandler.HandleMergePreview)
+	previewRouter.POST("/repos/:owner/:repo/merge/preview", adapt(previewHandler.HandleMergePreview))
 
 	// Merge router
 	mergeRouter := gin.New()
-	mergeRouter.POST("/repos/:owner/:repo/merges", mergeHandler.HandleMerge)
+	mergeRouter.POST("/repos/:owner/:repo/merges", adapt(mergeHandler.HandleMerge))
 
 	// When: preview 호출
 	previewURL := fmt.Sprintf("/repos/%s/%s/merge/preview?source_ref=feature&target_ref=main", owner, repoName)
@@ -1145,11 +1145,11 @@ func Test_Merge_PolicyStateChangesBetweenPreviewAndMerge_Returns409Or403_ByContr
 
 	// Preview router
 	previewRouter := gin.New()
-	previewRouter.POST("/repos/:owner/:repo/merge/preview", previewHandler.HandleMergePreview)
+	previewRouter.POST("/repos/:owner/:repo/merge/preview", adapt(previewHandler.HandleMergePreview))
 
 	// Merge router
 	mergeRouter := gin.New()
-	mergeRouter.POST("/repos/:owner/:repo/merges", mergeHandler.HandleMerge)
+	mergeRouter.POST("/repos/:owner/:repo/merges", adapt(mergeHandler.HandleMerge))
 
 	// When: preview 호출
 	previewURL := fmt.Sprintf("/repos/%s/%s/merge/preview?source_ref=feature&target_ref=main", owner, repoName)
@@ -1265,7 +1265,7 @@ func Test_Merge_FFOnly_TargetAdvancedDuringMerge_Returns409_Not403(t *testing.T)
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	// When: merge 요청을 비동기로 보내고, 동시에 다른 goroutine에서 target 브랜치를 업데이트
 	mergeDone := make(chan struct{})
@@ -1390,7 +1390,7 @@ func Test_Merge_FailureMidway_DoesNotLeaveGitStateFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	// When: 충돌이 있는 merge 시도 (ForceConflict=false)
 	bodyBytes, err := json.Marshal(&MergeRequest{
@@ -1487,7 +1487,7 @@ func Test_Merge_NoFastForward_CreatesMergeCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	bodyBytes, err := json.Marshal(&MergeRequest{
 		SourceRef: "feature",
@@ -1584,7 +1584,7 @@ func Test_Merge_FailsRollback_OriginalStateRestored(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+	router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 
 	// When: 충돌이 있는 merge 시도 (ForceConflict=false)
 	bodyBytes, err := json.Marshal(&MergeRequest{

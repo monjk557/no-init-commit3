@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/gin-gonic/gin"
@@ -50,8 +51,12 @@ func NewRepositoryCreationHandler(cfg *config.Config) (*RepositoryCreationHandle
 	}, nil
 }
 
-// HandleCreateRepository handles POST /repos/{owner}/{repo} for creating new repositories
-func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
+// HandleCreateRepository handles POST /repos/{owner}/{repo} for creating new repositories.
+//
+// Typed handler — typed.RegisterNoBody + typed.WithRequestBody 로 등록하고
+// JSON binding 은 본문에서 직접 수행한다 (legacy lenient fallback 보존:
+// 잘못된 / 빈 body 는 InitialCommit=true, DefaultBranch="main" 으로 fallback).
+func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) (CreateRepositoryResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
@@ -60,32 +65,30 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 		zap.String("repo", repo))
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return
+		return CreateRepositoryResponse{}, typed.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("Invalid path: %v", err),
+		)
 	}
 
 	var req CreateRepositoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		// Legacy lenient fallback: invalid / missing body → defaults.
 		req = CreateRepositoryRequest{
 			InitialCommit: true,
 			DefaultBranch: "main",
 		}
 	}
-
 	if req.DefaultBranch == "" {
 		req.DefaultBranch = "main"
 	}
 
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
 	if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
-		c.JSON(http.StatusConflict, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Repository %s/%s already exists", owner, repo),
-		})
-		return
+		return CreateRepositoryResponse{}, typed.NewHTTPError(
+			http.StatusConflict,
+			fmt.Sprintf("Repository %s/%s already exists", owner, repo),
+		)
 	}
 
 	createdRepo, err := h.createRepository(owner, repo, &req)
@@ -94,15 +97,13 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) {
 			zap.String("owner", owner),
 			zap.String("repo", repo),
 			zap.Error(err))
-
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to create repository: %v", err),
-		})
-		return
+		return CreateRepositoryResponse{}, typed.NewHTTPError(
+			http.StatusInternalServerError,
+			fmt.Sprintf("Failed to create repository: %v", err),
+		)
 	}
 
-	c.JSON(http.StatusCreated, createdRepo)
+	return *createdRepo, nil
 }
 
 // createRepository creates a new Git repository with optional initial commit

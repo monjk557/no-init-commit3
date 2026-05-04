@@ -50,7 +50,7 @@ func Test_MergeFileConflict_Returns422_MERGE_CONFLICT(t *testing.T) {
 		writeFile(t, wt, "conflict.txt", "main\n")
 		_, _ = commitFile(t, wt, "conflict.txt", "main")
 		router := gin.New()
-		router.POST("/repos/:owner/:repo/merges", handler.HandleMerge)
+		router.POST("/repos/:owner/:repo/merges", adapt(handler.HandleMerge))
 		bodyBytes, _ := json.Marshal(&MergeRequest{SourceRef: "feature", TargetRef: "main", ForceConflict: false})
 		req := httptest.NewRequest(http.MethodPost, "/repos/"+owner+"/"+repoName+"/merges", bytes.NewReader(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")

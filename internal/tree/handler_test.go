@@ -403,7 +403,7 @@ func TestHandleTreeAPI_Success_NonRecursive(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// 비재귀 모드로 트리 조회 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
@@ -480,7 +480,7 @@ func TestHandleTreeAPI_Success_Recursive(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// 재귀 모드로 트리 조회 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&recursive=true", nil)
@@ -509,7 +509,7 @@ func TestHandleTreeAPI_WithPath(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// src 디렉토리 경로로 트리 조회 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=src", nil)
@@ -538,7 +538,7 @@ func TestHandleTreeAPI_EmptyRefDefaultsToHEAD(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// ref 파라미터 없이 요청 (기본값 HEAD 사용)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree", nil)
@@ -561,7 +561,7 @@ func TestHandleTreeAPI_RepositoryNotFound(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// 존재하지 않는 저장소 조회 요청
 	req := httptest.NewRequest("GET", "/repos/nonexistent/norepo/tree?ref=main", nil)
@@ -588,7 +588,7 @@ func TestHandleTreeAPI_PathNotFound(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// 존재하지 않는 경로 조회 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=nonexistent/path", nil)
@@ -616,7 +616,7 @@ func TestHandleTreeAPI_ContextCancellation(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// 이미 취소된 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
@@ -647,7 +647,7 @@ func TestHandleTreeAPI_InvalidRef(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// 유효하지 않은 브랜치 조회 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=invalid-ref", nil)
@@ -688,7 +688,7 @@ func TestHandleTreeAPI_TreeSortingOrder(t *testing.T) {
 
 	// API 요청
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -712,7 +712,7 @@ func Test_Tree_RootDir_ReturnsEntries(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -732,7 +732,7 @@ func Test_Tree_Subdirectory_ReturnsEntries(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=src", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -752,7 +752,7 @@ func Test_Tree_NonExistentPath_Returns404(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=nonexistent/path", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -770,7 +770,7 @@ func Test_Tree_FilePath_Returns400(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=README.md", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -788,7 +788,7 @@ func Test_Tree_EmptyDirectory_ReturnsEmptyArray(t *testing.T) {
 	createTestRepositoryWithEmptyDir(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=empty_dir", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -808,7 +808,7 @@ func Test_Tree_ByRef_ReturnsEntriesAtRef(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -834,7 +834,7 @@ func Test_Tree_ByCommitSHA_ReturnsEntriesAtCommit(t *testing.T) {
 	sha := resolved.String()
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref="+sha, nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -856,7 +856,7 @@ func Test_Tree_PathTraversalSegments_Returns400(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&path=src/../etc", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -879,7 +879,7 @@ func Test_Tree_EntryNameWithUnicodeBidiCharacters_HandledSafely(t *testing.T) {
 	})
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -909,7 +909,7 @@ func Test_Tree_SymlinkPointsOutside_EntryReturnedButContentFetchBlocked(t *testi
 	repoPath := createTestRepositoryWithSymlink(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -941,7 +941,7 @@ func Test_Tree_FileEntry_TypeFile(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -966,7 +966,7 @@ func Test_Tree_DirectoryEntry_TypeDir(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -991,7 +991,7 @@ func Test_Tree_SymlinkEntry_TypeSymlink(t *testing.T) {
 	createTestRepositoryWithSymlink(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1016,7 +1016,7 @@ func Test_Tree_SubmoduleEntry_TypeSubmodule(t *testing.T) {
 	createTestRepositoryWithSubmodule(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1043,7 +1043,7 @@ func Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable(t *testing.T) {
 	createTestRepositoryWithSubmodule(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1070,7 +1070,7 @@ func Test_Tree_SymlinkEntry_ReturnsLinkTargetOrMetadata(t *testing.T) {
 	createTestRepositoryWithSymlink(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1102,7 +1102,7 @@ func Test_Tree_CaseCollision_BehaviorDeterministic(t *testing.T) {
 	})
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1134,7 +1134,7 @@ func Test_Tree_Recursive_ReturnsAllEntries(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&recursive=true", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1160,7 +1160,7 @@ func Test_Tree_Recursive_FlattensPaths(t *testing.T) {
 	createTestRepositoryWithCommits(t, tempDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleTreeAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main&recursive=true", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

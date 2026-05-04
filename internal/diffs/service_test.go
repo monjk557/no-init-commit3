@@ -182,7 +182,7 @@ func TestBinaryFile_NoChanges(t *testing.T) {
 	// Setup router
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// Make request - use full commit hash
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitSHA, secondCommitSHA)
@@ -370,7 +370,7 @@ func TestMaxFilesWithChanges_Limit(t *testing.T) {
 	// Setup router
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// Make request - use full commit hash
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitSHA, secondCommitSHA)
@@ -554,7 +554,7 @@ func TestMaxChangedLines_Limit(t *testing.T) {
 	// Setup router
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// Make request - use full commit hash
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitSHA, secondCommitSHA)
@@ -698,7 +698,7 @@ func TestTimeoutPrevention_AllFilesMetadata(t *testing.T) {
 	// Setup router
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// Make request - use full commit hash
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitSHA, secondCommitSHA)

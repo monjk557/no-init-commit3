@@ -2,11 +2,11 @@ package fork
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -60,9 +60,12 @@ func NewForkHandler(cfg *config.Config) (*ForkHandler, error) {
 	}, nil
 }
 
-// HandleForkRepository handles POST /repos/{owner}/{repo}/forks
-// 소스 저장소를 지정된 타겟 소유자 아래로 포크합니다.
-func (h *ForkHandler) HandleForkRepository(c *gin.Context) {
+// HandleForkRepository handles POST /repos/{owner}/{repo}/forks.
+//
+// Typed handler — RegisterJSON wrapper 가 invalid JSON body 시 400 으로
+// 응답한다. service 의 sentinel 에러 (ErrSourceNotFound, ErrForkAlreadyExists)
+// 는 routes.go 의 WithErrorMapper 가 status 매핑.
+func (h *ForkHandler) HandleForkRepository(c *gin.Context, req ForkRepositoryRequest) (ForkRepositoryResponse, error) {
 	ctx := c.Request.Context()
 
 	sourceOwner := c.Param("owner")
@@ -73,60 +76,33 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context) {
 		zap.String("source_owner", sourceOwner),
 		zap.String("source_repo", sourceRepo))
 
-	// Validate source path
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", sourceOwner, sourceRepo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid source path: %v", err),
-		})
-		return
+		return ForkRepositoryResponse{}, typed.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("Invalid source path: %v", err),
+		)
 	}
 
-	// Parse request body
-	var req ForkRepositoryRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid JSON: %v", err),
-		})
-		return
-	}
-
-	// Default target repo name to source repo name
 	targetRepo := req.Repo
 	if targetRepo == "" {
 		targetRepo = sourceRepo
 	}
 
-	// Validate target path
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", req.Owner, targetRepo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid target path: %v", err),
-		})
-		return
+		return ForkRepositoryResponse{}, typed.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("Invalid target path: %v", err),
+		)
 	}
 
-	// Get user ID from request header
 	userID := c.GetHeader("X-USER-ID")
 
-	// Execute fork
+	// service error 는 raw 로 반환 — WithErrorMapper 가 sentinel 매핑.
 	result, err := h.service.ForkRepository(ctx, sourceOwner, sourceRepo, req.Owner, targetRepo, userID)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		if errors.Is(err, ErrSourceNotFound) {
-			statusCode = http.StatusNotFound
-		} else if errors.Is(err, ErrForkAlreadyExists) {
-			statusCode = http.StatusConflict
-		}
-		c.JSON(statusCode, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
+		return ForkRepositoryResponse{}, err
 	}
 
-	// Override default branch if specified
 	if req.DefaultBranch != "" {
 		refPath := "refs/heads/" + req.DefaultBranch
 		if setErr := nativeSetSymbolicRef(ctx, result.TargetPath, refPath); setErr != nil {
@@ -138,7 +114,6 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context) {
 		}
 	}
 
-	// Publish fork event (non-blocking)
 	if h.eventsClient != nil {
 		relativePath := events.GetRelativeRepoPath(result.TargetPath, h.pathConfig.GetRepoRoot())
 		event := &events.CommitEvent{
@@ -161,7 +136,7 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context) {
 		}()
 	}
 
-	response := ForkRepositoryResponse{
+	return ForkRepositoryResponse{
 		Success:          true,
 		Repository:       fmt.Sprintf("%s/%s", req.Owner, targetRepo),
 		SourceRepository: fmt.Sprintf("%s/%s", sourceOwner, sourceRepo),
@@ -170,61 +145,55 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context) {
 		DefaultBranch:    result.DefaultBranch,
 		CreatedAt:        result.CreatedAt,
 		ForkMetadata:     result.ForkMetadata,
-	}
-
-	c.JSON(http.StatusCreated, response)
+	}, nil
 }
 
-// HandleGetForkInfo handles GET /repos/{owner}/{repo}/fork
-// 저장소가 포크인지 확인하고 포크 메타데이터를 반환합니다.
-func (h *ForkHandler) HandleGetForkInfo(c *gin.Context) {
+// HandleGetForkInfo handles GET /repos/{owner}/{repo}/fork.
+func (h *ForkHandler) HandleGetForkInfo(c *gin.Context) (ForkInfoResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// Validate path
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return
+		return ForkInfoResponse{}, typed.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("Invalid path: %v", err),
+		)
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return ForkInfoResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
 	if !h.service.IsFork(repoPath) {
-		c.JSON(http.StatusOK, ForkInfoResponse{
+		return ForkInfoResponse{
 			Success:    true,
 			IsFork:     false,
 			Repository: fmt.Sprintf("%s/%s", owner, repo),
-		})
-		return
+		}, nil
 	}
 
 	metadata, err := h.service.GetForkMetadata(repoPath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("failed to read fork metadata: %v", err),
-		})
-		return
+		return ForkInfoResponse{}, typed.NewHTTPError(
+			http.StatusInternalServerError,
+			fmt.Sprintf("failed to read fork metadata: %v", err),
+		)
 	}
 
-	c.JSON(http.StatusOK, ForkInfoResponse{
+	return ForkInfoResponse{
 		Success:      true,
 		IsFork:       true,
 		Repository:   fmt.Sprintf("%s/%s", owner, repo),
 		ForkMetadata: metadata,
-	})
+	}, nil
 }
 
-// HandleSyncUpstream handles POST /repos/{owner}/{repo}/fork/sync
-// 포크된 저장소를 업스트림과 동기화합니다.
-func (h *ForkHandler) HandleSyncUpstream(c *gin.Context) {
+// HandleSyncUpstream handles POST /repos/{owner}/{repo}/fork/sync.
+//
+// service 의 sentinel 에러 (ErrNotAFork, ErrUpstreamNotFound) 는 routes.go
+// 의 WithErrorMapper 가 status 매핑.
+func (h *ForkHandler) HandleSyncUpstream(c *gin.Context) (SyncUpstreamResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -235,37 +204,23 @@ func (h *ForkHandler) HandleSyncUpstream(c *gin.Context) {
 		zap.String("owner", owner),
 		zap.String("repo", repo))
 
-	// Validate path
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return
+		return SyncUpstreamResponse{}, typed.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("Invalid path: %v", err),
+		)
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return SyncUpstreamResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
 	result, err := h.service.SyncUpstream(ctx, repoPath)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		if errors.Is(err, ErrNotAFork) {
-			statusCode = http.StatusBadRequest
-		} else if errors.Is(err, ErrUpstreamNotFound) {
-			statusCode = http.StatusNotFound
-		}
-		c.JSON(statusCode, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
+		return SyncUpstreamResponse{}, err
 	}
 
-	// Ensure non-nil slices for JSON
 	synced := result.BranchesSynced
 	if synced == nil {
 		synced = []SyncedBranch{}
@@ -275,11 +230,11 @@ func (h *ForkHandler) HandleSyncUpstream(c *gin.Context) {
 		conflicts = []ConflictBranch{}
 	}
 
-	c.JSON(http.StatusOK, SyncUpstreamResponse{
+	return SyncUpstreamResponse{
 		Success:        true,
 		BranchesSynced: synced,
 		Conflicts:      conflicts,
-	})
+	}, nil
 }
 
 // EventTypeFork is the event type for fork operations.

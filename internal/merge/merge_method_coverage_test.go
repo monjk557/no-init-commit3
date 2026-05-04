@@ -98,7 +98,7 @@ func TestMergeMethodCoverage(t *testing.T) {
 			t.Logf("🔄 Calling HandleMerge with method: %s", tt.mergeMethod)
 
 			// Call the handler
-			handler.HandleMerge(c)
+			invokeTyped(c, handler.HandleMerge)
 
 			t.Logf("📊 Response status: %d", w.Code)
 			t.Logf("📄 Response body: %s", w.Body.String())
@@ -224,7 +224,7 @@ func TestMergeRequestValidation(t *testing.T) {
 				{Key: "repo", Value: "test-repo"},
 			}
 
-			handler.HandleMerge(c)
+			invokeTyped(c, handler.HandleMerge)
 
 			t.Logf("📊 Response status: %d", w.Code)
 			t.Logf("📄 Response: %s", w.Body.String())
@@ -302,7 +302,7 @@ func TestAllMergeMethodsEndToEnd(t *testing.T) {
 				{Key: "repo", Value: "test-repo"},
 			}
 
-			handler.HandleMerge(c)
+			invokeTyped(c, handler.HandleMerge)
 
 			t.Logf("📊 %s Result: Status %d", scenario.name, w.Code)
 			t.Logf("📄 %s Response: %s", scenario.name, w.Body.String())

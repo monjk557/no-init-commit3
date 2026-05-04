@@ -1,0 +1,68 @@
+// overview 도메인의 typed 라우트 등록.
+//
+// server.go (runtime) 와 specs/spec_routes.go (spec 생성) 가 모두 이 함수를
+// 호출하여 단일 source of truth 보장.
+package overview
+
+import (
+	"reflect"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/collabops/git-executor/internal/api/typed"
+)
+
+const tag = "Overview"
+
+// RegisterRoutes 는 overview 도메인의 모든 endpoint 를 등록한다. h 가 nil 이면
+// spec-only 모드. 모든 status 매핑은 handler 본문에서 inline 으로
+// typed.NewHTTPError 처리하므로 routes-level ErrorMapper 불필요.
+func RegisterRoutes(g gin.IRouter, h *RepositoryOverviewHandler) {
+	var (
+		overviewMain   func(*gin.Context) (RepositoryOverviewResponse, error)
+		treeOverview   func(*gin.Context) (TreeOverviewResponse, error)
+		blobOverview   func(*gin.Context) (BlobOverviewResponse, error)
+		treeWithCommit func(*gin.Context) (TreeWithCommitOverviewResponse, error)
+		latestCommit   func(*gin.Context) (LatestCommitOverviewResponse, error)
+		batchCommits   func(*gin.Context) (LatestCommitsBatchResponse, error)
+	)
+	if h != nil {
+		overviewMain = h.HandleGetRepositoryOverview
+		treeOverview = h.HandleGetTreeOverview
+		blobOverview = h.HandleGetBlobOverview
+		treeWithCommit = h.HandleGetTreeWithCommitOverview
+		latestCommit = h.HandleGetLatestCommitOverview
+		batchCommits = h.HandlePostLatestCommitsBatch
+	}
+
+	typed.RegisterGet(g, "/overview", tag,
+		overviewMain,
+		typed.WithSummary("HandleGetRepositoryOverview"),
+	)
+
+	typed.RegisterGet(g, "/overview/tree", tag,
+		treeOverview,
+		typed.WithSummary("HandleGetTreeOverview"),
+	)
+
+	typed.RegisterGet(g, "/overview/blob", tag,
+		blobOverview,
+		typed.WithSummary("HandleGetBlobOverview"),
+	)
+
+	typed.RegisterGet(g, "/overview/tree/commits", tag,
+		treeWithCommit,
+		typed.WithSummary("HandleGetTreeWithCommitOverview"),
+	)
+
+	typed.RegisterGet(g, "/overview/latest-commit", tag,
+		latestCommit,
+		typed.WithSummary("HandleGetLatestCommitOverview"),
+	)
+
+	typed.RegisterNoBody(g, "POST", "/overview/latest-commits", tag,
+		batchCommits,
+		typed.WithSummary("HandlePostLatestCommitsBatch"),
+		typed.WithRequestBody(reflect.TypeOf(LatestCommitsBatchRequest{})),
+	)
+}

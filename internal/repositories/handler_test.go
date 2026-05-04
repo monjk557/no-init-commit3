@@ -50,7 +50,8 @@ func TestHandleCreateRepository_Success(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	// Test successful repository creation with defaults
 	req := httptest.NewRequest("POST", "/repos/testowner/testrepo", nil)
@@ -76,7 +77,8 @@ func TestHandleCreateRepository_WithCustomOptions(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	requestBody := CreateRepositoryRequest{
 		DefaultBranch: "develop",
@@ -127,7 +129,8 @@ func TestHandleCreateRepository_AlreadyExists(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	req := httptest.NewRequest("POST", "/repos/testowner/testrepo", nil)
 	w := httptest.NewRecorder()
@@ -148,7 +151,8 @@ func TestHandleCreateRepository_InvalidPath(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	// Test with path traversal attempt
 	// Gin will parse this as owner=".." and repo=".." which may pass validation
@@ -166,7 +170,8 @@ func TestHandleCreateRepository_EmptyOwner(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	req := httptest.NewRequest("POST", "/repos//testrepo", nil)
 	w := httptest.NewRecorder()
@@ -181,7 +186,8 @@ func TestHandleCreateRepository_EmptyRepo(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	// Gin routing: /repos/testowner/ will match with repo=""
 	// But Gin may not match this route, or handler may validate
@@ -199,7 +205,8 @@ func TestHandleCreateRepository_WithoutInitialCommit(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	requestBody := CreateRepositoryRequest{
 		InitialCommit: false,
@@ -229,7 +236,8 @@ func TestHandleCreateRepository_SpecialCharactersInName(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	// Test with special characters (should be validated and rejected)
 	req := httptest.NewRequest("POST", "/repos/test-owner/test_repo", nil)
@@ -245,7 +253,8 @@ func TestHandleCreateRepository_InvalidJSON(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	// Send invalid JSON
 	req := httptest.NewRequest("POST", "/repos/testowner/testrepo", strings.NewReader("{invalid json}"))
@@ -280,7 +289,8 @@ func TestCreateRepository_EmptyDefaultBranch(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	requestBody := CreateRepositoryRequest{
 		DefaultBranch: "", // Empty should default to "main"
@@ -309,7 +319,8 @@ func TestCreateRepository_WithAuthor(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	requestBody := CreateRepositoryRequest{
 		InitialCommit: true,
@@ -342,7 +353,8 @@ func TestCreateRepository_WithInitialFiles(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	requestBody := CreateRepositoryRequest{
 		InitialCommit: true,
@@ -376,7 +388,8 @@ func TestCreateRepository_ConcurrentCreation(t *testing.T) {
 	defer cleanup()
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo", handler.HandleCreateRepository)
+	g := router.Group("/repos/:owner/:repo")
+	RegisterRoutes(g, handler)
 
 	// Try to create the same repository concurrently
 	done := make(chan bool, 2)

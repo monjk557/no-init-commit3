@@ -120,14 +120,42 @@ type CreateBranchDetails struct {
 }
 
 // UpdateBranchResponse는 브랜치 업데이트 응답을 나타냅니다.
-// 브랜치 포인터 업데이트 작업의 결과와 커밋 정보를 포함합니다.
+// 브랜치 포인터 업데이트 (commit update) 또는 rename 작업의 결과를 포함합니다.
+//
+// rename 시 추가 필드 (OldBranchName / NewBranchName / RefPath / HeadUpdated)
+// 가 채워지고, commit update 에서 PreviousHash != CommitHash 일 때만 Forced
+// 가 채워진다. 그 외에는 omitempty 로 누락된다 — legacy gin.H ad-hoc 응답의
+// 조건부 포함 의미를 보존.
 type UpdateBranchResponse struct {
-	Success      bool   `json:"success"`
-	BranchName   string `json:"branch_name"`
-	CommitHash   string `json:"commit_hash"`
-	PreviousHash string `json:"previous_hash"`
-	Operation    string `json:"operation"`
-	FastForward  bool   `json:"fast_forward"`
+	Success       bool   `json:"success"`
+	BranchName    string `json:"branch_name"`
+	CommitHash    string `json:"commit_hash"`
+	PreviousHash  string `json:"previous_hash"`
+	Operation     string `json:"operation"`
+	FastForward   bool   `json:"fast_forward"`
+	Forced        *bool  `json:"forced,omitempty"`          // commit update 에서 prev != current 일 때만
+	OldBranchName string `json:"old_branch_name,omitempty"` // rename only
+	NewBranchName string `json:"new_branch_name,omitempty"` // rename only
+	RefPath       string `json:"ref_path,omitempty"`        // rename only
+	HeadUpdated   *bool  `json:"head_updated,omitempty"`    // rename only
+	Message       string `json:"message,omitempty"`
+}
+
+// ResolveBranchResponse 는 GET /branches/resolve/*ref 응답 — 단일 branch 의
+// commit SHA 와 ref path 를 반환.
+type ResolveBranchResponse struct {
+	Success   bool   `json:"success"`
+	Name      string `json:"name"`
+	CommitSHA string `json:"commit_sha"`
+	RefPath   string `json:"ref_path"`
+}
+
+// DeleteBranchResponse 는 DELETE /branches/*branch 응답.
+type DeleteBranchResponse struct {
+	Success    bool   `json:"success"`
+	BranchName string `json:"branch_name"`
+	CommitHash string `json:"commit_hash"`
+	Operation  string `json:"operation"`
 }
 
 // BranchesListResponse는 브랜치 목록 응답을 나타냅니다 (GitHub 브랜치 페이지 스타일).

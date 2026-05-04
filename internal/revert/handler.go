@@ -2,14 +2,13 @@ package revert
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -54,34 +53,32 @@ func NewRevertHandler(cfg *config.Config) (*RevertHandler, error) {
 	}, nil
 }
 
-// HandleRevert handles POST /repos/{owner}/{repo}/revert
-// It creates a new branch with a revert commit that undoes the changes
-// introduced by a previously merged commit.
-func (h *RevertHandler) HandleRevert(c *gin.Context) {
+// HandleRevert handles POST /repos/{owner}/{repo}/revert.
+//
+// Typed handler — bind error 의 사용자 친화 메시지 보존을 위해 RegisterNoBody +
+// WithRequestBody 조합 (lenient bind archetype). performRevert 의 sentinel /
+// substring 기반 status 매핑은 routes.go 의 WithErrorMapper 가 담당.
+func (h *RevertHandler) HandleRevert(c *gin.Context) (RevertResponse, error) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return RevertResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	var req RevertRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Invalid JSON: %v", err)})
-		return
+		return RevertResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	if err := h.validateRevertRequest(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return RevertResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
-		return
+		return RevertResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
 	}
 
 	// Serialize writes to prevent concurrent conflicts
@@ -91,51 +88,16 @@ func (h *RevertHandler) HandleRevert(c *gin.Context) {
 
 	result, err := performRevert(ctx, repoPath, &req)
 	if err != nil {
-		var branchExistsErr *BranchExistsError
-		if errors.As(err, &branchExistsErr) {
-			c.JSON(http.StatusConflict, gin.H{
-				"success":       false,
-				"error":         branchExistsErr.Error(),
-				"code":          "BRANCH_ALREADY_EXISTS",
-				"revert_branch": branchExistsErr.BranchName,
-				"revert_commit": branchExistsErr.TipCommit,
-			})
-			return
-		}
-
-		errMsg := err.Error()
-		switch {
-		case strings.Contains(errMsg, "conflicts"):
-			c.JSON(http.StatusConflict, gin.H{
-				"success": false,
-				"error":   errMsg,
-				"code":    "REVERT_CONFLICT",
-			})
-		case strings.Contains(errMsg, "unknown revision") || strings.Contains(errMsg, "failed to read commit"):
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   errMsg,
-				"code":    "COMMIT_NOT_FOUND",
-			})
-		case strings.Contains(errMsg, "invalid parent_number"):
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   errMsg,
-				"code":    "INVALID_PARENT",
-			})
-		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": errMsg})
-		}
-		return
+		return RevertResponse{}, err
 	}
 
-	// Publish revert commit event
+	// Publish revert commit event (legacy 와 동일하게 응답 직전 호출).
 	userID := c.GetHeader("X-USER-ID")
 	if h.eventsClient != nil && result.RevertCommit != nil {
 		h.publishRevertEvent(ctx, repoPath, result, req.TargetRef, owner, repo, userID)
 	}
 
-	c.JSON(http.StatusOK, result)
+	return *result, nil
 }
 
 // validatePath validates the owner and repo path components.

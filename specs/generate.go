@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/collabops/git-executor/internal/api/typed"
 )
 
 // OpenAPI spec generator that reads Go schema files and server.go to generate OpenAPI spec
@@ -203,26 +205,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("🔍 Parsing server.go for routes...")
-	routes, err := parseServerRoutes(filepath.Join(projectRoot, "internal/server/server.go"))
+	spec, err := runGeneration(projectRoot, typed.DefaultRegistry(), os.Stdout)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing server.go: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("   Found %d routes\n", len(routes))
-
-	fmt.Println("🔍 Parsing schema files from all packages...")
-	schemas, err := parseAllSchemas(projectRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing schemas: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("   Found %d schema types\n", len(schemas))
-
-	fmt.Println("📝 Generating OpenAPI spec...")
-	spec, err := generateOpenAPISpec(routes, schemas, projectRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error generating OpenAPI spec: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 
@@ -233,6 +218,42 @@ func main() {
 	}
 
 	fmt.Printf("✅ OpenAPI spec generated successfully: %s\n", outputPath)
+}
+
+// runGeneration 은 spec 생성 파이프라인을 실행하고 결과 yaml 문자열을
+// 반환한다. main 은 이 결과를 disk 에 쓰고, 테스트는 이 결과를 baseline 과
+// 직접 비교한다.
+//
+// registry 가 nil 또는 비어있으면 모든 path 가 legacy AST 경로로 처리된다
+// (Phase 1 의 byte-equivalent 회귀 가드). Phase 2 에서 도메인이 점진
+// 마이그레이션되면 registry 가 우선, legacy 가 잔여 path 의 fallback.
+func runGeneration(projectRoot string, registry *typed.Registry, log *os.File) (string, error) {
+	if registry != nil {
+		fmt.Fprintln(log, "📚 Populating registry from domain RegisterRoutes...")
+		setupSpecRoutes(registry)
+		fmt.Fprintf(log, "   Registry endpoints: %d\n", len(registry.Snapshot()))
+	}
+
+	fmt.Fprintln(log, "🔍 Parsing server.go for routes...")
+	routes, err := parseServerRoutes(filepath.Join(projectRoot, "internal/server/server.go"))
+	if err != nil {
+		return "", fmt.Errorf("Error parsing server.go: %w", err)
+	}
+	fmt.Fprintf(log, "   Found %d routes\n", len(routes))
+
+	fmt.Fprintln(log, "🔍 Parsing schema files from all packages...")
+	schemas, err := parseAllSchemas(projectRoot)
+	if err != nil {
+		return "", fmt.Errorf("Error parsing schemas: %w", err)
+	}
+	fmt.Fprintf(log, "   Found %d schema types\n", len(schemas))
+
+	fmt.Fprintln(log, "📝 Generating OpenAPI spec...")
+	spec, err := generateOpenAPISpec(routes, schemas, projectRoot, registry)
+	if err != nil {
+		return "", fmt.Errorf("Error generating OpenAPI spec: %w", err)
+	}
+	return spec, nil
 }
 
 func findProjectRoot() string {
@@ -431,7 +452,7 @@ func getTypeString(expr ast.Expr) string {
 	}
 }
 
-func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, projectRoot string) (string, error) {
+func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, projectRoot string, registry *typed.Registry) (string, error) {
 	// 항상 Go 기준으로 스펙 생성
 	tmpl, err := template.New("openapi").Parse(openAPITemplate)
 	if err != nil {
@@ -439,7 +460,7 @@ func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, proj
 	}
 
 	var buf bytes.Buffer
-	paths := generatePathsFromRoutes(routes)
+	paths := generatePathsFromRoutes(routes, registry)
 	schemaDefs := generateSchemasFromStructs(schemas)
 
 	data := struct {
@@ -457,191 +478,190 @@ func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, proj
 	return buf.String(), nil
 }
 
-func generatePathsFromRoutes(routes []RouteInfo) string {
-	var buf strings.Builder
+// pathOperation 은 registry / legacy 양쪽에서 모이는 path operation 의
+// 통일된 중간 형태. renderPathOperations 가 yaml 출력으로 변환한다.
+type pathOperation struct {
+	method      string
+	specPath    string
+	summary     string
+	operationID string
+	tag         string
+	pathParams  []string // owner/repo 외 추가 path param 이름들
+	requestRef  string   // requestBody $ref schema 이름; 빈 문자열이면 body 없음
+	responseRef string   // 200 응답 $ref schema 이름; 빈 문자열이면 body 없음
+}
 
-	// specPath 기준으로 그룹 (OpenAPI 경로: /repos/{owner}/{repo}/...)
-	pathMap := make(map[string][]RouteInfo)
+// generatePathsFromRoutes 는 registry-first hybrid 로 path operation 들을
+// 모은다. 동일 (method, specPath) 가 registry 와 legacy 양쪽에 있으면 registry
+// 가 우선. registry 비어있는 경우 (Phase 1) 출력은 legacy-only 결과와 byte
+// equivalent.
+func generatePathsFromRoutes(routes []RouteInfo, registry *typed.Registry) string {
+	var ops []pathOperation
+	registered := make(map[string]bool)
+
+	if registry != nil {
+		registry.Walk(func(ep typed.Endpoint) {
+			// ExcludeFromSpec 도 registered 에 마킹해서 legacy fallback 이 다시
+			// 노출하지 못하게 한다 (런타임은 그대로, spec 만 숨김).
+			registered[ep.Method+" "+ep.Path] = true
+			if ep.ExcludeFromSpec {
+				return
+			}
+			ops = append(ops, registryEndpointToOperation(ep))
+		})
+	}
+
 	for _, route := range routes {
 		specPath, skip := routeToSpecPath(route.Path)
 		if skip {
 			continue
 		}
-		pathMap[specPath] = append(pathMap[specPath], route)
+		if registered[route.Method+" "+specPath] {
+			continue
+		}
+		ops = append(ops, legacyRouteToOperation(route, specPath))
 	}
 
-	paths := make([]string, 0, len(pathMap))
-	for p := range pathMap {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
+	return renderPathOperations(ops)
+}
 
-	for _, specPath := range paths {
-		routesForPath := pathMap[specPath]
-		buf.WriteString(fmt.Sprintf("  %s:\n", specPath))
-		for _, route := range routesForPath {
-			method := strings.ToLower(route.Method)
-			buf.WriteString(fmt.Sprintf("    %s:\n", method))
-			buf.WriteString(fmt.Sprintf("      summary: %s\n", route.HandlerName))
-			buf.WriteString(fmt.Sprintf("      operationId: %s\n", strings.ToLower(route.HandlerName)))
-			buf.WriteString("      tags:\n")
-			buf.WriteString(fmt.Sprintf("        - %s\n", getTagFromPath(specPath)))
-			buf.WriteString("      parameters:\n")
-			buf.WriteString("        - $ref: '#/components/parameters/Owner'\n")
-			buf.WriteString("        - $ref: '#/components/parameters/Repo'\n")
-			for _, p := range pathParamsFromSpecPath(specPath) {
-				buf.WriteString(fmt.Sprintf("        - name: %s\n", p))
-				buf.WriteString("          in: path\n")
-				buf.WriteString("          required: true\n")
-				buf.WriteString("          schema:\n")
-				buf.WriteString("            type: string\n")
+// registryEndpointToOperation 은 typed.Endpoint 를 generator 의 중간 형태로
+// 변환한다.
+func registryEndpointToOperation(ep typed.Endpoint) pathOperation {
+	op := pathOperation{
+		method:      ep.Method,
+		specPath:    ep.Path,
+		summary:     ep.Summary,
+		operationID: ep.OperationID,
+		tag:         ep.Tag,
+		pathParams:  pathParamsFromSpecPath(ep.Path),
+	}
+	if op.summary == "" && ep.OperationID != "" {
+		op.summary = ep.OperationID
+	}
+	if op.operationID == "" && op.summary != "" {
+		op.operationID = strings.ToLower(op.summary)
+	}
+	if ep.ReqType != nil && ep.ReqLocation == typed.LocationBodyJSON {
+		op.requestRef = ep.ReqType.Name()
+	}
+	for _, r := range ep.Responses {
+		if r.Status == 200 || r.Status == 0 {
+			switch {
+			case r.SchemaRef != "":
+				op.responseRef = r.SchemaRef
+			case r.RespType != nil:
+				op.responseRef = r.RespType.Name()
 			}
-			if ref := requestSchemaRef(route.Method, specPath); ref != "" {
-				buf.WriteString("      requestBody:\n")
-				buf.WriteString("        required: true\n")
-				buf.WriteString("        content:\n")
-				buf.WriteString("          application/json:\n")
-				buf.WriteString("            schema:\n")
-				buf.WriteString(fmt.Sprintf("              $ref: '#/components/schemas/%s'\n", openAPISchemaName(ref)))
-			}
-			buf.WriteString("      responses:\n")
-			buf.WriteString("        '200':\n")
-			buf.WriteString("          description: Success\n")
-			if ref := responseSchemaRef(route.Method, specPath); ref != "" {
-				buf.WriteString("          content:\n")
-				buf.WriteString("            application/json:\n")
-				buf.WriteString("              schema:\n")
-				buf.WriteString(fmt.Sprintf("                $ref: '#/components/schemas/%s'\n", openAPISchemaName(ref)))
-			}
-			buf.WriteString("        '400':\n")
-			buf.WriteString("          $ref: '#/components/responses/BadRequest'\n")
+			break
 		}
 	}
+	return op
+}
 
+// legacyRouteToOperation 은 server.go AST 추출 결과 + hardcoded switch 로
+// 채워진 legacy 매핑을 중간 형태로 변환한다 (Phase 2 마이그레이션이 끝나면
+// 이 경로는 dead code 가 되어 삭제).
+func legacyRouteToOperation(route RouteInfo, specPath string) pathOperation {
+	return pathOperation{
+		method:      route.Method,
+		specPath:    specPath,
+		summary:     route.HandlerName,
+		operationID: strings.ToLower(route.HandlerName),
+		tag:         getTagFromPath(specPath),
+		pathParams:  pathParamsFromSpecPath(specPath),
+		requestRef:  requestSchemaRef(route.Method, specPath),
+		responseRef: responseSchemaRef(route.Method, specPath),
+	}
+}
+
+// renderPathOperations 는 path 별로 그룹핑 후 path 알파벳 정렬, path 안에서는
+// 입력 순서를 유지하여 yaml 을 작성한다.
+func renderPathOperations(ops []pathOperation) string {
+	pathMap := make(map[string][]pathOperation)
+	pathOrder := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, op := range ops {
+		if !seen[op.specPath] {
+			pathOrder = append(pathOrder, op.specPath)
+			seen[op.specPath] = true
+		}
+		pathMap[op.specPath] = append(pathMap[op.specPath], op)
+	}
+
+	sort.Strings(pathOrder)
+
+	var buf strings.Builder
+	for _, specPath := range pathOrder {
+		buf.WriteString(fmt.Sprintf("  %s:\n", specPath))
+		for _, op := range pathMap[specPath] {
+			renderSingleOperation(&buf, op)
+		}
+	}
 	return buf.String()
 }
 
-// requestSchemaRef returns the component schema name for requestBody (POST/PATCH with body). Empty if none.
-func requestSchemaRef(method, specPath string) string {
-	switch method {
-	case "POST":
-		switch specPath {
-		case "/repos/{owner}/{repo}":
-			return "CreateRepositoryRequest"
-		case "/repos/{owner}/{repo}/branches":
-			return "CreateBranchRequest"
-		case "/repos/{owner}/{repo}/commits":
-			return "MultiFileCommitRequest"
-		case "/repos/{owner}/{repo}/tags":
-			return "CreateTagRequest"
-		case "/repos/{owner}/{repo}/merges":
-			return "MergeRequest"
-		case "/repos/{owner}/{repo}/revert":
-			return "RevertRequest"
-		case "/repos/{owner}/{repo}/context":
-			return "ContextRequest"
-		case "/repos/{owner}/{repo}/diff/classify-anchors":
-			return "ClassifyAnchorsRequest"
-		}
-	case "PATCH":
-		if strings.Contains(specPath, "/branches/{branch}") {
-			return "UpdateBranchRequest"
-		}
+// renderSingleOperation 은 한 (method, path) operation 의 yaml 블록을
+// 작성한다. 출력 포맷은 기존 generatePathsFromRoutes 의 inline 코드와
+// byte-equivalent.
+func renderSingleOperation(buf *strings.Builder, op pathOperation) {
+	method := strings.ToLower(op.method)
+	buf.WriteString(fmt.Sprintf("    %s:\n", method))
+	buf.WriteString(fmt.Sprintf("      summary: %s\n", op.summary))
+	buf.WriteString(fmt.Sprintf("      operationId: %s\n", op.operationID))
+	buf.WriteString("      tags:\n")
+	buf.WriteString(fmt.Sprintf("        - %s\n", op.tag))
+	buf.WriteString("      parameters:\n")
+	buf.WriteString("        - $ref: '#/components/parameters/Owner'\n")
+	buf.WriteString("        - $ref: '#/components/parameters/Repo'\n")
+	for _, p := range op.pathParams {
+		buf.WriteString(fmt.Sprintf("        - name: %s\n", p))
+		buf.WriteString("          in: path\n")
+		buf.WriteString("          required: true\n")
+		buf.WriteString("          schema:\n")
+		buf.WriteString("            type: string\n")
 	}
+	if op.requestRef != "" {
+		buf.WriteString("      requestBody:\n")
+		buf.WriteString("        required: true\n")
+		buf.WriteString("        content:\n")
+		buf.WriteString("          application/json:\n")
+		buf.WriteString("            schema:\n")
+		buf.WriteString(fmt.Sprintf("              $ref: '#/components/schemas/%s'\n", openAPISchemaName(op.requestRef)))
+	}
+	buf.WriteString("      responses:\n")
+	buf.WriteString("        '200':\n")
+	buf.WriteString("          description: Success\n")
+	if op.responseRef != "" {
+		buf.WriteString("          content:\n")
+		buf.WriteString("            application/json:\n")
+		buf.WriteString("              schema:\n")
+		buf.WriteString(fmt.Sprintf("                $ref: '#/components/schemas/%s'\n", openAPISchemaName(op.responseRef)))
+	}
+	buf.WriteString("        '400':\n")
+	buf.WriteString("          $ref: '#/components/responses/BadRequest'\n")
+}
+
+// requestSchemaRef returns the component schema name for requestBody (POST/PATCH with body).
+//
+// Phase 2.13 (모든 REST 도메인 typed migration 완료) 이후 비어있다 — registry
+// 가 모든 request schema 를 처리한다. AST-scanned route 가 새로 추가되어야
+// 한다면 (예: LFS 미마이그레이션 잔존, future endpoint), 그 path 의 case 를
+// 여기 추가하기보다는 도메인 routes.go 에 typed.RegisterX + WithRequestBody 로
+// 등록하는 것이 권장된다.
+func requestSchemaRef(method, specPath string) string {
+	_ = method
+	_ = specPath
 	return ""
 }
 
-// responseSchemaRef returns the component schema name for 200 response body. Empty if none.
+// responseSchemaRef returns the component schema name for 200 response body.
+//
+// Phase 2.13 이후 비어있다 — registry 가 모든 response schema 를 처리. (위
+// requestSchemaRef 와 같은 권장사항 적용.)
 func responseSchemaRef(method, specPath string) string {
-	switch specPath {
-	case "/repos/{owner}/{repo}":
-		if method == "POST" {
-			return "CreateRepositoryResponse"
-		}
-	case "/repos/{owner}/{repo}/branches":
-		if method == "GET" {
-			return "GetBranchesResponse"
-		}
-		if method == "POST" {
-			return "CreateBranchResponse"
-		}
-	case "/repos/{owner}/{repo}/branches/{branch}":
-		if method == "PATCH" {
-			return "UpdateBranchResponse"
-		}
-	case "/repos/{owner}/{repo}/commits":
-		if method == "GET" {
-			return "CommitsResponse"
-		}
-		if method == "POST" {
-			return "MultiFileCommitResponse"
-		}
-	case "/repos/{owner}/{repo}/commits/compare/summary":
-		if method == "GET" {
-			return "ComparisonSummaryResponse"
-		}
-	case "/repos/{owner}/{repo}/commits/{sha}":
-		if method == "GET" {
-			return "CommitDetailResponse"
-		}
-	case "/repos/{owner}/{repo}/tags":
-		if method == "GET" {
-			return "TagsResponse"
-		}
-		if method == "POST" {
-			return "CreateTagResponse"
-		}
-	case "/repos/{owner}/{repo}/merges":
-		if method == "POST" {
-			return "MergeResponse"
-		}
-	case "/repos/{owner}/{repo}/revert":
-		if method == "POST" {
-			return "RevertResponse"
-		}
-	case "/repos/{owner}/{repo}/merges/preview":
-		return "MergePreviewResponse"
-	case "/repos/{owner}/{repo}/merges/diff":
-		return "DiffResponse"
-	case "/repos/{owner}/{repo}/context":
-		return "ContextResponse"
-	case "/repos/{owner}/{repo}/overview":
-		return "RepositoryOverviewResponse"
-	case "/repos/{owner}/{repo}/overview/blob":
-		return "BlobOverviewResponse"
-	case "/repos/{owner}/{repo}/overview/latest-commit":
-		return "LatestCommitOverviewResponse"
-	case "/repos/{owner}/{repo}/overview/latest-commits":
-		return "LatestCommitsBatchResponse"
-	case "/repos/{owner}/{repo}/overview/tree":
-		return "TreeOverviewResponse"
-	case "/repos/{owner}/{repo}/overview/tree/commits":
-		return "TreeWithCommitOverviewResponse"
-	case "/repos/{owner}/{repo}/state":
-		return "RepositoryStateData"
-	case "/repos/{owner}/{repo}/languages":
-		return "LanguageStatsResponse"
-	case "/repos/{owner}/{repo}/tree":
-		return "TreeEntriesRecursiveResponse"
-	case "/repos/{owner}/{repo}/diff/branches":
-		return "DiffResponse"
-	case "/repos/{owner}/{repo}/diff/branches/{base}/{head}":
-		return "DiffResponse"
-	case "/repos/{owner}/{repo}/diff/commit/{sha}":
-		return "SingleCommitDiffResponse"
-	case "/repos/{owner}/{repo}/diff/commits/{base}/{head}":
-		return "DiffResponse"
-	case "/repos/{owner}/{repo}/diff/expand-context":
-		return "ExpandContextResponse"
-	case "/repos/{owner}/{repo}/diff/file":
-		return "FileDiff"
-	case "/repos/{owner}/{repo}/diff/file/branches/{base}/{head}":
-		return "DiffResponse"
-	case "/repos/{owner}/{repo}/diff/classify-anchors":
-		if method == "POST" {
-			return "ClassifyAnchorsResponse"
-		}
-	}
+	_ = method
+	_ = specPath
 	return ""
 }
 

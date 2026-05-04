@@ -1,11 +1,11 @@
 package commits
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -42,12 +42,10 @@ func NewCommitsHandler(cfg *config.Config) (*CommitsHandler, error) {
 
 	transactionManager := NewTransactionManager(logger)
 
-	// Initialize events client if enabled
 	var eventsClient events.RedisStreamClient
 	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
 		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
 		if err != nil {
-			// Log warning but continue without events
 			_ = err
 		}
 	}
@@ -71,23 +69,21 @@ type repositoryContext struct {
 	repoPath string
 }
 
-// validateAndGetRepoPath는 저장소 검증 및 경로를 가져오는 공통 로직입니다.
-func (h *CommitsHandler) validateAndGetRepoPath(ctx context.Context, c *gin.Context, owner, repo, ref string) (*repositoryContext, bool) {
+// validateAndGetRepoPath 는 저장소 검증 + 경로 조회를 수행한다. 실패 시
+// *typed.HTTPError 를 반환하여 wrapper 의 default 매핑 (404 + {success,error})
+// 으로 처리.
+func (h *CommitsHandler) validateAndGetRepoPath(owner, repo, ref string) (*repositoryContext, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
 
-	// 경로 구성 요소 검증
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// 저장소 경로 가져오기 및 존재 확인
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
 	return &repositoryContext{
@@ -95,46 +91,45 @@ func (h *CommitsHandler) validateAndGetRepoPath(ctx context.Context, c *gin.Cont
 		repo:     repo,
 		ref:      ref,
 		repoPath: repoPath,
-	}, true
+	}, nil
 }
 
-// HandleCommitsAPI는 GET /repos/:owner/:repo/commits 요청을 처리합니다.
-func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
+// HandleCommitsAPI는 GET /repos/{owner}/{repo}/commits 요청을 처리합니다.
+func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) (CommitsResponse, error) {
 	ctx := c.Request.Context()
 
 	params, err := h.validateAndExtractCommitsParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return CommitsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, params.Owner, params.Repo, params.Ref)
-	if !ok {
-		return
-	}
-
-	commits, totalCount, mergeBase, err := h.getCommitHistory(ctx, repoCtx.repoPath, params)
+	repoCtx, err := h.validateAndGetRepoPath(params.Owner, params.Repo, params.Ref)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return CommitsResponse{}, err
 	}
 
-	if commits == nil {
-		commits = []Commit{}
+	commitList, totalCount, mergeBase, err := h.getCommitHistory(ctx, repoCtx.repoPath, params)
+	if err != nil {
+		return CommitsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// limit+1로 요청했으므로, 초과분이 있으면 다음 페이지 존재
-	hasNext := len(commits) > params.Limit
+	if commitList == nil {
+		commitList = []Commit{}
+	}
+
+	hasNext := len(commitList) > params.Limit
 	if hasNext {
-		commits = commits[:params.Limit]
+		commitList = commitList[:params.Limit]
 	}
 
-	grouped := h.groupCommitsByDate(commits, params.GroupBy)
+	grouped := h.groupCommitsByDate(commitList, params.GroupBy)
 	if grouped == nil {
 		grouped = []CommitsByDate{}
 	}
 
-	response := CommitsResponse{
+	pagination := buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String())
+
+	return CommitsResponse{
 		Success:   true,
 		Results:   grouped,
 		HasNext:   hasNext,
@@ -142,19 +137,17 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) {
 		MergeBase: mergeBase,
 		Pagination: PaginationInfo{
 			Count:      totalCount,
-			Next:       buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String()).Next,
-			Previous:   buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String()).Previous,
-			TotalPages: buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String()).TotalPages,
+			Next:       pagination.Next,
+			Previous:   pagination.Previous,
+			TotalPages: pagination.TotalPages,
 			PageSize:   params.Limit,
 		},
-	}
-
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
-// HandleComparisonSummary는 GET /repos/:owner/:repo/commits/compare/summary 요청을 처리합니다.
+// HandleComparisonSummary는 GET /repos/{owner}/{repo}/commits/compare/summary 요청을 처리합니다.
 // merge base 기준으로 commit count와 changed file count만 반환하는 경량 API입니다.
-func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context) {
+func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context) (ComparisonSummaryResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -163,41 +156,34 @@ func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context) {
 	targetRef := c.Query("target_ref")
 
 	if sourceRef == "" || targetRef == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "both 'source_ref' and 'target_ref' query parameters are required"})
-		return
+		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, "both 'source_ref' and 'target_ref' query parameters are required")
 	}
 
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo, "HEAD")
-	if !ok {
-		return
+	repoCtx, err := h.validateAndGetRepoPath(owner, repo, "HEAD")
+	if err != nil {
+		return ComparisonSummaryResponse{}, err
 	}
 
-	// Resolve refs
 	sourceHash, err := nativeResolveRef(ctx, repoCtx.repoPath, sourceRef)
 	if err != nil {
 		sourceHash, err = nativeResolveRef(ctx, repoCtx.repoPath, "refs/heads/"+sourceRef)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve source ref '%s'", sourceRef)})
-			return
+			return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("failed to resolve source ref '%s'", sourceRef))
 		}
 	}
 	targetHash, err := nativeResolveRef(ctx, repoCtx.repoPath, targetRef)
 	if err != nil {
 		targetHash, err = nativeResolveRef(ctx, repoCtx.repoPath, "refs/heads/"+targetRef)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve target ref '%s'", targetRef)})
-			return
+			return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("failed to resolve target ref '%s'", targetRef))
 		}
 	}
 
-	// Find merge base
 	mergeBase, err := nativeMergeBase(ctx, repoCtx.repoPath, sourceHash, targetHash)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "no common ancestor found between the two refs"})
-		return
+		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, "no common ancestor found between the two refs")
 	}
 
-	// Count commits and changed files in parallel
 	type countResult struct {
 		count int
 		err   error
@@ -218,27 +204,25 @@ func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context) {
 	fileResult := <-fileCh
 
 	if commitResult.err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": commitResult.err.Error()})
-		return
+		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusInternalServerError, commitResult.err.Error())
 	}
 	if fileResult.err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": fileResult.err.Error()})
-		return
+		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusInternalServerError, fileResult.err.Error())
 	}
 
-	c.JSON(http.StatusOK, ComparisonSummaryResponse{
+	return ComparisonSummaryResponse{
 		Success:          true,
 		MergeBase:        mergeBase,
 		SourceSha:        sourceHash,
 		TargetSha:        targetHash,
 		CommitCount:      commitResult.count,
 		ChangedFileCount: fileResult.count,
-	})
+	}, nil
 }
 
-// HandleGetCommitDetail은 GET /repos/:owner/:repo/commits/:sha 요청을 처리합니다.
+// HandleGetCommitDetail은 GET /repos/{owner}/{repo}/commits/{sha} 요청을 처리합니다.
 // 단일 커밋의 메타데이터(메시지, 작성자, 커미터, 생성일 등)를 반환합니다.
-func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) {
+func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) (CommitDetailResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -246,29 +230,25 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) {
 	sha := c.Param("sha")
 
 	if sha == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "commit sha is required"})
-		return
+		return CommitDetailResponse{}, typed.NewHTTPError(http.StatusBadRequest, "commit sha is required")
 	}
 
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo, "HEAD")
-	if !ok {
-		return
+	repoCtx, err := h.validateAndGetRepoPath(owner, repo, "HEAD")
+	if err != nil {
+		return CommitDetailResponse{}, err
 	}
 
 	commit, err := nativeGetCommitInfo(ctx, repoCtx.repoPath, sha)
 	if err != nil {
 		if strings.Contains(err.Error(), "commit not found") {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("commit not found: %s", sha)})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+			return CommitDetailResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("commit not found: %s", sha))
 		}
-		return
+		return CommitDetailResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// 전체 커밋 메시지 가져오기 (%s는 subject만 반환하므로 %B로 full body를 가져옴)
 	fullMessage, err := nativeGetCommitFullMessage(ctx, repoCtx.repoPath, sha)
 	if err != nil {
-		fullMessage = commit.Message // fallback to subject
+		fullMessage = commit.Message
 	}
 
 	parents := commit.ParentHashes
@@ -276,7 +256,7 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) {
 		parents = []string{}
 	}
 
-	response := CommitDetailResponse{
+	return CommitDetailResponse{
 		Success: true,
 		Sha:     commit.Sha,
 		Message: fullMessage,
@@ -292,13 +272,15 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) {
 		},
 		Parents:  parents,
 		TreeHash: commit.TreeHash,
-	}
-
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
 // HandleMultiFileCommit는 POST /repos/{owner}/{repo}/commits 요청을 처리합니다.
-func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
+//
+// Typed handler — bind error 의 친화 메시지 + 다중 status 매핑 (failed to
+// resolve → 400, not found → 404, already exists → 409, validation/operation
+// → 400, default → 500) 을 모두 inline 으로 typed.NewHTTPError 처리.
+func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) (MultiFileCommitResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -306,27 +288,24 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
 
 	var req MultiFileCommitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Invalid JSON: %v", err)})
-		return
+		return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	if len(req.Operations) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "At least one operation is required"})
-		return
+		return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, "At least one operation is required")
 	}
 
 	for i, op := range req.Operations {
 		if err := validateMultiFileOperation(&op); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Invalid operation %d: %v", i, err)})
-			return
+			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid operation %d: %v", i, err))
 		}
 	}
 
 	branch := req.Branch
 
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo, branch)
-	if !ok {
-		return
+	repoCtx, err := h.validateAndGetRepoPath(owner, repo, branch)
+	if err != nil {
+		return MultiFileCommitResponse{}, err
 	}
 
 	userID := c.GetHeader("X-USER-ID")
@@ -336,21 +315,19 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) {
 	response, err := h.service.ExecuteMultiFileCommitOrCreateBranch(ctx, repoCtx.repoPath, &req, owner, repo, userID)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "failed to resolve") {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": errMsg})
-			return
+		switch {
+		case strings.Contains(errMsg, "failed to resolve"):
+			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, errMsg)
+		case strings.Contains(errMsg, "not found"):
+			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusNotFound, errMsg)
+		case strings.Contains(errMsg, "already exists"):
+			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusConflict, errMsg)
+		case strings.Contains(errMsg, "validation failed") || strings.Contains(errMsg, "operation"):
+			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, errMsg)
+		default:
+			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusInternalServerError, errMsg)
 		}
-		if strings.Contains(errMsg, "not found") {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": errMsg})
-		} else if strings.Contains(errMsg, "already exists") {
-			c.JSON(http.StatusConflict, gin.H{"success": false, "error": errMsg})
-		} else if strings.Contains(errMsg, "validation failed") || strings.Contains(errMsg, "operation") {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": errMsg})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": errMsg})
-		}
-		return
 	}
 
-	c.JSON(http.StatusOK, response)
+	return *response, nil
 }

@@ -71,7 +71,7 @@ func Test_CommitDiff_SingleLineAddition_ReturnsCorrectCounts(t *testing.T) {
 	handler, initialSHA, secondSHA := newDiffHandlerWithCommits(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// 전체 SHA 사용
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialSHA, secondSHA)
@@ -132,7 +132,7 @@ func Test_CommitDiff_FileModification_ReturnsCorrectDelta(t *testing.T) {
 	handler := newDiffHandler(t, tempDir)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// When: diff 조회 (전체 SHA 사용)
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
@@ -193,7 +193,7 @@ func Test_CommitDiff_SingleLineDeletion_ReturnsCorrectCounts(t *testing.T) {
 	handler := newDiffHandler(t, tempDir)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
 		initialCommitHash.String(), secondCommitHash.String())
@@ -228,7 +228,7 @@ func Test_CommitDiff_FileAddition_StatusAdded(t *testing.T) {
 	handler, baseSHA, headSHA := newDiffHandlerWithCommits(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", baseSHA, headSHA)
 	req, _ := http.NewRequest("GET", url, nil)
@@ -280,7 +280,7 @@ func Test_CommitDiff_FileDeletion_StatusDeleted(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", commit1.String(), commit2.String())
 	req, _ := http.NewRequest("GET", url, nil)
@@ -332,7 +332,7 @@ func Test_CommitDiff_FileRename_StatusRenamed(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", commit1.String(), commit2.String())
 	req, _ := http.NewRequest("GET", url, nil)
@@ -379,7 +379,7 @@ func Test_CommitDiff_BinaryFile_MarksAsBinary(t *testing.T) {
 	handler := newDiffHandler(t, tempDir)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialCommitSHA, secondCommitSHA)
 	req, _ := http.NewRequest("GET", url, nil)
@@ -437,7 +437,7 @@ func Test_CommitDiff_LargeFile_TruncatesContent(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=3", commit1.String(), commit2.String())
 	req, _ := http.NewRequest("GET", url, nil)
@@ -491,7 +491,7 @@ func Test_CommitDiff_EmptyFile_HandlesCorrectly(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=3", commit1.String(), commit2.String())
 	req, _ := http.NewRequest("GET", url, nil)
@@ -525,7 +525,7 @@ func Test_CommitDiff_InvalidBase_Returns400(t *testing.T) {
 	handler, _ := newDiffHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/commits//abc123", nil)
 	w := httptest.NewRecorder()
@@ -542,7 +542,7 @@ func Test_CommitDiff_WithContextLines_ReturnsSuccess(t *testing.T) {
 	handler, initialSHA, secondSHA := newDiffHandlerWithCommits(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// 전체 SHA 사용
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=5",
@@ -587,7 +587,7 @@ func Test_CommitDiff_DefaultContext_Returns3Lines(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// context 파라미터 없이 요청 (기본값 3)
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
@@ -636,7 +636,7 @@ func Test_CommitDiff_CustomContext_ReturnsRequestedLines(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// context=5로 요청
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=5",
@@ -683,7 +683,7 @@ func Test_CommitDiff_ZeroContext_ReturnsNoContext(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// context=0으로 요청
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s?context=0",
@@ -717,7 +717,7 @@ func Test_BranchDiff_NonExistentHead_ReturnsError(t *testing.T) {
 	handler, _ := newDiffHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", adapt(handler.HandleBranchDiff))
 
 	// 존재하지 않는 브랜치로 요청
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/nonexistent", nil)
@@ -764,7 +764,7 @@ func Test_BranchDiff_ValidBranches_ReturnsDiff(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", adapt(handler.HandleBranchDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/feature", nil)
 	w := httptest.NewRecorder()
@@ -805,7 +805,7 @@ func Test_BranchDiff_SameBranch_ReturnsEmpty(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", adapt(handler.HandleBranchDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/master", nil)
 	w := httptest.NewRecorder()
@@ -851,7 +851,7 @@ func Test_BranchDiff_DeletedBranch_Returns404(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", adapt(handler.HandleBranchDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/deleted", nil)
 	w := httptest.NewRecorder()
@@ -874,7 +874,7 @@ func Test_FileDiff_MissingPath_Returns400(t *testing.T) {
 	handler, _ := newDiffHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/file?base=abc&head=def", nil)
 	w := httptest.NewRecorder()
@@ -914,7 +914,7 @@ func Test_FileDiff_ValidPath_ReturnsDiff(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=test.txt&base=%s&head=%s",
 		baseCommitHash.String(), headCommitHash.String())
@@ -955,7 +955,7 @@ func Test_FileDiff_NonExistentPath_Returns404(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=nonexistent.txt&base=%s&head=%s",
 		commitHash.String(), commitHash.String())
@@ -980,7 +980,7 @@ func Test_FileDiff_BinaryFile_ReturnsMetadataOnly(t *testing.T) {
 	handler := newDiffHandler(t, tempDir)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=image.png&base=%s&head=%s",
 		initialCommitSHA, secondCommitSHA)
@@ -1045,7 +1045,7 @@ func Test_FileDiff_MergeBaseDefault_DivergedFileAddedShowsAsAdded(t *testing.T) 
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
 
 	// 1. 기본 (diff_mode=merge_base): merge-base에 없으므로 added로 +N 라인
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=models.py&base=%s&head=%s",
@@ -1117,7 +1117,7 @@ func Test_FileDiff_NeitherSideHasFile_Returns404(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=does/not/exist.py&base=%s&head=%s",
 		rootCommit.String(), headCommit.String())
@@ -1133,6 +1133,30 @@ func Test_FileDiff_NeitherSideHasFile_Returns404(t *testing.T) {
 	require.Equal(t, "FILE_NOT_FOUND", body["code"])
 }
 
+// Test_FileDiff_InvalidRef_Returns404WithCode
+// 회귀 (CR-2805 외부 contract 보존): 존재하지 않는 ref가 base/head로 들어오면
+// 404 + code: "REF_NOT_FOUND". orchestrator/web 이 이 코드로 분기하므로 떨어지면 안 됨.
+func Test_FileDiff_InvalidRef_Returns404WithCode(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDiffHandlerWithRepo(t)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+
+	// 의도적으로 resolvable 하지 않은 branch/tag/SHA 명: nativeResolveRef 가 3 경로 (direct, refs/heads, refs/tags)
+	// 모두 실패시켜야 REF_NOT_FOUND 경로 진입.
+	url := "/api/v2/repository/testowner/testrepo/diff/file?path=any.txt&base=this-ref-does-not-exist-base&head=this-ref-does-not-exist-head"
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusNotFound)
+	var body map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	require.Equal(t, false, body["success"])
+	require.Equal(t, "REF_NOT_FOUND", body["code"])
+}
+
 // Test_SingleCommitDiff_MissingSHA_Returns400
 // 회귀: SHA 누락 시 400 반환
 func Test_SingleCommitDiff_MissingSHA_Returns400(t *testing.T) {
@@ -1141,7 +1165,7 @@ func Test_SingleCommitDiff_MissingSHA_Returns400(t *testing.T) {
 	handler, _ := newDiffHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/commits/:sha/diff", handler.HandleSingleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/commits/:sha/diff", adapt(handler.HandleSingleCommitDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/commits//diff", nil)
 	w := httptest.NewRecorder()
@@ -1447,7 +1471,7 @@ func Test_CommitDiff_ContextCanceled_ReturnsErrorNotPanic(t *testing.T) {
 	handler, initialSHA, secondSHA := newDiffHandlerWithCommits(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s", initialSHA, secondSHA)
 	req, _ := http.NewRequest("GET", url, nil)
@@ -1511,7 +1535,7 @@ func Test_CommitDiff_LargeDiff_ReturnsTruncatedFlag(t *testing.T) {
 	handler := newDiffHandler(t, tempDir)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// When: diff 조회
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
@@ -1541,7 +1565,7 @@ func Test_CommitDiff_NonExistentCommit_Returns404(t *testing.T) {
 	handler, _ := newDiffHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// 존재하지 않는 SHA
 	nonExistentSHA := "0000000000000000000000000000000000000000"
@@ -1564,7 +1588,7 @@ func Test_BranchDiff_NonExistentBranch_Returns404(t *testing.T) {
 	handler, _ := newDiffHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", handler.HandleBranchDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/branches/:base/:head", adapt(handler.HandleBranchDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/branches/master/ghost-branch", nil)
 	w := httptest.NewRecorder()
@@ -1592,7 +1616,7 @@ func Test_CommitDiff_EmptyRepo_ReturnsErrorNot500(t *testing.T) {
 	handler := newDiffHandler(t, tempDir)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", handler.HandleCommitDiff)
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
 
 	// When: 존재하지 않는 SHA로 diff 요청
 	url := "/api/v2/repository/testowner/testrepo/diff/commits/abc123/def456"

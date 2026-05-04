@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
@@ -82,50 +83,38 @@ type repositoryContext struct {
 	repoWrapper *repositories.RepositoryWrapper
 }
 
-// validateAndOpenRepository는 저장소 검증 및 열기를 수행하는 공통 로직입니다.
-func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Context, c *gin.Context, owner, repo, ref string) (*repositoryContext, bool) {
-	// ref가 제공되지 않으면 기본값으로 HEAD 사용
+// validateAndOpenRepository는 저장소 검증 및 열기를 수행한다. 성공 시 RLock 을
+// 보유한 채 컨텍스트를 반환 — 호출자는 RUnlock + repoWrapper.Close 책임. 실패
+// 시 *typed.HTTPError 반환 (lock/repo open 모두 정리됨).
+func (h *RepositoryOverviewHandler) validateAndOpenRepository(_ context.Context, owner, repo, ref string) (*repositoryContext, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
 
-	// 경로 구성 요소 검증
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// 저장소 경로 가져오기
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// Acquire read lock before any repo access so that pack writes (push/commit)
-	// cannot race with our reads. The caller is responsible for releasing via:
-	//   defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	repoLock := repositories.GetRepoRWLock(repoPath)
 	repoLock.RLock()
 
-	// 저장소 열기: 캐시 없이 PlainOpen만 사용 (packfile repo에서 캐시된 storer 동시 접근 시 panic 방지).
 	repoWrapper, err := repositories.OpenRepositoryNoCache(repoPath)
 	if err != nil {
 		repoLock.RUnlock()
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// 브랜치는 별도 API에서 제공하므로 overview에서는 조회하지 않습니다.
-
-	// ref가 제공된 경우 검증 (ref를 해석 가능한지 확인)
 	if ref != "" && ref != "HEAD" {
 		_, err := repoWrapper.ResolveReference(ref)
 		if err != nil {
 			repoLock.RUnlock()
 			_ = repoWrapper.Close()
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
-			return nil, false
+			return nil, typed.NewHTTPError(http.StatusNotFound, "reference not found")
 		}
 	}
 
@@ -135,46 +124,38 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(ctx context.Contex
 		ref:         ref,
 		repoPath:    repoPath,
 		repoWrapper: repoWrapper,
-	}, true
+	}, nil
 }
 
-// validateRepositoryNative는 native git만 사용하여 저장소 검증 및 브랜치 목록을 가져옵니다.
-// go-git OpenRepositoryNoCache (1-3초)와 GetBranches (0.5-1.5초)를 제거하여
-// 검증 시간을 <50ms로 단축합니다.
-func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context, c *gin.Context, owner, repo, ref string) (*repositoryContext, bool) {
+// validateRepositoryNative는 native git만 사용하여 저장소 검증을 수행한다.
+// 성공 시 RLock 을 보유한 채 컨텍스트를 반환 — 호출자는 RUnlock 책임. 실패
+// 시 *typed.HTTPError 반환 (lock 정리됨).
+func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context, owner, repo, ref string) (*repositoryContext, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
 	repoLock := repositories.GetRepoRWLock(repoPath)
 	repoLock.RLock()
 
-	// Repo 존재 확인: git rev-parse --git-dir (빈 저장소도 지원)
 	if err := nativeCheckRepoExists(ctx, repoPath); err != nil {
 		repoLock.RUnlock()
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// 브랜치는 별도 API에서 제공하므로 overview에서는 조회하지 않습니다.
-
-	// ref 검증: native git rev-parse (go-git ResolveReference 대체)
 	if ref != "" && ref != "HEAD" {
 		if _, err := nativeResolveRef(ctx, repoPath, ref); err != nil {
 			repoLock.RUnlock()
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
-			return nil, false
+			return nil, typed.NewHTTPError(http.StatusNotFound, "reference not found")
 		}
 	}
 
@@ -183,15 +164,13 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 		repo:     repo,
 		ref:      ref,
 		repoPath: repoPath,
-	}, true
+	}, nil
 }
 
 // overviewTimeout is the hard request-level timeout for the overview handler.
-// Individual sub-tasks respect ctx cancellation, so the total wall time is bounded.
 const overviewTimeout = 15 * time.Second
 
 // overviewCommitCountCap is the maximum number of commits to iterate when counting.
-// Beyond this, the count is approximate (UI should show "100k+").
 const overviewCommitCountCap = 100_000
 
 // overviewResult holds the result of running overview parallel tasks (for retry).
@@ -206,13 +185,11 @@ type overviewResult struct {
 }
 
 // runOverviewTasks는 native git CLI를 사용하여 overview 병렬 태스크를 실행합니다.
-// go-git의 OpenRepositoryNoCache를 제거하여 repo open 오버헤드를 완전히 제거합니다 (3.2초 → <100ms).
 func (h *RepositoryOverviewHandler) runOverviewTasks(ctx context.Context, repoPath, ref, path, refHash string) overviewResult {
 	return h.runOverviewTasksNative(ctx, repoPath, ref, path, refHash)
 }
 
 // runOverviewTasksNative runs parallel overview sub-tasks using native git CLI.
-// go-git의 OpenRepositoryNoCache를 제거하여 repo open 오버헤드를 완전히 제거합니다.
 func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 	ctx context.Context, repoPath, ref, path, refHash string,
 ) overviewResult {
@@ -222,7 +199,6 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		wg  sync.WaitGroup
 	)
 
-	// commit count (native git rev-list --count) + cache
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -249,7 +225,6 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		mu.Unlock()
 	}()
 
-	// tree entries (native git ls-tree)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -260,7 +235,6 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		mu.Unlock()
 	}()
 
-	// tags (native git tag -l)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -274,7 +248,6 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		mu.Unlock()
 	}()
 
-	// branch count (native git for-each-ref refs/heads/)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -288,7 +261,6 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 		res.branchesCount = n
 	}()
 
-	// README blob (native git show)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -317,10 +289,12 @@ func isObjectNotFoundForPack(res overviewResult) bool {
 	return false
 }
 
-// HandleGetRepositoryOverview는 저장소 개요를 위한 GET /api/v1/repository/{owner}/{repo} 요청을 처리합니다.
-// 모든 비동기 작업을 병렬로 실행하여 wall time = max(개별) 로 줄입니다.
-// push 직후 pack 미반영 시 object not found가 나올 수 있으므로, 그때 캐시 무효화 후 한 번 재시도합니다.
-func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) {
+// HandleGetRepositoryOverview는 저장소 개요를 위한 GET /overview 요청을 처리한다.
+//
+// pack 미반영 시 object not found 가 나올 수 있으므로 캐시 무효화 후 한 번
+// 재시도. validateRepositoryNative 가 RLock 획득을 책임지고, 실패 case 는
+// *typed.HTTPError 로 즉시 반환.
+func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) (RepositoryOverviewResponse, error) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), overviewTimeout)
 	defer cancel()
 
@@ -340,14 +314,13 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			h.logger.Debug("Overview retry after cache invalidate (pack visibility)", zap.String("repoPath", repoPath))
 		}
 
-		var ok bool
-		repoCtx, ok = h.validateRepositoryNative(ctx, c, owner, repo, ref)
-		if !ok {
-			return
+		var verr error
+		repoCtx, verr = h.validateRepositoryNative(ctx, owner, repo, ref)
+		if verr != nil {
+			return RepositoryOverviewResponse{}, verr
 		}
 		repoPath = repoCtx.repoPath
 
-		// native git으로 refHash resolve — 빈 저장소에서는 실패하며 refHash는 ""로 남음.
 		refHash = ""
 		if resolved, resolveErr := nativeResolveRef(ctx, repoPath, repoCtx.ref); resolveErr == nil {
 			refHash = resolved
@@ -359,19 +332,16 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			break
 		}
 
-		// object-not-found for pack: release this attempt's lock, then retry.
 		repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 		repoCtx = nil
 	}
 
-	// repoCtx is non-nil only when we broke out with a valid result (lock still held).
 	if repoCtx != nil {
 		defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	}
 
-	// Empty repo: HEAD/ref didn't resolve, so there are no objects to inspect.
 	if refHash == "" {
-		c.JSON(http.StatusOK, RepositoryOverviewResponse{
+		return RepositoryOverviewResponse{
 			Success:    true,
 			Message:    "Repository overview fetched successfully",
 			IsEmpty:    true,
@@ -384,11 +354,9 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			Tags:       []GitTag{},
 			Count:      RepositoryCount{},
 			Readme:     "",
-		})
-		return
+		}, nil
 	}
 
-	// Tree 에러 처리
 	if res.treeErr != nil {
 		errMsg := strings.ToLower(res.treeErr.Error())
 		h.logger.Error("overview: tree failed",
@@ -401,14 +369,12 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		if strings.Contains(errMsg, "not a tree object") ||
 			strings.Contains(errMsg, "does not exist") ||
 			strings.Contains(errMsg, "path not found") {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
-			return
+			return RepositoryOverviewResponse{}, typed.NewHTTPError(http.StatusNotFound, "path not found")
 		}
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
+		return RepositoryOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
 	}
 
-	c.JSON(http.StatusOK, RepositoryOverviewResponse{
+	return RepositoryOverviewResponse{
 		Success:    true,
 		Message:    "Repository overview fetched successfully",
 		Repository: fmt.Sprintf("%s/%s", owner, repo),
@@ -426,33 +392,28 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 			CommitsApproximate: res.commitsApproximate,
 		},
 		Readme: res.readmeContent,
-	})
+	}, nil
 }
 
-// HandleGetTreeOverview는 트리 개요를 위한 GET /api/v1/repository/{owner}/{repo}/tree 요청을 처리합니다.
-// Native git 엔진 사용: go-git OpenRepositoryNoCache → native git exec.
-func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
+// HandleGetTreeOverview는 트리 개요를 위한 GET /overview/tree 요청을 처리합니다.
+func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) (TreeOverviewResponse, error) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	ref := c.Query("ref")
 	path := c.Query("path")
 
-	// 공통 검증 (native git — go-git 불필요)
-	repoCtx, ok := h.validateRepositoryNative(ctx, c, owner, repo, ref)
-	if !ok {
-		return
+	repoCtx, err := h.validateRepositoryNative(ctx, owner, repo, ref)
+	if err != nil {
+		return TreeOverviewResponse{}, err
 	}
 	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 
-	// 트리 항목 (native git ls-tree)
 	treeEntries, err := NativeGetTreeEntries(ctx, repoCtx.repoPath, repoCtx.ref, path)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
+		return TreeOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
 	}
 
-	// path 기준 최신 커밋 (native git log -1 -- path)
 	var latestCommit *GitCommit
 	if path != "" {
 		latestCommit, _ = NativeGetLatestCommitForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
@@ -460,7 +421,6 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		latestCommit, _ = NativeGetLatestCommit(ctx, repoCtx.repoPath, repoCtx.ref)
 	}
 
-	// 커밋 목록 (native git log)
 	var commitsList []GitCommit
 	if c.Query("include_all_commits") == "true" {
 		const maxCommitsForList = 1000
@@ -477,7 +437,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		commitsList = []GitCommit{}
 	}
 
-	response := TreeOverviewResponse{
+	return TreeOverviewResponse{
 		Success:      true,
 		Repository:   fmt.Sprintf("%s/%s", owner, repo),
 		Owner:        owner,
@@ -487,14 +447,11 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) {
 		Branches:     []GitBranch{},
 		LatestCommit: latestCommit,
 		Commits:      commitsList,
-	}
-
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
-// HandleGetBlobOverview는 블럭 개요를 위한 GET /api/v1/repository/{owner}/{repo}/blob 요청을 처리합니다.
-// Native git 엔진 사용: go-git → native git exec.
-func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
+// HandleGetBlobOverview는 GET /overview/blob 요청을 처리합니다.
+func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobOverviewResponse, error) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -502,45 +459,34 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 	ref := c.Query("ref")
 
 	if path == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Missing required parameter: path",
-		})
-		return
+		return BlobOverviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: path")
 	}
 
-	// 공통 검증 (native git — go-git 불필요)
-	repoCtx, ok := h.validateRepositoryNative(ctx, c, owner, repo, ref)
-	if !ok {
-		return
+	repoCtx, err := h.validateRepositoryNative(ctx, owner, repo, ref)
+	if err != nil {
+		return BlobOverviewResponse{}, err
 	}
 	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 
-	// blob 내용 조회 (native git show)
 	blobContent, err := NativeGetBlobContent(ctx, repoCtx.repoPath, repoCtx.ref, path)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "file not found"})
-		return
+		return BlobOverviewResponse{}, typed.NewHTTPError(http.StatusNotFound, "file not found")
 	}
 
 	contentType := blob.DetectContentType(blobContent, path)
 	isBinary := blob.IsBinaryContent(blobContent, contentType)
 
-	// 부모 디렉터리 트리 (native git ls-tree)
 	parentPath := ""
 	if idx := strings.LastIndex(path, "/"); idx != -1 {
 		parentPath = path[:idx]
 	}
 	treeEntries, err := NativeGetTreeEntries(ctx, repoCtx.repoPath, repoCtx.ref, parentPath)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
+		return BlobOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
 	}
 
-	// path 기준 최신 커밋 (native git log -1 -- path)
 	latestCommit, _ := NativeGetLatestCommitForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
 
-	// 커밋 목록 (native git log)
 	var commitsList []GitCommit
 	if c.Query("include_all_commits") == "true" {
 		const maxCommitsForList = 1000
@@ -564,7 +510,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		lines = strings.Count(strings.ReplaceAll(content, "\r\n", "\n"), "\n") + 1
 	}
 
-	response := BlobOverviewResponse{
+	return BlobOverviewResponse{
 		Success:      true,
 		IsBinary:     isBinary,
 		Content:      content,
@@ -575,15 +521,11 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) {
 		Branches:     []GitBranch{},
 		LatestCommit: latestCommit,
 		Commits:      commitsList,
-	}
-
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
-// HandleGetTreeWithCommitOverview는 트리와 커밋 정보를 함께 반환하는 GET /api/v1/repository/{owner}/{repo}/overview/tree/commits 요청을 처리합니다.
-//
-// Native git 엔진 사용: go-git의 DiffTree (9초) → native git log (6ms), 1,500배 개선.
-func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Context) {
+// HandleGetTreeWithCommitOverview handles GET /overview/tree/commits.
+func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Context) (TreeWithCommitOverviewResponse, error) {
 	ctx := c.Request.Context()
 	start := time.Now()
 	m := observability.GetApplicationMetrics()
@@ -593,26 +535,20 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	ref := c.Query("ref")
 	path := c.Query("path")
 
-	// 공통 검증 (native git — go-git 불필요)
-	repoCtx, ok := h.validateRepositoryNative(ctx, c, owner, repo, ref)
-	if !ok {
-		return
+	repoCtx, err := h.validateRepositoryNative(ctx, owner, repo, ref)
+	if err != nil {
+		return TreeWithCommitOverviewResponse{}, err
 	}
 	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 
 	repoCtx.path = path
 
-	// --- NATIVE GIT PATH ---
-	// 1. 트리 구조 로드 (native git ls-tree).
 	treeEntries, err := NativeGetTreeEntries(ctx, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		m.RecordTreeWithCommit("error", time.Since(start), 0)
-		// git ls-tree 실패는 거의 항상 경로 문제 (존재하지 않음, 파일 경로, 잘못된 ref 등).
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "path not found"})
-		return
+		return TreeWithCommitOverviewResponse{}, typed.NewHTTPError(http.StatusNotFound, "path not found")
 	}
 
-	// 2. 각 엔트리의 최신 커밋 조회 (native git log, 동시 실행).
 	paths := make([]string, 0, len(treeEntries))
 	for _, e := range treeEntries {
 		if e.Type == "blob" || e.Type == "tree" {
@@ -622,7 +558,6 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 
 	commitMap, meta := GetLatestCommitsNative(ctx, repoCtx.repoPath, repoCtx.ref, paths)
 
-	// 3. 트리 엔트리에 커밋 정보 오버레이.
 	for i := range treeEntries {
 		if commit, ok := commitMap[treeEntries[i].Path]; ok {
 			treeEntries[i].LatestCommit = commit
@@ -641,7 +576,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 		)
 	}
 
-	response := TreeWithCommitOverviewResponse{
+	return TreeWithCommitOverviewResponse{
 		Success:    true,
 		Repository: fmt.Sprintf("%s/%s", owner, repo),
 		Owner:      owner,
@@ -649,18 +584,11 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 		Path:       path,
 		Tree:       treeEntries,
 		Meta:       &meta,
-	}
-
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
-// HandleGetLatestCommitOverview handles GET /api/v1/repository/{owner}/{repo}/overview/latest-commit.
-//
-// Returns the single most recent commit for the given ref (optionally narrowed
-// by path). Runs one `git log -1` — an order of magnitude faster than
-// /overview/tree/commits, which scans commits per tree entry. The UI uses this
-// endpoint to render the commit header before the full tree overlay arrives.
-func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context) {
+// HandleGetLatestCommitOverview handles GET /overview/latest-commit.
+func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context) (LatestCommitOverviewResponse, error) {
 	ctx := c.Request.Context()
 	start := time.Now()
 
@@ -669,38 +597,36 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 	ref := c.Query("ref")
 	path := strings.Trim(c.Query("path"), "/")
 
-	repoCtx, ok := h.validateRepositoryNative(ctx, c, owner, repo, ref)
-	if !ok {
-		return
+	repoCtx, err := h.validateRepositoryNative(ctx, owner, repo, ref)
+	if err != nil {
+		return LatestCommitOverviewResponse{}, err
 	}
 	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 
 	if path != "" {
 		if err := h.pathValidator.ValidateFilePath(path); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-			return
+			return LatestCommitOverviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 	}
 
 	var (
-		commit *GitCommit
-		err    error
+		commit  *GitCommit
+		nateErr error
 	)
 	if path == "" {
-		commit, err = NativeGetLatestCommit(ctx, repoCtx.repoPath, repoCtx.ref)
+		commit, nateErr = NativeGetLatestCommit(ctx, repoCtx.repoPath, repoCtx.ref)
 	} else {
-		commit, err = NativeGetLatestCommitForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
+		commit, nateErr = NativeGetLatestCommitForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
 	}
-	if err != nil {
+	if nateErr != nil {
 		h.logger.Warn("latest-commit native git failed",
 			zap.String("owner", owner),
 			zap.String("repo", repo),
 			zap.String("ref", repoCtx.ref),
 			zap.String("path", path),
-			zap.Error(err),
+			zap.Error(nateErr),
 		)
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "failed to resolve latest commit"})
-		return
+		return LatestCommitOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "failed to resolve latest commit")
 	}
 
 	if h.logger != nil {
@@ -713,7 +639,7 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 		)
 	}
 
-	c.JSON(http.StatusOK, LatestCommitOverviewResponse{
+	return LatestCommitOverviewResponse{
 		Success:    true,
 		Repository: fmt.Sprintf("%s/%s", owner, repo),
 		Owner:      owner,
@@ -721,10 +647,11 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 		Ref:        repoCtx.ref,
 		Path:       path,
 		Commit:     commit,
-	})
+	}, nil
 }
 
-func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context) {
+// HandlePostLatestCommitsBatch handles POST /overview/latest-commits.
+func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context) (LatestCommitsBatchResponse, error) {
 	ctx := c.Request.Context()
 	start := time.Now()
 	m := observability.GetApplicationMetrics()
@@ -734,43 +661,35 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 
 	var req LatestCommitsBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body"})
-		return
+		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 	if strings.TrimSpace(req.Ref) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required field: ref"})
-		return
+		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required field: ref")
 	}
 	if len(req.Paths) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required field: paths"})
-		return
+		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required field: paths")
 	}
 
 	dirPath := strings.Trim(req.DirPath, "/")
 	if dirPath != "" {
 		if err := h.pathValidator.ValidateFilePath(dirPath); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-			return
+			return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 	}
 
-	// 공통 검증 및 저장소 열기 (RLock은 내부에서 획득)
-	repoCtx, ok := h.validateAndOpenRepository(ctx, c, owner, repo, req.Ref)
-	if !ok {
-		return
+	repoCtx, err := h.validateAndOpenRepository(ctx, owner, repo, req.Ref)
+	if err != nil {
+		return LatestCommitsBatchResponse{}, err
 	}
 	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
 
-	// resolved ref hash (fixed)
 	resolvedHash, err := repoCtx.repoWrapper.ResolveReference(repoCtx.ref)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "reference not found"})
-		return
+		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusNotFound, "reference not found")
 	}
 	resolvedRefHash := resolvedHash.String()
 
-	// Normalize/validate paths and build CommitPathInfo
 	seen := make(map[string]struct{}, len(req.Paths))
 	pathInfos := make([]CommitPathInfo, 0, len(req.Paths))
 	for _, p := range req.Paths {
@@ -785,8 +704,7 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 		}
 
 		if err := h.pathValidator.ValidateFilePath(full); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-			return
+			return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 
 		if _, ok := seen[full]; ok {
@@ -794,15 +712,12 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 		}
 		seen[full] = struct{}{}
 
-		// Policy: this endpoint resolves latest commits for exact file paths by default.
 		pathInfos = append(pathInfos, CommitPathInfo{Path: full, IsTree: false})
 	}
 	if len(pathInfos) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "paths must not be empty"})
-		return
+		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "paths must not be empty")
 	}
 
-	// Cache key: dirPath + stable hash(paths)
 	sortedFull := make([]string, 0, len(seen))
 	for full := range seen {
 		sortedFull = append(sortedFull, full)
@@ -812,7 +727,6 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 	pathsHash := hex.EncodeToString(hh[:])
 	cachePathKey := dirPath + "|" + pathsHash
 
-	// Cache hit: check complete first, then partial (anti-thundering).
 	if cachedCommits, isComplete, found := h.overviewCache.GetLatestCommitsBatchAny(repoCtx.repoPath, resolvedRefHash, cachePathKey); found {
 		cutReason := "cache_hit"
 		incomplete := !isComplete
@@ -820,7 +734,7 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 			cutReason = "cache_hit_partial"
 		}
 		m.RecordLatestCommitsBatch(cutReason, time.Since(start), len(pathInfos), 0)
-		resp := LatestCommitsBatchResponse{
+		return LatestCommitsBatchResponse{
 			Success:       true,
 			Repository:    fmt.Sprintf("%s/%s", owner, repo),
 			Owner:         owner,
@@ -834,19 +748,15 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 				TimeBudgetMs:    0,
 				CutReason:       cutReason,
 			},
-		}
-		c.JSON(http.StatusOK, resp)
-		return
+		}, nil
 	}
 
-	// Compute with singleflight (enforced for BOTH partial and complete — thundering herd prevention).
 	sfKey := fmt.Sprintf("latest_commits_batch|%s|%s|%s", repoCtx.repoPath, resolvedRefHash, cachePathKey)
-	v, err, shared := h.overviewCache.Do(sfKey, func() (any, error) {
+	v, sfErr, shared := h.overviewCache.Do(sfKey, func() (any, error) {
 		timeBudget := latestCommitsTimeBudget()
 		maxCommits := latestCommitsMaxCommits()
 
 		commits, meta := h.service.GetLatestCommitsForPathsWithMeta(ctx, repoCtx.repoWrapper.GetRepo(), resolvedHash, pathInfos, timeBudget, maxCommits)
-		// Cache complete → long TTL, partial → short TTL (2s, anti-thundering).
 		if !meta.Incomplete {
 			h.overviewCache.SetLatestCommitsBatch(repoCtx.repoPath, resolvedRefHash, cachePathKey, commits)
 		} else {
@@ -857,10 +767,9 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 			meta    LatestCommitsMeta
 		}{commits: commits, meta: meta}, nil
 	})
-	if err != nil {
+	if sfErr != nil {
 		m.RecordLatestCommitsBatch("error", time.Since(start), len(pathInfos), 0)
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
+		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
 	}
 	if shared {
 		m.RecordOverviewSingleflightShared("latest_commits_batch")
@@ -872,7 +781,6 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 	})
 	out.meta.ResolvedRefHash = resolvedRefHash
 
-	// Missing paths list (relative to dirPath input)
 	missing := make([]string, 0)
 	for _, p := range req.Paths {
 		p = strings.Trim(p, "/")
@@ -896,7 +804,7 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 	}
 	m.RecordLatestCommitsBatch(outcome, time.Since(start), len(pathInfos), out.meta.ScannedCommits)
 
-	resp := LatestCommitsBatchResponse{
+	return LatestCommitsBatchResponse{
 		Success:       true,
 		Repository:    fmt.Sprintf("%s/%s", owner, repo),
 		Owner:         owner,
@@ -905,6 +813,5 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 		CommitsByPath: out.commits,
 		Meta:          out.meta,
 		MissingPaths:  missing,
-	}
-	c.JSON(http.StatusOK, resp)
+	}, nil
 }

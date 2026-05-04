@@ -15,61 +15,55 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
-// HandleClassifyAnchors는 POST /repos/:owner/:repo/diff/classify-anchors를 처리합니다.
+// HandleClassifyAnchors는 POST /repos/{owner}/{repo}/diff/classify-anchors를 처리합니다.
 //
 // ReviewComment anchor의 head sha 기준 staleness를 배치로 계산합니다.
-// UpdateChangeRequestService가 source_commit_sha 변경 시 이 엔드포인트를 호출해
-// 기존 comment의 line_anchor_status_cache를 갱신합니다.
-func (h *DiffHandler) HandleClassifyAnchors(c *gin.Context) {
+func (h *DiffHandler) HandleClassifyAnchors(c *gin.Context) (ClassifyAnchorsResponse, error) {
 	ctx := c.Request.Context()
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
 		h.logger.Error("classify-anchors: invalid params", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	var req ClassifyAnchorsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if len(req.Anchors) == 0 {
-		c.JSON(http.StatusOK, ClassifyAnchorsResponse{
+		return ClassifyAnchorsResponse{
 			Success: true,
 			BaseSHA: req.BaseSHA,
 			HeadSHA: req.HeadSHA,
 			Results: []AnchorResult{},
-		})
-		return
+		}, nil
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
 		h.logger.Error("classify-anchors: invalid repo path", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	results, err := classifyAnchors(ctx, repoPath, req.BaseSHA, req.HeadSHA, req.Anchors)
 	if err != nil {
 		h.logger.Error("classify-anchors: compute failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
+		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	c.JSON(http.StatusOK, ClassifyAnchorsResponse{
+	return ClassifyAnchorsResponse{
 		Success: true,
 		BaseSHA: req.BaseSHA,
 		HeadSHA: req.HeadSHA,
 		Results: results,
-	})
+	}, nil
 }
 
 // classifyAnchors는 repo path + base/head SHA + anchor 목록으로 분류 결과를 반환합니다.

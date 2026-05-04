@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/testutil/gitrepo"
 	"github.com/gin-gonic/gin"
@@ -23,6 +25,24 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
+
+// invokeTyped 는 typed handler 를 호출하고 결과/에러를 gin.Context 에 직접
+// 쓴다. typed.RegisterX wrapper 의 default 매핑 (정상 → 200, *typed.HTTPError
+// → he.Status, 그 외 → 500) 을 mirror 한다. 테스트가 router 우회 + 직접
+// handler 호출 패턴을 유지할 수 있게 해준다.
+func invokeTyped[Resp any](c *gin.Context, fn func(*gin.Context) (Resp, error)) {
+	resp, err := fn(c)
+	if err != nil {
+		var he *typed.HTTPError
+		if errors.As(err, &he) {
+			c.JSON(he.Status, gin.H{"success": false, "error": he.Message})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
 
 func init() {
 	gin.SetMode(gin.TestMode)
@@ -57,7 +77,7 @@ func Test_MultiFileCommit_CreateMultipleFiles_ReturnsSuccess(t *testing.T) {
 		{Key: "repo", Value: "testrepo"},
 	}
 
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 	var resp MultiFileCommitResponse
@@ -86,7 +106,7 @@ func Test_MultiFileCommit_CreateSingle_ReturnsSuccess(t *testing.T) {
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
 
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 
@@ -115,7 +135,7 @@ func Test_MultiFileCommit_CreateMultiple_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 
@@ -144,7 +164,7 @@ func Test_MultiFileCommit_UpdateFile_ReturnsSuccess(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", createReq)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	// When: 파일 수정
@@ -158,7 +178,7 @@ func Test_MultiFileCommit_UpdateFile_ReturnsSuccess(t *testing.T) {
 	}
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", updateReq)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 
 	// Then
 	requireStatus(t, w2, http.StatusOK)
@@ -182,7 +202,7 @@ func Test_MultiFileCommit_DeleteFile_ReturnsSuccess(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", createReq)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	// When: 파일 삭제
@@ -196,7 +216,7 @@ func Test_MultiFileCommit_DeleteFile_ReturnsSuccess(t *testing.T) {
 	}
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", deleteReq)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 
 	// Then
 	requireStatus(t, w2, http.StatusOK)
@@ -221,7 +241,7 @@ func Test_MultiFileCommit_MixedOperations_ReturnsSuccess(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", seedReq)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	// When: mixed operations
@@ -237,7 +257,7 @@ func Test_MultiFileCommit_MixedOperations_ReturnsSuccess(t *testing.T) {
 	}
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 
 	// Then
 	requireStatus(t, w2, http.StatusOK)
@@ -260,7 +280,7 @@ func Test_MultiFileCommit_DuplicateCreate_Returns409(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req1)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	req2 := MultiFileCommitRequest{
@@ -273,7 +293,7 @@ func Test_MultiFileCommit_DuplicateCreate_Returns409(t *testing.T) {
 	}
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req2)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w2, http.StatusConflict)
 	requireBodyContains(t, w2, "already exists")
@@ -296,7 +316,7 @@ func Test_MultiFileCommit_UpdateNonExistent_Returns404(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusNotFound)
 	requireBodyContains(t, w, "not found")
@@ -319,7 +339,7 @@ func Test_MultiFileCommit_EmptyContent_Returns400(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusBadRequest)
 }
@@ -342,7 +362,7 @@ func Test_MultiFileCommit_LargeFile_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 }
@@ -367,7 +387,7 @@ func Test_MultiFileCommit_BinaryFile_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 }
@@ -389,7 +409,7 @@ func Test_MultiFileCommit_Subdirectory_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 }
@@ -411,7 +431,7 @@ func Test_MultiFileCommit_DeepNesting_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 }
@@ -433,7 +453,7 @@ func Test_MultiFileCommit_SpecialCharsInPath_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 }
@@ -456,7 +476,7 @@ func Test_MultiFileCommit_DuplicateFile_Returns409(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req1)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	// 같은 파일 다시 생성 시도
@@ -470,7 +490,7 @@ func Test_MultiFileCommit_DuplicateFile_Returns409(t *testing.T) {
 	}
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req2)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w2, http.StatusConflict)
 	requireBodyContains(t, w2, "already exists")
@@ -493,7 +513,7 @@ func Test_MultiFileCommit_DeleteNonExistent_Returns404(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusNotFound)
 	requireBodyContains(t, w, "not found")
@@ -514,7 +534,7 @@ func Test_MultiFileCommit_EmptyOperations_Returns400(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusBadRequest)
 }
@@ -543,7 +563,7 @@ func Test_MultiFileCommit_CreateBranch_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 
@@ -579,13 +599,13 @@ func Test_MultiFileCommit_CreateBranch_DuplicateName_Returns409(t *testing.T) {
 	// 첫 번째 요청 - 성공
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	// 두 번째 요청 - 충돌
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 	requireStatus(t, w2, http.StatusConflict)
 }
 
@@ -608,7 +628,7 @@ func Test_MultiFileCommit_CreateBranch_CommitFailure_RollbacksBranch(t *testing.
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusNotFound)
 
@@ -646,7 +666,7 @@ func Test_FileOperations_CreateUpdateDelete_ReturnsSuccess(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", createReq)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	// 2. Update
@@ -660,7 +680,7 @@ func Test_FileOperations_CreateUpdateDelete_ReturnsSuccess(t *testing.T) {
 	}
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", updateReq)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 	requireStatus(t, w2, http.StatusOK)
 
 	// 3. Delete
@@ -674,7 +694,7 @@ func Test_FileOperations_CreateUpdateDelete_ReturnsSuccess(t *testing.T) {
 	}
 	c3, w3 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", deleteReq)
 	c3.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c3)
+	invokeTyped(c3, handler.HandleMultiFileCommit)
 	requireStatus(t, w3, http.StatusOK)
 }
 
@@ -697,7 +717,7 @@ func Test_MultiFileCommit_Subdirectories_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 	var resp MultiFileCommitResponse
@@ -745,7 +765,7 @@ func Test_CommitsAPI_CompareMode_ReturnsOnlyAheadCommits(t *testing.T) {
 	setBranchRef(t, repo, "feat", featHash)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/commits", handler.HandleCommitsAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/commits?source_ref=feat&target_ref=main&limit=30&skip=0", nil)
 	w := httptest.NewRecorder()
@@ -1009,7 +1029,7 @@ func Test_MultiFileCommit_PathTraversal_Returns400(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	// 400 Bad Request (500이 아님)
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
@@ -1034,7 +1054,7 @@ func Test_MultiFileCommit_DuplicatePathInOperations_Returns400(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	// 400 Bad Request 또는 409 Conflict (500이 아님)
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
@@ -1058,7 +1078,7 @@ func Test_MultiFileCommit_MissingAuthor_Returns400(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	// 400 Bad Request (500이 아님)
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
@@ -1082,7 +1102,7 @@ func Test_MultiFileCommit_InvalidBranch_Returns404(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	// 404 또는 400이어야 함, 500은 안됨
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
@@ -1106,7 +1126,7 @@ func Test_MultiFileCommit_FirstCommitOnEmptyRepo_ReturnsSuccess(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 
@@ -1138,7 +1158,7 @@ func Test_MultiFileCommit_InvalidOperation_Returns400(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	// 400 Bad Request (500이 아님)
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
@@ -1162,7 +1182,7 @@ func Test_MultiFileCommit_ReturnsCommitSHA_Readable(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 
@@ -1211,7 +1231,7 @@ func Test_MultiFileCommit_InvalidEmail_AllowsOrRejectsByContract(t *testing.T) {
 			}
 			c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 			c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-			handler.HandleMultiFileCommit(c)
+			invokeTyped(c, handler.HandleMultiFileCommit)
 
 			// 현재 구현은 이메일 검증을 하지 않으므로 200 또는 400 (500은 아님)
 			require.NotEqual(t, http.StatusInternalServerError, w.Code,
@@ -1249,7 +1269,7 @@ func Test_MultiFileCommit_CommitMessageEncoding_UTF8AndNonUTF8(t *testing.T) {
 			}
 			c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 			c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-			handler.HandleMultiFileCommit(c)
+			invokeTyped(c, handler.HandleMultiFileCommit)
 
 			requireStatus(t, w, http.StatusOK)
 
@@ -1278,7 +1298,7 @@ func Test_MultiFileCommit_LargeMessage_RejectsOrTruncatesExplicitly(t *testing.T
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	// 현재 구현은 큰 메시지를 허용하므로 200 또는 400 (500은 아님)
 	require.NotEqual(t, http.StatusInternalServerError, w.Code,
@@ -1306,7 +1326,7 @@ func Test_MultiFileCommit_FileModeExecutableBit_Preserved(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusOK)
 
@@ -1363,7 +1383,7 @@ func Test_MultiFileCommit_PathNormalization_NoEscape(t *testing.T) {
 			}
 			c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 			c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-			handler.HandleMultiFileCommit(c)
+			invokeTyped(c, handler.HandleMultiFileCommit)
 
 			requireStatus(t, w, http.StatusBadRequest)
 			requireBodyContains(t, w, "path traversal")
@@ -1388,7 +1408,7 @@ func Test_MultiFileCommit_BinaryContent_Base64Validation(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	requireStatus(t, w, http.StatusBadRequest)
 	requireBodyContains(t, w, "base64")
@@ -1417,7 +1437,7 @@ func Test_MultiFileCommit_CreateBranch_InvalidSource_Returns400(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 
 	// 현재 구현은 400을 반환함
 	requireStatus(t, w, http.StatusBadRequest)
@@ -1446,11 +1466,11 @@ func Test_CommitsAPI_List_ReturnsCommits(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", createReq)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/commits", handler.HandleCommitsAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/commits?ref=main", nil)
 	w := httptest.NewRecorder()
@@ -1484,12 +1504,12 @@ func Test_CommitsAPI_Pagination_ReturnsCorrectPage(t *testing.T) {
 		}
 		c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", createReq)
 		c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-		handler.HandleMultiFileCommit(c)
+		invokeTyped(c, handler.HandleMultiFileCommit)
 		requireStatus(t, w, http.StatusOK)
 	}
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/commits", handler.HandleCommitsAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// limit=2, skip=0으로 첫 페이지 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/commits?ref=main&limit=2&skip=0", nil)
@@ -1518,7 +1538,7 @@ func Test_CommitsAPI_PaginationOutOfRange_ReturnsEmptyArray(t *testing.T) {
 	handler, _ := newCommitsHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/commits", handler.HandleCommitsAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// skip=100으로 범위를 벗어나는 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/commits?ref=main&limit=10&skip=100", nil)
@@ -1554,14 +1574,14 @@ func Test_CommitsAPI_ByRef_ReturnsCommitsFromRef(t *testing.T) {
 	}
 	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", createReq)
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c)
+	invokeTyped(c, handler.HandleMultiFileCommit)
 	requireStatus(t, w, http.StatusOK)
 
 	var commitResp MultiFileCommitResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &commitResp))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/commits", handler.HandleCommitsAPI)
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
 
 	// feature 브랜치의 커밋 조회
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/commits?ref=feature", nil)
@@ -1607,7 +1627,7 @@ func Test_MultiFileCommit_PartialFailure_NoPartialCommit(t *testing.T) {
 	}
 	c1, w1 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", seedReq)
 	c1.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c1)
+	invokeTyped(c1, handler.HandleMultiFileCommit)
 	requireStatus(t, w1, http.StatusOK)
 
 	var seedResp MultiFileCommitResponse
@@ -1626,7 +1646,7 @@ func Test_MultiFileCommit_PartialFailure_NoPartialCommit(t *testing.T) {
 	}
 	c2, w2 := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
 	c2.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	handler.HandleMultiFileCommit(c2)
+	invokeTyped(c2, handler.HandleMultiFileCommit)
 
 	// Then: 실패해야 함
 	require.NotEqual(t, http.StatusOK, w2.Code)

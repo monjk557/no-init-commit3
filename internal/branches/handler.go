@@ -1,4 +1,4 @@
-// Package protocol은 Git REST API 엔드포인트의 브랜치 작업을 제공합니다.
+// Package branches 는 Git REST API 엔드포인트의 브랜치 작업을 제공합니다.
 // 브랜치 생성, 업데이트, 삭제 등의 Git 브랜치 관리 기능을 구현합니다.
 package branches
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -23,7 +24,6 @@ import (
 )
 
 // BranchOperationsHandler는 Git 브랜치 작업을 처리합니다.
-// 브랜치 생성, 업데이트, 삭제 요청을 처리하고 적절한 응답을 제공합니다.
 type BranchOperationsHandler struct {
 	config            *config.Config
 	logger            *logging.Logger
@@ -35,38 +35,30 @@ type BranchOperationsHandler struct {
 }
 
 // NewBranchOperationsHandler는 새로운 브랜치 작업 핸들러를 생성합니다.
-// 설정과 권한 클라이언트를 사용하여 필요한 컴포너트들을 초기화합니다.
 func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, error) {
 	logger, err := logging.NewLogger(cfg.Logging)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
-	// Create path configuration
 	pathConfig, err := repositories.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
 
-	// Create path validator
 	pathValidator := repositories.NewGitAPIPathValidator(pathConfig)
 
-	// Compile branch name pattern following git check-ref-format rules (blocklist approach)
-	// Blocks: control chars (0x00-0x1f, 0x7f), space, ~, ^, :, ?, *, [, \
 	branchNamePattern, err := regexp.Compile(`^[^\x00-\x20\x7f~^:?*\[\\]+$`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile branch name pattern: %w", err)
 	}
 
-	// Create branch service
 	service := NewBranchService(logger)
 
-	// Initialize events client if enabled
 	var eventsClient events.RedisStreamClient
 	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
 		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
 		if err != nil {
-			// Log warning but continue without events
 			_ = err
 		}
 	}
@@ -89,27 +81,23 @@ type repositoryContext struct {
 	repoPath string
 }
 
-// validateAndGetRepoPath는 저장소 검증 및 경로를 가져오는 공통 로직입니다.
-func (h *BranchOperationsHandler) validateAndGetRepoPath(ctx context.Context, c *gin.Context, owner, repo string) (*repositoryContext, bool) {
+// validateAndGetRepoPath 는 저장소 검증 + 경로 조회를 수행한다. 실패 시
+// *typed.HTTPError 반환 (path validation → 400, repo not found → 404).
+func (h *BranchOperationsHandler) validateAndGetRepoPath(_ context.Context, owner, repo string) (*repositoryContext, error) {
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid path: %v", err),
-		})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid path: %v", err))
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return nil, false
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
 	return &repositoryContext{
 		owner:    owner,
 		repo:     repo,
 		repoPath: repoPath,
-	}, true
+	}, nil
 }
 
 // suggestBranchMaxAttempts는 대체 브랜치 이름을 찾기 위한 최대 시도 횟수입니다.
@@ -119,7 +107,6 @@ const suggestBranchMaxAttempts = 5
 func randomSuffix() string {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
-		// fallback: 타임스탬프 기반
 		return fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFFFF)
 	}
 	return hex.EncodeToString(b)
@@ -140,77 +127,63 @@ func suggestAvailableName(ctx context.Context, repoPath, baseName string) *strin
 	return nil
 }
 
-// HandleValidateBranchName handles GET /repos/{owner}/{repo}/branches/validate/*name
-// 브랜치 이름의 사용 가능 여부를 확인하고, 이미 존재하면 난수 suffix 기반 대체 이름을 제안합니다.
-func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) {
+// HandleValidateBranchName handles GET /branches/validate/*name.
+func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) (ValidateBranchNameResponse, error) {
 	ctx := c.Request.Context()
 
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	name := strings.TrimPrefix(protocol.SafeParam(c, "name"), "/")
 
-	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return ValidateBranchNameResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// native git으로 브랜치 존재 여부 확인
 	exists, _, err := NativeCheckBranchExists(ctx, repoPath, name)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
+		return ValidateBranchNameResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
 	}
 
 	if !exists {
-		c.JSON(http.StatusOK, ValidateBranchNameResponse{
+		return ValidateBranchNameResponse{
 			Success:     true,
 			IsAvailable: true,
-		})
-		return
+		}, nil
 	}
 
-	// 이미 존재하면 난수 suffix 기반 대체 이름 제안
-	c.JSON(http.StatusOK, ValidateBranchNameResponse{
+	return ValidateBranchNameResponse{
 		Success:       true,
 		IsAvailable:   false,
 		SuggestedName: suggestAvailableName(ctx, repoPath, name),
-	})
+	}, nil
 }
 
-// HandleGetBranches handles GET /repos/{owner}/{repo}/branches for getting branches.
+// HandleGetBranches handles GET /branches.
 // Supports optional ?search=<keyword> to filter branches by name (case-insensitive substring match).
-func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
+func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) (GetBranchesResponse, error) {
 	ctx := c.Request.Context()
 
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// 파라미터 추출 및 검증
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
-	searchQuery := c.Query("search")              // 브랜치 이름 검색 (대소문자 무관 부분 일치)
-	sortParam := c.DefaultQuery("sort", "newest") // "newest" (기본), "oldest", "name"
+	searchQuery := c.Query("search")
+	sortParam := c.DefaultQuery("sort", "newest")
 	sort := ParseBranchSort(sortParam)
-	emailFilter := c.Query("email")   // committer email 필터 (대소문자 무관)
-	statusFilter := c.Query("status") // "active" 또는 "stale"
+	emailFilter := c.Query("email")
+	statusFilter := c.Query("status")
 
-	// status 파라미터 검증
 	if statusFilter != "" && statusFilter != "active" && statusFilter != "stale" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid status: must be 'active' or 'stale'"})
-		return
+		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid status: must be 'active' or 'stale'")
 	}
 
-	// limit 파라미터 파싱 및 검증
 	limit := DefaultBranchesLimit
 	if limitStr != "" {
 		parsedLimit, err := strconv.Atoi(limitStr)
 		if err != nil || parsedLimit < MinBranchesLimit {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("invalid limit: must be >= %d", MinBranchesLimit)})
-			return
+			return GetBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid limit: must be >= %d", MinBranchesLimit))
 		}
 		if parsedLimit > MaxBranchesLimit {
 			limit = MaxBranchesLimit
@@ -219,37 +192,29 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		}
 	}
 
-	// skip 파라미터 파싱 및 검증
 	skip := 0
 	if skipStr != "" {
 		parsedSkip, err := strconv.Atoi(skipStr)
 		if err != nil || parsedSkip < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid skip: must be >= 0"})
-			return
+			return GetBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid skip: must be >= 0")
 		}
 		skip = parsedSkip
 	}
 
-	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// native git으로 모든 브랜치 가져오기 (정렬 적용)
 	allBranches, err := h.service.GetBranches(ctx, repoPath, sort)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
+		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
 	}
 
-	// nil 체크: 빈 배열 보장
 	if allBranches == nil {
 		allBranches = []BranchInfo{}
 	}
 
-	// search 필터 적용 (대소문자 무관 부분 일치)
 	if searchQuery != "" {
 		searchLower := strings.ToLower(searchQuery)
 		filtered := make([]BranchInfo, 0, len(allBranches))
@@ -261,7 +226,6 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		allBranches = filtered
 	}
 
-	// email 필터 적용 (대소문자 무관)
 	if emailFilter != "" {
 		emailLower := strings.ToLower(emailFilter)
 		filtered := make([]BranchInfo, 0, len(allBranches))
@@ -273,7 +237,6 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		allBranches = filtered
 	}
 
-	// status 필터 적용 (active: 90일 미만, stale: 90일 이상)
 	if statusFilter != "" {
 		filtered := make([]BranchInfo, 0, len(allBranches))
 		for _, b := range allBranches {
@@ -288,10 +251,8 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 
 	totalCount := len(allBranches)
 
-	// 페이지네이션 적용
 	var branches []BranchInfo
 	if skip >= totalCount {
-		// skip이 전체 개수보다 크면 빈 배열
 		branches = []BranchInfo{}
 	} else {
 		end := skip + limit
@@ -301,32 +262,30 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) {
 		branches = allBranches[skip:end]
 	}
 
-	// 페이지네이션 정보 계산
 	currentPage := 1
 	if limit > 0 {
 		currentPage = skip/limit + 1
 	}
 
-	// 페이지네이션 정보와 함께 응답 생성
-	response := GetBranchesResponse{
+	pagination := buildPagination(totalCount, currentPage, limit, c.Request.URL.String())
+
+	return GetBranchesResponse{
 		Success: true,
 		Results: branches,
 		Pagination: PaginationInfo{
 			Count:       totalCount,
-			Next:        buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).Next,
-			Previous:    buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).Previous,
+			Next:        pagination.Next,
+			Previous:    pagination.Previous,
 			CurrentPage: currentPage,
-			TotalPages:  buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).TotalPages,
+			TotalPages:  pagination.TotalPages,
 			PageSize:    limit,
 		},
-	}
-
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
-// HandleBranchStats handles POST /repos/{owner}/{repo}/branches/stats
-// 요청된 브랜치들의 ahead/behind를 default branch 기준으로 배치 계산합니다.
-func (h *BranchOperationsHandler) HandleBranchStats(c *gin.Context) {
+// HandleBranchStats handles POST /branches/stats — 요청된 브랜치들의 ahead/behind 를
+// default branch 기준으로 배치 계산.
+func (h *BranchOperationsHandler) HandleBranchStats(c *gin.Context) (BranchStatsResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -334,29 +293,24 @@ func (h *BranchOperationsHandler) HandleBranchStats(c *gin.Context) {
 
 	var req BranchStatsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("invalid request: %v", err)})
-		return
+		return BranchStatsResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
 	}
 
 	if len(req.Branches) > MaxBranchesLimit {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("too many branches: max %d", MaxBranchesLimit)})
-		return
+		return BranchStatsResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("too many branches: max %d", MaxBranchesLimit))
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return BranchStatsResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// default branch 확인
 	headRef := nativeGetHead(ctx, repoPath)
 	defaultBranch := strings.TrimPrefix(headRef, "refs/heads/")
 	if defaultBranch == "" {
 		defaultBranch = "main"
 	}
 
-	// goroutine 병렬 계산
 	type result struct {
 		name string
 		item BranchStatsItem
@@ -385,10 +339,10 @@ func (h *BranchOperationsHandler) HandleBranchStats(c *gin.Context) {
 		stats[r.name] = r.item
 	}
 
-	c.JSON(http.StatusOK, BranchStatsResponse{
+	return BranchStatsResponse{
 		Success: true,
 		Stats:   stats,
-	})
+	}, nil
 }
 
 // buildPagination은 페이지네이션 정보를 생성합니다.
@@ -400,7 +354,6 @@ func buildPagination(totalCount, currentPage, pageSize int, baseURL string) Pagi
 
 	var next, previous *string
 
-	// limit과 skip을 사용하므로 URL 파라미터도 limit/skip으로 생성
 	if currentPage < totalPages {
 		nextSkip := (currentPage) * pageSize
 		nextURL := fmt.Sprintf("%s?limit=%d&skip=%d", baseURL, pageSize, nextSkip)
@@ -423,47 +376,41 @@ func buildPagination(totalCount, currentPage, pageSize int, baseURL string) Pagi
 	}
 }
 
-// HandleResolveBranch handles GET /repos/{owner}/{repo}/branches/resolve/*ref — single branch → commit SHA.
-func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) {
+// HandleResolveBranch handles GET /branches/resolve/*ref — single branch → commit SHA.
+func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) (ResolveBranchResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	ref := strings.TrimPrefix(protocol.SafeParam(c, "ref"), "/")
 	if ref == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "branch name is required"})
-		return
+		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "branch name is required")
 	}
 
-	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// native git으로 브랜치 존재 여부 확인
 	exists, hash, err := NativeCheckBranchExists(ctx, repoPath, ref)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "repository corrupted"})
-		return
+		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
 	}
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("branch '%s' not found", ref)})
-		return
+		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("branch '%s' not found", ref))
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":    true,
-		"name":       ref,
-		"commit_sha": hash,
-		"ref_path":   "refs/heads/" + ref,
-	})
+	return ResolveBranchResponse{
+		Success:   true,
+		Name:      ref,
+		CommitSHA: hash,
+		RefPath:   "refs/heads/" + ref,
+	}, nil
 }
 
-// HandleValidateReopen handles POST /repos/{owner}/{repo}/branches/validate-reopen.
+// HandleValidateReopen handles POST /branches/validate-reopen.
 // CR reopen 전 source/target 브랜치 존재 여부와 lineage(계보) 검증을 한 번에 수행합니다.
-func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) {
+func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) (ValidateReopenResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -471,17 +418,14 @@ func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) {
 
 	var req ValidateReopenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: " + err.Error()})
-		return
+		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body: "+err.Error())
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
-		return
+		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	// 1) source/target 브랜치 존재 확인 (병렬)
 	type branchResult struct {
 		exists bool
 		hash   string
@@ -503,26 +447,21 @@ func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) {
 	targetRes := <-targetCh
 
 	if sourceRes.err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "failed to check source branch"})
-		return
+		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "failed to check source branch")
 	}
 	if !sourceRes.exists {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("source branch '%s' no longer exists", req.SourceBranchName)})
-		return
+		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusConflict, fmt.Sprintf("source branch '%s' no longer exists", req.SourceBranchName))
 	}
 	if targetRes.err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "error": "failed to check target branch"})
-		return
+		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "failed to check target branch")
 	}
 	if !targetRes.exists {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "error": fmt.Sprintf("target branch '%s' no longer exists", req.TargetBranchName)})
-		return
+		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusConflict, fmt.Sprintf("target branch '%s' no longer exists", req.TargetBranchName))
 	}
 
 	currentSourceTip := sourceRes.hash
 	currentTargetTip := targetRes.hash
 
-	// 2) lineage 검증: stored SHA와 현재 tip이 다르면 ancestor 관계 확인
 	lineageValid := true
 	if req.StoredSourceCommitSHA != "" && currentSourceTip != req.StoredSourceCommitSHA {
 		mergeBase, err := NativeMergeBase(ctx, repoPath, req.StoredSourceCommitSHA, currentSourceTip)
@@ -532,26 +471,21 @@ func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) {
 	}
 
 	if !lineageValid {
-		c.JSON(http.StatusConflict, gin.H{
-			"success": false,
-			"error":   "source branch has been recreated from a different merge base",
-		})
-		return
+		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusConflict, "source branch has been recreated from a different merge base")
 	}
 
-	c.JSON(http.StatusOK, ValidateReopenResponse{
+	return ValidateReopenResponse{
 		Success:         true,
 		SourceCommitSHA: currentSourceTip,
 		TargetCommitSHA: currentTargetTip,
 		LineageValid:    true,
-	})
+	}, nil
 }
 
-// HandleCreateBranch handles POST /repos/{owner}/{repo}/branches for creating new branches.
-func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
+// HandleCreateBranch handles POST /branches.
+func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) (CreateBranchResponse, error) {
 	ctx := c.Request.Context()
 
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
@@ -560,49 +494,32 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 		zap.String("owner", owner),
 		zap.String("repo", repo))
 
-	// Parse and validate JSON request
 	var req CreateBranchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid JSON: %v", err),
-		})
-		return
+		return CreateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
-	// Validate branch name
 	if err := h.validateBranchName(req.Name); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid branch name: %v", err),
-		})
-		return
+		return CreateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid branch name: %v", err))
 	}
 
-	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
-	if !ok {
-		return
+	repoCtx, err := h.validateAndGetRepoPath(ctx, owner, repo)
+	if err != nil {
+		return CreateBranchResponse{}, err
 	}
 
-	// Call service to create branch (native git — uses repoPath only)
 	result, err := h.service.CreateBranch(c.Request.Context(), repoCtx.repoPath, req)
 	if err != nil {
-		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "already exists") {
 			statusCode = http.StatusConflict
 		} else if strings.Contains(err.Error(), "failed to resolve") {
 			statusCode = http.StatusBadRequest
 		}
-		c.JSON(statusCode, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
+		return CreateBranchResponse{}, typed.NewHTTPError(statusCode, err.Error())
 	}
 
-	response := CreateBranchResponse{
+	return CreateBranchResponse{
 		Success:     true,
 		BranchName:  result.BranchName,
 		CommitSHA:   result.CommitSHA,
@@ -616,19 +533,17 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) {
 			ForceUsed: result.Details.ForceUsed,
 			Author:    result.Details.Author,
 		},
-	}
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
-// HandleUpdateBranch handles PATCH /repos/{owner}/{repo}/branches/{branch} for updating branch pointers
-func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
+// HandleUpdateBranch handles PATCH /branches/*branch — 브랜치 포인터 업데이트
+// 또는 rename 작업.
+func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) (UpdateBranchResponse, error) {
 	ctx := c.Request.Context()
 
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// Extract branch name from wildcard parameter (remove leading slash)
 	branchName := strings.TrimPrefix(protocol.SafeParam(c, "branch"), "/")
 
 	h.logger.LogInfo(c.Request.Context(), "Processing branch update request",
@@ -637,64 +552,37 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		zap.String("repo", repo),
 		zap.String("branch", branchName))
 
-	// Parse and validate JSON request
 	var req UpdateBranchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid JSON: %v", err),
-		})
-		return
+		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
-	// Validate that either target or new_name is provided, but not both
 	hasTarget := req.Target != ""
 	hasNewName := req.NewName != ""
 	if !hasTarget && !hasNewName {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Either 'target' (for commit update) or 'new_name' (for rename) must be provided",
-		})
-		return
+		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Either 'target' (for commit update) or 'new_name' (for rename) must be provided")
 	}
 	if hasTarget && hasNewName {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Cannot provide both 'target' and 'new_name'. Use 'target' for commit update or 'new_name' for rename",
-		})
-		return
+		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Cannot provide both 'target' and 'new_name'. Use 'target' for commit update or 'new_name' for rename")
 	}
 
-	// Validate branch name
 	if err := h.validateBranchName(branchName); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid branch name: %v", err),
-		})
-		return
+		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid branch name: %v", err))
 	}
 
-	// Validate new branch name if rename operation
 	if hasNewName {
 		if err := h.validateBranchName(req.NewName); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"error":   fmt.Sprintf("Invalid new branch name: %v", err),
-			})
-			return
+			return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid new branch name: %v", err))
 		}
 	}
 
-	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
-	if !ok {
-		return
+	repoCtx, err := h.validateAndGetRepoPath(ctx, owner, repo)
+	if err != nil {
+		return UpdateBranchResponse{}, err
 	}
 
-	// Call service to update branch (native git — uses repoPath only)
 	result, err := h.service.UpdateBranch(c.Request.Context(), repoCtx.repoPath, branchName, req)
 	if err != nil {
-		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "does not exist") {
 			statusCode = http.StatusNotFound
@@ -705,11 +593,7 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		} else if strings.Contains(err.Error(), "not a fast-forward") || strings.Contains(err.Error(), "must be provided") {
 			statusCode = http.StatusBadRequest
 		}
-		c.JSON(statusCode, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
+		return UpdateBranchResponse{}, typed.NewHTTPError(statusCode, err.Error())
 	}
 
 	// Publish branch rename event to Redis Stream (non-blocking)
@@ -740,48 +624,44 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) {
 		}()
 	}
 
-	// Prepare response data
-	responseData := map[string]interface{}{
-		"branch_name":   result.BranchName,
-		"commit_hash":   result.CommitHash,
-		"previous_hash": result.PreviousHash,
-		"operation":     result.Operation,
-		"fast_forward":  result.FastForward,
+	resp := UpdateBranchResponse{
+		Success:      true,
+		BranchName:   result.BranchName,
+		CommitHash:   result.CommitHash,
+		PreviousHash: result.PreviousHash,
+		Operation:    result.Operation,
+		FastForward:  result.FastForward,
 	}
 
-	// Only include "forced" field if currentCommit != targetCommit (v1 compatibility)
-	// When currentCommit == targetCommit, v1 omits the "forced" field
+	// "forced" 는 commit update 에서 prev != current 일 때만 노출 (legacy 호환).
 	if result.PreviousHash != result.CommitHash {
-		responseData["forced"] = result.Forced
+		forced := result.Forced
+		resp.Forced = &forced
 	}
 
-	// Add rename-specific fields
+	// rename-specific 필드.
 	if result.Operation == "rename" {
-		responseData["old_branch_name"] = result.OldBranchName
-		responseData["new_branch_name"] = result.NewBranchName
-		responseData["ref_path"] = result.RefPath
-		responseData["head_updated"] = result.HeadUpdated
+		resp.OldBranchName = result.OldBranchName
+		resp.NewBranchName = result.NewBranchName
+		resp.RefPath = result.RefPath
+		headUpdated := result.HeadUpdated
+		resp.HeadUpdated = &headUpdated
 	}
 
 	if result.Message != "" {
-		responseData["message"] = result.Message
+		resp.Message = result.Message
 	}
 
-	response := gin.H{"success": true}
-	for k, v := range responseData {
-		response[k] = v
-	}
-	c.JSON(http.StatusOK, response)
+	return resp, nil
 }
 
-func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
+// HandleDeleteBranch handles DELETE /branches/*branch.
+func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) (DeleteBranchResponse, error) {
 	ctx := c.Request.Context()
 
-	// Extract URL parameters
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// Extract branch name from wildcard parameter (remove leading slash)
 	branchName := strings.TrimPrefix(protocol.SafeParam(c, "branch"), "/")
 
 	h.logger.LogInfo(c.Request.Context(), "Processing branch deletion request",
@@ -792,37 +672,24 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		zap.String("raw_branch_param", c.Param("branch")),
 		zap.String("request_path", c.Request.URL.Path))
 
-	// Validate branch name
 	if err := h.validateBranchName(branchName); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   fmt.Sprintf("Invalid branch name: %v", err),
-		})
-		return
+		return DeleteBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid branch name: %v", err))
 	}
 
-	// 공통 검증 및 저장소 열기
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
-	if !ok {
-		return
+	repoCtx, err := h.validateAndGetRepoPath(ctx, owner, repo)
+	if err != nil {
+		return DeleteBranchResponse{}, err
 	}
 
-	// Call service to delete branch (native git — uses repoPath only)
 	result, err := h.service.DeleteBranch(c.Request.Context(), repoCtx.repoPath, branchName)
 	if err != nil {
-		// Determine appropriate status code based on error message
 		statusCode := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "does not exist") {
 			statusCode = http.StatusNotFound
 		}
-		c.JSON(statusCode, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
+		return DeleteBranchResponse{}, typed.NewHTTPError(statusCode, err.Error())
 	}
 
-	// Publish branch delete event to Redis Stream (non-blocking)
 	if h.eventsClient != nil {
 		relativePath := events.GetRelativeRepoPath(repoCtx.repoPath, h.pathConfig.GetRepoRoot())
 		userID := c.GetHeader("X-USER-ID")
@@ -848,18 +715,16 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) {
 		}()
 	}
 
-	response := gin.H{
-		"success":     true,
-		"branch_name": result.BranchName,
-		"commit_hash": result.CommitHash,
-		"operation":   "delete",
-	}
-	c.JSON(http.StatusOK, response)
+	return DeleteBranchResponse{
+		Success:    true,
+		BranchName: result.BranchName,
+		CommitHash: result.CommitHash,
+		Operation:  "delete",
+	}, nil
 }
 
-// HandleBulkDeleteBranches handles DELETE /repos/{owner}/{repo}/branches/bulk
-// 여러 브랜치를 한 번에 삭제합니다.
-func (h *BranchOperationsHandler) HandleBulkDeleteBranches(c *gin.Context) {
+// HandleBulkDeleteBranches handles POST /branches/bulk-delete.
+func (h *BranchOperationsHandler) HandleBulkDeleteBranches(c *gin.Context) (BulkDeleteBranchesResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -867,13 +732,12 @@ func (h *BranchOperationsHandler) HandleBulkDeleteBranches(c *gin.Context) {
 
 	var req BulkDeleteBranchesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: branches array is required"})
-		return
+		return BulkDeleteBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body: branches array is required")
 	}
 
-	repoCtx, ok := h.validateAndGetRepoPath(ctx, c, owner, repo)
-	if !ok {
-		return
+	repoCtx, err := h.validateAndGetRepoPath(ctx, owner, repo)
+	if err != nil {
+		return BulkDeleteBranchesResponse{}, err
 	}
 
 	results := make([]BulkDeleteBranchResult, 0, len(req.Branches))
@@ -909,7 +773,6 @@ func (h *BranchOperationsHandler) HandleBulkDeleteBranches(c *gin.Context) {
 		})
 		succeeded++
 
-		// Publish branch delete event (non-blocking)
 		if h.eventsClient != nil {
 			relativePath := events.GetRelativeRepoPath(repoCtx.repoPath, h.pathConfig.GetRepoRoot())
 			userID := c.GetHeader("X-USER-ID")
@@ -934,11 +797,11 @@ func (h *BranchOperationsHandler) HandleBulkDeleteBranches(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, BulkDeleteBranchesResponse{
+	return BulkDeleteBranchesResponse{
 		Success:   failed == 0,
 		Total:     len(req.Branches),
 		Succeeded: succeeded,
 		Failed:    failed,
 		Results:   results,
-	})
+	}, nil
 }

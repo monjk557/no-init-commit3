@@ -151,7 +151,7 @@ func Test_PostLatestCommitsBatch_ReturnsCommitsAndMeta(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	r := gin.New()
-	r.POST("/repos/:owner/:repo/overview/latest-commits", h.HandlePostLatestCommitsBatch)
+	r.POST("/repos/:owner/:repo/overview/latest-commits", adapt(h.HandlePostLatestCommitsBatch))
 
 	body := LatestCommitsBatchRequest{
 		Ref:     "main",
@@ -350,7 +350,7 @@ func TestHandleGetTreeOverview_LatestCommit_ForSpecificPath(t *testing.T) {
 	commitHashes := createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/tree", handler.HandleGetTreeOverview)
+	router.GET("/repos/:owner/:repo/tree", adapt(handler.HandleGetTreeOverview))
 
 	t.Run("RootPath_ReturnsLatestCommit", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/tree?path=", nil)
@@ -436,7 +436,7 @@ func TestHandleGetTreeOverview_LatestCommit_ForSpecificPath(t *testing.T) {
 // =============================================================================
 
 func overviewRoute(router *gin.Engine, h *RepositoryOverviewHandler) {
-	router.GET("/repos/:owner/:repo/overview", h.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(h.HandleGetRepositoryOverview))
 }
 
 func Test_Overview_ValidRepo_ReturnsOverview(t *testing.T) {
@@ -477,9 +477,9 @@ func Test_OverviewEndpoints_With500Commits_Return200(t *testing.T) {
 	createTestRepositoryWith500CommitsAtPath(t, filepath.Join(tempDir, owner, repo+".git"))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
-	router.GET("/repos/:owner/:repo/overview/tree", handler.HandleGetTreeOverview)
-	router.GET("/repos/:owner/:repo/overview/blob", handler.HandleGetBlobOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview/tree", adapt(handler.HandleGetTreeOverview))
+	router.GET("/repos/:owner/:repo/overview/blob", adapt(handler.HandleGetBlobOverview))
 
 	t.Run("overview", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview?ref=main", nil)
@@ -969,7 +969,7 @@ func Test_Contributors_ReturnsUniqueContributors(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/merges/preview", mergeHandler.HandleMergePreview)
+	merge.RegisterRoutes(router.Group("/repos/:owner/:repo"), nil, mergeHandler)
 
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/merges/preview?source_ref=feature&target_ref=main", owner, repo), nil)
 	w := httptest.NewRecorder()
@@ -1085,7 +1085,7 @@ func Test_Contributors_SortsByCommitCount(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/merges/preview", mergeHandler.HandleMergePreview)
+	merge.RegisterRoutes(router.Group("/repos/:owner/:repo"), nil, mergeHandler)
 
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/merges/preview?source_ref=feature&target_ref=main", owner, repo), nil)
 	w := httptest.NewRecorder()
@@ -1187,7 +1187,7 @@ func Test_Contributors_IncludesEmail(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/merges/preview", mergeHandler.HandleMergePreview)
+	merge.RegisterRoutes(router.Group("/repos/:owner/:repo"), nil, mergeHandler)
 
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/merges/preview?source_ref=feature&target_ref=main", owner, repo), nil)
 	w := httptest.NewRecorder()
@@ -1221,7 +1221,7 @@ func Test_TreeWithCommit_ResponseIncludesMeta(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1249,7 +1249,7 @@ func Test_TreeWithCommit_SmallRepo_ReturnsComplete(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1276,7 +1276,7 @@ func Test_TreeWithCommit_NonExistentPath_Returns404(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?path=nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -1297,7 +1297,7 @@ func Test_TreeWithCommit_NonExistentRepo_Returns404(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, owner), 0755))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1317,7 +1317,7 @@ func Test_TreeWithCommit_WithPathParam_ReturnsEntriesForPath(t *testing.T) {
 	createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main&path=src", nil)
 	w := httptest.NewRecorder()
@@ -1343,7 +1343,7 @@ func Test_TreeWithCommit_WithRefParam_Returns200(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main", nil)
 	w := httptest.NewRecorder()
@@ -1368,7 +1368,7 @@ func Test_TreeWithCommit_NonExistentRef_Returns404(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=nonexistent-branch", nil)
 	w := httptest.NewRecorder()
@@ -1388,7 +1388,7 @@ func Test_TreeWithCommit_FilePath_Returns404(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	// path가 파일(README.md)이면 tree가 아니므로 404
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?path=README.md", nil)
@@ -1409,7 +1409,7 @@ func Test_TreeWithCommit_ResponseHasRequiredFields(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1442,7 +1442,7 @@ func Test_Overview_Parallel_ReturnsAllFields(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
 	w := httptest.NewRecorder()
@@ -1475,7 +1475,7 @@ func Test_Overview_CommitCountApproximate_FlagExposedInResponse(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
 	w := httptest.NewRecorder()
@@ -1648,8 +1648,8 @@ func Test_OverviewEndpoints_TreesBeforeBlobs(t *testing.T) {
 	createTestRepoWithMixedTreeBlob(t, repoPath)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
-	router.GET("/repos/:owner/:repo/overview/tree", handler.HandleGetTreeOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview/tree", adapt(handler.HandleGetTreeOverview))
 
 	t.Run("overview_tree_field", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
@@ -1759,7 +1759,7 @@ func Test_TreeWithCommit_PerEntryLatestCommit_IsAccurate(t *testing.T) {
 		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET",
 		"/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main", nil)
@@ -1816,7 +1816,7 @@ func TestHandleGetLatestCommitOverview(t *testing.T) {
 	commitHashes := createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/latest-commit", handler.HandleGetLatestCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/latest-commit", adapt(handler.HandleGetLatestCommitOverview))
 
 	t.Run("NoPath_ReturnsRefHeadCommit", func(t *testing.T) {
 		req := httptest.NewRequest("GET",

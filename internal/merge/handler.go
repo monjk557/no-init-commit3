@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/events"
@@ -55,7 +56,6 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 	}
 	conflictDetector := NewConflictDetector(pathConfig, logger)
 
-	// Initialize events client if enabled
 	var eventsClient events.RedisStreamClient
 	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
 		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
@@ -112,22 +112,24 @@ func NewMergePreviewHandler(cfg *config.Config) (*MergePreviewHandler, error) {
 	}, nil
 }
 
-// HandleMerge handles POST /repos/{owner}/{repo}/merges for performing Git merges
-func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
+// HandleMerge handles POST /repos/{owner}/{repo}/merges for performing Git merges.
+//
+// Typed handler — multi-field error responses (conflicts, ConcurrentUpdate)
+// 는 responseErr wrapper 로 반환되어 routes.go 의 mergeErrorMapper 가
+// status + body 를 그대로 사용. 단순 4xx 는 typed.NewHTTPError.
+func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergeResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	var req MergeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Invalid JSON: %v", err)})
-		return
+		return MergeResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	if req.Method == "" {
@@ -138,26 +140,21 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	}
 
 	if err := h.validateMergeRequest(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergeResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// Resolve repo path (native git — no go-git OpenRepository)
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergeResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
 	}
 
-	// Resolve source and target refs to commit SHAs
 	sourceHash, err := gitRevParse(ctx, repoPath, req.SourceRef)
 	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "unknown revision") {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve source ref: %v", err)})
-		return
+		return MergeResponse{}, typed.NewHTTPError(status, fmt.Sprintf("Failed to resolve source ref: %v", err))
 	}
 
 	targetHash, err := gitRevParse(ctx, repoPath, req.TargetRef)
@@ -166,29 +163,24 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		if strings.Contains(err.Error(), "unknown revision") {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve target ref: %v", err)})
-		return
+		return MergeResponse{}, typed.NewHTTPError(status, fmt.Sprintf("Failed to resolve target ref: %v", err))
 	}
 
-	// Hook: Signal that target ref has been read (for testing concurrent scenarios)
 	if h.hooks != nil && h.hooks.AfterReadTargetRef != nil {
 		close(h.hooks.AfterReadTargetRef)
 	}
 
-	// Perform merge analysis
 	conflictAnalysis, err := h.analyzeMerge(ctx, repoPath, sourceHash, targetHash, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergeResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// Handle dry run
+	// Dry run
 	if req.DryRun {
 		if req.Method == MergeMethodRebase {
 			rebaseAnalysis, err := h.analyzeRebaseDryRun(ctx, repoPath, sourceHash, targetHash, &req)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-				return
+				return MergeResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 
 			details := map[string]interface{}{
@@ -206,7 +198,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				}
 			}
 
-			c.JSON(http.StatusOK, &MergeResponse{
+			return MergeResponse{
 				Success:         !rebaseAnalysis.HasConflicts || req.ForceConflict,
 				IsFastForward:   false,
 				HasConflicts:    rebaseAnalysis.HasConflicts,
@@ -216,8 +208,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				Message:         "Rebase dry run completed - no changes made",
 				ConflictSummary: rebaseAnalysis,
 				Details:         details,
-			})
-			return
+			}, nil
 		}
 
 		dryRunMessage := "Dry run completed - no changes made"
@@ -225,7 +216,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			dryRunMessage = "Source is already merged into target - no merge needed"
 		}
 
-		c.JSON(http.StatusOK, &MergeResponse{
+		return MergeResponse{
 			Success:         conflictAnalysis.CanMerge,
 			IsFastForward:   conflictAnalysis.IsFastForward,
 			HasConflicts:    conflictAnalysis.HasConflicts,
@@ -241,16 +232,15 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 				"estimated_time":    conflictAnalysis.EstimatedTime.String(),
 				"recommendations":   conflictAnalysis.Recommendations,
 			},
-		})
-		return
+		}, nil
 	}
 
-	// Source already merged — return success with existing target commit info (idempotent)
+	// Source already merged — idempotent success
 	if conflictAnalysis.IsAlreadyMerged {
 		h.logger.Info("Source already merged into target, returning existing commit info",
 			zap.String("source", req.SourceRef),
 			zap.String("target", req.TargetRef))
-		c.JSON(http.StatusOK, &MergeResponse{
+		return MergeResponse{
 			Success:         true,
 			MergeCommit:     conflictAnalysis.TargetCommit,
 			IsFastForward:   false,
@@ -261,38 +251,41 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			Method:          req.Method,
 			Message:         fmt.Sprintf("Source '%s' is already merged into target '%s'", req.SourceRef, req.TargetRef),
 			ConflictSummary: conflictAnalysis,
-		})
-		return
+		}, nil
 	}
 
-	// Conflict safety checks
+	// Conflict safety checks (multi-field error responses)
 	if conflictAnalysis.HasConflicts {
 		hasEnvironmentConflicts := h.hasEnvironmentFileConflicts(conflictAnalysis)
 
 		if hasEnvironmentConflicts && !req.ForceConflict {
-			c.JSON(http.StatusConflict, gin.H{
-				"success":             false,
-				"error":               "Environment file conflicts detected - manual resolution required",
-				"conflicts":           h.formatConflictsForResponse(conflictAnalysis),
-				"safety_warning":      "Environment files contain sensitive configuration. Please review conflicts manually.",
-				"resolution_required": true,
-			})
-			return
+			return MergeResponse{}, &responseErr{
+				status: http.StatusConflict,
+				body: gin.H{
+					"success":             false,
+					"error":               "Environment file conflicts detected - manual resolution required",
+					"conflicts":           h.formatConflictsForResponse(conflictAnalysis),
+					"safety_warning":      "Environment files contain sensitive configuration. Please review conflicts manually.",
+					"resolution_required": true,
+				},
+			}
 		}
 
 		if !req.ForceConflict {
-			c.JSON(http.StatusConflict, gin.H{
-				"success":   false,
-				"error":     fmt.Sprintf("Merge has %d conflicts requiring resolution", conflictAnalysis.ConflictCount),
-				"conflicts": h.formatConflictsForResponse(conflictAnalysis),
-				"resolution_options": map[string]interface{}{
-					"manual_resolution": "Resolve conflicts manually and retry merge",
-					"choose_source":     "Use source branch version (set force_conflict=true with confirmation)",
-					"choose_target":     "Use target branch version (default behavior)",
+			return MergeResponse{}, &responseErr{
+				status: http.StatusConflict,
+				body: gin.H{
+					"success":   false,
+					"error":     fmt.Sprintf("Merge has %d conflicts requiring resolution", conflictAnalysis.ConflictCount),
+					"conflicts": h.formatConflictsForResponse(conflictAnalysis),
+					"resolution_options": map[string]interface{}{
+						"manual_resolution": "Resolve conflicts manually and retry merge",
+						"choose_source":     "Use source branch version (set force_conflict=true with confirmation)",
+						"choose_target":     "Use target branch version (default behavior)",
+					},
+					"warning": "Forcing merge may overwrite important changes. Review conflicts carefully.",
 				},
-				"warning": "Forcing merge may overwrite important changes. Review conflicts carefully.",
-			})
-			return
+			}
 		}
 
 		h.logger.Warn("Forced merge with conflicts",
@@ -302,31 +295,30 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 			zap.Bool("has_environment_conflicts", hasEnvironmentConflicts))
 	}
 
-	// Serialize writes to prevent concurrent panics
+	// Serialize writes
 	if repoPath != "" {
 		repoLock := repositories.GetRepoRWLock(repoPath)
 		repoLock.Lock()
 		defer repoLock.Unlock()
 	}
 
-	// Perform the actual merge
 	mergeResult, err := h.performMerge(ctx, repoPath, sourceHash, targetHash, &req, conflictAnalysis)
 	if err != nil {
 		var concurrentErr *ConcurrentUpdateError
 		if errors.As(err, &concurrentErr) {
-			c.JSON(http.StatusConflict, gin.H{
-				"success":    false,
-				"error_code": "CONCURRENT_UPDATE",
-				"error":      concurrentErr.Message,
-			})
-			return
+			return MergeResponse{}, &responseErr{
+				status: http.StatusConflict,
+				body: gin.H{
+					"success":    false,
+					"error_code": "CONCURRENT_UPDATE",
+					"error":      concurrentErr.Message,
+				},
+			}
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergeResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// Prepare response
-	response := &MergeResponse{
+	response := MergeResponse{
 		Success:       true,
 		IsFastForward: mergeResult.IsFastForward,
 		HasConflicts:  mergeResult.HasConflicts,
@@ -356,7 +348,6 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 	}
 	response.Details = details
 
-	// Publish commit event
 	userID := c.GetHeader("X-USER-ID")
 	if h.eventsClient != nil && mergeResult.MergeCommit != nil {
 		h.publishMergeCommitEvent(ctx, repoPath, targetHash, mergeResult.MergeCommit, req.TargetRef, owner, repo, userID)
@@ -374,11 +365,11 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) {
 		}()
 	}
 
-	c.JSON(http.StatusOK, response)
+	return response, nil
 }
 
 // HandleMergePreview handles GET /repos/{owner}/{repo}/merges/preview
-func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
+func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) (MergePreviewResponse, error) {
 	startTime := time.Now()
 	ctx := c.Request.Context()
 
@@ -386,14 +377,12 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	var req MergePreviewRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("Invalid query parameters: %v", err)})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid query parameters: %v", err))
 	}
 
 	if req.Strategy == "" {
@@ -411,63 +400,56 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) {
 
 	status, err := h.validateMergePreviewRequest(&req)
 	if err != nil {
-		c.JSON(status, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(status, err.Error())
 	}
 
-	// Resolve repo path using native git
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
 	}
 
 	sourceHash, err := gitRevParse(ctx, repoPath, req.SourceRef)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve source ref: %v", err)})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("Failed to resolve source ref: %v", err))
 	}
 
 	targetHash, err := gitRevParse(ctx, repoPath, req.TargetRef)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("Failed to resolve target ref: %v", err)})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("Failed to resolve target ref: %v", err))
 	}
 
 	if sourceHash == targetHash {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Source and target references point to the same commit"})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Source and target references point to the same commit")
 	}
 
 	previewResult, err := h.performMergePreview(ctx, repoPath, sourceHash, targetHash, &req, startTime)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
+		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	c.JSON(http.StatusOK, previewResult)
+	return *previewResult, nil
 }
 
-// HandleMergeDiff handles GET /repos/{owner}/{repo}/merges/diff
-// merge-base 기준 diff를 반환합니다. Change Request 페이지에서 source 브랜치가
-// 도입한 변경만 보여주기 위한 엔드포인트입니다.
-// Query params: source_ref (required), target_ref (required), context (default: 3), page, page_size
-func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) {
+// HandleMergeDiff handles GET /repos/{owner}/{repo}/merges/diff.
+//
+// merge-base 기준 diff를 반환한다 (Change Request 페이지에서 source 브랜치
+// 가 도입한 변경만 보여주기 위함). DiffTooLargeError → 413 with reason
+// 필드, REF_NOT_FOUND substring → 404 with code 필드 — 둘 다 multi-field
+// 응답이라 responseErr 로 전달, ErrorMapper 가 처리.
+func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) (diffs.DiffResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	sourceRef := c.Query("source_ref")
 	targetRef := c.Query("target_ref")
 	if sourceRef == "" || targetRef == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "source_ref and target_ref are required"})
-		return
+		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "source_ref and target_ref are required")
 	}
 
 	contextLines := 3
@@ -479,36 +461,39 @@ func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) {
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
-		return
+		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
 	}
 
 	// base = target (merge INTO), head = source (merge FROM)
 	diffResp, err := diffs.CalculateMergeBaseDiff(ctx, repoPath, targetRef, sourceRef, contextLines)
 	if err != nil {
-		if diffErr, ok := err.(*diffs.DiffTooLargeError); ok {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-				"success": false,
-				"error":   "This diff is too large to display",
-				"reason":  diffErr.Reason,
-			})
-			return
+		// errors.As — wrap 된 *DiffTooLargeError 도 감지.
+		var diffErr *diffs.DiffTooLargeError
+		if errors.As(err, &diffErr) {
+			return diffs.DiffResponse{}, &responseErr{
+				status: http.StatusRequestEntityTooLarge,
+				body: gin.H{
+					"success": false,
+					"error":   "This diff is too large to display",
+					"reason":  diffErr.Reason,
+				},
+			}
 		}
 		errStr := err.Error()
-		if strings.Contains(errStr, "not found") ||
-			strings.Contains(errStr, "bad revision") {
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   err.Error(),
-				"code":    "REF_NOT_FOUND",
-			})
-			return
+		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "bad revision") {
+			return diffs.DiffResponse{}, &responseErr{
+				status: http.StatusNotFound,
+				body: gin.H{
+					"success": false,
+					"error":   err.Error(),
+					"code":    "REF_NOT_FOUND",
+				},
+			}
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
+		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// 페이지네이션 지원
+	// 페이지네이션
 	if c.Query("page") != "" || c.Query("page_size") != "" {
 		page, pageSize := 1, 50
 		if v, err := strconv.Atoi(c.Query("page")); err == nil && v > 0 {
@@ -531,7 +516,7 @@ func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, diffResp)
+	return *diffResp, nil
 }
 
 // validatePath validates the owner and repo path components

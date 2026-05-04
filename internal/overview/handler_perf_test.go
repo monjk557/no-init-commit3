@@ -203,7 +203,7 @@ func TestOverviewAPI_Performance_LargeRepository(t *testing.T) {
 
 	// Setup router
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
 
 	// Use a fixed ref (commit SHA) for perf comparisons; HEAD is allowed in prod but moves over time.
 	fixedRef := commitHash.String()
@@ -304,7 +304,7 @@ func Test_TreeWithCommitOverview_LargeRepository_Returns200(t *testing.T) {
 	fixedRef := commitHash.String()
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", handler.HandleGetTreeWithCommitOverview)
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/overview/tree/commits?ref=%s&path=", owner, repo, fixedRef), nil)
 	w := httptest.NewRecorder()
@@ -499,7 +499,7 @@ func Test_LatestCommitsBatch_Performance_TimeBudget50ms_P99Under1500ms(t *testin
 	t.Setenv("OVERVIEW_LATEST_COMMITS_MAX_COMMITS", "1000000")
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/overview/latest-commits", handler.HandlePostLatestCommitsBatch)
+	router.POST("/repos/:owner/:repo/overview/latest-commits", adapt(handler.HandlePostLatestCommitsBatch))
 
 	reqBody := LatestCommitsBatchRequest{
 		Ref:     headHash.String(),
@@ -629,7 +629,7 @@ func TestOverviewAPI_Performance_CommitCounting(t *testing.T) {
 
 	// Setup router
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
 
 	// Test commit counting performance
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/overview", owner, repo), nil)
@@ -669,7 +669,7 @@ func BenchmarkOverviewAPI(b *testing.B) {
 
 	// Setup router
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", handler.HandleGetRepositoryOverview)
+	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

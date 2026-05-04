@@ -1,12 +1,12 @@
 package tags
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -25,21 +25,33 @@ func NewTagsHandler(cfg *config.Config) (*TagsHandler, error) {
 	return &TagsHandler{pathConfig: pathConfig}, nil
 }
 
-func (h *TagsHandler) HandleGetTags(c *gin.Context) {
+// invalidBindErr 는 c.ShouldBindJSON 실패를 details 포함 응답으로 변환하기
+// 위한 wrapper. routes.go 의 ErrorMapper 가 이 타입을 인식해서 legacy 와
+// 동일한 {success, error: "Invalid request body", details: <err.Error>} 응답을
+// 만든다.
+type invalidBindErr struct {
+	inner error
+}
+
+func (e *invalidBindErr) Error() string { return e.inner.Error() }
+
+// HandleGetTags 는 GET /repos/{owner}/{repo}/tags 를 처리한다.
+//
+// Typed handler — limit/skip 은 query 에서 직접 읽음 (RegisterGet, no query
+// struct). 단순 4xx 는 typed.NewHTTPError, GetTags 실패는 raw error 로
+// 반환하여 ErrorMapper 가 details 필드를 첨부.
+func (h *TagsHandler) HandleGetTags(c *gin.Context) (TagsResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	// 파라미터 추출 및 검증
 	limitStr := c.Query("limit")
 	skipStr := c.Query("skip")
 
-	// limit 파라미터 파싱 및 검증
 	limit := DefaultTagsLimit
 	if limitStr != "" {
 		parsedLimit, err := strconv.Atoi(limitStr)
 		if err != nil || parsedLimit < MinTagsLimit {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("invalid limit: must be >= %d", MinTagsLimit)})
-			return
+			return TagsResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid limit: must be >= %d", MinTagsLimit))
 		}
 		if parsedLimit > MaxTagsLimit {
 			limit = MaxTagsLimit
@@ -48,153 +60,120 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context) {
 		}
 	}
 
-	// skip 파라미터 파싱 및 검증
 	skip := 0
 	if skipStr != "" {
 		parsedSkip, err := strconv.Atoi(skipStr)
 		if err != nil || parsedSkip < 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid skip: must be >= 0"})
-			return
+			return TagsResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid skip: must be >= 0")
 		}
 		skip = parsedSkip
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
-		return
+		return TagsResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
 	}
 
-	tags, totalCount, err := GetTags(c.Request.Context(), repoPath, limit, skip)
+	tagList, totalCount, err := GetTags(c.Request.Context(), repoPath, limit, skip)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Failed to get tags", "details": err.Error()})
-		return
+		return TagsResponse{}, err
 	}
 
-	// Ensure tags is never nil - return empty array instead of null
-	if tags == nil {
-		tags = []Tag{}
+	if tagList == nil {
+		tagList = []Tag{}
 	}
 
-	// 페이지네이션 정보 계산
 	currentPage := 1
 	if limit > 0 {
 		currentPage = skip/limit + 1
 	}
 
-	// 페이지네이션 정보와 함께 응답 생성
-	response := TagsResponse{
+	pagination := buildPagination(totalCount, currentPage, limit, c.Request.URL.String())
+
+	return TagsResponse{
 		Success: true,
 		Message: "Tags fetched successfully",
-		Results: tags,
+		Results: tagList,
 		Pagination: PaginationInfo{
 			Count:       totalCount,
-			Next:        buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).Next,
-			Previous:    buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).Previous,
+			Next:        pagination.Next,
+			Previous:    pagination.Previous,
 			CurrentPage: currentPage,
-			TotalPages:  buildPagination(totalCount, currentPage, limit, c.Request.URL.String()).TotalPages,
+			TotalPages:  pagination.TotalPages,
 			PageSize:    limit,
 		},
-	}
-
-	c.JSON(http.StatusOK, response)
+	}, nil
 }
 
-func (h *TagsHandler) HandleCreateTag(c *gin.Context) {
+// HandleCreateTag 는 POST /repos/{owner}/{repo}/tags 를 처리한다.
+//
+// Typed handler — bind error 의 사용자 친화 메시지/details 형식 보존을 위해
+// 본문에서 c.ShouldBindJSON 직접 수행 (lenient bind archetype). 다중 status
+// 매핑 (409 already exists, 404 not found, 400 default) 은 routes.go 의
+// ErrorMapper 가 담당.
+func (h *TagsHandler) HandleCreateTag(c *gin.Context) (CreateTagResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
 	var req CreateTagRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid request body", "details": err.Error()})
-		return
+		return CreateTagResponse{}, &invalidBindErr{inner: err}
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
-		return
+		return CreateTagResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
 	}
 
 	tag, err := CreateTag(c.Request.Context(), repoPath, &req)
 	if err != nil {
-		// 에러 타입에 따라 적절한 상태 코드 선택
-		if errors.Is(err, ErrTagAlreadyExists) {
-			c.JSON(http.StatusConflict, gin.H{
-				"success": false,
-				"error":   "Failed to create tag",
-				"details": "tag already exists",
-			})
-			return
-		}
-
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "commit not found") {
-			c.JSON(http.StatusNotFound, gin.H{
-				"success": false,
-				"error":   "Failed to create tag",
-				"details": errMsg,
-			})
-			return
-		}
-
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Failed to create tag",
-			"details": errMsg,
-		})
-		return
+		return CreateTagResponse{}, err
 	}
 
-	response := CreateTagResponse{
-		Success: true,
-		Tag:     tag,
-	}
-	c.JSON(http.StatusOK, response)
+	return CreateTagResponse{Success: true, Tag: tag}, nil
 }
 
-func (h *TagsHandler) HandleDeleteTag(c *gin.Context) {
+// HandleDeleteTag 는 DELETE /repos/{owner}/{repo}/tags/*tag 를 처리한다.
+//
+// Typed handler — wildcard `*tag` 의 leading `/` 를 strings.TrimPrefix 로
+// 제거 (legacy 와 동일). 다중 status 매핑 (404 not found, 400 default) 은
+// routes.go 의 ErrorMapper 가 담당.
+func (h *TagsHandler) HandleDeleteTag(c *gin.Context) (DeleteTagResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 	tagName := strings.TrimPrefix(protocol.SafeParam(c, "tag"), "/")
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
-		return
+		return DeleteTagResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
 	}
 
-	err = DeleteTag(c.Request.Context(), repoPath, tagName)
-	if err != nil {
-		// 에러 메시지에 따라 적절한 상태 코드 선택
-		statusCode := http.StatusBadRequest
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "not found") {
-			statusCode = http.StatusNotFound
-		}
-		c.JSON(statusCode, gin.H{"success": false, "error": "Failed to delete tag", "details": errMsg})
-		return
+	if err := DeleteTag(c.Request.Context(), repoPath, tagName); err != nil {
+		return DeleteTagResponse{}, err
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "tag": tagName})
+	return DeleteTagResponse{Success: true, Tag: tagName}, nil
 }
 
-// HandleBulkDeleteTags handles POST /repos/{owner}/{repo}/tags/bulk-delete
-// 여러 태그를 한 번에 삭제합니다.
-func (h *TagsHandler) HandleBulkDeleteTags(c *gin.Context) {
+// HandleBulkDeleteTags 는 POST /repos/{owner}/{repo}/tags/bulk-delete 를
+// 처리한다. 여러 태그를 한 번에 삭제하며, 개별 실패는 응답 내부에 기록되고
+// HTTP status 는 항상 200.
+//
+// Typed handler — bind error 의 사용자 친화 메시지 보존을 위해 lenient bind
+// archetype (본문에서 c.ShouldBindJSON 직접). 부분 실패는 error 가 아닌 정상
+// 응답으로 반환되므로 ErrorMapper 불필요.
+func (h *TagsHandler) HandleBulkDeleteTags(c *gin.Context) (BulkDeleteTagsResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
 	var req BulkDeleteTagsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: tags array is required"})
-		return
+		return BulkDeleteTagsResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body: tags array is required")
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Repository not found"})
-		return
+		return BulkDeleteTagsResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
 	}
 
 	ctx := c.Request.Context()
@@ -220,11 +199,11 @@ func (h *TagsHandler) HandleBulkDeleteTags(c *gin.Context) {
 		succeeded++
 	}
 
-	c.JSON(http.StatusOK, BulkDeleteTagsResponse{
+	return BulkDeleteTagsResponse{
 		Success:   failed == 0,
 		Total:     len(req.Tags),
 		Succeeded: succeeded,
 		Failed:    failed,
 		Results:   results,
-	})
+	}, nil
 }
