@@ -235,8 +235,10 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) {
 					TotalDeletions: diffResp.Stats.TotalDeletions,
 					FilesChanged:   len(paginatedFiles), // 페이지네이션 응답에 맞게 업데이트
 				},
-				Commits:   diffResp.Commits,
-				MergeBase: diffResp.MergeBase,
+				Commits:       diffResp.Commits,
+				MergeBase:     diffResp.MergeBase,
+				EffectiveBase: diffResp.EffectiveBase,
+				DiffMode:      diffResp.DiffMode,
 			},
 			Pagination: &updatedPagination,
 		}
@@ -335,8 +337,10 @@ func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) {
 					TotalDeletions: diffResp.Stats.TotalDeletions,
 					FilesChanged:   len(paginatedFiles),
 				},
-				Commits:   diffResp.Commits,
-				MergeBase: diffResp.MergeBase,
+				Commits:       diffResp.Commits,
+				MergeBase:     diffResp.MergeBase,
+				EffectiveBase: diffResp.EffectiveBase,
+				DiffMode:      diffResp.DiffMode,
 			},
 			Pagination: &updatedPagination,
 		}
@@ -346,7 +350,11 @@ func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) {
 	}
 }
 
-// HandleFileDiff는 GET /repos/:owner/:repo/diff/file?path=:path&base=:base&head=:head를 처리합니다
+// HandleFileDiff는 GET /repos/:owner/:repo/diff/file?path=:path&base=:base&head=:head를 처리합니다.
+//
+// 기본 비교 모드는 merge_base — CR 트리(file list)가 merge-base 기준으로 계산되므로
+// 단일 파일 diff도 같은 effective_base를 써야 변경 집합이 어긋나지 않습니다.
+// 호출자가 commit-vs-commit 직접 비교를 원하면 diff_mode=direct로 명시합니다.
 func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -374,7 +382,6 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
 		return
 	}
 
-	// 파일 diff를 위해 params를 쿼리 파라미터로 덮어쓰기
 	params.Base = base
 	params.Head = head
 
@@ -400,15 +407,19 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
 		contextLines = 999999 // 전체 파일을 포함하기 위한 큰 숫자
 	}
 
-	format := c.Query("format")
-	if format == "" {
-		format = "unified" // 기본값
+	// diff_mode 결정 + base/head를 effective_base로 해석
+	mode := parseDiffMode(c, DiffModeMergeBase)
+	rr, err := nativeResolveDiffRange(ctx, repoPath, base, head, mode)
+	if err != nil {
+		h.logger.Error("Failed to resolve diff range",
+			zap.String("base", base), zap.String("head", head), zap.String("diff_mode", string(mode)), zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"})
+		return
 	}
 
 	// 파일 diff 계산
-	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, params.Base, params.Head, contextLines, format)
+	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, rr, contextLines)
 	if err != nil {
-		// DiffTooLargeError인 경우 특별 처리
 		if diffErr, ok := err.(*DiffTooLargeError); ok {
 			h.logger.Warn("Diff too large to display", zap.String("reason", diffErr.Reason))
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
@@ -418,10 +429,29 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context) {
 			})
 			return
 		}
-		h.logger.Error("Failed to calculate file diff", zap.Error(err))
+		if IsFileDiffNotFound(err) {
+			h.logger.Info("File not present in either base or head",
+				zap.String("path", filePath),
+				zap.String("base", rr.BaseHash), zap.String("head", rr.HeadHash),
+				zap.String("effective_base", rr.EffectiveBase), zap.String("merge_base", rr.MergeBase))
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "FILE_NOT_FOUND"})
+			return
+		}
+		h.logger.Error("Failed to calculate file diff",
+			zap.String("path", filePath),
+			zap.String("base", rr.BaseHash), zap.String("head", rr.HeadHash),
+			zap.String("effective_base", rr.EffectiveBase), zap.String("merge_base", rr.MergeBase),
+			zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
+
+	// 응답 envelope에 mode 메타 채우기 — 호출자가 trees/file diff 정렬 여부를 검증할 수 있도록
+	diffResp.Base = base
+	diffResp.Head = head
+	diffResp.DiffMode = string(rr.Mode)
+	diffResp.EffectiveBase = rr.EffectiveBase
+	diffResp.MergeBase = rr.MergeBase
 
 	c.JSON(http.StatusOK, diffResp)
 }
@@ -602,10 +632,19 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context) {
 		return
 	}
 
+	// diff_mode 결정 + effective_base 해석
+	// side=old일 때는 effective_base에서 context 라인을 읽어야 file diff hunk와 라인 번호가 정확히 맞춰짐.
+	mode := parseDiffMode(c, DiffModeMergeBase)
+	rr, err := nativeResolveDiffRange(ctx, repoPath, base, head, mode)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"})
+		return
+	}
+
 	// side 파라미터: deleted 파일은 base에서 읽어야 함 (기본: head)
-	ref := head
+	ref := rr.HeadHash
 	if side := c.Query("side"); side == "old" {
-		ref = base
+		ref = rr.EffectiveBase
 	}
 
 	response, err := nativeExpandContextLines(ctx, repoPath, ref, filePath, fromOld, toOld, fromNew)
@@ -680,7 +719,8 @@ func (h *DiffHandler) HandlePatch(c *gin.Context) {
 // 파라미터:
 //   - base, head: 필수 (커밋 SHA 또는 브랜치명)
 //   - query: 필수 (검색어)
-//   - type: "commit" (기본) 또는 "branch" (merge-base 기준 diff)
+//   - diff_mode: "merge_base" (기본) 또는 "direct"
+//   - type: deprecated 별칭 — "branch"→merge_base, "commit"→direct (diff_mode가 우선)
 func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -694,7 +734,6 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 	base := c.Query("base")
 	head := c.Query("head")
 	query := c.Query("query")
-	diffType := c.DefaultQuery("type", "commit") // "commit" or "branch"
 
 	if base == "" || head == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameters: base, head"})
@@ -704,9 +743,26 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Missing required parameter: query"})
 		return
 	}
-	if diffType != "commit" && diffType != "branch" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "type must be 'commit' or 'branch'"})
-		return
+
+	// diff_mode 결정. 명시 우선; 없으면 레거시 type 별칭; 둘 다 없으면 merge_base.
+	mode := DiffModeMergeBase
+	if rawMode := strings.TrimSpace(c.Query("diff_mode")); rawMode != "" {
+		m := DiffMode(rawMode)
+		if !m.IsValid() {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "diff_mode must be 'merge_base' or 'direct'"})
+			return
+		}
+		mode = m
+	} else if rawType := strings.TrimSpace(c.Query("type")); rawType != "" {
+		switch rawType {
+		case "branch":
+			mode = DiffModeMergeBase
+		case "commit":
+			mode = DiffModeDirect
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "type must be 'commit' or 'branch'"})
+			return
+		}
 	}
 
 	params.Base = base
@@ -718,50 +774,16 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 		return
 	}
 
-	// diff 파일 목록 가져오기
-	var fileMetas []nativeFileMeta
-	var mergeBase string
+	rr, err := nativeResolveDiffRange(ctx, repoPath, base, head, mode)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error(), "code": "REF_NOT_FOUND"})
+		return
+	}
 
-	if diffType == "branch" {
-		// branch diff: merge-base 기준
-		baseHash, err := nativeResolveRef(ctx, repoPath, base)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve base: %s", base)})
-			return
-		}
-		headHash, err := nativeResolveRef(ctx, repoPath, head)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve head: %s", head)})
-			return
-		}
-		mb, err := nativeMergeBase(ctx, repoPath, baseHash, headHash)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "failed to find merge base"})
-			return
-		}
-		mergeBase = mb
-		fileMetas, err = nativeGetDiffFileList(ctx, repoPath, mb, headHash)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-			return
-		}
-	} else {
-		// commit diff: base..head
-		baseHash, err := nativeResolveRef(ctx, repoPath, base)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve base: %s", base)})
-			return
-		}
-		headHash, err := nativeResolveRef(ctx, repoPath, head)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": fmt.Sprintf("failed to resolve head: %s", head)})
-			return
-		}
-		fileMetas, err = nativeGetDiffFileList(ctx, repoPath, baseHash, headHash)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-			return
-		}
+	fileMetas, err := nativeGetDiffFileList(ctx, repoPath, rr.EffectiveBase, rr.HeadHash)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
 	}
 
 	// 파일명 검색 (대소문자 무관 부분 일치 — path와 old_path 모두 검색)
@@ -786,14 +808,22 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) {
 		results = []DiffFileSearchResult{}
 	}
 
+	// 레거시 type 필드 채우기 (호환성). 새 호출자는 diff_mode를 봅니다.
+	legacyType := "branch"
+	if rr.Mode == DiffModeDirect {
+		legacyType = "commit"
+	}
+
 	c.JSON(http.StatusOK, &DiffFileSearchResponse{
-		Success:    true,
-		Query:      query,
-		Type:       diffType,
-		Base:       base,
-		Head:       head,
-		MergeBase:  mergeBase,
-		Files:      results,
-		TotalCount: len(results),
+		Success:       true,
+		Query:         query,
+		Type:          legacyType,
+		DiffMode:      string(rr.Mode),
+		EffectiveBase: rr.EffectiveBase,
+		Base:          base,
+		Head:          head,
+		MergeBase:     rr.MergeBase,
+		Files:         results,
+		TotalCount:    len(results),
 	})
 }

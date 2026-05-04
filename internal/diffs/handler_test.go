@@ -1001,6 +1001,138 @@ func Test_FileDiff_BinaryFile_ReturnsMetadataOnly(t *testing.T) {
 	require.Equal(t, 0, len(fileDiff.Changes), "binary files should not have line changes")
 }
 
+// Test_FileDiff_MergeBaseDefault_DivergedFileAddedShowsAsAdded
+// 회귀 (Issue-2095, CR 2777 재현): merge-base에는 없고 base/head 양쪽에 동일 blob으로
+// 존재하는 파일이 file list와 일치하도록 file diff에도 잡혀야 함.
+// 기본 diff_mode=merge_base에서 effective_base=merge-base이므로 +N 라인 추가로 표시.
+func Test_FileDiff_MergeBaseDefault_DivergedFileAddedShowsAsAdded(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// merge-base 커밋: models.py 없음
+	rootBlob := makeBlob(t, repo, []byte("initial\n"))
+	rootTree := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: rootBlob},
+	})
+	rootCommit := makeCommit(t, repo, "root", rootTree, nil, now)
+
+	// base 커밋 (예: main): models.py 추가, 내용 X
+	modelsContent := []byte("class Goal:\n    pass\n")
+	modelsBlob := makeBlob(t, repo, modelsContent)
+	baseTree := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: rootBlob},
+		{Name: "models.py", Mode: 0100644, Hash: modelsBlob},
+	})
+	baseCommit := makeCommit(t, repo, "base adds models.py", baseTree, []plumbing.Hash{rootCommit}, now)
+
+	// head 커밋 (sibling, feature 브랜치): root에서 분기해 동일 내용으로 models.py 추가
+	headTree := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: rootBlob},
+		{Name: "models.py", Mode: 0100644, Hash: modelsBlob},
+	})
+	headCommit := makeCommit(t, repo, "head adds models.py", headTree, []plumbing.Hash{rootCommit}, now)
+
+	require.Equal(t, baseTree.String(), headTree.String(), "test 전제: base/head가 동일 tree여야 unchanged-blob 케이스를 재현")
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+
+	// 1. 기본 (diff_mode=merge_base): merge-base에 없으므로 added로 +N 라인
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=models.py&base=%s&head=%s",
+		baseCommit.String(), headCommit.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.Equal(t, "merge_base", resp.DiffMode)
+	require.Equal(t, rootCommit.String(), resp.EffectiveBase, "merge_base 모드에서 effective_base는 merge-base")
+	require.Equal(t, rootCommit.String(), resp.MergeBase)
+	require.Equal(t, 1, len(resp.Files))
+	require.Equal(t, "models.py", resp.Files[0].Path)
+	require.Equal(t, FileDiffStatusAdded, resp.Files[0].Status)
+	require.Equal(t, 2, resp.Files[0].Additions)
+
+	// 2. diff_mode=direct: base/head가 동일 blob이므로 변경 없음 (200 + 빈 hunks)
+	urlDirect := url + "&diff_mode=direct"
+	reqDirect, _ := http.NewRequest("GET", urlDirect, nil)
+	wDirect := httptest.NewRecorder()
+	router.ServeHTTP(wDirect, reqDirect)
+
+	requireStatus(t, wDirect, http.StatusOK)
+
+	var respDirect DiffResponse
+	require.NoError(t, json.NewDecoder(wDirect.Body).Decode(&respDirect))
+	require.True(t, respDirect.Success)
+	require.Equal(t, "direct", respDirect.DiffMode)
+	require.Equal(t, baseCommit.String(), respDirect.EffectiveBase, "direct 모드에서 effective_base는 입력 base")
+	require.Equal(t, 1, len(respDirect.Files), "unchanged-blob 케이스도 200 응답에 placeholder file 포함")
+	require.Equal(t, 0, respDirect.Files[0].Additions)
+	require.Equal(t, 0, respDirect.Files[0].Deletions)
+	require.Equal(t, FileLoadStatusLoaded, respDirect.Files[0].LoadStatus)
+}
+
+// Test_FileDiff_NeitherSideHasFile_Returns404
+// 회귀: 양쪽 ref 모두에 파일이 없으면 명확한 404를 반환해야 함.
+// (이전에는 잘못된 메시지로 400을 반환했음 — Issue-2095 수정 사항)
+func Test_FileDiff_NeitherSideHasFile_Returns404(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	rootBlob := makeBlob(t, repo, []byte("initial\n"))
+	rootTree := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: rootBlob},
+	})
+	rootCommit := makeCommit(t, repo, "root", rootTree, nil, now)
+
+	otherBlob := makeBlob(t, repo, []byte("other\n"))
+	headTree := makeTree(t, repo, []object.TreeEntry{
+		{Name: "initial.txt", Mode: 0100644, Hash: rootBlob},
+		{Name: "other.txt", Mode: 0100644, Hash: otherBlob},
+	})
+	headCommit := makeCommit(t, repo, "head", headTree, []plumbing.Hash{rootCommit}, now)
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", handler.HandleFileDiff)
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=does/not/exist.py&base=%s&head=%s",
+		rootCommit.String(), headCommit.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusNotFound)
+
+	var body map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	require.Equal(t, false, body["success"])
+	require.Equal(t, "FILE_NOT_FOUND", body["code"])
+}
+
 // Test_SingleCommitDiff_MissingSHA_Returns400
 // 회귀: SHA 누락 시 400 반환
 func Test_SingleCommitDiff_MissingSHA_Returns400(t *testing.T) {

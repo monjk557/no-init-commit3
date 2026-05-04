@@ -3,12 +3,12 @@
 // Review Dismiss 2.0 (Phase B, simplified) — §14.
 // 3-state: active / stale / orphaned. SHIFTED/REVERTED는 active로 통합.
 // 알고리즘:
-//   1. head sha에 base sha로부터 diff 계산
-//   2. anchor의 path를 old-path 기준으로 diff에서 찾음
-//   3. 없으면(파일 변경 없음) → active
-//   4. status=deleted or is_binary → orphaned
-//   5. renamed → new_path 전달
-//   6. hunk의 old-range가 anchor range와 겹치면 → stale, 아니면 active
+//  1. head sha에 base sha로부터 diff 계산
+//  2. anchor의 path를 old-path 기준으로 diff에서 찾음
+//  3. 없으면(파일 변경 없음) → active
+//  4. status=deleted or is_binary → orphaned
+//  5. renamed → new_path 전달
+//  6. hunk의 old-range가 anchor range와 겹치면 → stale, 아니면 active
 package diffs
 
 import (

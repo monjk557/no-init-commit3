@@ -2028,9 +2028,13 @@ components:
           type: string
         type:
           type: string
+        diff_mode:
+          type: string
         base:
           type: string
         head:
+          type: string
+        effective_base:
           type: string
         merge_base:
           type: string
@@ -2085,6 +2089,10 @@ components:
             $ref: '#/components/schemas/FileDiff'
         stats:
           $ref: '#/components/schemas/DiffStats'
+        diff_mode:
+          type: string
+        effective_base:
+          type: string
         commits:
           $ref: '#/components/schemas/CommitStats'
         commits_by_date:

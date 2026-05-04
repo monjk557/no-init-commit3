@@ -135,31 +135,75 @@ func nativeCalculateBranchDiff(ctx context.Context, repoPath, baseBranch, headBr
 	diffResp.Commits = commitStats
 	diffResp.CommitsByDate = commitsByDate
 	diffResp.MergeBase = mergeBase
+	diffResp.EffectiveBase = mergeBase
+	diffResp.DiffMode = string(DiffModeMergeBase)
 
 	return diffResp, nil
 }
 
-// nativeCalculateFileDiff는 두 참조 간의 특정 파일에 대한 diff를 native git으로 계산합니다.
-func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, base, head string, contextLines int) (*DiffResponse, error) {
-	baseHash, err := nativeResolveRef(ctx, repoPath, base)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve base reference %s: %w", base, err)
-	}
-	headHash, err := nativeResolveRef(ctx, repoPath, head)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve head reference %s: %w", head, err)
-	}
+// fileDiffNotFoundError는 파일이 effective_base/head 양쪽 모두에 존재하지 않을 때 반환됩니다.
+// 핸들러는 이 에러 타입을 보고 404를 응답해야 합니다.
+type fileDiffNotFoundError struct {
+	Path string
+}
 
+func (e *fileDiffNotFoundError) Error() string {
+	return fmt.Sprintf("file not found in either base or head: %s", e.Path)
+}
+
+// IsFileDiffNotFound는 에러가 파일 부재로 인한 것인지 확인합니다.
+func IsFileDiffNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, ok := err.(*fileDiffNotFoundError)
+	return ok
+}
+
+// nativeCalculateFileDiff는 두 참조 간의 특정 파일에 대한 diff를 native git으로 계산합니다.
+//
+// effectiveBase/headHash는 이미 해시로 해석된 값을 받습니다 (caller가 ResolvedRange로 미리 해석).
+// 이 함수 자체는 mode를 모르고, 해시 기준 2-dot diff만 수행합니다 — mode 처리는 호출자 책임.
+//
+// 빈 status 처리 (정정된 시맨틱):
+//   - 양쪽에 동일 blob → 200 응답 + 빈 hunks (load_status=loaded, additions=0, deletions=0)
+//   - 양쪽에 모두 없음 → fileDiffNotFoundError (호출자가 404로 매핑)
+func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, effectiveBase, headHash string, contextLines int) (*DiffResponse, error) {
 	// 단일 파일 status 확인
 	statusOut, err := nativeRunGitCmd(ctx, repoPath, nativeGitTimeout,
-		"diff", "--name-status", "-M", baseHash+".."+headHash, "--", filePath)
+		"diff", "--name-status", "-M", effectiveBase+".."+headHash, "--", filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file status: %w", err)
 	}
 
 	statusLine := strings.TrimSpace(statusOut)
 	if statusLine == "" {
-		return nil, fmt.Errorf("file not found in either base or head: %s", filePath)
+		// 변경 status가 비었다고 해서 곧장 not-found가 아님 — base와 head 양쪽에 동일 blob으로
+		// 존재하는 정상 케이스가 있다 (예: feature 브랜치의 파일이 main에도 같은 내용으로 들어간 상태).
+		// 양쪽 ref에 파일이 존재하는지 직접 확인해서 분기.
+		baseHas := nativeBlobExistsAtRef(ctx, repoPath, effectiveBase, filePath)
+		headHas := nativeBlobExistsAtRef(ctx, repoPath, headHash, filePath)
+		if !baseHas && !headHas {
+			return nil, &fileDiffNotFoundError{Path: filePath}
+		}
+
+		// 한쪽에만 존재하는데 status가 비는 케이스는 git 동작상 있을 수 없지만,
+		// 방어적으로 빈 diff 응답으로 처리 (additions/deletions 0).
+		// 양쪽에 동일 blob → 변경 없음 응답.
+		fileDiff := FileDiff{
+			Path:       filePath,
+			Status:     FileDiffStatusModified, // 변경 없음을 나타내는 안전한 default
+			Additions:  0,
+			Deletions:  0,
+			IsBinary:   isBinaryFileByExtension(filePath),
+			Hunks:      []Hunk{},
+			LoadStatus: FileLoadStatusLoaded,
+		}
+		return &DiffResponse{
+			Success: true,
+			Files:   []FileDiff{fileDiff},
+			Stats:   DiffStats{FilesChanged: 0, TotalAdditions: 0, TotalDeletions: 0},
+		}, nil
 	}
 
 	// 파일 status 파싱
@@ -170,7 +214,7 @@ func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, base, head
 
 	// numstat으로 stats 가져오기
 	numstatOut, err := nativeRunGitCmd(ctx, repoPath, nativeGitTimeout,
-		"diff", "--numstat", "-M", baseHash+".."+headHash, "--", filePath)
+		"diff", "--numstat", "-M", effectiveBase+".."+headHash, "--", filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file stats: %w", err)
 	}
@@ -208,7 +252,7 @@ func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, base, head
 		if changedLines > MaxChangedLines {
 			fileDiff.LoadStatus = FileLoadStatusTooLarge
 		} else {
-			patchText, err := nativeGetFilePatch(ctx, repoPath, baseHash, headHash, filePath, contextLines)
+			patchText, err := nativeGetFilePatch(ctx, repoPath, effectiveBase, headHash, filePath, contextLines)
 			if err != nil {
 				fileDiff.LoadStatus = FileLoadStatusCollapsed
 			} else if patchText == "" {
@@ -236,8 +280,6 @@ func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, base, head
 
 	return &DiffResponse{
 		Success: true,
-		Base:    base,
-		Head:    head,
 		Files:   []FileDiff{fileDiff},
 		Stats:   stats,
 	}, nil
@@ -418,6 +460,73 @@ func nativeMergeBase(ctx context.Context, repoPath, a, b string) (string, error)
 		return "", fmt.Errorf("failed to find merge base: %w", err)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// ResolvedRange는 diff 요청에서 base/head를 해시로 해석하고 mode에 맞춰
+// effective_base를 미리 치환한 결과입니다. 모든 하위 git 호출은 EffectiveBase를
+// base 인자로 사용해야 file list와 file diff가 동일 기준에서 계산됩니다.
+type ResolvedRange struct {
+	Mode          DiffMode
+	BaseHash      string // 입력 base를 resolve한 해시
+	HeadHash      string // 입력 head를 resolve한 해시
+	MergeBase     string // merge-base(BaseHash, HeadHash). resolve 실패 시 빈 문자열.
+	EffectiveBase string // direct: BaseHash. merge_base: MergeBase (없으면 BaseHash로 fallback).
+}
+
+// nativeResolveDiffRange는 base/head를 해시로 변환하고 mode에 따른 effective_base를 계산합니다.
+//
+// merge_base 모드에서 merge-base 계산이 실패하면 (히스토리가 끊긴 저장소 등의 예외 케이스)
+// EffectiveBase = BaseHash로 fallback합니다 (direct와 같은 동작). 이 경우 호출자는
+// MergeBase=="" 사실로 fallback 여부를 식별할 수 있습니다.
+//
+// 응답 메타에 BaseHash/HeadHash/MergeBase/EffectiveBase를 모두 노출하면 호출자가
+// 트리(merge-base)와 file diff(effective_base) 정렬 여부를 직접 검증할 수 있습니다.
+func nativeResolveDiffRange(ctx context.Context, repoPath, base, head string, mode DiffMode) (*ResolvedRange, error) {
+	if !mode.IsValid() {
+		mode = DiffModeMergeBase
+	}
+
+	baseHash, err := nativeResolveRef(ctx, repoPath, base)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve base reference %s: %w", base, err)
+	}
+	headHash, err := nativeResolveRef(ctx, repoPath, head)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve head reference %s: %w", head, err)
+	}
+
+	rr := &ResolvedRange{
+		Mode:     mode,
+		BaseHash: baseHash,
+		HeadHash: headHash,
+	}
+
+	// merge-base는 모드와 무관하게 가능한 경우 항상 계산합니다 (관측 가능성 + direct 모드도 응답에 노출).
+	// 실패는 비치명: direct에서는 영향 없음. merge_base 모드에서는 BaseHash로 fallback.
+	if mb, mbErr := nativeMergeBase(ctx, repoPath, baseHash, headHash); mbErr == nil {
+		rr.MergeBase = mb
+	}
+
+	switch mode {
+	case DiffModeMergeBase:
+		if rr.MergeBase != "" {
+			rr.EffectiveBase = rr.MergeBase
+		} else {
+			rr.EffectiveBase = baseHash
+		}
+	default: // direct
+		rr.EffectiveBase = baseHash
+	}
+
+	return rr, nil
+}
+
+// nativeBlobExistsAtRef는 ref:path가 git 객체 데이터베이스에 존재하는지 확인합니다.
+// nativeCalculateFileDiff의 empty-status 분기에서 "양쪽에 동일 blob"과 "양쪽에 없음"을 구분하기 위해 사용.
+func nativeBlobExistsAtRef(ctx context.Context, repoPath, ref, path string) bool {
+	_, err := nativeRunGitCmd(ctx, repoPath, nativeGitRefTimeout,
+		"cat-file", "-e", ref+":"+path)
+	return err == nil
 }
 
 // nativeCalculateCommitCounts는 ahead/behind 커밋 수를 계산합니다.

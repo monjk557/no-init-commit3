@@ -267,10 +267,24 @@ func CalculateMergeBaseDiff(ctx context.Context, repoPath, baseBranch, headBranc
 	return nativeCalculateBranchDiff(ctx, repoPath, baseBranch, headBranch, contextLines)
 }
 
-// calculateFileDiff는 두 참조 간의 특정 파일에 대한 diff를 계산합니다.
-// native git diff를 사용합니다 (go-git 대체).
-func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath, base, head string, contextLines int, _ string) (*DiffResponse, error) {
-	return nativeCalculateFileDiff(ctx, repoPath, filePath, base, head, contextLines)
+// calculateFileDiff는 ResolvedRange 기준으로 단일 파일의 diff를 계산합니다.
+// 호출자(핸들러)가 미리 mode를 해석해서 effective_base를 결정해 둔 상태로 들어옵니다.
+func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath string, rr *ResolvedRange, contextLines int) (*DiffResponse, error) {
+	return nativeCalculateFileDiff(ctx, repoPath, filePath, rr.EffectiveBase, rr.HeadHash, contextLines)
+}
+
+// parseDiffMode는 query string에서 diff_mode를 읽고, 없거나 알 수 없는 값이면 default를 반환합니다.
+// /diff/search/files 엔드포인트의 레거시 type=branch|commit 별칭은 호출자가 직접 매핑합니다.
+func parseDiffMode(c *gin.Context, defaultMode DiffMode) DiffMode {
+	raw := strings.TrimSpace(c.Query("diff_mode"))
+	if raw == "" {
+		return defaultMode
+	}
+	mode := DiffMode(raw)
+	if !mode.IsValid() {
+		return defaultMode
+	}
+	return mode
 }
 
 // isBinaryContent는 콘텐츠가 바이너리로 보이는지 확인합니다

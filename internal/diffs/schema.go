@@ -6,6 +6,29 @@ import (
 
 // 공통 요청 검증 및 응답 유틸리티
 
+// DiffMode controls how (base, head)가 서로 어떻게 비교되는지 결정합니다.
+//
+//   - DiffModeMergeBase: effective_base = merge-base(base, head). 3-dot 시맨틱과 동일.
+//     CR/branch 비교 흐름의 기본값 — 트리(file list)와 단일 파일 diff가 같은 변경 집합을 보도록 정렬.
+//   - DiffModeDirect: effective_base = base. 2-dot 직접 비교.
+//     커밋 vs 커밋, patch 등 base/head를 그대로 비교해야 하는 케이스에 사용.
+type DiffMode string
+
+const (
+	DiffModeMergeBase DiffMode = "merge_base"
+	DiffModeDirect    DiffMode = "direct"
+)
+
+// IsValid는 DiffMode가 알려진 값인지 검사합니다.
+func (m DiffMode) IsValid() bool {
+	switch m {
+	case DiffModeMergeBase, DiffModeDirect:
+		return true
+	default:
+		return false
+	}
+}
+
 // RequestParams는 diff 엔드포인트의 공통 요청 파라미터를 보유합니다
 type RequestParams struct {
 	Owner string
@@ -31,14 +54,19 @@ type PaginatedDiffResponse struct {
 
 // DiffResponse는 diff 엔드포인트의 응답 구조를 나타냅니다
 type DiffResponse struct {
-	Success       bool            `json:"success"`
-	Base          string          `json:"base"`
-	Head          string          `json:"head"`
-	Files         []FileDiff      `json:"files"`
-	Stats         DiffStats       `json:"stats"`
+	Success bool       `json:"success"`
+	Base    string     `json:"base"`
+	Head    string     `json:"head"`
+	Files   []FileDiff `json:"files"`
+	Stats   DiffStats  `json:"stats"`
+	// DiffMode는 이 응답을 만드는 데 사용된 비교 모드입니다 (CR file list와의 정렬 검증용).
+	DiffMode string `json:"diff_mode,omitempty"`
+	// EffectiveBase는 실제 git 호출에서 base로 사용된 hash입니다.
+	// merge_base 모드에서는 MergeBase와 동일, direct 모드에서는 입력 base의 resolved hash.
+	EffectiveBase string          `json:"effective_base,omitempty"`
 	Commits       *CommitStats    `json:"commits,omitempty"`         // 브랜치 diff용
 	CommitsByDate []CommitsByDate `json:"commits_by_date,omitempty"` // 날짜별 커밋 목록
-	MergeBase     string          `json:"merge_base,omitempty"`      // 브랜치 diff용
+	MergeBase     string          `json:"merge_base,omitempty"`      // base/head의 merge-base hash (정보용)
 	Truncated     bool            `json:"truncated,omitempty"`       // 응답 크기 제한으로 인해 일부 파일이 제외되었는지 여부
 }
 
@@ -195,14 +223,17 @@ type DiffFileSearchResult struct {
 
 // DiffFileSearchResponse는 diff 파일 검색 응답입니다.
 type DiffFileSearchResponse struct {
-	Success    bool                   `json:"success"`
-	Query      string                 `json:"query"`
-	Type       string                 `json:"type"` // "commit" or "branch"
-	Base       string                 `json:"base"`
-	Head       string                 `json:"head"`
-	MergeBase  string                 `json:"merge_base,omitempty"`
-	Files      []DiffFileSearchResult `json:"files"`
-	TotalCount int                    `json:"total_count"`
+	Success bool   `json:"success"`
+	Query   string `json:"query"`
+	// Type은 deprecated된 별칭입니다. 새 호출자는 DiffMode를 사용하세요. ("commit"/"branch" 매핑)
+	Type          string                 `json:"type"`
+	DiffMode      string                 `json:"diff_mode,omitempty"`
+	Base          string                 `json:"base"`
+	Head          string                 `json:"head"`
+	EffectiveBase string                 `json:"effective_base,omitempty"`
+	MergeBase     string                 `json:"merge_base,omitempty"`
+	Files         []DiffFileSearchResult `json:"files"`
+	TotalCount    int                    `json:"total_count"`
 }
 
 // ========================================================================
