@@ -1041,12 +1041,19 @@ func mapGoTypeToOpenAPI(goType string) string {
 	switch {
 	case goType == "string":
 		return "string"
-	case goType == "int" || goType == "int64" || goType == "int32":
+	case goType == "int" || goType == "int64" || goType == "int32" ||
+		goType == "int16" || goType == "int8" ||
+		goType == "uint" || goType == "uint64" || goType == "uint32" ||
+		goType == "uint16" || goType == "uint8" ||
+		goType == "rune" || goType == "byte":
 		return "integer"
 	case goType == "bool":
 		return "boolean"
 	case goType == "float64" || goType == "float32":
 		return "number"
+	case goType == "Duration":
+		// time.Duration → int64 nanoseconds (Go marshal 동작)
+		return "integer"
 	case strings.HasPrefix(goType, "[]"):
 		return "array"
 	case strings.HasPrefix(goType, "map["):
@@ -1153,7 +1160,11 @@ func renderOpenAPIPropertyYAML(goType string, parentPkg string, knownSchemas map
 	switch {
 	case base == "string":
 		return []string{"type: string"}
-	case base == "int" || base == "int64" || base == "int32":
+	case base == "int" || base == "int64" || base == "int32" ||
+		base == "int16" || base == "int8" ||
+		base == "uint" || base == "uint64" || base == "uint32" ||
+		base == "uint16" || base == "uint8" ||
+		base == "rune" || base == "byte":
 		return []string{"type: integer"}
 	case base == "bool":
 		return []string{"type: boolean"}
@@ -1162,6 +1173,11 @@ func renderOpenAPIPropertyYAML(goType string, parentPkg string, knownSchemas map
 	case base == "Time":
 		// Best-effort mapping for time.Time (getTypeString strips package)
 		return []string{"type: string", "format: date-time"}
+	case base == "Duration":
+		// time.Duration 은 int64 nanoseconds 로 JSON marshal 된다
+		// (`json:",omitempty"` 무관). 기본 type alias 라 known schema 가 아니라
+		// 여기서 명시 매핑. format: int64 로 client codegen 이 정확한 타입 받게 함.
+		return []string{"type: integer", "format: int64"}
 	case strings.HasPrefix(base, "[]"):
 		elem := strings.TrimPrefix(strings.TrimPrefix(base, "[]"), "*")
 		resolvedElem := resolver.resolve(parentPkg, elem)

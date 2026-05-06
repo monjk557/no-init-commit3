@@ -1546,7 +1546,8 @@ components:
         allow_partial_commit:
           type: boolean
         timeout:
-          type: object
+          type: integer
+          format: int64
         dry_run:
           type: boolean
     CommitStats:
@@ -2217,7 +2218,7 @@ components:
         hash:
           type: string
         mode:
-          type: object
+          type: integer
         size:
           type: integer
         content:
@@ -2665,7 +2666,8 @@ components:
           additionalProperties: true
           nullable: true
         estimated_time:
-          type: object
+          type: integer
+          format: int64
         recommendations:
           type: array
           items:
@@ -2903,7 +2905,8 @@ components:
         validation_only:
           type: boolean
         duration_ms:
-          type: object
+          type: integer
+          format: int64
         details:
           type: object
           additionalProperties: true
@@ -3018,11 +3021,14 @@ components:
       type: object
       properties:
         analysis_time:
-          type: object
+          type: integer
+          format: int64
         conflict_analysis_time:
-          type: object
+          type: integer
+          format: int64
         tree_comparison_time:
-          type: object
+          type: integer
+          format: int64
         files_analyzed:
           type: integer
         objects_traversed:
