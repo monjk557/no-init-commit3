@@ -251,7 +251,7 @@ func runGeneration(projectRoot string, registry *typed.Registry, log *os.File) (
 	fmt.Fprintf(log, "   Found %d routes\n", len(routes))
 
 	fmt.Fprintln(log, "🔍 Parsing schema files from all packages...")
-	schemas, err := parseAllSchemas(projectRoot)
+	schemas, resolver, err := parseAllSchemas(projectRoot)
 	if err != nil {
 		return "", fmt.Errorf("Error parsing schemas: %w", err)
 	}
@@ -264,7 +264,7 @@ func runGeneration(projectRoot string, registry *typed.Registry, log *os.File) (
 	fmt.Fprintf(log, "   Found %d typed-string enum aliases\n", len(stringEnums))
 
 	fmt.Fprintln(log, "📝 Generating OpenAPI spec...")
-	spec, err := generateOpenAPISpec(routes, schemas, stringEnums, projectRoot, registry)
+	spec, err := generateOpenAPISpec(routes, schemas, stringEnums, resolver, projectRoot, registry)
 	if err != nil {
 		return "", fmt.Errorf("Error generating OpenAPI spec: %w", err)
 	}
@@ -534,8 +534,34 @@ func schemaFilePaths() []string {
 	}
 }
 
-func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
-	schemas := make(map[string]SchemaInfo)
+// typeResolver maps (parent_package, unqualified_type_name) → final spec name.
+// Resolves type references inside a schema's fields to the right OpenAPI
+// component name when cross-package name collisions exist.
+//
+// 예: commits 패키지의 `PaginationInfo` 와 overview 패키지의 `PaginationInfo` 가
+// shape 이 다르면 각각 `CommitsPaginationInfo` / `OverviewPaginationInfo` 로
+// qualify 된다. 동일 shape 이면 collision 없다고 보고 단일 schema 유지.
+type typeResolver map[string]map[string]string
+
+// resolve 는 parentPkg 안에서 참조된 unqualified 타입명을 spec 안 final
+// 스키마명으로 매핑한다. 매핑이 없으면 원본 이름을 그대로 반환 (primitive 나
+// 외부 타입).
+func (r typeResolver) resolve(parentPkg, name string) string {
+	if r == nil {
+		return name
+	}
+	if pkgMap, ok := r[parentPkg]; ok {
+		if mapped, ok := pkgMap[name]; ok {
+			return mapped
+		}
+	}
+	return name
+}
+
+func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, typeResolver, error) {
+	// Phase 1: 패키지별로 schema 를 수집. 같은 이름이라도 다른 패키지면
+	// 별도 보관해서 collision 검출에 쓴다.
+	perPackage := map[string]map[string]SchemaInfo{}
 
 	for _, relPath := range schemaFilePaths() {
 		fullPath := filepath.Join(projectRoot, relPath)
@@ -546,15 +572,107 @@ func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
 		pkg := filepath.Base(filepath.Dir(relPath))
 		fileSchemas, err := parseSchemaFile(fullPath, pkg)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing %s: %w", relPath, err)
+			return nil, nil, fmt.Errorf("error parsing %s: %w", relPath, err)
 		}
 
+		if perPackage[pkg] == nil {
+			perPackage[pkg] = map[string]SchemaInfo{}
+		}
 		for name, schema := range fileSchemas {
-			schemas[name] = schema
+			perPackage[pkg][name] = schema
 		}
 	}
 
-	return schemas, nil
+	// Phase 2: name → []pkg 로 뒤집어서 cross-package 충돌 검출.
+	nameToPackages := map[string][]string{}
+	for pkg, schemas := range perPackage {
+		for name := range schemas {
+			nameToPackages[name] = append(nameToPackages[name], pkg)
+		}
+	}
+
+	// Phase 3: 충돌 있는 이름은 패키지 prefix 로 qualify, 없으면 원본 유지.
+	// 동일 shape (== identical struct) 가 여러 패키지에 있으면 collision 으로
+	// 보지 않고 한 컴포넌트로 합친다 (드물지만 안전).
+	schemas := map[string]SchemaInfo{}
+	resolver := typeResolver{}
+
+	for name, pkgs := range nameToPackages {
+		sort.Strings(pkgs) // deterministic
+		if len(pkgs) == 1 {
+			pkg := pkgs[0]
+			schemas[name] = perPackage[pkg][name]
+			ensurePkg(resolver, pkg)[name] = name
+			continue
+		}
+
+		// 다중 패키지 — shape 가 모두 같으면 한 schema 로 통합.
+		first := perPackage[pkgs[0]][name]
+		allSame := true
+		for _, pkg := range pkgs[1:] {
+			if !schemasEqual(first, perPackage[pkg][name]) {
+				allSame = false
+				break
+			}
+		}
+
+		if allSame {
+			schemas[name] = first
+			for _, pkg := range pkgs {
+				ensurePkg(resolver, pkg)[name] = name
+			}
+			continue
+		}
+
+		// 진짜 collision — 패키지 prefix 로 qualify.
+		for _, pkg := range pkgs {
+			qualified := titleCasePackage(pkg) + name
+			schema := perPackage[pkg][name]
+			schema.Name = qualified
+			schemas[qualified] = schema
+			ensurePkg(resolver, pkg)[name] = qualified
+		}
+	}
+
+	return schemas, resolver, nil
+}
+
+func ensurePkg(r typeResolver, pkg string) map[string]string {
+	if r[pkg] == nil {
+		r[pkg] = map[string]string{}
+	}
+	return r[pkg]
+}
+
+// schemasEqual 은 두 SchemaInfo 의 field set 이 동일한지 비교한다 (필드 순서
+// 무관, 이름·타입·json tag·required 비교).
+func schemasEqual(a, b SchemaInfo) bool {
+	if len(a.Fields) != len(b.Fields) {
+		return false
+	}
+	aFields := map[string]FieldInfo{}
+	for _, f := range a.Fields {
+		aFields[f.Name] = f
+	}
+	for _, f := range b.Fields {
+		af, ok := aFields[f.Name]
+		if !ok {
+			return false
+		}
+		if af.Type != f.Type || af.JSONTag != f.JSONTag || af.Required != f.Required {
+			return false
+		}
+	}
+	return true
+}
+
+// titleCasePackage 는 패키지 이름의 첫 글자를 대문자로 변환한다 (예:
+// "commits" → "Commits"). schema name qualify 시 prefix 로 쓰인다.
+func titleCasePackage(pkg string) string {
+	if pkg == "" {
+		return ""
+	}
+	return strings.ToUpper(pkg[:1]) + pkg[1:]
 }
 
 func parseSchemaFile(filePath string, pkg string) (map[string]SchemaInfo, error) {
@@ -629,7 +747,7 @@ func getTypeString(expr ast.Expr) string {
 	}
 }
 
-func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, projectRoot string, registry *typed.Registry) (string, error) {
+func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, resolver typeResolver, projectRoot string, registry *typed.Registry) (string, error) {
 	// 항상 Go 기준으로 스펙 생성
 	tmpl, err := template.New("openapi").Parse(openAPITemplate)
 	if err != nil {
@@ -638,7 +756,7 @@ func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, stri
 
 	var buf bytes.Buffer
 	paths := generatePathsFromRoutes(routes, registry)
-	schemaDefs := generateSchemasFromStructs(schemas, stringEnums)
+	schemaDefs := generateSchemasFromStructs(schemas, stringEnums, resolver)
 
 	data := struct {
 		Paths   string
@@ -888,7 +1006,7 @@ func openAPISchemaName(s string) string {
 	return strings.ReplaceAll(s, "-", "")
 }
 
-func generateSchemasFromStructs(schemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo) string {
+func generateSchemasFromStructs(schemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, resolver typeResolver) string {
 	var buf strings.Builder
 
 	// Sort schema names for consistent output
@@ -900,7 +1018,7 @@ func generateSchemasFromStructs(schemas map[string]SchemaInfo, stringEnums map[s
 
 	for _, name := range names {
 		schema := schemas[name]
-		buf.WriteString(renderSchemaYAML(schema, schemas, stringEnums, openAPISchemaName))
+		buf.WriteString(renderSchemaYAML(schema, schemas, stringEnums, openAPISchemaName, resolver))
 	}
 
 	return buf.String()
@@ -927,7 +1045,7 @@ func mapGoTypeToOpenAPI(goType string) string {
 	}
 }
 
-func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, schemaNameFn func(string) string) string {
+func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, schemaNameFn func(string) string, resolver typeResolver) string {
 	var buf strings.Builder
 	buf.WriteString(fmt.Sprintf("    %s:\n", schemaNameFn(schema.Name)))
 	buf.WriteString("      type: object\n")
@@ -950,7 +1068,7 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, str
 	for _, field := range taggedFields {
 		fieldName := field.JSONTag
 		buf.WriteString(fmt.Sprintf("        %s:\n", fieldName))
-		propLines := renderOpenAPIPropertyYAML(field.Type, knownSchemas, stringEnums, schemaNameFn)
+		propLines := renderOpenAPIPropertyYAML(field.Type, schema.Package, knownSchemas, stringEnums, schemaNameFn, resolver)
 		for _, l := range propLines {
 			buf.WriteString("          " + l + "\n")
 		}
@@ -995,7 +1113,7 @@ func isRefProperty(propLines []string) bool {
 	return false
 }
 
-func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, schemaNameFn func(string) string) []string {
+func renderOpenAPIPropertyYAML(goType string, parentPkg string, knownSchemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, schemaNameFn func(string) string, resolver typeResolver) []string {
 	base := strings.TrimPrefix(goType, "*")
 
 	// 우선 typed-string enum (``type X string`` + const) 으로 정의된 alias 면
@@ -1008,9 +1126,11 @@ func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo
 		}
 	}
 
-	// If this matches another known schema type name, use $ref
-	if _, ok := knownSchemas[base]; ok {
-		return []string{fmt.Sprintf("$ref: '#/components/schemas/%s'", schemaNameFn(base))}
+	// 같은 패키지에서 unqualified 타입 ref 는 collision 이 있을 수 있으므로
+	// resolver 를 거쳐 final spec name 으로 매핑한다.
+	resolvedBase := resolver.resolve(parentPkg, base)
+	if _, ok := knownSchemas[resolvedBase]; ok {
+		return []string{fmt.Sprintf("$ref: '#/components/schemas/%s'", schemaNameFn(resolvedBase))}
 	}
 
 	switch {
@@ -1027,11 +1147,12 @@ func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo
 		return []string{"type: string", "format: date-time"}
 	case strings.HasPrefix(base, "[]"):
 		elem := strings.TrimPrefix(strings.TrimPrefix(base, "[]"), "*")
-		if _, ok := knownSchemas[elem]; ok {
+		resolvedElem := resolver.resolve(parentPkg, elem)
+		if _, ok := knownSchemas[resolvedElem]; ok {
 			return []string{
 				"type: array",
 				"items:",
-				fmt.Sprintf("  $ref: '#/components/schemas/%s'", schemaNameFn(elem)),
+				fmt.Sprintf("  $ref: '#/components/schemas/%s'", schemaNameFn(resolvedElem)),
 			}
 		}
 		return []string{

@@ -188,6 +188,7 @@ func TestRenderSchemaYAML_NullableForNilableJSONFields(t *testing.T) {
 		map[string]SchemaInfo{},
 		map[string]StringEnumInfo{},
 		func(s string) string { return s },
+		typeResolver{},
 	)
 
 	// 각 field 의 block (해당 field key 부터 다음 sibling field key 또는

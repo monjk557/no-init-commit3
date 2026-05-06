@@ -1019,19 +1019,6 @@ components:
       required:
         - id
         - status
-    AuthorInfo:
-      type: object
-      properties:
-        name:
-          type: string
-        email:
-          type: string
-        date:
-          type: string
-      required:
-        - date
-        - email
-        - name
     BlobBinaryResponse:
       type: object
       properties:
@@ -1123,7 +1110,7 @@ components:
         is_head:
           type: boolean
         last_commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/BranchesCommitInfo'
         date:
           type: string
           format: date-time
@@ -1205,6 +1192,26 @@ components:
       required:
         - stats
         - success
+    BranchesCommitInfo:
+      type: object
+      properties:
+        sha:
+          type: string
+        message:
+          type: string
+        author:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+          format: date-time
+      required:
+        - author
+        - date
+        - email
+        - message
+        - sha
     BranchesListResponse:
       type: object
       properties:
@@ -1236,6 +1243,30 @@ components:
         - stale
         - total_count
         - yours
+    BranchesPaginationInfo:
+      type: object
+      properties:
+        count:
+          type: integer
+        next:
+          type: string
+          nullable: true
+        previous:
+          type: string
+          nullable: true
+        current_page:
+          type: integer
+        total_pages:
+          type: integer
+        page_size:
+          type: integer
+      required:
+        - count
+        - current_page
+        - next
+        - page_size
+        - previous
+        - total_pages
     BulkDeleteBranchResult:
       type: object
       properties:
@@ -1485,25 +1516,6 @@ components:
         - sha
         - success
         - tree_hash
-    CommitInfo:
-      type: object
-      properties:
-        sha:
-          type: string
-        message:
-          type: string
-        author:
-          $ref: '#/components/schemas/AuthorInfo'
-        committer:
-          $ref: '#/components/schemas/AuthorInfo'
-        created_at:
-          type: string
-      required:
-        - author
-        - committer
-        - created_at
-        - message
-        - sha
     CommitMetadata:
       type: object
       properties:
@@ -1577,6 +1589,30 @@ components:
       required:
         - error
         - success
+    CommitsPaginationInfo:
+      type: object
+      properties:
+        count:
+          type: integer
+        next:
+          type: string
+          nullable: true
+        previous:
+          type: string
+          nullable: true
+        current_page:
+          type: integer
+        total_pages:
+          type: integer
+        page_size:
+          type: integer
+      required:
+        - count
+        - current_page
+        - next
+        - page_size
+        - previous
+        - total_pages
     CommitsRequestParams:
       type: object
     CommitsResponse:
@@ -1596,7 +1632,7 @@ components:
         merge_base:
           type: string
         pagination:
-          $ref: '#/components/schemas/PaginationInfo'
+          $ref: '#/components/schemas/CommitsPaginationInfo'
       required:
         - has_next
         - message
@@ -2219,7 +2255,7 @@ components:
             $ref: '#/components/schemas/BranchInfo'
           nullable: true
         pagination:
-          $ref: '#/components/schemas/PaginationInfo'
+          $ref: '#/components/schemas/BranchesPaginationInfo'
       required:
         - pagination
         - results
@@ -2340,13 +2376,13 @@ components:
         commit_sha:
           type: string
         commit_info:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/StateCommitInfo'
         is_branch:
           type: boolean
         reference:
           type: string
         commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/StateCommitInfo'
         is_detached:
           type: boolean
       required:
@@ -2624,11 +2660,11 @@ components:
             $ref: '#/components/schemas/FileConflict'
           nullable: true
         merge_base:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/MergeCommitInfo'
         source_commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/MergeCommitInfo'
         target_commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/MergeCommitInfo'
         strategy:
           type: string
           enum: [recursive, resolve, ort, ours, theirs, subtree]
@@ -2663,6 +2699,42 @@ components:
         - source_commit
         - strategy
         - target_commit
+    MergeAuthorInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+          format: date-time
+      required:
+        - date
+        - email
+        - name
+    MergeCommitInfo:
+      type: object
+      properties:
+        sha:
+          type: string
+        message:
+          type: string
+        author:
+          $ref: '#/components/schemas/MergeAuthorInfo'
+        committer:
+          $ref: '#/components/schemas/MergeAuthorInfo'
+        created_at:
+          type: string
+        tree_sha:
+          type: string
+      required:
+        - author
+        - committer
+        - created_at
+        - message
+        - sha
+        - tree_sha
     MergeHooks:
       type: object
     MergePreviewRequest:
@@ -2686,7 +2758,7 @@ components:
           items:
             type: string
         merge_base:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/MergeCommitInfo'
         conflict_summary:
           $ref: '#/components/schemas/MergeAnalysisResult'
         changes_summary:
@@ -2735,9 +2807,9 @@ components:
         message:
           type: string
         author:
-          $ref: '#/components/schemas/AuthorInfo'
+          $ref: '#/components/schemas/MergeAuthorInfo'
         committer:
-          $ref: '#/components/schemas/AuthorInfo'
+          $ref: '#/components/schemas/MergeAuthorInfo'
         force_conflict:
           type: boolean
         dry_run:
@@ -2756,7 +2828,7 @@ components:
         success:
           type: boolean
         merge_commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/MergeCommitInfo'
         is_fast_forward:
           type: boolean
         is_already_merged:
@@ -2892,16 +2964,7 @@ components:
         - operation
         - path
         - success
-    PaginatedDiffResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        pagination:
-          $ref: '#/components/schemas/PaginationParams'
-      required:
-        - success
-    PaginationInfo:
+    OverviewPaginationInfo:
       type: object
       properties:
         page:
@@ -2927,6 +2990,15 @@ components:
         - per_page
         - total_files
         - total_pages
+    PaginatedDiffResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        pagination:
+          $ref: '#/components/schemas/PaginationParams'
+      required:
+        - success
     PaginationParams:
       type: object
       properties:
@@ -3009,7 +3081,7 @@ components:
         last_modified:
           type: string
         commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/StateCommitInfo'
       required:
         - commit_sha
         - full_name
@@ -3050,6 +3122,33 @@ components:
       required:
         - new_name
         - old_name
+    RepositoriesRepositoryInfo:
+      type: object
+      properties:
+        default_branch:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_modified:
+          type: string
+          format: date-time
+        size:
+          type: integer
+        branch_count:
+          type: integer
+        tag_count:
+          type: integer
+        commit_count:
+          type: integer
+      required:
+        - branch_count
+        - commit_count
+        - created_at
+        - default_branch
+        - last_modified
+        - size
+        - tag_count
     RepositoryCount:
       type: object
       properties:
@@ -3068,42 +3167,6 @@ components:
         - commits
         - tags
         - total
-    RepositoryInfo:
-      type: object
-      properties:
-        path:
-          type: string
-        default_branch:
-          type: string
-        size:
-          type: integer
-        branch_count:
-          type: integer
-        tag_count:
-          type: integer
-        commit_count:
-          type: integer
-        is_bare:
-          type: boolean
-        has_worktree:
-          type: boolean
-        git_directory:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        last_modified:
-          type: string
-          format: date-time
-      required:
-        - branch_count
-        - commit_count
-        - default_branch
-        - git_directory
-        - has_worktree
-        - is_bare
-        - size
-        - tag_count
     RepositoryOverviewResponse:
       type: object
       properties:
@@ -3167,7 +3230,7 @@ components:
         references:
           $ref: '#/components/schemas/References'
         repository_info:
-          $ref: '#/components/schemas/RepositoryInfo'
+          $ref: '#/components/schemas/StateRepositoryInfo'
         timestamp:
           type: string
         details:
@@ -3199,6 +3262,41 @@ components:
         - name
         - ref_path
         - success
+    RevertAuthorInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+          format: date-time
+      required:
+        - email
+        - name
+    RevertCommitInfo:
+      type: object
+      properties:
+        sha:
+          type: string
+        message:
+          type: string
+        author:
+          $ref: '#/components/schemas/RevertAuthorInfo'
+        committer:
+          $ref: '#/components/schemas/RevertAuthorInfo'
+        created_at:
+          type: string
+        tree_sha:
+          type: string
+      required:
+        - author
+        - committer
+        - created_at
+        - message
+        - sha
+        - tree_sha
     RevertRequest:
       type: object
       properties:
@@ -3213,9 +3311,9 @@ components:
         message:
           type: string
         author:
-          $ref: '#/components/schemas/AuthorInfo'
+          $ref: '#/components/schemas/RevertAuthorInfo'
         committer:
-          $ref: '#/components/schemas/AuthorInfo'
+          $ref: '#/components/schemas/RevertAuthorInfo'
       required:
         - commit_sha
         - target_ref
@@ -3227,9 +3325,9 @@ components:
         revert_branch:
           type: string
         revert_commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/RevertCommitInfo'
         reverted_commit:
-          $ref: '#/components/schemas/CommitInfo'
+          $ref: '#/components/schemas/RevertCommitInfo'
         message:
           type: string
       required:
@@ -3248,6 +3346,74 @@ components:
       required:
         - commit
         - success
+    StateAuthorInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        date:
+          type: string
+      required:
+        - date
+        - email
+        - name
+    StateCommitInfo:
+      type: object
+      properties:
+        sha:
+          type: string
+        message:
+          type: string
+        author:
+          $ref: '#/components/schemas/StateAuthorInfo'
+        committer:
+          $ref: '#/components/schemas/StateAuthorInfo'
+        created_at:
+          type: string
+      required:
+        - author
+        - committer
+        - created_at
+        - message
+        - sha
+    StateRepositoryInfo:
+      type: object
+      properties:
+        path:
+          type: string
+        default_branch:
+          type: string
+        size:
+          type: integer
+        branch_count:
+          type: integer
+        tag_count:
+          type: integer
+        commit_count:
+          type: integer
+        is_bare:
+          type: boolean
+        has_worktree:
+          type: boolean
+        git_directory:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_modified:
+          type: string
+          format: date-time
+      required:
+        - branch_count
+        - commit_count
+        - default_branch
+        - git_directory
+        - has_worktree
+        - is_bare
+        - size
+        - tag_count
     SubmoduleChange:
       type: object
       properties:
@@ -3328,6 +3494,30 @@ components:
         - date
         - email
         - name
+    TagsPaginationInfo:
+      type: object
+      properties:
+        count:
+          type: integer
+        next:
+          type: string
+          nullable: true
+        previous:
+          type: string
+          nullable: true
+        current_page:
+          type: integer
+        total_pages:
+          type: integer
+        page_size:
+          type: integer
+      required:
+        - count
+        - current_page
+        - next
+        - page_size
+        - previous
+        - total_pages
     TagsResponse:
       type: object
       properties:
@@ -3341,7 +3531,7 @@ components:
             $ref: '#/components/schemas/Tag'
           nullable: true
         pagination:
-          $ref: '#/components/schemas/PaginationInfo'
+          $ref: '#/components/schemas/TagsPaginationInfo'
       required:
         - message
         - pagination
@@ -3492,7 +3682,7 @@ components:
         meta:
           $ref: '#/components/schemas/LatestCommitsMeta'
         pagination:
-          $ref: '#/components/schemas/PaginationInfo'
+          $ref: '#/components/schemas/OverviewPaginationInfo'
       required:
         - name
         - owner
