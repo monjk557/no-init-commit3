@@ -271,6 +271,33 @@ func findProjectRoot() string {
 	return ""
 }
 
+// nonRESTHelpers 는 REST API 가 아닌 endpoint 를 등록하는 helper 함수 이름.
+// 이 함수들의 본문 안에서 호출되는 g.METHOD(path, handler) 는 AST scan 에서
+// 무시한다 (LFS / Git protocol / docs 등 spec 대상 아님).
+var nonRESTHelpers = map[string]bool{
+	"registerLFSRoutes":        true,
+	"registerLFSStorageRoutes": true,
+	"setupSwaggerRoutes":       true,
+	"setupProtocolRoutes":      true,
+}
+
+// nonRESTHandlerReceivers 는 handler 호출 시 receiver 이름이 이 목록에 있으면
+// REST API endpoint 가 아니라고 간주 (server-level / LFS / Git protocol).
+//
+//	router.GET("/health", s.healthCheck)             — receiver "s"
+//	router.GET("/ready", s.readyCheck)               — receiver "s"
+//	router.GET("/workspaces/:owner/lfs/usage", lfsHandler.HandleGetUsage)
+//	                                                 — receiver "lfsHandler"
+//
+// LFS 와 server-level routes 는 OpenAPI spec 대상이 아님 (LFS 는 별도 프로토콜,
+// health/ready 는 infra). spec 출력에서 자동 제외.
+var nonRESTHandlerReceivers = map[string]bool{
+	"s":                  true, // server methods (s.healthCheck, s.readyCheck, ...)
+	"lfsHandler":         true, // LFS endpoints (별도 프로토콜)
+	"uploadPackHandler":  true, // Git Smart HTTP
+	"receivePackHandler": true, // Git Smart HTTP
+}
+
 func parseServerRoutes(filePath string) ([]RouteInfo, error) {
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
@@ -280,36 +307,68 @@ func parseServerRoutes(filePath string) ([]RouteInfo, error) {
 
 	var routes []RouteInfo
 
-	ast.Inspect(node, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.CallExpr:
-			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
-				method := sel.Sel.Name
-				if isHTTPMethod(method) {
-					if len(x.Args) >= 2 {
-						if pathLit, ok := x.Args[0].(*ast.BasicLit); ok {
-							path := strings.Trim(pathLit.Value, "\"`")
-							if selExpr, ok := x.Args[1].(*ast.SelectorExpr); ok {
-								routes = append(routes, RouteInfo{
-									Method:      method,
-									Path:        path,
-									HandlerName: selExpr.Sel.Name,
-									Package:     selExpr.X.(*ast.Ident).Name,
-								})
-							} else if ident, ok := x.Args[1].(*ast.Ident); ok {
-								routes = append(routes, RouteInfo{
-									Method:      method,
-									Path:        path,
-									HandlerName: ident.Name,
-								})
-							}
-						}
-					}
-				}
-			}
+	// Walk top-level decls 직접 — 각 FuncDecl 별로 nonRESTHelpers 인지 판별 후
+	// 본문을 skip 하거나 inspect.
+	for _, decl := range node.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
 		}
-		return true
-	})
+		if fn.Body == nil {
+			continue
+		}
+		if nonRESTHelpers[fn.Name.Name] {
+			// LFS / protocol / docs helper — body 통째로 skip.
+			continue
+		}
+
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			callExpr, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := callExpr.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			method := sel.Sel.Name
+			if !isHTTPMethod(method) {
+				return true
+			}
+			if len(callExpr.Args) < 2 {
+				return true
+			}
+			pathLit, ok := callExpr.Args[0].(*ast.BasicLit)
+			if !ok {
+				return true
+			}
+			path := strings.Trim(pathLit.Value, "\"`")
+
+			// handler arg 분석 — receiver 가 nonRESTHandlerReceivers 면 skip.
+			if selExpr, ok := callExpr.Args[1].(*ast.SelectorExpr); ok {
+				recv := ""
+				if ident, ok := selExpr.X.(*ast.Ident); ok {
+					recv = ident.Name
+				}
+				if nonRESTHandlerReceivers[recv] {
+					return true
+				}
+				routes = append(routes, RouteInfo{
+					Method:      method,
+					Path:        path,
+					HandlerName: selExpr.Sel.Name,
+					Package:     recv,
+				})
+			} else if ident, ok := callExpr.Args[1].(*ast.Ident); ok {
+				routes = append(routes, RouteInfo{
+					Method:      method,
+					Path:        path,
+					HandlerName: ident.Name,
+				})
+			}
+			return true
+		})
+	}
 
 	return routes, nil
 }
