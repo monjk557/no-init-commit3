@@ -2171,7 +2171,7 @@ components:
           type: boolean
         loadStatus:
           type: string
-          enum: [loaded, collapsed, too_large, binary]
+          enum: [loaded, collapsed, too_large, binary, submodule]
         old_path:
           type: string
         submodule_change:
