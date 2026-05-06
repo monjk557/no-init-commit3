@@ -150,3 +150,87 @@ func safeIndex(lines []string, i int) string {
 	}
 	return lines[i]
 }
+
+// TestRenderSchemaYAML_NullableForNilableJSONFields 는 Go encoding/json 의
+// nil 동작을 OpenAPI 의 nullable 로 정확히 표현하는지 검증한다.
+//
+// Go 측 contract:
+//
+//   - omitempty 없는 *T  : nil 시 응답에 null
+//   - omitempty 없는 []T : nil 시 응답에 null
+//   - omitempty 없는 map : nil 시 응답에 null
+//   - omitempty 있는 모든 위 케이스 : nil 시 omit (필드 자체가 응답에 없음)
+//
+// 이전엔 *T 만 nullable: true 를 출력해서 slice/map 의 nil-null 매핑이
+// spec 에 반영되지 않았다 (실제 사고 사례: FileDiff.diffLines 가 large file
+// 응답에서 null 인데 spec 은 array required 로 표시 → orchestrator parse 실패).
+func TestRenderSchemaYAML_NullableForNilableJSONFields(t *testing.T) {
+	// JSONTag 는 parseSchemaFile 에서 옵션 부분(",omitempty")을 잘라낸 base 가
+	// 들어오고, omitempty 여부는 Required 로 전달된다.
+	schema := SchemaInfo{
+		Name: "_NullabilityProbe",
+		Fields: []FieldInfo{
+			// omitempty 없는 slice — nil 시 null. nullable: true 필요.
+			{Name: "Items", Type: "[]string", JSONTag: "items", Required: true},
+			// omitempty 있는 slice — nil 시 omit. nullable 불필요.
+			{Name: "Labels", Type: "[]string", JSONTag: "labels", Required: false},
+			// omitempty 없는 map — nil 시 null. nullable: true 필요.
+			{Name: "Meta", Type: "map[string]string", JSONTag: "meta", Required: true},
+			// omitempty 없는 *primitive — 기존부터 nullable. 회귀 가드.
+			{Name: "Count", Type: "*int", JSONTag: "count", Required: true},
+			// 일반 string — nullable 불필요.
+			{Name: "Name", Type: "string", JSONTag: "name", Required: true},
+		},
+	}
+
+	out := renderSchemaYAML(schema, map[string]SchemaInfo{}, func(s string) string { return s })
+
+	// 각 field 의 block (해당 field key 부터 다음 sibling field key 또는
+	// required: 까지) 을 분리해 nullable: true 포함 여부를 검사한다.
+	// field key 는 8-space indent (properties: 안의 항목).
+	const fieldIndent = "        " // 8 spaces
+
+	type wantSpec struct {
+		field    string
+		nullable bool
+	}
+	cases := []wantSpec{
+		{"items", true},   // slice w/o omitempty → nullable
+		{"labels", false}, // slice w/ omitempty → no nullable
+		{"meta", true},    // map w/o omitempty → nullable
+		{"count", true},   // pointer w/o omitempty → nullable (regression guard)
+		{"name", false},   // primitive → no nullable
+	}
+
+	lines := strings.Split(out, "\n")
+	for _, tc := range cases {
+		key := fieldIndent + tc.field + ":"
+		var start, end int = -1, len(lines)
+		for i, l := range lines {
+			if l == key {
+				start = i
+				continue
+			}
+			// next sibling at same indent → end of current block
+			if start >= 0 && i > start {
+				if strings.HasPrefix(l, fieldIndent) && !strings.HasPrefix(l, fieldIndent+" ") {
+					end = i
+					break
+				}
+				// also stop at required: section (6-space indent)
+				if strings.HasPrefix(strings.TrimRight(l, " "), "      required:") {
+					end = i
+					break
+				}
+			}
+		}
+		if start < 0 {
+			t.Fatalf("field %q not found in output:\n%s", tc.field, out)
+		}
+		block := strings.Join(lines[start:end], "\n")
+		hasNullable := strings.Contains(block, "nullable: true")
+		if hasNullable != tc.nullable {
+			t.Errorf("%s nullable=%v want %v\nblock:\n%s", tc.field, hasNullable, tc.nullable, block)
+		}
+	}
+}

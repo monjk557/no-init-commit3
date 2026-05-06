@@ -1083,16 +1083,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GitTreeEntryWithCommit'
+          nullable: true
         branches:
           type: array
           items:
             $ref: '#/components/schemas/GitBranch'
+          nullable: true
         latest_commit:
           $ref: '#/components/schemas/GitCommit'
         commits:
           type: array
           items:
             $ref: '#/components/schemas/GitCommit'
+          nullable: true
       required:
         - branches
         - commits
@@ -1186,6 +1189,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
       required:
         - branches
     BranchStatsResponse:
@@ -1196,6 +1200,7 @@ components:
         stats:
           type: object
           additionalProperties: true
+          nullable: true
       required:
         - stats
         - success
@@ -1206,18 +1211,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BranchListItem'
+          nullable: true
         yours:
           type: array
           items:
             $ref: '#/components/schemas/BranchListItem'
+          nullable: true
         active:
           type: array
           items:
             $ref: '#/components/schemas/BranchListItem'
+          nullable: true
         stale:
           type: array
           items:
             $ref: '#/components/schemas/BranchListItem'
+          nullable: true
         total_count:
           type: integer
       required:
@@ -1247,6 +1256,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
       required:
         - branches
     BulkDeleteBranchesResponse:
@@ -1264,6 +1274,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BulkDeleteBranchResult'
+          nullable: true
       required:
         - failed
         - results
@@ -1289,6 +1300,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
       required:
         - tags
     BulkDeleteTagsResponse:
@@ -1306,6 +1318,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BulkDeleteTagResult'
+          nullable: true
       required:
         - failed
         - results
@@ -1367,6 +1380,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnchorRequest'
+          nullable: true
       required:
         - anchors
         - base_sha
@@ -1384,6 +1398,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnchorResult'
+          nullable: true
       required:
         - base_sha
         - head_sha
@@ -1404,6 +1419,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
         tree_hash:
           type: string
       required:
@@ -1457,6 +1473,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
         tree_hash:
           type: string
       required:
@@ -1503,6 +1520,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
       required:
         - author
         - date
@@ -1540,6 +1558,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CommitMetadata'
+          nullable: true
       required:
         - commits
         - date
@@ -1570,6 +1589,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CommitsByDate'
+          nullable: true
         has_next:
           type: boolean
         merge_base:
@@ -1662,6 +1682,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
         metadata:
           type: object
           additionalProperties: true
@@ -1691,9 +1712,11 @@ components:
           type: array
           items:
             type: string
+          nullable: true
         workflows:
           type: object
           additionalProperties: true
+          nullable: true
       required:
         - diff_files
         - success
@@ -1919,6 +1942,7 @@ components:
         includes:
           type: object
           additionalProperties: true
+          nullable: true
         request_type:
           type: string
       required:
@@ -1947,6 +1971,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DiffFileSearchResult'
+          nullable: true
         total_count:
           type: integer
       required:
@@ -1992,6 +2017,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileDiff'
+          nullable: true
         stats:
           $ref: '#/components/schemas/DiffStats'
         diff_mode:
@@ -2038,6 +2064,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LineChange'
+          nullable: true
         path:
           type: string
         start_old:
@@ -2088,6 +2115,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ConflictRegion'
+          nullable: true
         auto_resolvable:
           type: boolean
         resolution:
@@ -2133,6 +2161,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LineChange'
+          nullable: true
         is_binary:
           type: boolean
         loadStatus:
@@ -2181,6 +2210,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BranchInfo'
+          nullable: true
         pagination:
           $ref: '#/components/schemas/PaginationInfo'
       required:
@@ -2232,6 +2262,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
         tree_hash:
           type: string
       required:
@@ -2278,13 +2309,10 @@ components:
           type: string
         mode:
           type: string
-          nullable: true
         hash:
           type: string
-          nullable: true
         size:
           type: integer
-          nullable: true
         latest_commit:
           $ref: '#/components/schemas/GitCommit'
       required:
@@ -2348,6 +2376,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LanguageStats'
+          nullable: true
         total_bytes:
           type: integer
         total_files:
@@ -2401,6 +2430,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LanguageStat'
+          nullable: true
         total_bytes:
           type: integer
         total_files:
@@ -2450,6 +2480,7 @@ components:
           type: array
           items:
             type: string
+          nullable: true
       required:
         - dir_path
         - paths
@@ -2470,6 +2501,7 @@ components:
         commits_by_path:
           type: object
           additionalProperties: true
+          nullable: true
         meta:
           $ref: '#/components/schemas/LatestCommitsMeta'
         missing_paths:
@@ -2580,6 +2612,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileConflict'
+          nullable: true
         merge_base:
           $ref: '#/components/schemas/CommitInfo'
         source_commit:
@@ -2593,12 +2626,14 @@ components:
         severity_breakdown:
           type: object
           additionalProperties: true
+          nullable: true
         estimated_time:
           type: object
         recommendations:
           type: array
           items:
             type: string
+          nullable: true
         metadata:
           type: object
           additionalProperties: true
@@ -2695,7 +2730,6 @@ components:
           type: boolean
         change_request_id:
           type: integer
-          nullable: true
         metadata:
           type: object
           additionalProperties: true
@@ -2726,6 +2760,7 @@ components:
         details:
           type: object
           additionalProperties: true
+          nullable: true
         conflict_summary:
           $ref: '#/components/schemas/MergeAnalysisResult'
       required:
@@ -2761,6 +2796,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MultiFileOperation'
+          nullable: true
         options:
           $ref: '#/components/schemas/CommitOptions'
         metadata:
@@ -2957,10 +2993,12 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ReferenceInfo'
+          nullable: true
         tags:
           type: array
           items:
             $ref: '#/components/schemas/ReferenceInfo'
+          nullable: true
         count:
           $ref: '#/components/schemas/ReferenceCount'
       required:
@@ -3056,14 +3094,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GitTreeEntryWithCommit'
+          nullable: true
         branches:
           type: array
           items:
             $ref: '#/components/schemas/GitBranch'
+          nullable: true
         tags:
           type: array
           items:
             $ref: '#/components/schemas/GitTag'
+          nullable: true
         count:
           $ref: '#/components/schemas/RepositoryCount'
         readme:
@@ -3217,6 +3258,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Tag'
+          nullable: true
         pagination:
           $ref: '#/components/schemas/PaginationInfo'
       required:
@@ -3254,6 +3296,7 @@ components:
         tree:
           type: object
           additionalProperties: true
+          nullable: true
       required:
         - success
         - tree
@@ -3266,6 +3309,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TreeEntry'
+          nullable: true
       required:
         - entries
         - success
@@ -3299,16 +3343,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GitTreeEntryWithCommit'
+          nullable: true
         branches:
           type: array
           items:
             $ref: '#/components/schemas/GitBranch'
+          nullable: true
         latest_commit:
           $ref: '#/components/schemas/GitCommit'
         commits:
           type: array
           items:
             $ref: '#/components/schemas/GitCommit'
+          nullable: true
       required:
         - branches
         - commits
@@ -3330,6 +3377,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TreeEntry'
+          nullable: true
         total_count:
           type: integer
         truncated:
@@ -3357,6 +3405,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GitTreeEntryWithCommit'
+          nullable: true
         meta:
           $ref: '#/components/schemas/LatestCommitsMeta'
         pagination:
@@ -3396,7 +3445,6 @@ components:
           type: boolean
         forced:
           type: boolean
-          nullable: true
         old_branch_name:
           type: string
         new_branch_name:
@@ -3405,7 +3453,6 @@ components:
           type: string
         head_updated:
           type: boolean
-          nullable: true
         message:
           type: string
       required:

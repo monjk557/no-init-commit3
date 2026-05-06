@@ -836,10 +836,15 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, sch
 		for _, l := range propLines {
 			buf.WriteString("          " + l + "\n")
 		}
-		// Pointer-to-primitive 는 JSON null 을 반환할 수 있으므로 nullable 로 표시.
-		// $ref 와 함께는 nullable 을 쓸 수 없어서 primitive/array 인 경우로 한정한다
+		// Go encoding/json 의 nil 동작을 OpenAPI nullable 로 매핑한다.
+		// omitempty 없는 (= Required) nil-able 타입 (pointer / slice / map) 은
+		// 응답에 null 로 직렬화된다 → nullable: true.
+		// $ref 와 함께는 nullable 을 직접 둘 수 없어 primitive/array/object 한정
 		// (OpenAPI 3.0 에서 $ref + nullable 은 allOf 래핑이 필요함).
-		if strings.HasPrefix(field.Type, "*") && !isRefProperty(propLines) {
+		isNilableJSON := strings.HasPrefix(field.Type, "*") ||
+			strings.HasPrefix(field.Type, "[]") ||
+			strings.HasPrefix(field.Type, "map[")
+		if field.Required && isNilableJSON && !isRefProperty(propLines) {
 			buf.WriteString("          nullable: true\n")
 		}
 		if field.Required {
