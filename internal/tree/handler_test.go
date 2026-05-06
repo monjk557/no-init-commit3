@@ -300,6 +300,83 @@ func createTestRepositoryWithSubmodule(t *testing.T, tempDir, owner, repo string
 	return repoPath
 }
 
+// createTestRepositoryWithSubmoduleAndGitmodules 는 submodule + .gitmodules
+// 둘 다 포함하는 테스트 저장소를 생성합니다. 트리에 mode 160000 entry 와 함께
+// .gitmodules blob 이 동반되어 url/branch 가 응답에 채워지는 시나리오를 테스트.
+func createTestRepositoryWithSubmoduleAndGitmodules(t *testing.T, tempDir, owner, repo string) string {
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	gitRepo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	storer := gitRepo.Storer
+
+	// 서브모듈로 가리킬 빈 커밋
+	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
+	emptyTreeObj := storer.NewEncodedObject()
+	require.NoError(t, emptyTree.Encode(emptyTreeObj))
+	subTreeHash, err := storer.SetEncodedObject(emptyTreeObj)
+	require.NoError(t, err)
+	subCommit := &object.Commit{
+		TreeHash:  subTreeHash,
+		Author:    object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Committer: object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Message:   "sub",
+		Encoding:  "UTF-8",
+	}
+	subCommitObj := storer.NewEncodedObject()
+	require.NoError(t, subCommit.Encode(subCommitObj))
+	subCommitOID, err := storer.SetEncodedObject(subCommitObj)
+	require.NoError(t, err)
+
+	// .gitmodules blob — root tree 의 sub gitlink 와 매칭되는 단일 [submodule "sub"]
+	// 섹션. URL/branch 가 응답으로 그대로 노출돼야 한다.
+	gmContent := []byte(`[submodule "sub"]
+	path = sub
+	url = https://github.com/example/sub.git
+	branch = release-1.x
+`)
+	gmBlob := storer.NewEncodedObject()
+	gmBlob.SetType(plumbing.BlobObject)
+	gmBlob.SetSize(int64(len(gmContent)))
+	gmw, err := gmBlob.Writer()
+	require.NoError(t, err)
+	_, err = gmw.Write(gmContent)
+	require.NoError(t, err)
+	require.NoError(t, gmw.Close())
+	gmHash, err := storer.SetEncodedObject(gmBlob)
+	require.NoError(t, err)
+
+	rootTree := &object.Tree{
+		Entries: []object.TreeEntry{
+			{Name: ".gitmodules", Mode: filemode.Regular, Hash: gmHash},
+			{Name: "sub", Mode: filemode.Submodule, Hash: subCommitOID},
+		},
+	}
+	rootTreeObj := storer.NewEncodedObject()
+	require.NoError(t, rootTree.Encode(rootTreeObj))
+	rootTreeHash, err := storer.SetEncodedObject(rootTreeObj)
+	require.NoError(t, err)
+
+	rootCommit := &object.Commit{
+		TreeHash:  rootTreeHash,
+		Author:    object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Committer: object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Message:   "root",
+		Encoding:  "UTF-8",
+	}
+	rootCommitObj := storer.NewEncodedObject()
+	require.NoError(t, rootCommit.Encode(rootCommitObj))
+	rootCommitHash, err := storer.SetEncodedObject(rootCommitObj)
+	require.NoError(t, err)
+
+	mainRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), rootCommitHash)
+	require.NoError(t, gitRepo.Storer.SetReference(mainRef))
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))
+	require.NoError(t, gitRepo.Storer.SetReference(headRef))
+	return repoPath
+}
+
 // createTestRepositoryWithEmptyDir 빈 디렉토리(트리 엔트리 0개)가 포함된 테스트 저장소를 생성한다.
 func createTestRepositoryWithEmptyDir(t *testing.T, tempDir, owner, repo string) string {
 	repoPath := filepath.Join(tempDir, owner, repo+".git")
@@ -1009,7 +1086,7 @@ func Test_Tree_SymlinkEntry_TypeSymlink(t *testing.T) {
 	assert.True(t, found, "tree should include symlink entry with type symlink")
 }
 
-// Test_Tree_SubmoduleEntry_TypeSubmodule 서브모듈 엔트리는 type이 commit(또는 submodule)으로 노출된다.
+// Test_Tree_SubmoduleEntry_TypeSubmodule 서브모듈 엔트리는 type이 "submodule"로 노출된다.
 func Test_Tree_SubmoduleEntry_TypeSubmodule(t *testing.T) {
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
@@ -1026,17 +1103,17 @@ func Test_Tree_SubmoduleEntry_TypeSubmodule(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	var found bool
 	for _, e := range resp.Tree["/"] {
-		if e.Name == "sub" && (e.Type == "commit" || e.Type == "tree") {
+		if e.Name == "sub" && e.Type == string(EntryTypeSubmodule) {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "submodule entry should be present (type commit or tree)")
+	assert.True(t, found, "submodule entry should be present with type=submodule")
 }
 
 // --- 6.2A Entry Types 확장 ---
 
-// Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable 서브모듈 엔트리에 commit OID(또는 URL)가 있으면 포함한다.
+// Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable 서브모듈 엔트리에 pinned commit OID 가 응답에 포함된다.
 func Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable(t *testing.T) {
 	handler, tempDir, cleanup := setupTestHandler(t)
 	defer cleanup()
@@ -1060,7 +1137,41 @@ func Test_Tree_SubmoduleEntry_IncludesCommitOIDAndURLIfAvailable(t *testing.T) {
 	}
 	require.NotNil(t, subEntry, "submodule entry should be present")
 	assert.Equal(t, "sub", subEntry.Path)
-	// 현재 스키마에 OID/URL 필드가 없으면 타입·이름만 검증
+	assert.Equal(t, string(EntryTypeSubmodule), subEntry.Type)
+	require.NotNil(t, subEntry.Submodule, "submodule entry should carry SubmoduleInfo")
+	assert.NotEmpty(t, subEntry.Submodule.Commit, "pinned commit hash must be populated")
+	assert.Len(t, subEntry.Submodule.Commit, 40, "pinned commit must be a full 40-char SHA1")
+}
+
+// Test_Tree_SubmoduleEntry_PopulatesURLAndBranchFromGitmodules .gitmodules 가
+// 함께 있는 경우 SubmoduleInfo.URL/Branch 가 응답에 채워진다.
+func Test_Tree_SubmoduleEntry_PopulatesURLAndBranchFromGitmodules(t *testing.T) {
+	handler, tempDir, cleanup := setupTestHandler(t)
+	defer cleanup()
+	createTestRepositoryWithSubmoduleAndGitmodules(t, tempDir, "testowner", "testrepo")
+
+	router := gin.New()
+	RegisterRoutes(router.Group("/repos/:owner/:repo"), handler)
+	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/tree?ref=main", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp TreeEntriesRecursiveResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	var subEntry *TreeEntry
+	for i := range resp.Tree["/"] {
+		if resp.Tree["/"][i].Name == "sub" {
+			subEntry = &resp.Tree["/"][i]
+			break
+		}
+	}
+	require.NotNil(t, subEntry, "submodule entry should be present")
+	require.NotNil(t, subEntry.Submodule, "SubmoduleInfo must be populated")
+	assert.Equal(t, "https://github.com/example/sub.git", subEntry.Submodule.URL)
+	assert.Equal(t, "release-1.x", subEntry.Submodule.Branch)
+	assert.NotEmpty(t, subEntry.Submodule.Commit, "pinned commit must be set")
 }
 
 // Test_Tree_SymlinkEntry_ReturnsLinkTargetOrMetadata 심볼릭 링크 엔트리는 링크 대상 또는 메타데이터를 반환한다.

@@ -65,22 +65,24 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 		}
 
 		entryType := metaParts[1] // "blob", "tree", "commit"
+		hash := metaParts[2]
 		name := gitutil.UnquoteGitPath(tabParts[1])
 
-		// Map commit (submodule) to its type
-		displayType := entryType
-		if displayType == "commit" {
-			displayType = "commit" // kept as-is, caller may remap to "tree"
-		}
-
-		result = append(result, TreeEntry{
+		entry := TreeEntry{
 			Path: name,
 			Name: name,
-			Type: displayType,
-		})
+			Type: entryType,
+		}
+		// gitlink (mode 160000): expose pinned commit immediately so the
+		// handler can decorate with .gitmodules-derived URL/branch later.
+		if entryType == string(EntryTypeCommit) {
+			entry.Type = string(EntryTypeSubmodule)
+			entry.Submodule = &SubmoduleInfo{Commit: hash}
+		}
+		result = append(result, entry)
 	}
 
-	// Sort: trees first, then blobs, then commits; alphabetical within type
+	// Sort: trees first, then blobs, then submodules; alphabetical within type
 	sortTreeEntries(result)
 
 	return result, nil
@@ -141,16 +143,16 @@ func SearchFiles(repoPath, ref, query string, limit int) ([]TreeEntry, int, erro
 	return results, totalMatches, nil
 }
 
-// sortTreeEntries sorts entries: trees first, then blobs, alphabetical within type.
+// sortTreeEntries sorts entries: trees first, then blobs, then submodules; alphabetical within type.
 func sortTreeEntries(entries []TreeEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		typeOrder := func(t string) int {
 			switch t {
-			case "tree":
+			case string(EntryTypeTree):
 				return 0
-			case "blob":
+			case string(EntryTypeBlob):
 				return 1
-			case "commit":
+			case string(EntryTypeSubmodule), string(EntryTypeCommit):
 				return 2
 			default:
 				return 3
@@ -164,6 +166,46 @@ func sortTreeEntries(entries []TreeEntry) {
 	})
 }
 
+// decorateEntries 는 GetTreeEntries 가 반환한 엔트리를 응답 형태로 변환합니다.
+// 절대 경로를 채우고, gitlink 엔트리에는 .gitmodules 정보를 덧붙입니다.
+// gitmods 가 nil 이거나 매칭되는 항목이 없으면 commit hash 만 노출됩니다.
+func decorateEntries(treeEntries []TreeEntry, basePath string, gitmods *repositories.GitmodulesIndex) []TreeEntry {
+	out := make([]TreeEntry, 0, len(treeEntries))
+	for _, entry := range treeEntries {
+		fullPath := entry.Name
+		if basePath != "" {
+			fullPath = basePath + "/" + entry.Name
+		}
+
+		decorated := TreeEntry{
+			Type: entry.Type,
+			Name: entry.Name,
+			Path: fullPath,
+		}
+		if entry.Submodule != nil {
+			info := *entry.Submodule
+			if cfg := gitmods.LookupByPath(fullPath); cfg != nil {
+				info.URL = cfg.URL
+				info.Branch = cfg.Branch
+			}
+			decorated.Submodule = &info
+		}
+		out = append(out, decorated)
+	}
+	return out
+}
+
+// loadGitmodules 는 ref 의 .gitmodules 를 읽어 인덱스를 반환합니다.
+// 파일이 없거나 읽기 실패 시 nil 을 반환하며, 호출자는 이를 "submodule 부가
+// 정보가 비어 있는" 정상 케이스로 처리합니다.
+func (h *TreeHandler) loadGitmodules(repoPath, ref string) *repositories.GitmodulesIndex {
+	idx, err := repositories.LoadGitmodulesAtRef(context.Background(), repoPath, ref)
+	if err != nil {
+		return nil
+	}
+	return idx
+}
+
 // getTreeStructure retrieves the tree structure using the Git repository interface
 func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntriesResponse, error) {
 	treeEntries, err := GetTreeEntries(h.pathConfig, h.logger, repoPath, ref, path)
@@ -172,26 +214,8 @@ func (h *TreeHandler) getTreeStructure(repoPath, ref, path string) (*TreeEntries
 	}
 
 	basePath := strings.Trim(path, "/")
-
-	var responseEntries []TreeEntry
-	for _, entry := range treeEntries {
-		fullPath := entry.Name
-		if basePath != "" {
-			fullPath = basePath + "/" + entry.Name
-		}
-
-		entryType := entry.Type
-		if entryType == "commit" {
-			entryType = "tree"
-		}
-
-		responseEntries = append(responseEntries, TreeEntry{
-			Type: entryType,
-			Name: entry.Name,
-			Path: fullPath,
-		})
-	}
-
+	gitmods := h.loadGitmodules(repoPath, ref)
+	responseEntries := decorateEntries(treeEntries, basePath, gitmods)
 	sortTreeEntries(responseEntries)
 
 	return &TreeEntriesResponse{
@@ -222,6 +246,7 @@ func (h *TreeHandler) getTreeStructureRecursive(repoPath, ref, targetPath string
 	}
 
 	result := make(map[string][]TreeEntry)
+	gitmods := h.loadGitmodules(repoPath, ref)
 
 	for _, path := range pathsToExplore {
 		treeEntries, err := GetTreeEntries(h.pathConfig, h.logger, repoPath, ref, path)
@@ -233,26 +258,7 @@ func (h *TreeHandler) getTreeStructureRecursive(repoPath, ref, targetPath string
 		}
 
 		basePath := strings.Trim(path, "/")
-		var responseEntries []TreeEntry
-
-		for _, entry := range treeEntries {
-			entryType := entry.Type
-			if entryType == "commit" {
-				entryType = "tree"
-			}
-
-			fullPath := entry.Name
-			if basePath != "" {
-				fullPath = basePath + "/" + entry.Name
-			}
-
-			responseEntries = append(responseEntries, TreeEntry{
-				Type: entryType,
-				Name: entry.Name,
-				Path: fullPath,
-			})
-		}
-
+		responseEntries := decorateEntries(treeEntries, basePath, gitmods)
 		sortTreeEntries(responseEntries)
 
 		mapKey := path

@@ -2315,6 +2315,8 @@ components:
           type: integer
         latest_commit:
           $ref: '#/components/schemas/GitCommit'
+        submodule:
+          $ref: '#/components/schemas/SubmoduleInfo'
       required:
         - name
         - path
@@ -3217,6 +3219,22 @@ components:
       required:
         - commit
         - success
+    SubmoduleInfo:
+      type: object
+      properties:
+        commit:
+          type: string
+        url:
+          type: string
+        branch:
+          type: string
+        resolved_repo:
+          type: string
+        is_resolvable:
+          type: boolean
+      required:
+        - commit
+        - is_resolvable
     Tag:
       type: object
       properties:
@@ -3322,6 +3340,8 @@ components:
           type: string
         path:
           type: string
+        submodule:
+          $ref: '#/components/schemas/SubmoduleInfo'
       required:
         - name
         - path

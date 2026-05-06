@@ -845,17 +845,49 @@ func convertParentHashes(hashes []plumbing.Hash) []string {
 	return result
 }
 
+// loadGitmodulesFromTree 는 commit tree 에서 .gitmodules blob 을 찾아 파싱합니다.
+// blob 이 없거나 파싱 실패 시 nil 을 반환하며, 호출자는 이를 "submodule 부가
+// 정보가 비어 있는" 정상 케이스로 처리합니다. go-git 의 cached blob access
+// 를 활용해 별도 git exec 없이 tree 에서 직접 읽습니다.
+func (s *RepositoryOverviewService) loadGitmodulesFromTree(gitRepo *gogit.Repository, root *object.Tree) *repositories.GitmodulesIndex {
+	if root == nil {
+		return nil
+	}
+	entry, err := root.FindEntry(".gitmodules")
+	if err != nil {
+		return nil
+	}
+	if entry.Mode != filemode.Regular && entry.Mode != filemode.Executable {
+		return nil
+	}
+	blob, err := s.objectCache.GetBlob(gitRepo, entry.Hash)
+	if err != nil {
+		return nil
+	}
+	reader, err := blob.Reader()
+	if err != nil {
+		return nil
+	}
+	defer reader.Close()
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil
+	}
+	return repositories.ParseGitmodules(content)
+}
+
 // entryInfo는 각 tree entry의 기본 정보를 담는 내부 타입입니다.
 type entryInfo struct {
 	index      int
 	entryType  string
-	sortKey    int // pre-computed: 0=tree,1=blob,2=commit,3=other (avoids switch per comparison)
+	sortKey    int // pre-computed: 0=tree,1=blob,2=submodule,3=other (avoids switch per comparison)
 	name       string
 	fullPath   string
 	modeStr    string
 	hashStr    string
 	size       *int64
 	commitInfo *GitCommit
+	submodule  *SubmoduleInfo
 }
 
 // entryTypeSortKey returns a pre-computed sort priority for entry type.
@@ -865,7 +897,7 @@ func entryTypeSortKey(et string) int {
 		return 0
 	case "blob":
 		return 1
-	case "commit":
+	case "submodule", "commit":
 		return 2
 	default:
 		return 3
@@ -919,6 +951,10 @@ func (s *RepositoryOverviewService) getTreeEntries(ctx context.Context, gitRepo 
 		}
 	}
 
+	// .gitmodules 는 항상 root tree 에 있다 — targetTree (path 하위) 가 아니라
+	// 최초의 treeObj 에서 읽어야 함.
+	gitmods := s.loadGitmodulesFromTree(gitRepo, treeObj)
+
 	basePath := strings.Trim(path, "/")
 
 	entries := make([]entryInfo, len(targetTree.Entries))
@@ -939,13 +975,22 @@ func (s *RepositoryOverviewService) getTreeEntries(ctx context.Context, gitRepo 
 		case filemode.Dir:
 			entryType = "tree"
 		case filemode.Submodule:
-			entryType = "commit"
+			entryType = "submodule"
 		default:
 			entryType = "blob"
 		}
 
 		modeStr := strconv.FormatUint(uint64(entry.Mode), 8)
 		hashStr := entry.Hash.String()
+
+		var submodule *SubmoduleInfo
+		if entryType == "submodule" {
+			submodule = &SubmoduleInfo{Commit: hashStr}
+			if cfg := gitmods.LookupByPath(fullPath); cfg != nil {
+				submodule.URL = cfg.URL
+				submodule.Branch = cfg.Branch
+			}
+		}
 
 		var size *int64
 		if entryType == "blob" {
@@ -971,6 +1016,7 @@ func (s *RepositoryOverviewService) getTreeEntries(ctx context.Context, gitRepo 
 			modeStr:   modeStr,
 			hashStr:   hashStr,
 			size:      size,
+			submodule: submodule,
 		}
 	}
 
@@ -1072,6 +1118,7 @@ func (s *RepositoryOverviewService) getTreeEntries(ctx context.Context, gitRepo 
 				Hash:         &e.hashStr,
 				Size:         e.size,
 				LatestCommit: e.commitInfo,
+				Submodule:    e.submodule,
 			}
 		}
 		return treeEntriesWithCommit, meta, nil
@@ -1095,6 +1142,7 @@ func (s *RepositoryOverviewService) getTreeEntries(ctx context.Context, gitRepo 
 			Hash:         &e.hashStr,
 			Size:         e.size,
 			LatestCommit: nil,
+			Submodule:    e.submodule,
 		}
 	}
 	return treeEntriesWithCommit, emptyMeta, nil

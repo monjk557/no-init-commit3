@@ -79,15 +79,28 @@ type GitTreeEntry struct {
 	Path string `json:"path"`
 }
 
+// SubmoduleInfo는 submodule (gitlink) 트리 엔트리의 부가 정보입니다.
+// pinned commit 은 항상 채워지고, URL/branch 는 .gitmodules 가 존재할 때만
+// 채워집니다. ResolvedRepo / IsResolvable 은 Phase 5 에서 채워질 예약 필드로,
+// 현재는 항상 빈 문자열 / false 입니다.
+type SubmoduleInfo struct {
+	Commit       string `json:"commit"`                  // pinned commit SHA (full hex)
+	URL          string `json:"url,omitempty"`           // .gitmodules 의 url
+	Branch       string `json:"branch,omitempty"`        // .gitmodules 의 branch (optional)
+	ResolvedRepo string `json:"resolved_repo,omitempty"` // mirror 매핑 결과 (Phase 5 reserved)
+	IsResolvable bool   `json:"is_resolvable"`           // pin commit reachability (Phase 5 reserved)
+}
+
 // GitTreeEntryWithCommit는 커밋 정보를 포함한 트리 항목입니다.
 type GitTreeEntryWithCommit struct {
-	Type         string     `json:"type"`
-	Name         string     `json:"name"`
-	Path         string     `json:"path"`
-	Mode         *string    `json:"mode,omitempty"`          // 파일 모드 (Unix permissions)
-	Hash         *string    `json:"hash,omitempty"`          // Git object hash
-	Size         *int64     `json:"size,omitempty"`          // 파일 크기 (바이트, blob인 경우만)
-	LatestCommit *GitCommit `json:"latest_commit,omitempty"` // 최신 커밋 정보
+	Type         string         `json:"type"` // "tree" | "blob" | "submodule"
+	Name         string         `json:"name"`
+	Path         string         `json:"path"`
+	Mode         *string        `json:"mode,omitempty"`          // 파일 모드 (Unix permissions)
+	Hash         *string        `json:"hash,omitempty"`          // Git object hash
+	Size         *int64         `json:"size,omitempty"`          // 파일 크기 (바이트, blob인 경우만)
+	LatestCommit *GitCommit     `json:"latest_commit,omitempty"` // 최신 커밋 정보
+	Submodule    *SubmoduleInfo `json:"submodule,omitempty"`     // type == "submodule" 일 때만
 }
 
 // 내부 타입들
