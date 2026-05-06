@@ -1089,7 +1089,6 @@ components:
         - commits
         - content
         - is_binary
-        - latest_commit
         - lines
         - size
         - success
@@ -1263,9 +1262,7 @@ components:
       required:
         - count
         - current_page
-        - next
         - page_size
-        - previous
         - total_pages
     BulkDeleteBranchResult:
       type: object
@@ -1609,9 +1606,7 @@ components:
       required:
         - count
         - current_page
-        - next
         - page_size
-        - previous
         - total_pages
     CommitsRequestParams:
       type: object
@@ -1942,7 +1937,6 @@ components:
           $ref: '#/components/schemas/Tag'
       required:
         - success
-        - tag
     DeleteBranchResponse:
       type: object
       properties:
@@ -2166,13 +2160,10 @@ components:
           additionalProperties: true
       required:
         - auto_resolvable
-        - base_version
         - conflict_type
         - file_path
-        - our_version
         - regions
         - severity
-        - their_version
     FileContent:
       type: object
       properties:
@@ -2352,10 +2343,13 @@ components:
           type: string
         mode:
           type: string
+          nullable: true
         hash:
           type: string
+          nullable: true
         size:
           type: integer
+          nullable: true
         latest_commit:
           $ref: '#/components/schemas/GitCommit'
         submodule:
@@ -2508,7 +2502,6 @@ components:
         commit:
           $ref: '#/components/schemas/GitCommit'
       required:
-        - commit
         - name
         - owner
         - ref
@@ -2606,10 +2599,7 @@ components:
           type: integer
           nullable: true
       required:
-        - blobLineNumber
         - displayNoNewLineWarning
-        - left
-        - right
         - text
         - type
     MergeAnalysisRequest:
@@ -2693,12 +2683,9 @@ components:
         - has_conflicts
         - is_already_merged
         - is_fast_forward
-        - merge_base
         - recommendations
         - severity_breakdown
-        - source_commit
         - strategy
-        - target_commit
     MergeAuthorInfo:
       type: object
       properties:
@@ -2816,6 +2803,7 @@ components:
           type: boolean
         change_request_id:
           type: integer
+          nullable: true
         metadata:
           type: object
           additionalProperties: true
@@ -2853,12 +2841,10 @@ components:
           $ref: '#/components/schemas/MergeAnalysisResult'
       required:
         - conflict_count
-        - conflict_summary
         - details
         - has_conflicts
         - is_already_merged
         - is_fast_forward
-        - merge_commit
         - message
         - method
         - strategy
@@ -3344,7 +3330,6 @@ components:
         commit:
           $ref: '#/components/schemas/CommitMetadata'
       required:
-        - commit
         - success
     StateAuthorInfo:
       type: object
@@ -3514,9 +3499,7 @@ components:
       required:
         - count
         - current_page
-        - next
         - page_size
-        - previous
         - total_pages
     TagsResponse:
       type: object
@@ -3632,7 +3615,6 @@ components:
       required:
         - branches
         - commits
-        - latest_commit
         - name
         - owner
         - path
@@ -3718,6 +3700,7 @@ components:
           type: boolean
         forced:
           type: boolean
+          nullable: true
         old_branch_name:
           type: string
         new_branch_name:
@@ -3726,6 +3709,7 @@ components:
           type: string
         head_updated:
           type: boolean
+          nullable: true
         message:
           type: string
       required:
@@ -3748,7 +3732,6 @@ components:
       required:
         - is_available
         - success
-        - suggested_name
     ValidateReopenRequest:
       type: object
       properties:

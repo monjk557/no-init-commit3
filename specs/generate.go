@@ -713,6 +713,19 @@ func parseSchemaFile(filePath string, pkg string) (map[string]SchemaInfo, error)
 									}
 								}
 
+								// Go pointer 타입 (`*T`) 은 nil 가능 — 의미상 nullable.
+								// `omitempty` 없이도 nil 이면 wire 가 `null` 을 emit 한다.
+								// Spec 에서 required 로 두면 client 가 strict validation 에서
+								// null 거부 (ResponseValidationError) → drift. 따라서 pointer
+								// field 는 항상 not-required 로 emit 한다.
+								//
+								// 영향: Pydantic auto-gen 등 typed client 는 `Optional[T]` 로
+								// 받게 되어 null 을 안전하게 수용. 비-pointer (value) 타입은
+								// 기존 omitempty 기반 로직 유지.
+								if strings.HasPrefix(fieldInfo.Type, "*") {
+									fieldInfo.Required = false
+								}
+
 								schema.Fields = append(schema.Fields, fieldInfo)
 							}
 						}
@@ -1073,14 +1086,18 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, str
 			buf.WriteString("          " + l + "\n")
 		}
 		// Go encoding/json 의 nil 동작을 OpenAPI nullable 로 매핑한다.
-		// omitempty 없는 (= Required) nil-able 타입 (pointer / slice / map) 은
-		// 응답에 null 로 직렬화된다 → nullable: true.
-		// $ref 와 함께는 nullable 을 직접 둘 수 없어 primitive/array/object 한정
-		// (OpenAPI 3.0 에서 $ref + nullable 은 allOf 래핑이 필요함).
-		isNilableJSON := strings.HasPrefix(field.Type, "*") ||
-			strings.HasPrefix(field.Type, "[]") ||
-			strings.HasPrefix(field.Type, "map[")
-		if field.Required && isNilableJSON && !isRefProperty(propLines) {
+		// - pointer (`*T`): Go 의미상 항상 nullable. parseSchemaFile 이 Required=false
+		//   로 강제했지만, wire 는 (omitempty 가 없는 한) null 키로 직렬화하므로
+		//   client codegen 이 `T | null` 로 인식하도록 nullable: true 를 emit.
+		// - slice / map: omitempty 없을 때만 (Required=true) nullable 로 표기.
+		//   omitempty 있으면 Go 가 키를 omit 하므로 spec 도 단순 optional.
+		// - $ref 와 함께는 nullable 을 직접 둘 수 없어 primitive/array/object 한정
+		//   (OpenAPI 3.0 에서 $ref + nullable 은 allOf 래핑이 필요함).
+		isPointer := strings.HasPrefix(field.Type, "*")
+		isNilableSliceMap := !isPointer &&
+			(strings.HasPrefix(field.Type, "[]") || strings.HasPrefix(field.Type, "map["))
+		shouldEmitNullable := isPointer || (field.Required && isNilableSliceMap)
+		if shouldEmitNullable && !isRefProperty(propLines) {
 			buf.WriteString("          nullable: true\n")
 		}
 		if field.Required {
