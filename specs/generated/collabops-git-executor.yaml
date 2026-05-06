@@ -1012,7 +1012,8 @@ components:
         id:
           type: string
         status:
-          type: object
+          type: string
+          enum: [active, stale, orphaned]
         new_path:
           type: string
       required:
@@ -2102,9 +2103,11 @@ components:
         file_path:
           type: string
         conflict_type:
-          type: object
+          type: string
+          enum: [content, rename, delete, add, mode, submodule, symlink]
         severity:
-          type: object
+          type: string
+          enum: [low, medium, high, critical]
         our_version:
           $ref: '#/components/schemas/FileVersion'
         their_version:
@@ -2581,7 +2584,8 @@ components:
         target_ref:
           type: string
         strategy:
-          type: object
+          type: string
+          enum: [recursive, resolve, ort, ours, theirs, subtree]
         auto_resolve:
           type: boolean
         include_content:
@@ -2622,7 +2626,8 @@ components:
         target_commit:
           $ref: '#/components/schemas/CommitInfo'
         strategy:
-          type: object
+          type: string
+          enum: [recursive, resolve, ort, ours, theirs, subtree]
         auto_resolvable:
           type: integer
         severity_breakdown:
@@ -2670,7 +2675,8 @@ components:
         conflict_count:
           type: integer
         strategy:
-          type: object
+          type: string
+          enum: [recursive, resolve, ort, ours, theirs, subtree]
         recommended_actions:
           type: array
           items:
@@ -2717,9 +2723,11 @@ components:
         target_ref:
           type: string
         method:
-          type: object
+          type: string
+          enum: [merge, squash, rebase]
         strategy:
-          type: object
+          type: string
+          enum: [recursive, resolve, ort, ours, theirs, subtree]
         message:
           type: string
         author:
@@ -2754,9 +2762,11 @@ components:
         conflict_count:
           type: integer
         strategy:
-          type: object
+          type: string
+          enum: [recursive, resolve, ort, ours, theirs, subtree]
         method:
-          type: object
+          type: string
+          enum: [merge, squash, rebase]
         message:
           type: string
         details:
@@ -2849,7 +2859,8 @@ components:
         path:
           type: string
         operation:
-          type: object
+          type: string
+          enum: [create, update, delete, move]
         content:
           type: string
         encoding:
@@ -2867,7 +2878,8 @@ components:
         path:
           type: string
         operation:
-          type: object
+          type: string
+          enum: [create, update, delete, move]
         success:
           type: boolean
         error:

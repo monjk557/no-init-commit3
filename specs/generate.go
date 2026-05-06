@@ -198,6 +198,15 @@ type FieldInfo struct {
 	Required bool
 }
 
+// StringEnumInfo 는 “type X string“ typed-string alias + 같은 패키지의
+// “const (X = "...")“ 블록으로 정의된 enum 의 정보를 담는다. 이를 OpenAPI
+// 의 “type: string, enum: [...]“ 로 emit 해서 typed client (orchestrator
+// auto-gen) 가 올바르게 “Literal[...]“ 으로 받아들이게 한다.
+type StringEnumInfo struct {
+	Name   string
+	Values []string
+}
+
 func main() {
 	projectRoot := findProjectRoot()
 	if projectRoot == "" {
@@ -248,8 +257,14 @@ func runGeneration(projectRoot string, registry *typed.Registry, log *os.File) (
 	}
 	fmt.Fprintf(log, "   Found %d schema types\n", len(schemas))
 
+	stringEnums, err := parseAllStringEnums(projectRoot)
+	if err != nil {
+		return "", fmt.Errorf("Error parsing typed-string enums: %w", err)
+	}
+	fmt.Fprintf(log, "   Found %d typed-string enum aliases\n", len(stringEnums))
+
 	fmt.Fprintln(log, "📝 Generating OpenAPI spec...")
-	spec, err := generateOpenAPISpec(routes, schemas, projectRoot, registry)
+	spec, err := generateOpenAPISpec(routes, schemas, stringEnums, projectRoot, registry)
 	if err != nil {
 		return "", fmt.Errorf("Error generating OpenAPI spec: %w", err)
 	}
@@ -400,10 +415,109 @@ func routeToSpecPath(routePath string) (specPath string, skip bool) {
 	return specPath, false
 }
 
-func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
-	schemas := make(map[string]SchemaInfo)
+// parseAllStringEnums 는 schema 파일들에서 typed-string alias + const 블록을
+// 찾아 OpenAPI enum 으로 emit 할 수 있는 형태로 모은다. 같은 파일 안에서
+// alias 와 const 가 짝지어져 있어야 한다 (Go convention).
+func parseAllStringEnums(projectRoot string) (map[string]StringEnumInfo, error) {
+	enums := make(map[string]StringEnumInfo)
 
-	schemaFiles := []string{
+	for _, relPath := range schemaFilePaths() {
+		fullPath := filepath.Join(projectRoot, relPath)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			continue
+		}
+		fileEnums, err := parseStringEnumsInFile(fullPath)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing enums from %s: %w", relPath, err)
+		}
+		for name, ei := range fileEnums {
+			enums[name] = ei
+		}
+	}
+
+	return enums, nil
+}
+
+// parseStringEnumsInFile 는 단일 Go 파일에서 typed-string alias 와 그 alias
+// 의 const 값을 수집한다. const 가 없는 alias 는 enum 으로 취급하지 않는다.
+func parseStringEnumsInFile(filePath string) (map[string]StringEnumInfo, error) {
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+
+	// Phase 1: typed-string alias 후보 수집 (`type X string`).
+	aliases := make(map[string]bool)
+	for _, decl := range node.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name == nil || !ts.Name.IsExported() {
+				continue
+			}
+			ident, ok := ts.Type.(*ast.Ident)
+			if !ok || ident.Name != "string" {
+				continue
+			}
+			aliases[ts.Name.Name] = true
+		}
+	}
+
+	if len(aliases) == 0 {
+		return nil, nil
+	}
+
+	// Phase 2: 그 alias 들의 const 값 수집. const 블록 안에서 첫 spec 의
+	// type 이 alias 면 그 블록 전체가 같은 type 으로 간주 (Go iota-like
+	// 패턴이지만 string 도 동일하게 group). 다만 spec 마다 type 명시되어
+	// 있을 수도 있으니 spec.Type 이 있으면 우선.
+	enums := make(map[string]StringEnumInfo)
+	for _, decl := range node.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		var blockType string
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			if vs.Type != nil {
+				if ident, ok := vs.Type.(*ast.Ident); ok {
+					blockType = ident.Name
+				} else {
+					blockType = ""
+				}
+			}
+			if !aliases[blockType] {
+				continue
+			}
+			for _, val := range vs.Values {
+				lit, ok := val.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				strVal := strings.Trim(lit.Value, "\"")
+				ei := enums[blockType]
+				ei.Name = blockType
+				ei.Values = append(ei.Values, strVal)
+				enums[blockType] = ei
+			}
+		}
+	}
+
+	return enums, nil
+}
+
+// schemaFilePaths 는 generator 가 walking 하는 schema source 파일 경로 목록.
+// parseAllSchemas / parseAllStringEnums 모두 같은 set 을 사용한다.
+func schemaFilePaths() []string {
+	return []string{
 		"internal/repositories/schema.go",
 		"internal/branches/schema.go",
 		"internal/commits/schema.go",
@@ -418,8 +532,12 @@ func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
 		"internal/context/schema.go",
 		"internal/langstats/schema.go",
 	}
+}
 
-	for _, relPath := range schemaFiles {
+func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, error) {
+	schemas := make(map[string]SchemaInfo)
+
+	for _, relPath := range schemaFilePaths() {
 		fullPath := filepath.Join(projectRoot, relPath)
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			continue
@@ -511,7 +629,7 @@ func getTypeString(expr ast.Expr) string {
 	}
 }
 
-func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, projectRoot string, registry *typed.Registry) (string, error) {
+func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, projectRoot string, registry *typed.Registry) (string, error) {
 	// 항상 Go 기준으로 스펙 생성
 	tmpl, err := template.New("openapi").Parse(openAPITemplate)
 	if err != nil {
@@ -520,7 +638,7 @@ func generateOpenAPISpec(routes []RouteInfo, schemas map[string]SchemaInfo, proj
 
 	var buf bytes.Buffer
 	paths := generatePathsFromRoutes(routes, registry)
-	schemaDefs := generateSchemasFromStructs(schemas)
+	schemaDefs := generateSchemasFromStructs(schemas, stringEnums)
 
 	data := struct {
 		Paths   string
@@ -770,7 +888,7 @@ func openAPISchemaName(s string) string {
 	return strings.ReplaceAll(s, "-", "")
 }
 
-func generateSchemasFromStructs(schemas map[string]SchemaInfo) string {
+func generateSchemasFromStructs(schemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo) string {
 	var buf strings.Builder
 
 	// Sort schema names for consistent output
@@ -782,7 +900,7 @@ func generateSchemasFromStructs(schemas map[string]SchemaInfo) string {
 
 	for _, name := range names {
 		schema := schemas[name]
-		buf.WriteString(renderSchemaYAML(schema, schemas, openAPISchemaName))
+		buf.WriteString(renderSchemaYAML(schema, schemas, stringEnums, openAPISchemaName))
 	}
 
 	return buf.String()
@@ -809,7 +927,7 @@ func mapGoTypeToOpenAPI(goType string) string {
 	}
 }
 
-func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, schemaNameFn func(string) string) string {
+func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, schemaNameFn func(string) string) string {
 	var buf strings.Builder
 	buf.WriteString(fmt.Sprintf("    %s:\n", schemaNameFn(schema.Name)))
 	buf.WriteString("      type: object\n")
@@ -832,7 +950,7 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, sch
 	for _, field := range taggedFields {
 		fieldName := field.JSONTag
 		buf.WriteString(fmt.Sprintf("        %s:\n", fieldName))
-		propLines := renderOpenAPIPropertyYAML(field.Type, knownSchemas, schemaNameFn)
+		propLines := renderOpenAPIPropertyYAML(field.Type, knownSchemas, stringEnums, schemaNameFn)
 		for _, l := range propLines {
 			buf.WriteString("          " + l + "\n")
 		}
@@ -877,8 +995,18 @@ func isRefProperty(propLines []string) bool {
 	return false
 }
 
-func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo, schemaNameFn func(string) string) []string {
+func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, schemaNameFn func(string) string) []string {
 	base := strings.TrimPrefix(goType, "*")
+
+	// 우선 typed-string enum (``type X string`` + const) 으로 정의된 alias 면
+	// inline enum 으로 emit. 같은 이름의 struct schema 보다 우선 — string-typed
+	// alias 와 struct 이름이 충돌할 일은 없지만 의도를 명확히 한다.
+	if ei, ok := stringEnums[base]; ok && len(ei.Values) > 0 {
+		return []string{
+			"type: string",
+			fmt.Sprintf("enum: [%s]", strings.Join(ei.Values, ", ")),
+		}
+	}
 
 	// If this matches another known schema type name, use $ref
 	if _, ok := knownSchemas[base]; ok {
@@ -897,12 +1025,6 @@ func renderOpenAPIPropertyYAML(goType string, knownSchemas map[string]SchemaInfo
 	case base == "Time":
 		// Best-effort mapping for time.Time (getTypeString strips package)
 		return []string{"type: string", "format: date-time"}
-	case base == "LineChangeType":
-		return []string{"type: string", "enum: [ADD, DELETE, CONTEXT, HUNK]"}
-	case base == "FileDiffStatus":
-		return []string{"type: string", "enum: [added, deleted, modified, renamed]"}
-	case base == "FileLoadStatus":
-		return []string{"type: string", "enum: [loaded, collapsed, too_large, binary]"}
 	case strings.HasPrefix(base, "[]"):
 		elem := strings.TrimPrefix(strings.TrimPrefix(base, "[]"), "*")
 		if _, ok := knownSchemas[elem]; ok {

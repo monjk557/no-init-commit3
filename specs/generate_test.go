@@ -183,7 +183,12 @@ func TestRenderSchemaYAML_NullableForNilableJSONFields(t *testing.T) {
 		},
 	}
 
-	out := renderSchemaYAML(schema, map[string]SchemaInfo{}, func(s string) string { return s })
+	out := renderSchemaYAML(
+		schema,
+		map[string]SchemaInfo{},
+		map[string]StringEnumInfo{},
+		func(s string) string { return s },
+	)
 
 	// 각 field 의 block (해당 field key 부터 다음 sibling field key 또는
 	// required: 까지) 을 분리해 nullable: true 포함 여부를 검사한다.
