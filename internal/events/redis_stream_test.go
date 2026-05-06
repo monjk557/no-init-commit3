@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,18 +15,25 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-// getTestRedisURL returns Redis URL for testing
-// Uses REDIS_URL environment variable or defaults to localhost:6379
-func getTestRedisURL() string {
-	url := os.Getenv("REDIS_URL")
-	if url == "" {
-		url = "redis://localhost:6379/0"
+// setupTestRedis는 테스트가 사용할 Redis URL을 반환합니다.
+// 기본은 in-process miniredis 인스턴스 — docker/외부 인프라 의존 없음, t.Cleanup
+// 으로 자동 종료. REDIS_URL 환경변수가 있으면 그 진짜 Redis 를 그대로 사용
+// (로컬에서 진짜 인스턴스 대상 디버깅용 escape hatch).
+//
+// Issue-2197: 이전 구현이 항상 localhost:6379 를 찔러 Redis 없는 CI/dev 환경에서
+// 16 건 모두 connect refused 로 실패. miniredis 는 본 패키지가 쓰는 stream/
+// XADD/XLEN/XRANGE 등을 모두 지원하므로 prod 코드 변경 없이 그대로 통과.
+func setupTestRedis(t *testing.T) string {
+	t.Helper()
+	if url := os.Getenv("REDIS_URL"); url != "" {
+		return url
 	}
-	return url
+	mr := miniredis.RunT(t)
+	return "redis://" + mr.Addr() + "/0"
 }
 
 func TestNewRedisStreamClient(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -40,7 +48,7 @@ func TestNewRedisStreamClient(t *testing.T) {
 }
 
 func TestAddCommitEventToStream(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	// Create Redis stream client
@@ -134,7 +142,7 @@ func TestAddCommitEventToStream(t *testing.T) {
 }
 
 func TestAddCommitEventToStream_WithUserID(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -198,7 +206,7 @@ func TestAddCommitEventToStream_WithUserID(t *testing.T) {
 }
 
 func TestAddCommitEventToStream_WithoutUserID(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -264,7 +272,7 @@ func TestAddCommitEventToStream_WithoutUserID(t *testing.T) {
 }
 
 func TestAddPushEventToStream(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -331,7 +339,7 @@ func TestAddPushEventToStream(t *testing.T) {
 }
 
 func TestAddMergeEventToStream(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -398,7 +406,7 @@ func TestAddMergeEventToStream(t *testing.T) {
 }
 
 func TestAddDeleteEventToStream(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -465,7 +473,7 @@ func TestAddDeleteEventToStream(t *testing.T) {
 }
 
 func TestAddRenameEventToStream(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -534,7 +542,7 @@ func TestAddRenameEventToStream(t *testing.T) {
 }
 
 func TestAddRenameEventToStream_WithoutOldRefName(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -600,7 +608,7 @@ func TestAddRenameEventToStream_WithoutOldRefName(t *testing.T) {
 }
 
 func TestAddCommitEventToStream_StreamLength(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -650,7 +658,7 @@ func TestAddCommitEventToStream_StreamLength(t *testing.T) {
 }
 
 func TestAddCommitEventToStream_MultipleEvents(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 
 	client, err := NewRedisStreamClient(redisURL, logger)
@@ -743,7 +751,7 @@ func TestAddCommitEventToStream_MultipleEvents(t *testing.T) {
 
 // Test_PublishEvent_ValidEvent_Publishes 정상 발행
 func Test_PublishEvent_ValidEvent_Publishes(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 	client, err := NewRedisStreamClient(redisURL, logger)
 	require.NoError(t, err)
@@ -773,7 +781,7 @@ func Test_PublishEvent_RedisDown_ReturnsError(t *testing.T) {
 
 // Test_PublishEvent_InvalidPayload_Returns400 잘못된 페이로드(nil event) 시 에러 반환
 func Test_PublishEvent_InvalidPayload_Returns400(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 	client, err := NewRedisStreamClient(redisURL, logger)
 	require.NoError(t, err)
@@ -790,7 +798,7 @@ func Test_PublishEvent_InvalidPayload_Returns400(t *testing.T) {
 
 // Test_PublishEvent_DuplicateDelivery_IsIdempotentConsumerSide 동일 이벤트 재발행 시에도 성공(컨슈머 측 idempotent)
 func Test_PublishEvent_DuplicateDelivery_IsIdempotentConsumerSide(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 	client, err := NewRedisStreamClient(redisURL, logger)
 	require.NoError(t, err)
@@ -816,7 +824,7 @@ func Test_PublishEvent_DuplicateDelivery_IsIdempotentConsumerSide(t *testing.T) 
 
 // Test_PublishEvent_OrderPreserved_PerRepoPartition 발행 순서가 스트림에서 유지됨
 func Test_PublishEvent_OrderPreserved_PerRepoPartition(t *testing.T) {
-	redisURL := getTestRedisURL()
+	redisURL := setupTestRedis(t)
 	logger := zaptest.NewLogger(t, zaptest.Level(zap.InfoLevel))
 	opt, err := redis.ParseURL(redisURL)
 	require.NoError(t, err)

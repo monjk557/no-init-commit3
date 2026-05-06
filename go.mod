@@ -25,6 +25,7 @@ require (
 
 require (
 	cloud.google.com/go/storage v1.61.2
+	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/go-enry/go-enry/v2 v2.9.2
 	github.com/go-playground/validator/v10 v10.30.0
 	github.com/redis/go-redis/v9 v9.17.1
@@ -122,6 +123,7 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.39.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.63.0 // indirect
