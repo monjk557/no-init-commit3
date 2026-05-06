@@ -990,6 +990,9 @@ func (s *RepositoryOverviewService) getTreeEntries(ctx context.Context, gitRepo 
 				submodule.URL = cfg.URL
 				submodule.Branch = cfg.Branch
 			}
+			if submodule.URL != "" {
+				submodule.Parsed = repositories.ParseRepoURL(submodule.URL)
+			}
 		}
 
 		var size *int64

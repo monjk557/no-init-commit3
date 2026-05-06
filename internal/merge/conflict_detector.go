@@ -266,6 +266,26 @@ func (cd *ConflictDetector) buildFileConflict(ctx context.Context, repoPath, pat
 	conflict.ConflictType = cd.determineConflictType(baseExists, sourceExists, targetExists, sourceDiff, targetDiff)
 	conflict.Severity = cd.calculateConflictSeverity(conflict.ConflictType, conflict.OurVersion, conflict.TheirVersion)
 
+	// Submodule 충돌 — 일반 content 분석 대신 우리/그쪽/베이스 SHA + .gitmodules
+	// 메타를 별도 페이로드로 채워 넣는다. 클라이언트는 SubmoduleConflictCard 로 라우팅.
+	if conflict.ConflictType == ConflictTypeSubmodule {
+		// targetDiff 는 우리 브랜치 (target/ours), sourceDiff 는 머지 들어오는 브랜치 (source/theirs).
+		// buildFileConflict 호출자 (analyzeThreeWayMerge) 의 매개변수 순서와 일치.
+		sub := &SubmoduleConflict{
+			OurCommit:   targetDiff.DstHash,
+			TheirCommit: sourceDiff.DstHash,
+		}
+		// base 가 없는 add/add 케이스에서는 SrcHash 가 모두 zero — 빈 문자열로 정규화.
+		if base := nonZeroBaseHash(sourceDiff, targetDiff); base != "" {
+			sub.BaseCommit = base
+		}
+		// .gitmodules 는 머지 결과의 head (source = theirs) 시점에서 읽어 url/branch 부여.
+		// 보통 양 브랜치가 같은 .gitmodules 를 공유하므로 source / target 어느 쪽이어도 동일하지만,
+		// 분기되어 있을 수 있으니 source 쪽을 우선 시도 후 비면 target 으로 fallback.
+		cd.populateSubmoduleMeta(ctx, repoPath, path, sub)
+		conflict.Submodule = sub
+	}
+
 	// Analyze content conflicts if requested
 	if req.IncludeContent && conflict.ConflictType == ConflictTypeContent {
 		regions, err := cd.analyzeContentConflicts(ctx, repoPath, sourceDiff, targetDiff, req.MaxFileSize)
@@ -326,6 +346,13 @@ func buildBaseFileVersionFromDiff(sourceDiff, targetDiff *DiffEntry) *FileVersio
 
 // determineConflictType determines the type of conflict based on diff states.
 func (cd *ConflictDetector) determineConflictType(baseExists, sourceExists, targetExists bool, sourceDiff, targetDiff *DiffEntry) ConflictType {
+	// Submodule conflict: 양쪽 모두 gitlink (mode 160000) 이고 pinned commit
+	// SHA 가 다르면 — content/mode 분기보다 우선해서 별도 타입으로 분류해야
+	// 사용자가 ours/theirs/base SHA 중 선택하는 UI 로 라우팅 가능.
+	if isSubmoduleConflict(sourceDiff, targetDiff) {
+		return ConflictTypeSubmodule
+	}
+
 	// Delete/modify conflict
 	if baseExists && !sourceExists && targetExists {
 		return ConflictTypeDelete
@@ -348,6 +375,73 @@ func (cd *ConflictDetector) determineConflictType(baseExists, sourceExists, targ
 
 	// Content conflict (default for both-modified)
 	return ConflictTypeContent
+}
+
+// nonZeroBaseHash 는 sourceDiff/targetDiff 의 SrcHash 중 비제로 SHA 를 반환합니다.
+// 두 diff 가 동일 base 에서 출발하므로 SrcHash 는 일치해야 정상 — 다르면
+// (예: rename + 다른 path) 빈 문자열을 반환해 base 표시를 생략.
+func nonZeroBaseHash(sourceDiff, targetDiff *DiffEntry) string {
+	candidates := []string{}
+	if sourceDiff != nil {
+		candidates = append(candidates, sourceDiff.SrcHash)
+	}
+	if targetDiff != nil {
+		candidates = append(candidates, targetDiff.SrcHash)
+	}
+	for _, c := range candidates {
+		if c != "" && strings.TrimLeft(c, "0") != "" {
+			return c
+		}
+	}
+	return ""
+}
+
+// populateSubmoduleMeta 는 .gitmodules 를 source/target ref 순서로 읽어
+// SubmoduleConflict 의 url/branch/parsed 를 채웁니다. 둘 다 실패해도 에러 아님 —
+// metadata 는 optional.
+func (cd *ConflictDetector) populateSubmoduleMeta(ctx context.Context, repoPath, path string, sub *SubmoduleConflict) {
+	// 베이스 / source / target 어느 ref 에서 읽어도 .gitmodules 는 보통 동일하므로
+	// 우선 HEAD 부터 시도. HEAD 가 detached 거나 .gitmodules 가 없으면 idx == nil.
+	idx, err := repositories.LoadGitmodulesAtRef(ctx, repoPath, "HEAD")
+	if err != nil || idx == nil {
+		return
+	}
+	cfg := idx.LookupByPath(path)
+	if cfg == nil {
+		return
+	}
+	sub.URL = cfg.URL
+	sub.Branch = cfg.Branch
+	if sub.URL != "" {
+		sub.Parsed = repositories.ParseRepoURL(sub.URL)
+	}
+}
+
+// gitlinkMode 는 git 의 submodule (mode 160000) marker. ls-tree / diff-tree 양쪽
+// 출력에서 등장.
+const gitlinkMode = "160000"
+
+// isGitlinkMode reports whether a mode string represents mode 160000 in any
+// of git's known formattings (e.g. "160000" or "0160000").
+func isGitlinkMode(mode string) bool {
+	if mode == "" {
+		return false
+	}
+	return mode == gitlinkMode || strings.TrimLeft(mode, "0") == gitlinkMode
+}
+
+// isSubmoduleConflict reports whether the conflict is a submodule pin disagreement.
+// 양 브랜치 모두 같은 path 를 gitlink 로 유지하면서 SHA 가 다른 케이스만 매칭.
+// 한 쪽만 gitlink (예: 디렉터리 → submodule 변환) 같은 exotic 케이스는 일반
+// add/delete/mode 분기로 떨어지도록 둠 — 자동 처리 위험 회피.
+func isSubmoduleConflict(sourceDiff, targetDiff *DiffEntry) bool {
+	if sourceDiff == nil || targetDiff == nil {
+		return false
+	}
+	if !isGitlinkMode(sourceDiff.DstMode) || !isGitlinkMode(targetDiff.DstMode) {
+		return false
+	}
+	return sourceDiff.DstHash != targetDiff.DstHash
 }
 
 // calculateConflictSeverity determines the severity of a conflict

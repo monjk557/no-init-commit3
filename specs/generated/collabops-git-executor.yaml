@@ -2123,6 +2123,8 @@ components:
           type: boolean
         resolution:
           $ref: '#/components/schemas/ConflictResolution'
+        submodule:
+          $ref: '#/components/schemas/SubmoduleConflict'
         metadata:
           type: object
           additionalProperties: true
@@ -2172,6 +2174,8 @@ components:
           enum: [loaded, collapsed, too_large, binary]
         old_path:
           type: string
+        submodule_change:
+          $ref: '#/components/schemas/SubmoduleChange'
       required:
         - additions
         - deletions
@@ -2939,6 +2943,19 @@ components:
         - page
         - page_size
         - total
+    ParsedRepoURL:
+      type: object
+      properties:
+        host:
+          type: string
+        owner:
+          type: string
+        repo:
+          type: string
+      required:
+        - host
+        - owner
+        - repo
     PreviewMetrics:
       type: object
       properties:
@@ -3231,6 +3248,38 @@ components:
       required:
         - commit
         - success
+    SubmoduleChange:
+      type: object
+      properties:
+        from_commit:
+          type: string
+        to_commit:
+          type: string
+        url:
+          type: string
+        parsed:
+          $ref: '#/components/schemas/ParsedRepoURL'
+      required:
+        - from_commit
+        - to_commit
+    SubmoduleConflict:
+      type: object
+      properties:
+        base_commit:
+          type: string
+        our_commit:
+          type: string
+        their_commit:
+          type: string
+        url:
+          type: string
+        branch:
+          type: string
+        parsed:
+          $ref: '#/components/schemas/ParsedRepoURL'
+      required:
+        - our_commit
+        - their_commit
     SubmoduleInfo:
       type: object
       properties:
@@ -3240,6 +3289,8 @@ components:
           type: string
         branch:
           type: string
+        parsed:
+          $ref: '#/components/schemas/ParsedRepoURL'
         resolved_repo:
           type: string
         is_resolvable:

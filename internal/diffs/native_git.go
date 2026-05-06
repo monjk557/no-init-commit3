@@ -12,7 +12,110 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/gitutil"
+	"github.com/collabops/git-executor/internal/repositories"
 )
+
+// gitlinkMode is git's mode marker for submodule (gitlink) entries.
+// `git diff --raw` may emit it as "160000" or zero-padded "160000".
+const gitlinkMode = "160000"
+
+// submoduleDelta carries the from→to commit pin transition for one path,
+// extracted from `git diff --raw` output.
+type submoduleDelta struct {
+	FromCommit string
+	ToCommit   string
+}
+
+// nativeGetSubmoduleChanges runs `git diff --raw -M base..head` and returns
+// a path→submoduleDelta map for entries where either side is a gitlink.
+// Entries where both sides are non-gitlink (= regular files / trees) are
+// excluded — the caller still gets full line-level diff coverage for those.
+//
+// `git diff --raw` line format (tab-separated tail):
+//
+//	:<srcMode> <dstMode> <srcSHA> <dstSHA> <status>\t<path>[\t<newPath>]
+//
+// For added gitlinks, srcMode is "000000". For deleted, dstMode is "000000".
+func nativeGetSubmoduleChanges(ctx context.Context, repoPath, base, head string) (map[string]submoduleDelta, error) {
+	out, err := nativeRunGitCmd(ctx, repoPath, nativeGitTimeout,
+		"diff", "--raw", "-M", "--abbrev=40", base+".."+head)
+	if err != nil {
+		return nil, fmt.Errorf("git diff --raw: %w", err)
+	}
+
+	result := make(map[string]submoduleDelta)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		// Drop leading ':' if present.
+		line = strings.TrimPrefix(line, ":")
+
+		tabIdx := strings.IndexByte(line, '\t')
+		if tabIdx < 0 {
+			continue
+		}
+		header := line[:tabIdx]
+		tail := line[tabIdx+1:]
+		fields := strings.Fields(header)
+		if len(fields) < 5 {
+			continue
+		}
+		srcMode, dstMode := fields[0], fields[1]
+		srcSHA, dstSHA := fields[2], fields[3]
+		status := fields[4]
+
+		if !isGitlinkMode(srcMode) && !isGitlinkMode(dstMode) {
+			continue
+		}
+
+		// Path: for renames the tail is "old\tnew" — gitlink renames are exotic
+		// but we still extract the destination path defensively.
+		path := tail
+		if strings.HasPrefix(status, "R") {
+			parts := strings.SplitN(tail, "\t", 2)
+			if len(parts) == 2 {
+				path = parts[1]
+			}
+		}
+		path = gitutil.UnquoteGitPath(path)
+
+		result[path] = submoduleDelta{
+			FromCommit: zeroSHAToEmpty(srcSHA),
+			ToCommit:   zeroSHAToEmpty(dstSHA),
+		}
+	}
+	return result, nil
+}
+
+// isGitlinkMode reports whether the mode string represents mode 160000 in
+// any of git's known formattings (e.g. "160000" or "0160000").
+func isGitlinkMode(mode string) bool {
+	return mode == gitlinkMode || strings.TrimLeft(mode, "0") == gitlinkMode
+}
+
+// zeroSHAToEmpty maps the all-zero SHA (added or deleted side) to "" so the
+// JSON payload reads as an absence instead of a meaningless hash string.
+func zeroSHAToEmpty(sha string) string {
+	if sha == "" || strings.TrimLeft(sha, "0") == "" {
+		return ""
+	}
+	return sha
+}
+
+// loadSubmoduleIndex reads .gitmodules at the given ref and returns the parsed
+// index, or nil on any error/absence. head is the natural choice for diff
+// context (the "to" side); when empty the function is a no-op.
+func loadSubmoduleIndex(ctx context.Context, repoPath, ref string) *repositories.GitmodulesIndex {
+	if ref == "" {
+		return nil
+	}
+	idx, err := repositories.LoadGitmodulesAtRef(ctx, repoPath, ref)
+	if err != nil {
+		return nil
+	}
+	return idx
+}
 
 // ---------------------------------------------------------------------------
 // Native git: diff 계산
@@ -312,6 +415,11 @@ func nativeBuildDiffResponse(ctx context.Context, repoPath, baseHash, headHash, 
 		return nil, fmt.Errorf("failed to get diff file list: %w", err)
 	}
 
+	// gitlink (mode 160000) 변경 감지 — 일반 파일 diff 와 별도로 추출.
+	// 실패해도 본 흐름은 막지 않는다: 일반 diff 는 그대로 반환.
+	submoduleDeltas, _ := nativeGetSubmoduleChanges(ctx, repoPath, baseHash, headHash)
+	gitmods := loadSubmoduleIndex(ctx, repoPath, headHash)
+
 	// FileDiff 객체 빌드
 	fileDiffs := make([]FileDiff, 0, len(fileMetas))
 	for _, meta := range fileMetas {
@@ -326,6 +434,25 @@ func nativeBuildDiffResponse(ctx context.Context, repoPath, baseHash, headHash, 
 		if meta.OldPath != "" {
 			fileDiff.OldPath = meta.OldPath
 		}
+		// gitlink 매칭: 같은 path 가 submoduleDeltas 에 있으면 SubmoduleChange 부착.
+		if delta, ok := submoduleDeltas[meta.Path]; ok {
+			sub := &SubmoduleChange{
+				FromCommit: delta.FromCommit,
+				ToCommit:   delta.ToCommit,
+			}
+			if cfg := gitmods.LookupByPath(meta.Path); cfg != nil {
+				sub.URL = cfg.URL
+			}
+			if sub.URL != "" {
+				sub.Parsed = repositories.ParseRepoURL(sub.URL)
+			}
+			fileDiff.SubmoduleChange = sub
+			// gitlink 의 line-level patch 는 "Subproject commit <SHA>" 한 줄로
+			// 사용자에게 의미 없는 노이즈가 되므로, line 처리 단계 자체를 건너뛰고
+			// LoadStatus 를 submodule 로 마크해 클라이언트가 SubmoduleChange 카드로
+			// 렌더하도록 한다.
+			fileDiff.LoadStatus = FileLoadStatusSubmodule
+		}
 		fileDiffs = append(fileDiffs, fileDiff)
 	}
 
@@ -336,6 +463,10 @@ func nativeBuildDiffResponse(ctx context.Context, repoPath, baseHash, headHash, 
 			break
 		}
 		if fileDiffs[i].IsBinary || contextLines <= 0 {
+			continue
+		}
+		// gitlink 는 line diff 무의미 — 위에서 이미 LoadStatus=submodule 처리됨.
+		if fileDiffs[i].LoadStatus == FileLoadStatusSubmodule {
 			continue
 		}
 		// 변경된 라인 수 체크

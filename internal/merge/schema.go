@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/diffs"
+	"github.com/collabops/git-executor/internal/repositories"
 )
 
 // MergeMethod represents different merge methods (how to combine branches)
@@ -140,7 +141,21 @@ type FileConflict struct {
 	Regions        []ConflictRegion       `json:"regions"`              // Specific conflict regions
 	AutoResolvable bool                   `json:"auto_resolvable"`      // Deprecated: always false. All conflicts require manual resolution
 	Resolution     *ConflictResolution    `json:"resolution,omitempty"` // Suggested resolution
+	Submodule      *SubmoduleConflict     `json:"submodule,omitempty"`  // ConflictType=="submodule" 일 때만 채워짐
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`   // Additional metadata
+}
+
+// SubmoduleConflict는 양 브랜치가 같은 submodule pin 을 서로 다른 SHA 로 변경했을
+// 때의 충돌 페이로드입니다. 일반 content conflict 와 달리 region/diffline 이 없고,
+// 사용자는 ours / theirs / base 셋 중 하나를 선택하거나 임의 SHA 로 직접 지정해
+// resolve 합니다. URL/Branch/Parsed 는 .gitmodules 에서 발견된 경우에만 채워집니다.
+type SubmoduleConflict struct {
+	BaseCommit  string                      `json:"base_commit,omitempty"` // 공통 조상 시점 SHA (add/add 케이스에서는 빈 문자열)
+	OurCommit   string                      `json:"our_commit"`            // 우리 브랜치 (target) 의 SHA
+	TheirCommit string                      `json:"their_commit"`          // 머지 들어오는 브랜치 (source) 의 SHA
+	URL         string                      `json:"url,omitempty"`         // .gitmodules 의 url
+	Branch      string                      `json:"branch,omitempty"`      // .gitmodules 의 branch
+	Parsed      *repositories.ParsedRepoURL `json:"parsed,omitempty"`      // url 파싱 성공 시
 }
 
 // FileVersion은 특정 커밋에서의 파일 버전을 나타냅니다.

@@ -1,5 +1,7 @@
 package tree
 
+import "github.com/collabops/git-executor/internal/repositories"
+
 // TreeEntry는 Git 트리의 개별 항목(파일 또는 디렉토리)을 나타냅니다.
 // 항목의 유형, 이름, 전체 경로를 포함합니다.
 
@@ -22,11 +24,12 @@ const (
 // 인스턴스 안의 mirror 매핑 또는 reachability 검증이 가능할 때 채워질 예약
 // 필드로, Phase 2 에서는 ResolvedRepo=빈 문자열, IsResolvable=false 로 고정됩니다.
 type SubmoduleInfo struct {
-	Commit       string `json:"commit"`                  // pinned commit SHA (full hex)
-	URL          string `json:"url,omitempty"`           // .gitmodules 의 url
-	Branch       string `json:"branch,omitempty"`        // .gitmodules 의 branch (optional)
-	ResolvedRepo string `json:"resolved_repo,omitempty"` // mirror 매핑 결과 (Phase 5 reserved)
-	IsResolvable bool   `json:"is_resolvable"`           // pin commit reachability (Phase 5 reserved)
+	Commit       string                      `json:"commit"`                  // pinned commit SHA (full hex)
+	URL          string                      `json:"url,omitempty"`           // .gitmodules 의 url
+	Branch       string                      `json:"branch,omitempty"`        // .gitmodules 의 branch (optional)
+	Parsed       *repositories.ParsedRepoURL `json:"parsed,omitempty"`        // url 파싱 성공 시 (host/owner/repo)
+	ResolvedRepo string                      `json:"resolved_repo,omitempty"` // mirror 매핑 결과 (Phase 5 reserved)
+	IsResolvable bool                        `json:"is_resolvable"`           // pin commit reachability (Phase 5 reserved)
 }
 
 type TreeEntry struct {

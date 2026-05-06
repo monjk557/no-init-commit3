@@ -1648,9 +1648,82 @@ func Test_Diff_WhitespaceIgnore_OptionChangesPatch(t *testing.T) {
 	t.Skip("whitespace ignore 옵션 미구현")
 }
 
+// Test_Diff_Submodule_ReportsSubmoduleDelta — Phase 3 활성화.
+// gitlink (mode 160000) hash 가 변할 때 응답에 SubmoduleChange (from/to + url + parsed)
+// 가 채워지고, line-level diff 대신 LoadStatus="submodule" 로 표시되는지 검증.
 func Test_Diff_Submodule_ReportsSubmoduleDelta(t *testing.T) {
 	t.Parallel()
-	t.Skip("submodule diff 지원 확인 필요")
+
+	tempDir := t.TempDir()
+	ownerDir := filepath.Join(tempDir, "testowner")
+	require.NoError(t, os.MkdirAll(ownerDir, 0755))
+
+	repoPath := filepath.Join(ownerDir, "testrepo.git")
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// submodule 가 가리킬 두 개의 빈 commit (서로 다른 SHA)
+	subTreeHash := makeTree(t, repo, []object.TreeEntry{})
+	subCommitFrom := makeCommit(t, repo, "sub v1", subTreeHash, nil, now)
+	subCommitTo := makeCommit(t, repo, "sub v2", subTreeHash, []plumbing.Hash{subCommitFrom}, now.Add(time.Hour))
+
+	// .gitmodules blob (양 커밋 동일)
+	gmContent := []byte(`[submodule "vendor/x"]
+	path = vendor/x
+	url = https://stage.collabops.ai/co-one/x.git
+	branch = main
+`)
+	gmBlobHash := makeBlob(t, repo, gmContent)
+
+	// base tree: .gitmodules + vendor/x (mode 160000, hash subCommitFrom)
+	baseTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: ".gitmodules", Mode: 0100644, Hash: gmBlobHash},
+		{Name: "vendor/x", Mode: 0160000, Hash: subCommitFrom},
+	})
+	baseCommitHash := makeCommit(t, repo, "base", baseTreeHash, nil, now)
+
+	// head tree: 같은 .gitmodules + vendor/x (subCommitTo 로 핀 이동)
+	headTreeHash := makeTree(t, repo, []object.TreeEntry{
+		{Name: ".gitmodules", Mode: 0100644, Hash: gmBlobHash},
+		{Name: "vendor/x", Mode: 0160000, Hash: subCommitTo},
+	})
+	headCommitHash := makeCommit(t, repo, "bump submodule", headTreeHash, []plumbing.Hash{baseCommitHash}, now.Add(time.Hour))
+
+	handler := newDiffHandler(t, tempDir)
+	router := gin.New()
+	router.GET("/api/v2/repository/:owner/:repo/diff/commits/:base/:head", adapt(handler.HandleCommitDiff))
+
+	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/commits/%s/%s",
+		baseCommitHash.String(), headCommitHash.String())
+	req, _ := http.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+	var resp DiffResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+
+	var sub *FileDiff
+	for i := range resp.Files {
+		if resp.Files[i].Path == "vendor/x" {
+			sub = &resp.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, sub, "submodule entry must appear in diff files")
+	require.Equal(t, FileLoadStatusSubmodule, sub.LoadStatus,
+		"gitlink change must be marked LoadStatus=submodule (line diff suppressed)")
+	require.NotNil(t, sub.SubmoduleChange, "submodule_change payload must be present")
+	require.Equal(t, subCommitFrom.String(), sub.SubmoduleChange.FromCommit)
+	require.Equal(t, subCommitTo.String(), sub.SubmoduleChange.ToCommit)
+	require.Equal(t, "https://stage.collabops.ai/co-one/x.git", sub.SubmoduleChange.URL)
+	require.NotNil(t, sub.SubmoduleChange.Parsed, "url should be parsed for navigation")
+	require.Equal(t, "stage.collabops.ai", sub.SubmoduleChange.Parsed.Host)
+	require.Equal(t, "co-one", sub.SubmoduleChange.Parsed.Owner)
+	require.Equal(t, "x", sub.SubmoduleChange.Parsed.Repo)
 }
 
 func Test_Diff_HugeBinary_ReturnsNoPatchButSizeAndOID(t *testing.T) {

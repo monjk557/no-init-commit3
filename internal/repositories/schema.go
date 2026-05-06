@@ -4,6 +4,19 @@ import (
 	"time"
 )
 
+// ParsedRepoURL is a structured view of a git remote URL — host + owner +
+// repo. Used by submodule responses so the frontend can decide
+// internal-vs-external navigation by comparing host with its own origin,
+// without re-parsing the URL on every render.
+//
+// `.git` suffix is always stripped from Repo. ParseRepoURL (in url_parse.go)
+// produces this struct.
+type ParsedRepoURL struct {
+	Host  string `json:"host"`
+	Owner string `json:"owner"`
+	Repo  string `json:"repo"`
+}
+
 type CreateRepositoryResponse struct {
 	Success       bool                   `json:"success"`
 	Repository    string                 `json:"repository"`

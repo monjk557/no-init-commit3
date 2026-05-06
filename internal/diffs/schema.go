@@ -2,6 +2,8 @@ package diffs
 
 import (
 	"fmt"
+
+	"github.com/collabops/git-executor/internal/repositories"
 )
 
 // 공통 요청 검증 및 응답 유틸리티
@@ -108,17 +110,29 @@ type Hunk struct {
 	Header   string `json:"header"`    // 원본 라인 e.g. "@@ -78,2 +78,2 @@" — 그대로 표시·버튼용
 }
 
+// SubmoduleChange는 gitlink (mode 160000) entry 의 commit pin 변화를 나타냅니다.
+// 일반 파일 diff 와 달리 line-level changes 가 의미가 없고 — 응답은 from/to commit
+// SHA + (가능하면) .gitmodules 의 url 만 노출됩니다. 클라이언트는 이 페이로드로
+// "submodule pin 이 어디서 어디로 갔는지" 를 단일 카드로 렌더링할 수 있습니다.
+type SubmoduleChange struct {
+	FromCommit string                      `json:"from_commit"`      // base 시점 pinned SHA (added 일 때 빈 문자열)
+	ToCommit   string                      `json:"to_commit"`        // head 시점 pinned SHA (deleted 일 때 빈 문자열)
+	URL        string                      `json:"url,omitempty"`    // .gitmodules 에서 발견된 url (없으면 빈 문자열)
+	Parsed     *repositories.ParsedRepoURL `json:"parsed,omitempty"` // url 파싱 성공 시 (host/owner/repo)
+}
+
 // FileDiff는 단일 파일의 변경사항을 나타냅니다
 type FileDiff struct {
-	Path       string         `json:"path"`
-	Status     FileDiffStatus `json:"status"` // "added", "deleted", "modified", "renamed"
-	Additions  int            `json:"additions"`
-	Deletions  int            `json:"deletions"`
-	Changes    []LineChange   `json:"diffLines"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
-	Hunks      []Hunk         `json:"-"`         // 내부 전용 (expand-context 등), JSON 응답에서 제외
-	IsBinary   bool           `json:"is_binary"`
-	LoadStatus FileLoadStatus `json:"loadStatus"`         // 파일 diff 로드 상태: loaded, collapsed, too_large, binary
-	OldPath    string         `json:"old_path,omitempty"` // 이름 변경시 사용
+	Path            string           `json:"path"`
+	Status          FileDiffStatus   `json:"status"` // "added", "deleted", "modified", "renamed"
+	Additions       int              `json:"additions"`
+	Deletions       int              `json:"deletions"`
+	Changes         []LineChange     `json:"diffLines"` // omitempty 제거: 필드는 항상 포함 (nil이면 null로 표시)
+	Hunks           []Hunk           `json:"-"`         // 내부 전용 (expand-context 등), JSON 응답에서 제외
+	IsBinary        bool             `json:"is_binary"`
+	LoadStatus      FileLoadStatus   `json:"loadStatus"`                 // 파일 diff 로드 상태: loaded, collapsed, too_large, binary, submodule
+	OldPath         string           `json:"old_path,omitempty"`         // 이름 변경시 사용
+	SubmoduleChange *SubmoduleChange `json:"submodule_change,omitempty"` // gitlink 변경 시에만 채워짐
 }
 
 // LineChange는 diff의 단일 라인 변경을 나타냅니다.
@@ -160,6 +174,7 @@ const (
 	FileLoadStatusCollapsed FileLoadStatus = "collapsed" // MaxFilesWithChanges 초과로 미로드 — /diff/file 개별 조회 가능
 	FileLoadStatusTooLarge  FileLoadStatus = "too_large" // MaxChangedLines/MaxFileLines 초과 — 표시 불가
 	FileLoadStatusBinary    FileLoadStatus = "binary"    // 바이너리 파일
+	FileLoadStatusSubmodule FileLoadStatus = "submodule" // gitlink (mode 160000) — line diff 대신 submodule_change 사용
 )
 
 // LineChangeType은 diff 라인 변경의 타입을 나타냅니다

@@ -188,6 +188,9 @@ func decorateEntries(treeEntries []TreeEntry, basePath string, gitmods *reposito
 				info.URL = cfg.URL
 				info.Branch = cfg.Branch
 			}
+			if info.URL != "" {
+				info.Parsed = repositories.ParseRepoURL(info.URL)
+			}
 			decorated.Submodule = &info
 		}
 		out = append(out, decorated)
