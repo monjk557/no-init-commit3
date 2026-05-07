@@ -85,7 +85,7 @@ func TestHandleMergePreview_Returns404_When_SourceRefNotFound(t *testing.T) {
 	require.NoError(t, repo.Storer.RemoveReference(plumbing.NewBranchReferenceName(featureBranch)))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/merges/preview", adapt(handler.HandleMergePreview))
+	router.GET("/repos/:owner/:repo/merges/preview", adaptQuery(handler.HandleMergePreview))
 
 	req := httptest.NewRequest(
 		http.MethodGet,
@@ -935,7 +935,7 @@ func Test_MergePreview_PolicyAllows_ButMergeRejects_IsImpossible(t *testing.T) {
 
 	// Preview router
 	previewRouter := gin.New()
-	previewRouter.POST("/repos/:owner/:repo/merge/preview", adapt(previewHandler.HandleMergePreview))
+	previewRouter.POST("/repos/:owner/:repo/merge/preview", adaptQuery(previewHandler.HandleMergePreview))
 
 	// Merge router
 	mergeRouter := gin.New()
@@ -1037,7 +1037,7 @@ func Test_MergePreview_PolicyRejects_MergeAlsoRejects_SameErrorCode(t *testing.T
 
 	// Preview router
 	previewRouter := gin.New()
-	previewRouter.POST("/repos/:owner/:repo/merge/preview", adapt(previewHandler.HandleMergePreview))
+	previewRouter.POST("/repos/:owner/:repo/merge/preview", adaptQuery(previewHandler.HandleMergePreview))
 
 	// Merge router
 	mergeRouter := gin.New()
@@ -1145,7 +1145,7 @@ func Test_Merge_PolicyStateChangesBetweenPreviewAndMerge_Returns409Or403_ByContr
 
 	// Preview router
 	previewRouter := gin.New()
-	previewRouter.POST("/repos/:owner/:repo/merge/preview", adapt(previewHandler.HandleMergePreview))
+	previewRouter.POST("/repos/:owner/:repo/merge/preview", adaptQuery(previewHandler.HandleMergePreview))
 
 	// Merge router
 	mergeRouter := gin.New()

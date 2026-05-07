@@ -39,7 +39,7 @@ func (e *responseErr) Error() string {
 func RegisterRoutes(g gin.IRouter, opsH *MergeOperationsHandler, previewH *MergePreviewHandler) {
 	var (
 		mergeOp   func(*gin.Context) (MergeResponse, error)
-		mergePrev func(*gin.Context) (MergePreviewResponse, error)
+		mergePrev func(*gin.Context, MergePreviewRequest) (MergePreviewResponse, error)
 		mergeDiff func(*gin.Context) (diffs.DiffResponse, error)
 	)
 	if opsH != nil {
@@ -57,7 +57,12 @@ func RegisterRoutes(g gin.IRouter, opsH *MergeOperationsHandler, previewH *Merge
 		typed.WithErrorMapper(mergeErrorMapper),
 	)
 
-	typed.RegisterGet(g, "/merges/preview", tag,
+	// query 파라미터는 RegisterGetWithQuery 로 등록 — wrapper 가 struct
+	// field 의 form 태그를 reflect 하여 Endpoint.QueryParams 에 채우고, spec
+	// generator 가 OpenAPI parameters (in: query) 로 expand 한다.
+	// orchestrator auto-gen client 가 source_ref/target_ref 등 인자를 받도록
+	// 노출하기 위함 (Issue-2296).
+	typed.RegisterGetWithQuery(g, "/merges/preview", tag,
 		mergePrev,
 		typed.WithSummary("HandleMergePreview"),
 	)

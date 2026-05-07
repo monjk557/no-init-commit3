@@ -368,8 +368,13 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 	return response, nil
 }
 
-// HandleMergePreview handles GET /repos/{owner}/{repo}/merges/preview
-func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) (MergePreviewResponse, error) {
+// HandleMergePreview handles GET /repos/{owner}/{repo}/merges/preview.
+//
+// query string 은 typed.RegisterGetWithQuery wrapper 가 MergePreviewRequest
+// 로 bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 query
+// parameter 메타데이터를 자동 노출하므로 orchestrator auto-gen client 가
+// source_ref/target_ref 등 인자를 누락하지 않는다.
+func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context, req MergePreviewRequest) (MergePreviewResponse, error) {
 	startTime := time.Now()
 	ctx := c.Request.Context()
 
@@ -378,11 +383,6 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context) (MergePreviewRe
 
 	if err := h.validatePath(owner, repo); err != nil {
 		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-
-	var req MergePreviewRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid query parameters: %v", err))
 	}
 
 	if req.Strategy == "" {

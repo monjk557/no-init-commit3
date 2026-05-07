@@ -669,6 +669,41 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: source_ref
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: target_ref
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: strategy
+          in: query
+          schema:
+            type: string
+        - name: include_changes
+          in: query
+          schema:
+            type: boolean
+        - name: include_content
+          in: query
+          schema:
+            type: boolean
+        - name: max_file_size
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: max_files
+          in: query
+          schema:
+            type: integer
+        - name: compare_strategy
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success

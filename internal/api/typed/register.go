@@ -8,6 +8,7 @@ package typed
 import (
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -123,6 +124,11 @@ func RegisterGet[Resp any](
 
 // RegisterGetWithQuery 는 query string 을 Query struct 로 바인딩하는 GET
 // endpoint 를 등록한다. gin 의 form/binding 태그를 따른다.
+//
+// 등록 시점에 Query struct 의 form 태그를 reflect 하여 Endpoint.QueryParams
+// 를 채운다 — spec generator 가 OpenAPI `parameters: [in: query, ...]` 로
+// 자동 expand 한다 (orchestrator auto-gen client 가 query 인자를 누락하지
+// 않도록).
 func RegisterGetWithQuery[Query any, Resp any](
 	r gin.IRouter,
 	path, tag string,
@@ -137,6 +143,7 @@ func RegisterGetWithQuery[Query any, Resp any](
 		"application/json",
 		opts,
 	)
+	ep.QueryParams = extractQueryParams(reflectType[Query]())
 	DefaultRegistry().Register(ep)
 
 	r.Handle(http.MethodGet, path, func(c *gin.Context) {
@@ -210,4 +217,62 @@ func RegisterRaw(
 	)
 	DefaultRegistry().Register(ep)
 	r.Handle(method, path, handler)
+}
+
+// extractQueryParams 는 Query struct 의 exported field 들을 OpenAPI
+// parameter 메타데이터 (ParamSpec) 로 변환한다.
+//
+// 규칙:
+//   - 태그 우선순위: form > json. 둘 다 없거나 "-" 이면 필드 건너뜀.
+//   - `binding:"required"` 가 있으면 Required=true.
+//   - 임베디드 익명 struct 는 재귀 평탄화 (gin 의 form binding 동작과 일치).
+//
+// reflect 는 등록 시점에 한 번만 수행되므로 runtime overhead 무시 가능.
+func extractQueryParams(t reflect.Type) []ParamSpec {
+	if t == nil {
+		return nil
+	}
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+
+	var out []ParamSpec
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		// embedded anonymous struct → 재귀 평탄화
+		if f.Anonymous && f.Type.Kind() == reflect.Struct {
+			out = append(out, extractQueryParams(f.Type)...)
+			continue
+		}
+
+		name := paramNameFromTag(f)
+		if name == "" || name == "-" {
+			continue
+		}
+		required := strings.Contains(f.Tag.Get("binding"), "required")
+		out = append(out, ParamSpec{
+			Name:     name,
+			Required: required,
+			GoType:   f.Type,
+		})
+	}
+	return out
+}
+
+// paramNameFromTag 는 form 태그를 우선 사용하고, 없으면 json 태그를 fallback
+// 으로 사용한다. ",omitempty" 같은 옵션 부분은 잘라내고 base 만 반환.
+func paramNameFromTag(f reflect.StructField) string {
+	if v := f.Tag.Get("form"); v != "" {
+		return strings.SplitN(v, ",", 2)[0]
+	}
+	if v := f.Tag.Get("json"); v != "" {
+		return strings.SplitN(v, ",", 2)[0]
+	}
+	return ""
 }

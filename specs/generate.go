@@ -794,9 +794,26 @@ type pathOperation struct {
 	summary     string
 	operationID string
 	tag         string
-	pathParams  []string // owner/repo 외 추가 path param 이름들
-	requestRef  string   // requestBody $ref schema 이름; 빈 문자열이면 body 없음
-	responseRef string   // 200 응답 $ref schema 이름; 빈 문자열이면 body 없음
+	pathParams  []string         // owner/repo 외 추가 path param 이름들
+	queryParams []queryParamSpec // ?source_ref=... 같은 query 파라미터 (typed.RegisterGetWithQuery 전용)
+	requestRef  string           // requestBody $ref schema 이름; 빈 문자열이면 body 없음
+	responseRef string           // 200 응답 $ref schema 이름; 빈 문자열이면 body 없음
+}
+
+// queryParamSpec 은 OpenAPI 의 `parameters: [in: query, ...]` 한 줄을
+// 그리는 데 필요한 최소 메타데이터.
+type queryParamSpec struct {
+	name     string
+	required bool
+	openAPI  queryParamSchema // type / format
+}
+
+// queryParamSchema 는 query parameter 의 OpenAPI schema 를 정의한다.
+// gin 의 form binding 이 다루는 primitive 만 지원 (struct/map/slice 는
+// query 에 부적절).
+type queryParamSchema struct {
+	typ    string // "string" | "integer" | "boolean" | "number"
+	format string // optional ("int64" 등); 빈 문자열이면 미출력
 }
 
 // generatePathsFromRoutes 는 registry-first hybrid 로 path operation 들을
@@ -852,6 +869,9 @@ func registryEndpointToOperation(ep typed.Endpoint) pathOperation {
 	}
 	if ep.ReqType != nil && ep.ReqLocation == typed.LocationBodyJSON {
 		op.requestRef = ep.ReqType.Name()
+	}
+	if ep.ReqLocation == typed.LocationQuery {
+		op.queryParams = queryParamsFromEndpoint(ep.QueryParams)
 	}
 	for _, r := range ep.Responses {
 		if r.Status == 200 || r.Status == 0 {
@@ -929,6 +949,18 @@ func renderSingleOperation(buf *strings.Builder, op pathOperation) {
 		buf.WriteString("          schema:\n")
 		buf.WriteString("            type: string\n")
 	}
+	for _, q := range op.queryParams {
+		buf.WriteString(fmt.Sprintf("        - name: %s\n", q.name))
+		buf.WriteString("          in: query\n")
+		if q.required {
+			buf.WriteString("          required: true\n")
+		}
+		buf.WriteString("          schema:\n")
+		buf.WriteString(fmt.Sprintf("            type: %s\n", q.openAPI.typ))
+		if q.openAPI.format != "" {
+			buf.WriteString(fmt.Sprintf("            format: %s\n", q.openAPI.format))
+		}
+	}
 	if op.requestRef != "" {
 		buf.WriteString("      requestBody:\n")
 		buf.WriteString("        required: true\n")
@@ -971,6 +1003,57 @@ func responseSchemaRef(method, specPath string) string {
 	_ = method
 	_ = specPath
 	return ""
+}
+
+// queryParamsFromEndpoint 은 typed.Endpoint.QueryParams 를 generator 중간
+// 형태로 변환한다. RegisterGetWithQuery 등록 시점에 reflect 로 채워진
+// ParamSpec 을 OpenAPI 의 in:query parameter 로 그릴 수 있도록 type/format
+// 을 매핑한다.
+func queryParamsFromEndpoint(params []typed.ParamSpec) []queryParamSpec {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make([]queryParamSpec, 0, len(params))
+	for _, p := range params {
+		out = append(out, queryParamSpec{
+			name:     p.Name,
+			required: p.Required,
+			openAPI:  reflectTypeToQuerySchema(p.GoType),
+		})
+	}
+	return out
+}
+
+// reflectTypeToQuerySchema 는 Go reflect.Type 을 OpenAPI primitive
+// (type/format) 으로 매핑한다. gin form binding 의 가능 대상만 다룬다 —
+// pointer 는 deref, 그 외 unsupported 는 string 으로 fallback (orchestrator
+// 가 안전하게 받기 위함).
+func reflectTypeToQuerySchema(t reflect.Type) queryParamSchema {
+	if t == nil {
+		return queryParamSchema{typ: "string"}
+	}
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	// `type X string` typed-string alias 는 OpenAPI 에선 underlying primitive
+	// (string) 으로 노출 — query 는 enum 표현보다 plain string 이 호환성
+	// 측면에서 안전하다 (orchestrator client 가 Literal 또는 str 둘 다 OK).
+	switch t.Kind() {
+	case reflect.String:
+		return queryParamSchema{typ: "string"}
+	case reflect.Bool:
+		return queryParamSchema{typ: "boolean"}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		return queryParamSchema{typ: "integer"}
+	case reflect.Int64, reflect.Uint64:
+		return queryParamSchema{typ: "integer", format: "int64"}
+	case reflect.Float32, reflect.Float64:
+		return queryParamSchema{typ: "number"}
+	default:
+		return queryParamSchema{typ: "string"}
+	}
 }
 
 // pathParamsFromSpecPath returns path param names (e.g. branch, name) from specPath, excluding owner/repo.
