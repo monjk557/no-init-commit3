@@ -177,9 +177,22 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Transfer-Encoding", "chunked")
 
+	// Replace the http.Server's fixed Read/Write deadlines with a
+	// per-stream idle deadline. Push bodies (packfiles) and report
+	// streams can both run for many minutes; an absolute deadline
+	// truncates them mid-flight and surfaces to git as
+	// `early EOF` / `invalid index-pack output`. The idle deadline
+	// reaps only truly stalled connections, so concurrency slots are
+	// never held by a frozen client.
+	sd := NewStreamDeadliner(w, h.config.Server.GitProtocolIdleTimeout)
+	if err := sd.Prime(); err != nil {
+		fmt.Printf("[receive-pack] failed to install stream deadline: %v\n", err)
+	}
+	r.Body = NewIdleReadCloser(r.Body, sd)
+
 	w.WriteHeader(http.StatusOK)
 
-	pktWriter := performance.NewOptimizedPktLineWriter(w)
+	pktWriter := performance.NewOptimizedPktLineWriter(NewIdleWriter(w, sd))
 
 	// Stream the request body instead of buffering it entirely in memory.
 	// readSection reads only the small pkt-line commands; the remaining

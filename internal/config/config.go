@@ -101,6 +101,17 @@ type ServerConfig struct {
 	HealthCheckPath string
 	EnableDocs      bool
 	DocsPath        string
+
+	// GitProtocolIdleTimeout governs Smart HTTP streaming routes
+	// (POST /git-upload-pack, POST /git-receive-pack). The global
+	// http.Server WriteTimeout / ReadTimeout are absolute and would
+	// truncate long-running pack streams, so those routes opt out of
+	// fixed deadlines and instead enforce this per-stream idle window:
+	// the deadline slides forward by GitProtocolIdleTimeout on every
+	// successful read/write. Streams remain alive while data is
+	// flowing and are reaped only when truly idle. Zero disables the
+	// idle deadline (uncapped).
+	GitProtocolIdleTimeout time.Duration
 }
 
 // GitConfig stores Git repository configuration
@@ -371,18 +382,31 @@ func parseServerConfig() (ServerConfig, error) {
 	enableDocs := true
 	docsPath := "/api-docs"
 
+	// Smart HTTP streaming idle deadline. Override via env for ops
+	// tuning without code change. Default 5 minutes balances long
+	// fetches against zombie-conn risk under saturation.
+	gitProtocolIdleTimeout := 5 * time.Minute
+	if raw := os.Getenv("GIT_PROTOCOL_IDLE_TIMEOUT"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return ServerConfig{}, fmt.Errorf("GIT_PROTOCOL_IDLE_TIMEOUT is not a valid duration: %w", err)
+		}
+		gitProtocolIdleTimeout = parsed
+	}
+
 	return ServerConfig{
-		Port:            portInt,
-		TCPGitPort:      TCPGitPortInt,
-		BasePath:        basePath,
-		Host:            host,
-		ReadTimeout:     readTimeout,
-		WriteTimeout:    writeTimeout,
-		IdleTimeout:     idleTimeout,
-		ShutdownTimeout: shutdownTimeout,
-		HealthCheckPath: healthCheckPath,
-		EnableDocs:      enableDocs,
-		DocsPath:        docsPath,
+		Port:                   portInt,
+		TCPGitPort:             TCPGitPortInt,
+		BasePath:               basePath,
+		Host:                   host,
+		ReadTimeout:            readTimeout,
+		WriteTimeout:           writeTimeout,
+		IdleTimeout:            idleTimeout,
+		ShutdownTimeout:        shutdownTimeout,
+		HealthCheckPath:        healthCheckPath,
+		EnableDocs:             enableDocs,
+		DocsPath:               docsPath,
+		GitProtocolIdleTimeout: gitProtocolIdleTimeout,
 	}, nil
 }
 

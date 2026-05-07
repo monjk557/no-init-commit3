@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/gitutil"
@@ -36,6 +37,12 @@ func newSidebandWriter(w io.Writer, channel byte) *sidebandWriter {
 
 type UploadPackHandler struct {
 	pathConfig *repositories.PathConfig
+
+	// idleTimeout sets the per-stream idle deadline applied to the
+	// upload-pack response stream in lieu of http.Server.WriteTimeout
+	// (see internal/protocol/streamdeadline.go for rationale).
+	// Zero disables the deadline entirely.
+	idleTimeout time.Duration
 }
 
 func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
@@ -45,7 +52,8 @@ func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
 	}
 
 	return &UploadPackHandler{
-		pathConfig: pathConfig,
+		pathConfig:  pathConfig,
+		idleTimeout: cfg.Server.GitProtocolIdleTimeout,
 	}, nil
 }
 
@@ -119,9 +127,19 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 	w.Header().Set("Cache-Control", "no-cache")
 
+	// Replace the http.Server's fixed WriteTimeout with a per-stream
+	// idle deadline. pack-objects can stream for many minutes on cold
+	// caches or large histories; an absolute deadline mid-pack
+	// truncates the response and surfaces to the client as
+	// `fatal: early EOF / fetch-pack: invalid index-pack output`.
+	sd := NewStreamDeadliner(w, h.idleTimeout)
+	if err := sd.Prime(); err != nil {
+		fmt.Printf("[upload-pack] failed to install stream deadline: %v\n", err)
+	}
+
 	cmd := exec.CommandContext(r.Context(), "git", "upload-pack", "--stateless-rpc", repoPath)
 	cmd.Stdin = bytes.NewReader(bodyBytes)
-	cmd.Stdout = w
+	cmd.Stdout = NewIdleWriter(w, sd)
 	cmd.Env = gitProtocolEnv(r)
 
 	var stderr bytes.Buffer
