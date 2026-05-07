@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -436,7 +435,12 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context, req MergePrevie
 // 가 도입한 변경만 보여주기 위함). DiffTooLargeError → 413 with reason
 // 필드, REF_NOT_FOUND substring → 404 with code 필드 — 둘 다 multi-field
 // 응답이라 responseErr 로 전달, ErrorMapper 가 처리.
-func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) (diffs.DiffResponse, error) {
+//
+// query string 은 typed.RegisterGetWithQuery wrapper 가 MergeDiffRequest
+// 로 bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 query
+// parameter 메타데이터를 자동 노출하므로 orchestrator auto-gen client 가
+// source_ref/target_ref 등 인자를 누락하지 않는다 (Issue-2317).
+func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context, req MergeDiffRequest) (diffs.DiffResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
@@ -446,17 +450,15 @@ func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) (diffs.DiffRespons
 		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	sourceRef := c.Query("source_ref")
-	targetRef := c.Query("target_ref")
-	if sourceRef == "" || targetRef == "" {
-		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "source_ref and target_ref are required")
-	}
+	sourceRef := req.SourceRef
+	targetRef := req.TargetRef
 
+	// LEGACY: `c.Query("context")` 가 비어 있지 않고 atoi 성공 + v >= 0 이면
+	// contextLines = v. NEW: req.Context 가 nil 이면 default 3, non-nil 이면
+	// 음수만 거르고 그대로 사용 (=0 → "no context" 보존).
 	contextLines := 3
-	if contextStr := c.Query("context"); contextStr != "" {
-		if v, err := strconv.Atoi(contextStr); err == nil && v >= 0 {
-			contextLines = v
-		}
+	if req.Context != nil && *req.Context >= 0 {
+		contextLines = *req.Context
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
@@ -493,14 +495,17 @@ func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context) (diffs.DiffRespons
 		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// 페이지네이션
-	if c.Query("page") != "" || c.Query("page_size") != "" {
+	// 페이지네이션 — req.Page 또는 req.PageSize 둘 중 하나라도 query string
+	// 으로 전달되면 (nil 이 아니면) paginate 진입한다. LEGACY:
+	// `c.Query("page") != "" || c.Query("page_size") != ""` 와 동등 — `=0`
+	// 명시 호출도 paginate 진입 (default 1, 50 으로 fallback).
+	if req.Page != nil || req.PageSize != nil {
 		page, pageSize := 1, 50
-		if v, err := strconv.Atoi(c.Query("page")); err == nil && v > 0 {
-			page = v
+		if req.Page != nil && *req.Page > 0 {
+			page = *req.Page
 		}
-		if v, err := strconv.Atoi(c.Query("page_size")); err == nil && v > 0 && v <= 200 {
-			pageSize = v
+		if req.PageSize != nil && *req.PageSize > 0 && *req.PageSize <= 200 {
+			pageSize = *req.PageSize
 		}
 
 		total := len(diffResp.Files)

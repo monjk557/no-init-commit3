@@ -257,6 +257,24 @@ type MergePreviewRequest struct {
 	CompareStrategy string        `form:"compare_strategy,omitempty"`    // tree, diff, or full (default: tree)
 }
 
+// MergeDiffRequest represents the query parameters for `GET /merges/diff`.
+//
+// typed.RegisterGetWithQuery wrapper 가 form 태그를 reflect 하여 OpenAPI
+// parameters (in: query) 로 expand 한다 — orchestrator auto-gen client 가
+// source_ref/target_ref 등 인자를 누락하지 않도록 노출하기 위함 (Issue-2317).
+//
+// Context / Page / PageSize 는 LEGACY (c.Query) 의 "미지정 vs `=0` 명시"
+// 구분을 보존하기 위해 `*int` 포인터로 둔다. nil 이면 query string 자체가
+// 비어 있던 경우 (LEGACY: `c.Query("...") == ""`), 비어 있지 않은 값은
+// 포인터로 전달된다 (`=0` 명시 포함).
+type MergeDiffRequest struct {
+	SourceRef string `form:"source_ref" binding:"required"` // Source ref (head; merge FROM)
+	TargetRef string `form:"target_ref" binding:"required"` // Target ref (base; merge INTO)
+	Context   *int   `form:"context,omitempty"`             // Number of context lines (default: 3, 0 = no context)
+	Page      *int   `form:"page,omitempty"`                // 1-based page index for file pagination
+	PageSize  *int   `form:"page_size,omitempty"`           // Files per page (default: 50, max: 200)
+}
+
 // MergePreviewResponse represents the response for merge preview operations
 type MergePreviewResponse struct {
 	CanMerge           bool                 `json:"can_merge"`                     // Whether merge can proceed

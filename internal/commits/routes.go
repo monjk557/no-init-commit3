@@ -21,7 +21,7 @@ const tag = "Commits"
 func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	var (
 		listCommits       func(*gin.Context) (CommitsResponse, error)
-		comparisonSummary func(*gin.Context) (ComparisonSummaryResponse, error)
+		comparisonSummary func(*gin.Context, ComparisonSummaryRequest) (ComparisonSummaryResponse, error)
 		commitDetail      func(*gin.Context) (CommitDetailResponse, error)
 		multiFileCommit   func(*gin.Context) (MultiFileCommitResponse, error)
 	)
@@ -41,7 +41,13 @@ func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	// GET /commits/compare/summary — lightweight comparison.
 	// /:sha 라우트와 충돌 가능성이 있으나 "compare/summary" 는 sha 패턴이
 	// 아니므로 gin 의 path matching 에서 정확히 분기됨.
-	typed.RegisterGet(g, "/commits/compare/summary", tag,
+	//
+	// query 파라미터는 RegisterGetWithQuery 로 등록 — wrapper 가 struct
+	// field 의 form 태그를 reflect 하여 Endpoint.QueryParams 에 채우고, spec
+	// generator 가 OpenAPI parameters (in: query) 로 expand 한다.
+	// orchestrator auto-gen client 가 source_ref/target_ref 인자를 받도록
+	// 노출하기 위함 (Issue-2317).
+	typed.RegisterGetWithQuery(g, "/commits/compare/summary", tag,
 		comparisonSummary,
 		typed.WithSummary("HandleComparisonSummary"),
 	)

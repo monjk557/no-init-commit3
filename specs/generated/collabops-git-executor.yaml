@@ -345,6 +345,16 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: source_ref
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: target_ref
+          in: query
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -651,6 +661,28 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: source_ref
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: target_ref
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: context
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: page_size
+          in: query
+          schema:
+            type: integer
       responses:
         '200':
           description: Success
@@ -1670,6 +1702,8 @@ components:
         - pagination
         - results
         - success
+    ComparisonSummaryRequest:
+      type: object
     ComparisonSummaryResponse:
       type: object
       properties:
@@ -2759,6 +2793,8 @@ components:
         - message
         - sha
         - tree_sha
+    MergeDiffRequest:
+      type: object
     MergeHooks:
       type: object
     MergePreviewRequest:

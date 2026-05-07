@@ -147,17 +147,18 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) (CommitsResponse, erro
 
 // HandleComparisonSummary는 GET /repos/{owner}/{repo}/commits/compare/summary 요청을 처리합니다.
 // merge base 기준으로 commit count와 changed file count만 반환하는 경량 API입니다.
-func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context) (ComparisonSummaryResponse, error) {
+//
+// query string 은 typed.RegisterGetWithQuery wrapper 가 ComparisonSummaryRequest
+// 로 bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 query
+// parameter 메타데이터를 자동 노출하므로 orchestrator auto-gen client 가
+// source_ref/target_ref 인자를 누락하지 않는다 (Issue-2317).
+func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context, req ComparisonSummaryRequest) (ComparisonSummaryResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	sourceRef := c.Query("source_ref")
-	targetRef := c.Query("target_ref")
-
-	if sourceRef == "" || targetRef == "" {
-		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, "both 'source_ref' and 'target_ref' query parameters are required")
-	}
+	sourceRef := req.SourceRef
+	targetRef := req.TargetRef
 
 	repoCtx, err := h.validateAndGetRepoPath(owner, repo, "HEAD")
 	if err != nil {

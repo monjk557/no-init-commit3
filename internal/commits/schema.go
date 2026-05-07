@@ -20,6 +20,17 @@ type CommitAuthorDetail struct {
 	Date  string `json:"date"`
 }
 
+// ComparisonSummaryRequest 는 GET /commits/compare/summary 의 query
+// parameter 를 나타낸다.
+//
+// typed.RegisterGetWithQuery wrapper 가 form 태그를 reflect 하여 OpenAPI
+// parameters (in: query) 로 expand 한다 — orchestrator auto-gen client 가
+// source_ref/target_ref 인자를 누락하지 않도록 노출하기 위함 (Issue-2317).
+type ComparisonSummaryRequest struct {
+	SourceRef string `form:"source_ref" binding:"required"` // Source ref (head; merge FROM)
+	TargetRef string `form:"target_ref" binding:"required"` // Target ref (base; merge INTO)
+}
+
 // ComparisonSummaryResponse는 두 커밋 간 비교 요약 응답입니다.
 type ComparisonSummaryResponse struct {
 	Success          bool   `json:"success"`
