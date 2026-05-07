@@ -261,6 +261,7 @@ type MergePreviewRequest struct {
 type MergePreviewResponse struct {
 	CanMerge           bool                 `json:"can_merge"`                     // Whether merge can proceed
 	IsFastForward      bool                 `json:"is_fast_forward"`               // Whether merge would be fast-forward
+	IsAlreadyMerged    bool                 `json:"is_already_merged"`             // Whether source is already merged into target (mirrors MergeResponse for top-level discoverability)
 	HasConflicts       bool                 `json:"has_conflicts"`                 // Whether conflicts exist
 	ConflictCount      int                  `json:"conflict_count"`                // Number of conflicts
 	Strategy           MergeStrategy        `json:"strategy"`                      // Strategy to be used

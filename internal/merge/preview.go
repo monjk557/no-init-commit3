@@ -103,6 +103,7 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repoPath 
 	response := &MergePreviewResponse{
 		CanMerge:           !conflictAnalysis.HasConflicts,
 		IsFastForward:      conflictAnalysis.IsFastForward,
+		IsAlreadyMerged:    conflictAnalysis.IsAlreadyMerged,
 		HasConflicts:       conflictAnalysis.HasConflicts,
 		ConflictCount:      conflictAnalysis.ConflictCount,
 		Strategy:           req.Strategy,

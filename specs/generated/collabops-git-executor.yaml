@@ -2735,6 +2735,8 @@ components:
           type: boolean
         is_fast_forward:
           type: boolean
+        is_already_merged:
+          type: boolean
         has_conflicts:
           type: boolean
         conflict_count:
@@ -2778,6 +2780,7 @@ components:
         - can_merge
         - conflict_count
         - has_conflicts
+        - is_already_merged
         - is_fast_forward
         - strategy
     MergeRequest:
