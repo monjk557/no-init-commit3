@@ -83,6 +83,11 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/branches:
@@ -590,6 +595,11 @@ paths:
       responses:
         '200':
           description: Success
+          content:
+            text/plain:
+              schema:
+                type: string
+                format: binary
         '400':
           $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/search/files:
@@ -998,6 +1008,18 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          schema:
+            type: string
+        - name: path
+          in: query
+          schema:
+            type: string
+        - name: recursive
+          in: query
+          schema:
+            type: boolean
       responses:
         '200':
           description: Success
@@ -1016,6 +1038,18 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          schema:
+            type: string
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
       responses:
         '200':
           description: Success
@@ -1126,6 +1160,10 @@ components:
           type: boolean
         is_binary:
           type: boolean
+        is_lfs_pointer:
+          type: boolean
+        lfs:
+          $ref: '#/components/schemas/LFSPointerInfo'
         content:
           type: string
         content_type:
@@ -1156,6 +1194,7 @@ components:
         - commits
         - content
         - is_binary
+        - is_lfs_pointer
         - lines
         - size
         - success
@@ -2478,6 +2517,16 @@ components:
         - header
         - start_new
         - start_old
+    LFSPointerInfo:
+      type: object
+      properties:
+        oid:
+          type: string
+        size:
+          type: integer
+      required:
+        - oid
+        - size
     LanguageDistribution:
       type: object
       properties:
@@ -3600,6 +3649,8 @@ components:
         - pagination
         - results
         - success
+    TreeAPIRequest:
+      type: object
     TreeDirectoryRequest:
       type: object
       properties:
@@ -3701,6 +3752,8 @@ components:
         - repository
         - success
         - tree
+    TreeSearchRequest:
+      type: object
     TreeSearchResponse:
       type: object
       properties:

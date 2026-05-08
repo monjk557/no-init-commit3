@@ -310,7 +310,7 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 	tags.RegisterRoutes(ownerRepoGroup, tagsHandler)
 
 	// Blob endpoints
-	ownerRepoGroup.GET("/blob", blobHandler.HandleBlobAPI)
+	blob.RegisterRoutes(ownerRepoGroup, blobHandler)
 
 	// Diff endpoints
 	diffs.RegisterRoutes(ownerRepoGroup, diffsHandler)

@@ -127,10 +127,23 @@ type TreeOverviewResponse struct {
 	Commits      []GitCommit              `json:"commits"`
 }
 
-// BlobOverviewResponse is the response type for blob overview API
+// LFSPointerInfo는 Git LFS pointer 파일에서 추출한 메타데이터입니다.
+// /overview/blob 응답에서 LFS pointer 일 때만 채워집니다 (그 외에는 nil).
+type LFSPointerInfo struct {
+	Oid  string `json:"oid"`  // sha256 hash (64 hex chars)
+	Size int64  `json:"size"` // pointed object 의 byte size
+}
+
+// BlobOverviewResponse is the response type for blob overview API.
+//
+// IsLFSPointer 가 true 면 Content / Lines 는 비어 있고 LFS 메타데이터는 LFS
+// 필드에서 읽는다. 이는 client (orchestrator/web) 가 raw blob 의 LFS JSON
+// 분기에 의존하지 않고 overview 에서 LFS 정보를 얻도록 하기 위한 책임 이전.
 type BlobOverviewResponse struct {
 	Success      bool                     `json:"success"`
 	IsBinary     bool                     `json:"is_binary"`
+	IsLFSPointer bool                     `json:"is_lfs_pointer"`
+	LFS          *LFSPointerInfo          `json:"lfs,omitempty"`
 	Content      string                   `json:"content"`
 	ContentType  string                   `json:"content_type,omitempty"`
 	Lines        int                      `json:"lines"`

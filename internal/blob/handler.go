@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/collabops/git-executor/internal/config"
-	"github.com/collabops/git-executor/internal/lfs"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -102,22 +101,9 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 		return
 	}
 
-	// LFS 포인터 감지 및 메타데이터 반환
-	if lfs.IsLFSPointer(content) {
-		oid, size, ok := lfs.ParseLFSPointer(content)
-		if ok {
-			c.Header("Content-Type", "application/json")
-			c.JSON(http.StatusOK, gin.H{
-				"success":        true,
-				"is_lfs_pointer": true,
-				"lfs": gin.H{
-					"oid":  oid,
-					"size": size,
-				},
-			})
-			return
-		}
-	}
+	// LFS pointer 라도 binary streaming 으로 통일한다 (Issue-2327). client 는
+	// /overview/blob 의 IsLFSPointer / LFS 필드로 메타데이터를 얻고, /blob 은
+	// 단일 application/octet-stream contract 만 노출한다.
 
 	// 헤더 설정
 	c.Header("Content-Type", contentType)

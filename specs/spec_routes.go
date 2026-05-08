@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/branches"
 	"github.com/collabops/git-executor/internal/commits"
 	repocontext "github.com/collabops/git-executor/internal/context"
@@ -52,6 +53,7 @@ func setupSpecRoutes(reg *typed.Registry) {
 	overview.RegisterRoutes(apiGroup, nil)
 	branches.RegisterRoutes(apiGroup, nil)
 	diffs.RegisterRoutes(apiGroup, nil)
+	blob.RegisterRoutes(apiGroup, nil)
 
 	// 아직 legacy switch 경로:
 	// lfs

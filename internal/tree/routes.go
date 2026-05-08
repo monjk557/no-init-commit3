@@ -20,25 +20,27 @@ const tag = "Tree"
 // spec-only 모드 (등록만, 호출 없음).
 func RegisterRoutes(g gin.IRouter, h *TreeHandler) {
 	var (
-		treeAPI    func(*gin.Context) (TreeEntriesRecursiveResponse, error)
-		treeSearch func(*gin.Context) (TreeSearchResponse, error)
+		treeAPI    func(*gin.Context, TreeAPIRequest) (TreeEntriesRecursiveResponse, error)
+		treeSearch func(*gin.Context, TreeSearchRequest) (TreeSearchResponse, error)
 	)
 	if h != nil {
 		treeAPI = h.HandleTreeAPI
 		treeSearch = h.HandleTreeSearch
 	}
 
-	// GET /tree: ref/path/recursive 는 query 에서 직접 읽음. "path is not a
-	// tree" → 400, 그 외 raw → 404.
-	typed.RegisterGet(g, "/tree", tag,
+	// GET /tree: ref/path/recursive 는 TreeAPIRequest 로 바인딩. "path is not
+	// a tree" → 400, 그 외 raw → 404. RegisterGetWithQuery 로 spec 에 query
+	// parameter 를 expand 하여 orchestrator auto-gen client 가 인자 누락 없이
+	// 호출하도록 한다 (Issue-2327).
+	typed.RegisterGetWithQuery(g, "/tree", tag,
 		treeAPI,
 		typed.WithSummary("HandleTreeAPI"),
 		typed.WithErrorMapper(treeAPIErrorMapper),
 	)
 
-	// GET /tree/search: query/limit 직접 읽음. "failed to resolve reference"
-	// → 404, 그 외 raw → 500.
-	typed.RegisterGet(g, "/tree/search", tag,
+	// GET /tree/search: TreeSearchRequest 로 바인딩. "failed to resolve
+	// reference" → 404, 그 외 raw → 500.
+	typed.RegisterGetWithQuery(g, "/tree/search", tag,
 		treeSearch,
 		typed.WithSummary("HandleTreeSearch"),
 		typed.WithErrorMapper(treeSearchErrorMapper),

@@ -14,6 +14,7 @@ import (
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/lfs"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -476,6 +477,20 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 	contentType := blob.DetectContentType(blobContent, path)
 	isBinary := blob.IsBinaryContent(blobContent, contentType)
 
+	// LFS pointer 감지 — pointer 일 때 Content/Lines 비우고 LFS 메타데이터를
+	// 응답에 첨부하여 client 가 raw /blob 응답의 LFS JSON 분기에 의존하지
+	// 않도록 한다 (Issue-2327).
+	var (
+		isLFSPointer bool
+		lfsInfo      *LFSPointerInfo
+	)
+	if lfs.IsLFSPointer(blobContent) {
+		if oid, size, ok := lfs.ParseLFSPointer(blobContent); ok {
+			isLFSPointer = true
+			lfsInfo = &LFSPointerInfo{Oid: oid, Size: size}
+		}
+	}
+
 	parentPath := ""
 	if idx := strings.LastIndex(path, "/"); idx != -1 {
 		parentPath = path[:idx]
@@ -505,7 +520,9 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 
 	var content string
 	var lines int
-	if !isBinary {
+	// LFS pointer 면 raw pointer 텍스트를 노출하지 않는다 — client 는
+	// IsLFSPointer + LFS 필드만 보고 처리.
+	if !isBinary && !isLFSPointer {
 		content = string(blobContent)
 		lines = strings.Count(strings.ReplaceAll(content, "\r\n", "\n"), "\n") + 1
 	}
@@ -513,6 +530,8 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 	return BlobOverviewResponse{
 		Success:      true,
 		IsBinary:     isBinary,
+		IsLFSPointer: isLFSPointer,
+		LFS:          lfsInfo,
 		Content:      content,
 		ContentType:  contentType,
 		Lines:        lines,

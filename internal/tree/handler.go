@@ -3,7 +3,6 @@ package tree
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
@@ -55,9 +54,11 @@ func NewTreeHandler(cfg *config.Config) (*TreeHandler, error) {
 
 // HandleTreeAPI handles GET /repos/{owner}/{repo}/tree?ref=&path=&recursive=
 //
-// Typed handler — substring 기반 status 매핑 ("path is not a tree" → 400) 은
-// routes.go 의 ErrorMapper 가 담당. 단순 4xx 는 typed.NewHTTPError.
-func (h *TreeHandler) HandleTreeAPI(c *gin.Context) (TreeEntriesRecursiveResponse, error) {
+// Typed handler — query string 은 typed.RegisterGetWithQuery wrapper 가
+// TreeAPIRequest 로 자동 바인딩한다. substring 기반 status 매핑
+// ("path is not a tree" → 400) 은 routes.go 의 ErrorMapper 가 담당.
+// 단순 4xx 는 typed.NewHTTPError.
+func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEntriesRecursiveResponse, error) {
 	ctx := c.Request.Context()
 
 	// Context 취소 확인 (Handler에서 관리)
@@ -69,13 +70,9 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) (TreeEntriesRecursiveRespons
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := c.Query("ref")
-	path := c.Query("path")
-	recursiveStr := c.Query("recursive")
-	recursive := false
-	if recursiveStr != "" {
-		recursive, _ = strconv.ParseBool(recursiveStr)
-	}
+	ref := req.Ref
+	path := req.Path
+	recursive := req.Recursive
 
 	if ref == "" {
 		ref = "HEAD"
@@ -131,13 +128,14 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context) (TreeEntriesRecursiveRespons
 
 // HandleTreeSearch handles GET /repos/{owner}/{repo}/tree/search?ref=&query=&limit=
 //
-// Typed handler — "failed to resolve reference" → 404, 그 외 raw 는 500. 단순
-// 4xx 는 typed.NewHTTPError.
-func (h *TreeHandler) HandleTreeSearch(c *gin.Context) (TreeSearchResponse, error) {
+// Typed handler — query string 은 typed.RegisterGetWithQuery wrapper 가
+// TreeSearchRequest 로 자동 바인딩한다. "failed to resolve reference" → 404,
+// 그 외 raw 는 500. 단순 4xx 는 typed.NewHTTPError.
+func (h *TreeHandler) HandleTreeSearch(c *gin.Context, req TreeSearchRequest) (TreeSearchResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := c.Query("ref")
-	query := c.Query("query")
+	ref := req.Ref
+	query := req.Query
 
 	if query == "" {
 		return TreeSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "query parameter is required")
@@ -148,13 +146,11 @@ func (h *TreeHandler) HandleTreeSearch(c *gin.Context) (TreeSearchResponse, erro
 	}
 
 	limit := DefaultSearchLimit
-	if limitStr := c.Query("limit"); limitStr != "" {
-		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
-			if parsed > MaxSearchLimit {
-				limit = MaxSearchLimit
-			} else {
-				limit = parsed
-			}
+	if req.Limit > 0 {
+		if req.Limit > MaxSearchLimit {
+			limit = MaxSearchLimit
+		} else {
+			limit = req.Limit
 		}
 	}
 

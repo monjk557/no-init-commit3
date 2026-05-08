@@ -798,6 +798,13 @@ type pathOperation struct {
 	queryParams []queryParamSpec // ?source_ref=... 같은 query 파라미터 (typed.RegisterGetWithQuery 전용)
 	requestRef  string           // requestBody $ref schema 이름; 빈 문자열이면 body 없음
 	responseRef string           // 200 응답 $ref schema 이름; 빈 문자열이면 body 없음
+
+	// rawResponseContentType 은 RegisterRaw endpoint 의 200 응답 content-type
+	// (예: application/octet-stream, text/plain) 을 담는다. responseRef 가
+	// 비어있고 이 값이 set 되면 spec 에 schema 없는 raw content 블록을 emit.
+	// orchestrator auto-gen 클라이언트가 raw bytes/text endpoint 로 인식하기
+	// 위함 (Issue-2327).
+	rawResponseContentType string
 }
 
 // queryParamSpec 은 OpenAPI 의 `parameters: [in: query, ...]` 한 줄을
@@ -880,6 +887,12 @@ func registryEndpointToOperation(ep typed.Endpoint) pathOperation {
 				op.responseRef = r.SchemaRef
 			case r.RespType != nil:
 				op.responseRef = r.RespType.Name()
+			}
+			// RegisterRaw endpoint: schema 가 없고 ContentType 이 application/json
+			// 이외인 경우 raw content type 을 별도 필드로 보관하여
+			// renderSingleOperation 이 spec 에 명시적으로 노출하도록 한다.
+			if op.responseRef == "" && r.ContentType != "" && r.ContentType != "application/json" {
+				op.rawResponseContentType = r.ContentType
 			}
 			break
 		}
@@ -972,11 +985,21 @@ func renderSingleOperation(buf *strings.Builder, op pathOperation) {
 	buf.WriteString("      responses:\n")
 	buf.WriteString("        '200':\n")
 	buf.WriteString("          description: Success\n")
-	if op.responseRef != "" {
+	switch {
+	case op.responseRef != "":
 		buf.WriteString("          content:\n")
 		buf.WriteString("            application/json:\n")
 		buf.WriteString("              schema:\n")
 		buf.WriteString(fmt.Sprintf("                $ref: '#/components/schemas/%s'\n", openAPISchemaName(op.responseRef)))
+	case op.rawResponseContentType != "":
+		// RegisterRaw endpoint — schema 없는 binary/text content. orchestrator
+		// auto-gen 클라이언트는 이 content-type 만 보고 raw bytes/text reader
+		// 를 emit 한다.
+		buf.WriteString("          content:\n")
+		buf.WriteString(fmt.Sprintf("            %s:\n", op.rawResponseContentType))
+		buf.WriteString("              schema:\n")
+		buf.WriteString("                type: string\n")
+		buf.WriteString("                format: binary\n")
 	}
 	buf.WriteString("        '400':\n")
 	buf.WriteString("          $ref: '#/components/responses/BadRequest'\n")
