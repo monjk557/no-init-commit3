@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -151,6 +152,174 @@ func safeIndex(lines []string, i int) string {
 	return lines[i]
 }
 
+// jsonTagSet 은 SchemaInfo.Fields 의 JSONTag 들을 set 으로 모은다 — 검증
+// 시점에 순서에 의존하지 않도록.
+func jsonTagSet(fields []FieldInfo) map[string]bool {
+	out := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		if f.JSONTag != "" && f.JSONTag != "-" {
+			out[f.JSONTag] = true
+		}
+	}
+	return out
+}
+
+// flattenedFieldsForFixture 는 fixture src 를 parseSchemaFile + flattenEmbeddings
+// 두 단계로 통과시켜 지정 schema 의 최종 json tag set 을 반환한다.
+// parseSchemaFile (detect) ↔ flattenEmbeddings (inline) 책임 분리를 그대로
+// 따라가는 reality-mirroring helper.
+func flattenedFieldsForFixture(t *testing.T, src, schemaName string) map[string]bool {
+	t.Helper()
+	path := writeFixtureSchema(t, src)
+	schemas, err := parseSchemaFile(path, "fixture")
+	if err != nil {
+		t.Fatalf("parseSchemaFile: %v", err)
+	}
+	if err := flattenEmbeddings(schemas, typeResolver{}, nil); err != nil {
+		t.Fatalf("flattenEmbeddings: %v", err)
+	}
+	sc, ok := schemas[schemaName]
+	if !ok {
+		t.Fatalf("%s schema not found; got %v", schemaName, schemas)
+	}
+	return jsonTagSet(sc.Fields)
+}
+
+// writeFixtureSchema 는 임시 디렉토리에 `schema.go` 한 파일을 만들어 그 경로를
+// 반환한다. parseSchemaFile 이 path 기반 API 라 in-memory src 주입이 안 되어
+// tempdir + 실제 파일이 가장 단순한 fixture 경로다.
+func writeFixtureSchema(t *testing.T, src string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "schema.go")
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	return path
+}
+
+// TestParseSchemaFile_FlattensAnonymousValueEmbedding 는 anonymous embedded
+// struct (value type) 의 필드들이 parent struct 의 fields 에 inline 됨을
+// 검증한다. encoding/json 의 anonymous field flatten 동작과 동일.
+//
+// 현재 generator (`parseSchemaFile` line ~700) 는 `len(field.Names) > 0` 가드로
+// anonymous embedding 을 silent skip 한다 → SingleCommitDiffResponse /
+// PaginatedDiffResponse 의 spec 에서 *DiffResponse 임베딩 필드들이 통째로
+// 누락되어 web 까지 drift 전파 (Issue-2343).
+func TestParseSchemaFile_FlattensAnonymousValueEmbedding(t *testing.T) {
+	src := `package fixture
+
+type Inner struct {
+	A string ` + "`json:\"a\"`" + `
+	B int    ` + "`json:\"b\"`" + `
+}
+
+type Outer struct {
+	C    bool ` + "`json:\"c\"`" + `
+	Inner
+}
+`
+	got := flattenedFieldsForFixture(t, src, "Outer")
+	want := map[string]bool{"a": true, "b": true, "c": true}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("Outer.Fields missing flattened json tag %q; got fields=%v", k, got)
+		}
+	}
+}
+
+// TestParseSchemaFile_FlattensAnonymousPointerEmbedding 는 *Embedded 형태의
+// anonymous pointer embedding 도 동일하게 flatten 됨을 검증한다.
+//
+// 실제 회귀 사례: SingleCommitDiffResponse {Success; Commit; *DiffResponse}
+// (internal/diffs/schema.go:76).
+func TestParseSchemaFile_FlattensAnonymousPointerEmbedding(t *testing.T) {
+	src := `package fixture
+
+type Inner struct {
+	A string ` + "`json:\"a\"`" + `
+	B int    ` + "`json:\"b\"`" + `
+}
+
+type Outer struct {
+	C bool ` + "`json:\"c\"`" + `
+	*Inner
+}
+`
+	got := flattenedFieldsForFixture(t, src, "Outer")
+	want := map[string]bool{"a": true, "b": true, "c": true}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("Outer.Fields missing flattened json tag %q; got fields=%v", k, got)
+		}
+	}
+}
+
+// TestParseSchemaFile_TaggedEmbeddingStaysNested 는 임베딩에 명시적 json tag
+// 가 붙으면 flatten 하지 않고 nested ref 로 유지됨을 검증한다 (encoding/json
+// 동작과 동일 — tag 가 있으면 일반 필드로 취급).
+func TestParseSchemaFile_TaggedEmbeddingStaysNested(t *testing.T) {
+	src := `package fixture
+
+type Inner struct {
+	A string ` + "`json:\"a\"`" + `
+}
+
+type Outer struct {
+	C     bool ` + "`json:\"c\"`" + `
+	Inner ` + "`json:\"inner\"`" + `
+}
+`
+	got := flattenedFieldsForFixture(t, src, "Outer")
+	if !got["inner"] {
+		t.Errorf("Outer.Fields should keep tagged embedding as nested ref %q; got fields=%v", "inner", got)
+	}
+	if got["a"] {
+		t.Errorf("Outer.Fields should NOT flatten tagged embedding (json:\"inner\"); but got nested 'a'; fields=%v", got)
+	}
+	if !got["c"] {
+		t.Errorf("Outer.Fields missing 'c'; fields=%v", got)
+	}
+}
+
+// TestParseAllSchemas_FlattensCrossPackageEmbedding 는 실제 코드베이스의
+// FileChange (internal/merge/schema.go) 가 cross-package 임베딩 (`diffs.FileDiff`)
+// 의 필드들을 spec 단계에서 받는지 직접 검증한다.
+//
+// 현재 generator 는 cross-package anonymous embedding 도 silent skip → FileDiff
+// 의 path/status/additions/deletions/... 가 FileChange spec 에서 누락. 이
+// 테스트는 Phase 2 fix 후 GREEN 으로 전환된다.
+func TestParseAllSchemas_FlattensCrossPackageEmbedding(t *testing.T) {
+	root := projectRootForTest(t)
+
+	schemas, _, err := parseAllSchemas(root, nil)
+	if err != nil {
+		t.Fatalf("parseAllSchemas: %v", err)
+	}
+
+	fc, ok := schemas["FileChange"]
+	if !ok {
+		t.Fatalf("FileChange schema not found")
+	}
+
+	got := jsonTagSet(fc.Fields)
+	// FileDiff 의 json tags 중 omitempty 없이 항상 wire 에 등장하는 핵심 필드만
+	// 검증 (omitempty 가 있는 old_path/submodule_change 는 검증 대상 아님 —
+	// flatten 자체는 일어나야 하지만 byte-equiv 회귀로 충분).
+	want := []string{"path", "status", "additions", "deletions", "is_binary"}
+	for _, k := range want {
+		if !got[k] {
+			t.Errorf("FileChange.Fields missing flattened json tag %q from diffs.FileDiff; got fields=%v", k, got)
+		}
+	}
+	// 그리고 FileChange 자체의 manual field 도 그대로.
+	for _, k := range []string{"content", "conflicts"} {
+		if !got[k] {
+			t.Errorf("FileChange.Fields missing own json tag %q; got fields=%v", k, got)
+		}
+	}
+}
+
 // TestRenderSchemaYAML_NullableForNilableJSONFields 는 Go encoding/json 의
 // nil 동작을 OpenAPI 의 nullable 로 정확히 표현하는지 검증한다.
 //
@@ -238,5 +407,100 @@ func TestRenderSchemaYAML_NullableForNilableJSONFields(t *testing.T) {
 		if hasNullable != tc.nullable {
 			t.Errorf("%s nullable=%v want %v\nblock:\n%s", tc.field, hasNullable, tc.nullable, block)
 		}
+	}
+}
+
+// TestFlattenEmbeddings_CycleDetected 는 자기 자신을 직간접 임베딩하는
+// schema 가 들어오면 flattenEmbeddings 가 명시적 에러를 반환함을 검증한다
+// (현재 코드베이스엔 cycle 없음 — 미래 회귀 가드).
+func TestFlattenEmbeddings_CycleDetected(t *testing.T) {
+	src := `package fixture
+
+type A struct {
+	X int ` + "`json:\"x\"`" + `
+	*B
+}
+
+type B struct {
+	Y int ` + "`json:\"y\"`" + `
+	*A
+}
+`
+	path := writeFixtureSchema(t, src)
+	schemas, err := parseSchemaFile(path, "fixture")
+	if err != nil {
+		t.Fatalf("parseSchemaFile: %v", err)
+	}
+
+	err = flattenEmbeddings(schemas, typeResolver{}, nil)
+	if err == nil {
+		t.Fatalf("expected cycle error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("error should mention cycle; got %q", err.Error())
+	}
+}
+
+// TestFlattenEmbeddings_DuplicateTagBetweenEmbeddingsErrors 는 같은 schema
+// 가 두 임베딩을 가지고 둘이 동일 json tag 를 emit 할 때 fail-fast 에러가
+// 발생함을 검증한다. encoding/json 은 둘 다 drop 하지만, generator 에선
+// silent drift 위험이 더 크므로 명시적 에러로 차단.
+func TestFlattenEmbeddings_DuplicateTagBetweenEmbeddingsErrors(t *testing.T) {
+	src := `package fixture
+
+type Left struct {
+	Shared int ` + "`json:\"shared\"`" + `
+}
+
+type Right struct {
+	Shared int ` + "`json:\"shared\"`" + `
+}
+
+type Outer struct {
+	Left
+	Right
+}
+`
+	path := writeFixtureSchema(t, src)
+	schemas, err := parseSchemaFile(path, "fixture")
+	if err != nil {
+		t.Fatalf("parseSchemaFile: %v", err)
+	}
+
+	err = flattenEmbeddings(schemas, typeResolver{}, nil)
+	if err == nil {
+		t.Fatalf("expected duplicate-tag error, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate json tag") {
+		t.Errorf("error should mention duplicate json tag; got %q", err.Error())
+	}
+}
+
+// TestFlattenEmbeddings_ExternalTypeWarning 는 schemas map 에 없는 외부
+// type 임베딩이 silent skip 되지 않고 log writer 에 warning 을 emit 함을
+// 검증한다.
+func TestFlattenEmbeddings_ExternalTypeWarning(t *testing.T) {
+	src := `package fixture
+
+type Outer struct {
+	X int ` + "`json:\"x\"`" + `
+	*ExternalThing
+}
+`
+	path := writeFixtureSchema(t, src)
+	schemas, err := parseSchemaFile(path, "fixture")
+	if err != nil {
+		t.Fatalf("parseSchemaFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := flattenEmbeddings(schemas, typeResolver{}, &buf); err != nil {
+		t.Fatalf("flattenEmbeddings should not error on external type; got %v", err)
+	}
+	if !strings.Contains(buf.String(), "ExternalThing") {
+		t.Errorf("warning should mention external type %q; got %q", "ExternalThing", buf.String())
+	}
+	if !strings.Contains(buf.String(), "Outer") {
+		t.Errorf("warning should mention containing schema %q; got %q", "Outer", buf.String())
 	}
 }

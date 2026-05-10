@@ -2223,6 +2223,29 @@ components:
     FileChange:
       type: object
       properties:
+        path:
+          type: string
+        status:
+          type: string
+          enum: [added, deleted, modified, renamed]
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        diffLines:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineChange'
+          nullable: true
+        is_binary:
+          type: boolean
+        loadStatus:
+          type: string
+          enum: [loaded, collapsed, too_large, binary, submodule]
+        old_path:
+          type: string
+        submodule_change:
+          $ref: '#/components/schemas/SubmoduleChange'
         content:
           $ref: '#/components/schemas/FileContent'
         conflicts:
@@ -2236,6 +2259,14 @@ components:
           type: array
           items:
             type: string
+      required:
+        - additions
+        - deletions
+        - diffLines
+        - is_binary
+        - loadStatus
+        - path
+        - status
     FileConflict:
       type: object
       properties:
@@ -3105,11 +3136,40 @@ components:
     PaginatedDiffResponse:
       type: object
       properties:
+        base:
+          type: string
+        head:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileDiff'
+          nullable: true
+        stats:
+          $ref: '#/components/schemas/DiffStats'
+        diff_mode:
+          type: string
+        effective_base:
+          type: string
+        commits:
+          $ref: '#/components/schemas/CommitStats'
+        commits_by_date:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommitsByDate'
+        merge_base:
+          type: string
+        truncated:
+          type: boolean
         success:
           type: boolean
         pagination:
           $ref: '#/components/schemas/PaginationParams'
       required:
+        - base
+        - files
+        - head
+        - stats
         - success
     PaginationParams:
       type: object
@@ -3454,11 +3514,40 @@ components:
     SingleCommitDiffResponse:
       type: object
       properties:
+        base:
+          type: string
+        head:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileDiff'
+          nullable: true
+        stats:
+          $ref: '#/components/schemas/DiffStats'
+        diff_mode:
+          type: string
+        effective_base:
+          type: string
+        commits:
+          $ref: '#/components/schemas/CommitStats'
+        commits_by_date:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommitsByDate'
+        merge_base:
+          type: string
+        truncated:
+          type: boolean
         success:
           type: boolean
         commit:
           $ref: '#/components/schemas/CommitMetadata'
       required:
+        - base
+        - files
+        - head
+        - stats
         - success
     StateAuthorInfo:
       type: object

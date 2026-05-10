@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -189,6 +190,23 @@ type SchemaInfo struct {
 	Name    string
 	Fields  []FieldInfo
 	Package string
+	// Embeds 는 anonymous embedded field 의 참조 정보. JSON tag 가 없는
+	// 임베딩만 담긴다 — tag 가 있으면 일반 named field 로 취급되어 Fields
+	// 에 들어간다 (encoding/json 동작과 동일). flattenEmbeddings 가 후처리
+	// 단계에서 이 슬라이스를 walk 하여 대상 schema 의 Fields 를 parent 의
+	// Fields 에 inline 한다.
+	Embeds []EmbedRef
+}
+
+// EmbedRef 는 anonymous embedded field 한 건의 메타. parseSchemaFile 단계
+// 에서 채우고 flattenEmbeddings 가 resolver 를 거쳐 target SchemaInfo 를
+// 찾아 펼친다.
+type EmbedRef struct {
+	// TypeName 은 임베딩된 타입의 unqualified 이름 (예: "DiffResponse").
+	TypeName string
+	// PkgQual 은 cross-package 임베딩 시 selector 의 package qualifier.
+	// same-package 임베딩이면 빈 문자열. 예: `diffs.FileDiff` → "diffs".
+	PkgQual string
 }
 
 type FieldInfo struct {
@@ -251,7 +269,7 @@ func runGeneration(projectRoot string, registry *typed.Registry, log *os.File) (
 	fmt.Fprintf(log, "   Found %d routes\n", len(routes))
 
 	fmt.Fprintln(log, "🔍 Parsing schema files from all packages...")
-	schemas, resolver, err := parseAllSchemas(projectRoot)
+	schemas, resolver, err := parseAllSchemas(projectRoot, log)
 	if err != nil {
 		return "", fmt.Errorf("Error parsing schemas: %w", err)
 	}
@@ -558,7 +576,7 @@ func (r typeResolver) resolve(parentPkg, name string) string {
 	return name
 }
 
-func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, typeResolver, error) {
+func parseAllSchemas(projectRoot string, log io.Writer) (map[string]SchemaInfo, typeResolver, error) {
 	// Phase 1: 패키지별로 schema 를 수집. 같은 이름이라도 다른 패키지면
 	// 별도 보관해서 collision 검출에 쓴다.
 	perPackage := map[string]map[string]SchemaInfo{}
@@ -634,7 +652,133 @@ func parseAllSchemas(projectRoot string) (map[string]SchemaInfo, typeResolver, e
 		}
 	}
 
+	// Phase 4: anonymous embedded fields 를 flatten — encoding/json 의 anonymous
+	// field 동작과 동일. cycle detection + parent-wins (이름 충돌 시 parent 우선).
+	if err := flattenEmbeddings(schemas, resolver, log); err != nil {
+		return nil, nil, fmt.Errorf("flatten embeddings: %w", err)
+	}
+
 	return schemas, resolver, nil
+}
+
+// flattenEmbeddings 는 schemas 안의 모든 SchemaInfo.Embeds 를 walk 하여 대상
+// schema 의 Fields 를 parent.Fields 에 inline 한다. encoding/json 의
+// anonymous field 동작 mirror:
+//
+//   - parent 와 embedded 의 같은 json key 충돌 시 parent 우선 (Go shadowing 규칙)
+//   - 같은 depth 의 다중 임베딩 간 동일 json key 충돌 시 fail-fast 에러
+//     (encoding/json 은 둘 다 drop 하지만, generator 에선 silent drift 위험을
+//     막기 위해 명시적 에러 — 의도된 케이스라면 한 쪽 임베딩에 json tag 명시
+//     으로 해소)
+//   - cycle (자기 자신 직간접 임베딩) 발견 시 명시적 에러
+//   - 같은 임베딩이 여러 단계 거쳐 들어와도 한 번만 inline (fixed-point)
+//   - 외부 type (resolver 가 매핑 못함) 임베딩은 skip + log 에 warning
+//
+// 결정성: schemas iteration 은 sort 된 name 순서로 시작. 각 schema 의
+// Fields 는 source-order 보존, embedded fields 는 parent's own fields 앞에
+// prepend (encoding/json 의 marshal 결과는 source-order 따라 임베딩 위치에
+// inline 되지만 OpenAPI 의 properties 는 unordered → 단순한 prepend 가
+// readable).
+//
+// log 가 nil 이면 warning 출력은 생략 (test 등 silent 모드).
+func flattenEmbeddings(schemas map[string]SchemaInfo, resolver typeResolver, log io.Writer) error {
+	// flat 은 visit 가 끝난 schema 의 최종 Fields 를 캐시한다 (동일 schema
+	// 가 다른 parent 에 임베딩될 때 재계산 방지).
+	flat := map[string][]FieldInfo{}
+
+	var visit func(name string, stack map[string]bool) error
+	visit = func(name string, stack map[string]bool) error {
+		if _, done := flat[name]; done {
+			return nil
+		}
+		if stack[name] {
+			return fmt.Errorf("cycle detected involving %q", name)
+		}
+		sc, ok := schemas[name]
+		if !ok {
+			// 외부 type (resolver 가 매핑 못함) — flatten 대상 아님. parent
+			// 측에서는 embedded fields 0건으로 취급.
+			return nil
+		}
+
+		stack[name] = true
+		defer delete(stack, name)
+
+		// 1) parent own fields 의 json tag set — parent-wins 충돌 처리에 사용.
+		ownTags := map[string]bool{}
+		for _, f := range sc.Fields {
+			if f.JSONTag != "" && f.JSONTag != "-" {
+				ownTags[f.JSONTag] = true
+			}
+		}
+
+		// 2) 각 embedding 을 재귀 flatten 후 parent 에 prepend.
+		var inlined []FieldInfo
+		seenInlinedTags := map[string]bool{}
+		for _, e := range sc.Embeds {
+			lookupPkg := e.PkgQual
+			if lookupPkg == "" {
+				lookupPkg = sc.Package
+			}
+			target := resolver.resolve(lookupPkg, e.TypeName)
+			if err := visit(target, stack); err != nil {
+				return err
+			}
+			embeddedFields, ok := flat[target]
+			if !ok {
+				// 외부 type (generator 의 schemaFilePaths() 밖의 type, 예:
+				// third-party) — flatten 대상 schema 가 없으므로 skip.
+				// 미래 회귀 가드용으로 warning 만 emit.
+				if log != nil {
+					qual := e.TypeName
+					if e.PkgQual != "" {
+						qual = e.PkgQual + "." + e.TypeName
+					}
+					fmt.Fprintf(log, "⚠️  flattenEmbeddings: %q embeds %q which is not in the schema set; embedded fields will be missing from spec\n",
+						name, qual)
+				}
+				continue
+			}
+			for _, f := range embeddedFields {
+				if f.JSONTag == "" || f.JSONTag == "-" {
+					continue
+				}
+				if ownTags[f.JSONTag] {
+					continue // parent-wins (Go shadowing)
+				}
+				if seenInlinedTags[f.JSONTag] {
+					// 같은 depth 의 다른 임베딩이 동일 tag 를 가진 경우.
+					// encoding/json 은 둘 다 drop 하지만, generator 에선
+					// silent drift 위험이 더 크므로 fail-fast. 의도된 충돌이면
+					// 한 쪽 임베딩에 json tag 명시 으로 해소 가능.
+					return fmt.Errorf(
+						"schema %q: duplicate json tag %q from multiple anonymous embeddings",
+						name, f.JSONTag)
+				}
+				seenInlinedTags[f.JSONTag] = true
+				inlined = append(inlined, f)
+			}
+		}
+
+		merged := append(inlined, sc.Fields...)
+		flat[name] = merged
+		sc.Fields = merged
+		schemas[name] = sc
+		return nil
+	}
+
+	// 결정성: schemas iteration 순서를 sort 로 고정.
+	names := make([]string, 0, len(schemas))
+	for name := range schemas {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := visit(name, map[string]bool{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensurePkg(r typeResolver, pkg string) map[string]string {
@@ -644,8 +788,12 @@ func ensurePkg(r typeResolver, pkg string) map[string]string {
 	return r[pkg]
 }
 
-// schemasEqual 은 두 SchemaInfo 의 field set 이 동일한지 비교한다 (필드 순서
-// 무관, 이름·타입·json tag·required 비교).
+// schemasEqual 은 두 SchemaInfo 의 shape 이 동일한지 비교한다 (필드 순서
+// 무관, 이름·타입·json tag·required + anonymous embedding 참조 set 비교).
+//
+// Embeds 비교가 빠지면 두 패키지 같은 이름 schema 중 한 쪽만 임베딩을 가질
+// 때 collision detection 이 둘을 동일 판정해 한 쪽 임베딩이 silent 하게
+// 무시될 수 있음 (Issue-2343 review 에서 식별된 회귀 가드).
 func schemasEqual(a, b SchemaInfo) bool {
 	if len(a.Fields) != len(b.Fields) {
 		return false
@@ -660,6 +808,19 @@ func schemasEqual(a, b SchemaInfo) bool {
 			return false
 		}
 		if af.Type != f.Type || af.JSONTag != f.JSONTag || af.Required != f.Required {
+			return false
+		}
+	}
+	if len(a.Embeds) != len(b.Embeds) {
+		return false
+	}
+	embedKey := func(e EmbedRef) string { return e.PkgQual + "." + e.TypeName }
+	aEmbeds := map[string]bool{}
+	for _, e := range a.Embeds {
+		aEmbeds[embedKey(e)] = true
+	}
+	for _, e := range b.Embeds {
+		if !aEmbeds[embedKey(e)] {
 			return false
 		}
 	}
@@ -727,6 +888,53 @@ func parseSchemaFile(filePath string, pkg string) (map[string]SchemaInfo, error)
 								}
 
 								schema.Fields = append(schema.Fields, fieldInfo)
+							} else if len(field.Names) == 0 {
+								// Anonymous embedded field. encoding/json 의 동작:
+								//   - JSON tag 없음 → embedded struct 의 fields 가
+								//     parent 에 inline (flatten). Embeds 에 추가하여
+								//     Phase 4 flattenEmbeddings 가 후처리.
+								//   - JSON tag 있음 → 일반 named field 로 취급 (nested
+								//     ref). field name 은 임베딩된 type name.
+								//   - JSON tag "-" → 무시.
+								typeName, pkgQual := parseEmbeddedType(field.Type)
+								if typeName == "" || !isExportedIdent(typeName) {
+									continue
+								}
+
+								var jsonTag string
+								var jsonTagFull string
+								if field.Tag != nil {
+									tag := reflect.StructTag(strings.Trim(field.Tag.Value, "`"))
+									jsonTagFull = tag.Get("json")
+									if jsonTagFull == "-" {
+										continue
+									}
+									if jsonTagFull != "" {
+										parts := strings.Split(jsonTagFull, ",")
+										jsonTag = parts[0]
+									}
+								}
+
+								if jsonTag != "" {
+									// Tagged embedding → 일반 field 처럼 emit.
+									fieldInfo := FieldInfo{
+										Name:     typeName,
+										Type:     getTypeString(field.Type),
+										JSONTag:  jsonTag,
+										Required: !strings.Contains(jsonTagFull, "omitempty"),
+									}
+									if strings.HasPrefix(fieldInfo.Type, "*") {
+										fieldInfo.Required = false
+									}
+									schema.Fields = append(schema.Fields, fieldInfo)
+									continue
+								}
+
+								// Untagged anonymous embedding → flatten 대상.
+								schema.Embeds = append(schema.Embeds, EmbedRef{
+									TypeName: typeName,
+									PkgQual:  pkgQual,
+								})
 							}
 						}
 					}
@@ -739,6 +947,41 @@ func parseSchemaFile(filePath string, pkg string) (map[string]SchemaInfo, error)
 	})
 
 	return schemas, nil
+}
+
+// parseEmbeddedType 은 anonymous embedded field 의 type 표현식을 (typeName,
+// pkgQual) 로 분해한다. pointer 임베딩은 deref. cross-package 임베딩이면
+// pkgQual 에 selector 의 X (package alias) 가 들어간다.
+//
+// 지원 형태:
+//   - Foo            → ("Foo", "")
+//   - *Foo           → ("Foo", "")
+//   - pkg.Foo        → ("Foo", "pkg")
+//   - *pkg.Foo       → ("Foo", "pkg")
+//
+// 그 외 (interface 임베딩, generic 등) 는 ("", "") 반환 → 호출자가 skip.
+func parseEmbeddedType(expr ast.Expr) (typeName, pkgQual string) {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name, ""
+	case *ast.SelectorExpr:
+		if id, ok := t.X.(*ast.Ident); ok {
+			return t.Sel.Name, id.Name
+		}
+	case *ast.StarExpr:
+		return parseEmbeddedType(t.X)
+	}
+	return "", ""
+}
+
+// isExportedIdent 은 Go 의 exported identifier 규칙 (첫 글자 대문자) 을 검사.
+// ast.Ident.IsExported 와 동일하지만 raw string 입력에 사용.
+func isExportedIdent(name string) bool {
+	if name == "" {
+		return false
+	}
+	c := name[0]
+	return c >= 'A' && c <= 'Z'
 }
 
 func getTypeString(expr ast.Expr) string {
