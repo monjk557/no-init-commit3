@@ -328,12 +328,23 @@ func Load() (*Config, error) {
 }
 
 // applyOnpremOverrides는 onprem 환경에서 필요한 설정을 강제 적용합니다.
-// onprem = prod 수준의 보안/안정성 + 내부망 제약 (HTTPS 없음, 외부 서비스 접근 불가, 자체 인프라)
+// onprem = prod 수준의 보안/안정성 + 내부망 제약 (HTTPS 없음, 외부 서비스 접근 불가, 자체 인프라).
+//
+// 적용 조건: APP_ENV=onprem 일 때만 호출됨 (parseAppEnv().IsOnprem() 가 true).
+// stage/prod 환경에서는 이 override 자체가 실행되지 않으므로 본 함수의 변경은
+// onprem 환경에만 영향. validate() 에서는 backend 별 필수 필드 검증을 그대로 수행.
 func applyOnpremOverrides(config *Config) {
 	// API 문서 비활성화 (운영 환경 — 보안)
 	config.Server.EnableDocs = false
 
-	// LFS 스토리지: GCS 사용 불가 → local 강제
+	// LFS 스토리지: onprem (air-gap) 환경에서는 GCS API endpoint (storage.googleapis.com)
+	// 도달 불가능 → local backend 로 강제 변경.
+	//
+	// 주의:
+	//   - 이 override 는 **onprem 환경 전용**. stage/prod 에서는 GCS backend 정상 동작.
+	//   - MinIO (collabops-service-objstore) backend 는 onprem 에 deploy 되어 있어
+	//     cluster-internal 도달 가능 → override 대상 아님. 향후 LFS_STORAGE_BACKEND=minio
+	//     케이스가 추가되어도 이 분기에서 건드리지 않음.
 	if config.LFS.Enabled && config.LFS.StorageBackend == "gcs" {
 		config.LFS.StorageBackend = "local"
 		config.LFS.GCSBucket = ""
