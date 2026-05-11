@@ -201,7 +201,11 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) (DiffResponse, error) {
 
 // HandleBranchDiffQuery handles GET /diff/branches?base=&head= — query parameter
 // 방식 (슬래시 포함 브랜치명 지원).
-func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) (DiffResponse, error) {
+//
+// query 는 typed.RegisterGetWithQuery wrapper 가 BranchDiffQueryRequest 로
+// bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 base/head 를
+// in: query 로 노출 (Issue-2317 후속).
+func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context, req BranchDiffQueryRequest) (DiffResponse, error) {
 	ctx := c.Request.Context()
 
 	params, err := h.validateAndExtractParams(c)
@@ -209,11 +213,8 @@ func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) (DiffResponse, error
 		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	base := c.Query("base")
-	head := c.Query("head")
-	if base == "" || head == "" {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required query parameters: base or head")
-	}
+	base := req.Base
+	head := req.Head
 	params.Base = base
 	params.Head = head
 
@@ -263,7 +264,7 @@ func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context) (DiffResponse, error
 // 기본 비교 모드는 merge_base — CR 트리(file list)가 merge-base 기준으로 계산되므로
 // 단일 파일 diff도 같은 effective_base를 써야 변경 집합이 어긋나지 않습니다 (Issue-2095).
 // 호출자가 commit-vs-commit 직접 비교를 원하면 diff_mode=direct로 명시.
-func (h *DiffHandler) HandleFileDiff(c *gin.Context) (DiffResponse, error) {
+func (h *DiffHandler) HandleFileDiff(c *gin.Context, req FileDiffRequest) (DiffResponse, error) {
 	ctx := c.Request.Context()
 
 	params, err := h.validateAndExtractParams(c)
@@ -271,16 +272,9 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context) (DiffResponse, error) {
 		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	filePath := c.Query("path")
-	if filePath == "" {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: path")
-	}
-
-	base := c.Query("base")
-	head := c.Query("head")
-	if base == "" || head == "" {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base or head")
-	}
+	filePath := req.Path
+	base := req.Base
+	head := req.Head
 	params.Base = base
 	params.Head = head
 
@@ -370,7 +364,13 @@ func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) (SingleCommitDiffRe
 
 // HandleExpandContext handles GET /diff/expand-context — hunk 사이 숨겨진
 // context 라인을 blob 에서 직접 읽어 반환하는 경량 API.
-func (h *DiffHandler) HandleExpandContext(c *gin.Context) (ExpandContextResponse, error) {
+//
+// query 는 typed.RegisterGetWithQuery wrapper 가 ExpandContextRequest 로
+// bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 path/base/head/
+// start_old/start_new/count/direction 등을 in: query 로 노출 (Issue-2317
+// 후속). from_old/to_old/from_new/side/diff_mode/type 등 보조 파라미터는
+// handler 본문에서 c.Query 로 직접 읽는다 (기존 custom 에러 메시지 보존).
+func (h *DiffHandler) HandleExpandContext(c *gin.Context, req ExpandContextRequest) (ExpandContextResponse, error) {
 	ctx := c.Request.Context()
 
 	params, err := h.validateAndExtractParams(c)
@@ -378,23 +378,19 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context) (ExpandContextResponse
 		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	filePath := c.Query("path")
-	base := c.Query("base")
-	head := c.Query("head")
-
-	if filePath == "" || base == "" || head == "" {
-		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "required parameters: path, base, head")
-	}
+	filePath := req.Path
+	base := req.Base
+	head := req.Head
 
 	var fromOld, toOld, fromNew int
 
-	if startOldStr := c.Query("start_old"); startOldStr != "" {
+	if startOldStr := req.StartOld; startOldStr != "" {
 		startOld, err := strconv.Atoi(startOldStr)
 		if err != nil || startOld < 1 {
 			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_old must be a positive integer")
 		}
 
-		startNewStr := c.Query("start_new")
+		startNewStr := req.StartNew
 		if startNewStr == "" {
 			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_new is required when using start_old")
 		}
@@ -404,14 +400,17 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context) (ExpandContextResponse
 		}
 
 		count := 20
-		if countStr := c.Query("count"); countStr != "" {
+		if countStr := req.Count; countStr != "" {
 			count, err = strconv.Atoi(countStr)
 			if err != nil || count < 1 {
 				return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "count must be a positive integer")
 			}
 		}
 
-		direction := c.DefaultQuery("direction", "down")
+		direction := req.Direction
+		if direction == "" {
+			direction = "down"
+		}
 
 		if direction == "up" {
 			fromOld = startOld - count

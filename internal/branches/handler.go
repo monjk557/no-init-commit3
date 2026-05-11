@@ -161,19 +161,27 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) (Vali
 
 // HandleGetBranches handles GET /branches.
 // Supports optional ?search=<keyword> to filter branches by name (case-insensitive substring match).
-func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context) (GetBranchesResponse, error) {
+//
+// query string 은 typed.RegisterGetWithQuery wrapper 가 GetBranchesRequest 로
+// bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 query parameter
+// 메타데이터를 자동 노출하므로 orchestrator auto-gen client 가 limit/skip/
+// search/sort/email/status 인자를 누락하지 않는다 (Issue-2317 후속).
+func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranchesRequest) (GetBranchesResponse, error) {
 	ctx := c.Request.Context()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	limitStr := c.Query("limit")
-	skipStr := c.Query("skip")
-	searchQuery := c.Query("search")
-	sortParam := c.DefaultQuery("sort", "newest")
+	limitStr := req.Limit
+	skipStr := req.Skip
+	searchQuery := req.Search
+	sortParam := req.Sort
+	if sortParam == "" {
+		sortParam = "newest"
+	}
 	sort := ParseBranchSort(sortParam)
-	emailFilter := c.Query("email")
-	statusFilter := c.Query("status")
+	emailFilter := req.Email
+	statusFilter := req.Status
 
 	if statusFilter != "" && statusFilter != "active" && statusFilter != "stale" {
 		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid status: must be 'active' or 'stale'")

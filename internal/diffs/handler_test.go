@@ -874,7 +874,7 @@ func Test_FileDiff_MissingPath_Returns400(t *testing.T) {
 	handler, _ := newDiffHandlerWithRepo(t)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adaptQuery(handler.HandleFileDiff))
 
 	req, _ := http.NewRequest("GET", "/api/v2/repository/testowner/testrepo/diff/file?base=abc&head=def", nil)
 	w := httptest.NewRecorder()
@@ -914,7 +914,7 @@ func Test_FileDiff_ValidPath_ReturnsDiff(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adaptQuery(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=test.txt&base=%s&head=%s",
 		baseCommitHash.String(), headCommitHash.String())
@@ -955,7 +955,7 @@ func Test_FileDiff_NonExistentPath_Returns404(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adaptQuery(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=nonexistent.txt&base=%s&head=%s",
 		commitHash.String(), commitHash.String())
@@ -980,7 +980,7 @@ func Test_FileDiff_BinaryFile_ReturnsMetadataOnly(t *testing.T) {
 	handler := newDiffHandler(t, tempDir)
 
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adaptQuery(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=image.png&base=%s&head=%s",
 		initialCommitSHA, secondCommitSHA)
@@ -1045,7 +1045,7 @@ func Test_FileDiff_MergeBaseDefault_DivergedFileAddedShowsAsAdded(t *testing.T) 
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adaptQuery(handler.HandleFileDiff))
 
 	// 1. 기본 (diff_mode=merge_base): merge-base에 없으므로 added로 +N 라인
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=models.py&base=%s&head=%s",
@@ -1117,7 +1117,7 @@ func Test_FileDiff_NeitherSideHasFile_Returns404(t *testing.T) {
 
 	handler := newDiffHandler(t, tempDir)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adaptQuery(handler.HandleFileDiff))
 
 	url := fmt.Sprintf("/api/v2/repository/testowner/testrepo/diff/file?path=does/not/exist.py&base=%s&head=%s",
 		rootCommit.String(), headCommit.String())
@@ -1141,7 +1141,7 @@ func Test_FileDiff_InvalidRef_Returns404WithCode(t *testing.T) {
 
 	handler, _ := newDiffHandlerWithRepo(t)
 	router := gin.New()
-	router.GET("/api/v2/repository/:owner/:repo/diff/file", adapt(handler.HandleFileDiff))
+	router.GET("/api/v2/repository/:owner/:repo/diff/file", adaptQuery(handler.HandleFileDiff))
 
 	// 의도적으로 resolvable 하지 않은 branch/tag/SHA 명: nativeResolveRef 가 3 경로 (direct, refs/heads, refs/tags)
 	// 모두 실패시켜야 REF_NOT_FOUND 경로 진입.

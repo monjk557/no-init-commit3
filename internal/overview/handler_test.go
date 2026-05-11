@@ -1221,7 +1221,7 @@ func Test_TreeWithCommit_ResponseIncludesMeta(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1249,7 +1249,7 @@ func Test_TreeWithCommit_SmallRepo_ReturnsComplete(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1276,7 +1276,7 @@ func Test_TreeWithCommit_NonExistentPath_Returns404(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?path=nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -1297,7 +1297,7 @@ func Test_TreeWithCommit_NonExistentRepo_Returns404(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, owner), 0755))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1317,7 +1317,7 @@ func Test_TreeWithCommit_WithPathParam_ReturnsEntriesForPath(t *testing.T) {
 	createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main&path=src", nil)
 	w := httptest.NewRecorder()
@@ -1343,7 +1343,7 @@ func Test_TreeWithCommit_WithRefParam_Returns200(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main", nil)
 	w := httptest.NewRecorder()
@@ -1368,7 +1368,7 @@ func Test_TreeWithCommit_NonExistentRef_Returns404(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=nonexistent-branch", nil)
 	w := httptest.NewRecorder()
@@ -1388,7 +1388,7 @@ func Test_TreeWithCommit_FilePath_Returns404(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	// path가 파일(README.md)이면 tree가 아니므로 404
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits?path=README.md", nil)
@@ -1409,7 +1409,7 @@ func Test_TreeWithCommit_ResponseHasRequiredFields(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview/tree/commits", nil)
 	w := httptest.NewRecorder()
@@ -1759,7 +1759,7 @@ func Test_TreeWithCommit_PerEntryLatestCommit_IsAccurate(t *testing.T) {
 		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET",
 		"/repos/"+owner+"/"+repo+"/overview/tree/commits?ref=main", nil)
@@ -1816,7 +1816,7 @@ func TestHandleGetLatestCommitOverview(t *testing.T) {
 	commitHashes := createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/latest-commit", adapt(handler.HandleGetLatestCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/latest-commit", adaptQuery(handler.HandleGetLatestCommitOverview))
 
 	t.Run("NoPath_ReturnsRefHeadCommit", func(t *testing.T) {
 		req := httptest.NewRequest("GET",

@@ -99,6 +99,30 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: limit
+          in: query
+          schema:
+            type: string
+        - name: skip
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: email
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -309,6 +333,30 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          schema:
+            type: string
+        - name: source_ref
+          in: query
+          schema:
+            type: string
+        - name: target_ref
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: string
+        - name: skip
+          in: query
+          schema:
+            type: string
+        - name: group_by
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -425,6 +473,16 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: base
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: head
+          in: query
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -546,6 +604,37 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: base
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: head
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: start_old
+          in: query
+          schema:
+            type: string
+        - name: start_new
+          in: query
+          schema:
+            type: string
+        - name: count
+          in: query
+          schema:
+            type: string
+        - name: direction
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -564,6 +653,21 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: base
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: head
+          in: query
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -800,6 +904,14 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          schema:
+            type: string
+        - name: path
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -860,6 +972,14 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          schema:
+            type: string
+        - name: path
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -1202,6 +1322,8 @@ components:
     BlobRequestParams:
       type: object
     BranchAheadBehind:
+      type: object
+    BranchDiffQueryRequest:
       type: object
     BranchInfo:
       type: object
@@ -1693,6 +1815,8 @@ components:
       required:
         - error
         - success
+    CommitsListRequest:
+      type: object
     CommitsPaginationInfo:
       type: object
       properties:
@@ -2195,6 +2319,8 @@ components:
         - total_deletions
     DiffTooLargeError:
       type: object
+    ExpandContextRequest:
+      type: object
     ExpandContextResponse:
       type: object
       properties:
@@ -2351,6 +2477,8 @@ components:
         - loadStatus
         - path
         - status
+    FileDiffRequest:
+      type: object
     FileVersion:
       type: object
       properties:
@@ -2375,6 +2503,8 @@ components:
         - is_binary
         - mode
         - size
+    GetBranchesRequest:
+      type: object
     GetBranchesResponse:
       type: object
       properties:
@@ -2634,6 +2764,8 @@ components:
         - success
         - total_bytes
         - total_files
+    LatestCommitOverviewRequest:
+      type: object
     LatestCommitOverviewResponse:
       type: object
       properties:
@@ -3865,6 +3997,8 @@ components:
         - success
         - total_count
         - truncated
+    TreeWithCommitOverviewRequest:
+      type: object
     TreeWithCommitOverviewResponse:
       type: object
       properties:

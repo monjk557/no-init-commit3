@@ -6,6 +6,24 @@ import (
 	"github.com/collabops/git-executor/internal/repositories"
 )
 
+// TreeWithCommitOverviewRequest 는 GET /overview/tree/commits 의 query
+// parameter 를 나타낸다.
+//
+// typed.RegisterGetWithQuery wrapper 가 form 태그를 reflect 하여 OpenAPI
+// parameters (in: query) 로 expand 한다 — orchestrator auto-gen client 가
+// ref / path 인자를 누락하지 않도록 노출 (Issue-2317 후속).
+type TreeWithCommitOverviewRequest struct {
+	Ref  string `form:"ref"`
+	Path string `form:"path"`
+}
+
+// LatestCommitOverviewRequest 는 GET /overview/latest-commit 의 query
+// parameter 를 나타낸다 — ref + path 를 in: query 로 노출.
+type LatestCommitOverviewRequest struct {
+	Ref  string `form:"ref"`
+	Path string `form:"path"`
+}
+
 // OverviewResponse is the response type for repository overview API.
 // latest_commits and language_distribution were dropped — the orchestrator
 // sources those from DRF. remotes was dropped — not meaningful for

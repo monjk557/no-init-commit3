@@ -26,7 +26,7 @@ func RegisterRoutes(g gin.IRouter, h *BranchOperationsHandler) {
 		validateName  func(*gin.Context) (ValidateBranchNameResponse, error)
 		resolveBranch func(*gin.Context) (ResolveBranchResponse, error)
 		validateRopen func(*gin.Context) (ValidateReopenResponse, error)
-		listBranches  func(*gin.Context) (GetBranchesResponse, error)
+		listBranches  func(*gin.Context, GetBranchesRequest) (GetBranchesResponse, error)
 		createBranch  func(*gin.Context) (CreateBranchResponse, error)
 		updateBranch  func(*gin.Context) (UpdateBranchResponse, error)
 		stats         func(*gin.Context) (BranchStatsResponse, error)
@@ -65,7 +65,13 @@ func RegisterRoutes(g gin.IRouter, h *BranchOperationsHandler) {
 	)
 
 	// GET /branches.
-	typed.RegisterGet(g, "/branches", tag,
+	//
+	// query 파라미터는 RegisterGetWithQuery 로 등록 — wrapper 가 struct
+	// field 의 form 태그를 reflect 하여 Endpoint.QueryParams 에 채우고, spec
+	// generator 가 OpenAPI parameters (in: query) 로 expand 한다.
+	// orchestrator auto-gen client 가 limit/skip/search/sort/email/status
+	// 인자를 받도록 노출하기 위함 (Issue-2317 후속).
+	typed.RegisterGetWithQuery(g, "/branches", tag,
 		listBranches,
 		typed.WithSummary("HandleGetBranches"),
 	)

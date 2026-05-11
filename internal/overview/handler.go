@@ -544,15 +544,19 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 }
 
 // HandleGetTreeWithCommitOverview handles GET /overview/tree/commits.
-func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Context) (TreeWithCommitOverviewResponse, error) {
+//
+// query 는 typed.RegisterGetWithQuery wrapper 가 TreeWithCommitOverviewRequest
+// 로 bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 ref/path 를
+// in: query 로 노출 (Issue-2317 후속).
+func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Context, req TreeWithCommitOverviewRequest) (TreeWithCommitOverviewResponse, error) {
 	ctx := c.Request.Context()
 	start := time.Now()
 	m := observability.GetApplicationMetrics()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := c.Query("ref")
-	path := c.Query("path")
+	ref := req.Ref
+	path := req.Path
 
 	repoCtx, err := h.validateRepositoryNative(ctx, owner, repo, ref)
 	if err != nil {
@@ -607,14 +611,18 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 }
 
 // HandleGetLatestCommitOverview handles GET /overview/latest-commit.
-func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context) (LatestCommitOverviewResponse, error) {
+//
+// query 는 typed.RegisterGetWithQuery wrapper 가 LatestCommitOverviewRequest
+// 로 bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 ref/path 를
+// in: query 로 노출 (Issue-2317 후속).
+func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context, req LatestCommitOverviewRequest) (LatestCommitOverviewResponse, error) {
 	ctx := c.Request.Context()
 	start := time.Now()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := c.Query("ref")
-	path := strings.Trim(c.Query("path"), "/")
+	ref := req.Ref
+	path := strings.Trim(req.Path, "/")
 
 	repoCtx, err := h.validateRepositoryNative(ctx, owner, repo, ref)
 	if err != nil {

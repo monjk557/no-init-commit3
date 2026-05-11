@@ -95,10 +95,16 @@ func (h *CommitsHandler) validateAndGetRepoPath(owner, repo, ref string) (*repos
 }
 
 // HandleCommitsAPI는 GET /repos/{owner}/{repo}/commits 요청을 처리합니다.
-func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context) (CommitsResponse, error) {
+//
+// query string 은 typed.RegisterGetWithQuery wrapper 가 CommitsListRequest
+// 로 bind 한 뒤 본 함수에 전달한다 — wrapper 가 spec generator 에 query
+// parameter 메타데이터를 자동 노출하므로 orchestrator auto-gen client 가
+// ref/source_ref/target_ref/limit/skip/group_by 인자를 누락하지 않는다
+// (Issue-2317 후속).
+func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context, req CommitsListRequest) (CommitsResponse, error) {
 	ctx := c.Request.Context()
 
-	params, err := h.validateAndExtractCommitsParams(c)
+	params, err := h.validateAndExtractCommitsParams(c, req)
 	if err != nil {
 		return CommitsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
 	}

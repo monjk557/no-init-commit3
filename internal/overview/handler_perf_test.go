@@ -304,7 +304,7 @@ func Test_TreeWithCommitOverview_LargeRepository_Returns200(t *testing.T) {
 	fixedRef := commitHash.String()
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/tree/commits", adapt(handler.HandleGetTreeWithCommitOverview))
+	router.GET("/repos/:owner/:repo/overview/tree/commits", adaptQuery(handler.HandleGetTreeWithCommitOverview))
 
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/overview/tree/commits?ref=%s&path=", owner, repo, fixedRef), nil)
 	w := httptest.NewRecorder()

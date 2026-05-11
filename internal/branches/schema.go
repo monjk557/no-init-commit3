@@ -43,6 +43,24 @@ type BranchInfo struct {
 	CommitterEmail string      `json:"committer_email"`
 }
 
+// GetBranchesRequest 는 GET /branches 의 query parameter 를 나타낸다.
+//
+// typed.RegisterGetWithQuery wrapper 가 form 태그를 reflect 하여 OpenAPI
+// parameters (in: query) 로 expand 한다 — orchestrator auto-gen client 가
+// limit/skip/search/sort/email/status 인자를 누락하지 않도록 노출하기 위함
+// (Issue-2317 후속).
+//
+// 모든 필드는 optional 이며 default 처리는 handler 본문에서 수행한다 — 기존
+// custom error message ("invalid limit: must be >= N" 등) 를 보존.
+type GetBranchesRequest struct {
+	Limit  string `form:"limit"`
+	Skip   string `form:"skip"`
+	Search string `form:"search"`
+	Sort   string `form:"sort"`   // default "newest"
+	Email  string `form:"email"`
+	Status string `form:"status"` // "active" | "stale"
+}
+
 // GetBranchesResponse는 브랜치 목록 응답을 나타냅니다.
 type GetBranchesResponse struct {
 	Success    bool           `json:"success"`

@@ -20,7 +20,7 @@ const tag = "Commits"
 // (default *HTTPError 매핑이 그대로 사용됨).
 func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	var (
-		listCommits       func(*gin.Context) (CommitsResponse, error)
+		listCommits       func(*gin.Context, CommitsListRequest) (CommitsResponse, error)
 		comparisonSummary func(*gin.Context, ComparisonSummaryRequest) (ComparisonSummaryResponse, error)
 		commitDetail      func(*gin.Context) (CommitDetailResponse, error)
 		multiFileCommit   func(*gin.Context) (MultiFileCommitResponse, error)
@@ -33,7 +33,12 @@ func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	}
 
 	// GET /commits — list with pagination.
-	typed.RegisterGet(g, "/commits", tag,
+	//
+	// query 파라미터 (ref / source_ref / target_ref / limit / skip / group_by)
+	// 는 RegisterGetWithQuery 로 등록하여 OpenAPI parameters (in: query) 로
+	// expand 한다 — orchestrator auto-gen client 가 인자를 누락하지 않도록
+	// (Issue-2317 후속).
+	typed.RegisterGetWithQuery(g, "/commits", tag,
 		listCommits,
 		typed.WithSummary("HandleCommitsAPI"),
 	)

@@ -35,10 +35,10 @@ func RegisterRoutes(g gin.IRouter, h *DiffHandler) {
 	var (
 		commitDiff       func(*gin.Context) (DiffResponse, error)
 		branchDiff       func(*gin.Context) (DiffResponse, error)
-		branchDiffQuery  func(*gin.Context) (DiffResponse, error)
-		fileDiff         func(*gin.Context) (DiffResponse, error)
+		branchDiffQuery  func(*gin.Context, BranchDiffQueryRequest) (DiffResponse, error)
+		fileDiff         func(*gin.Context, FileDiffRequest) (DiffResponse, error)
 		singleCommitDiff func(*gin.Context) (SingleCommitDiffResponse, error)
-		expandContext    func(*gin.Context) (ExpandContextResponse, error)
+		expandContext    func(*gin.Context, ExpandContextRequest) (ExpandContextResponse, error)
 		fileSearch       func(*gin.Context) (DiffFileSearchResponse, error)
 		classifyAnchors  func(*gin.Context) (ClassifyAnchorsResponse, error)
 	)
@@ -65,13 +65,17 @@ func RegisterRoutes(g gin.IRouter, h *DiffHandler) {
 		typed.WithErrorMapper(diffErrorMapper),
 	)
 
-	typed.RegisterGet(g, "/diff/branches", tag,
+	// GET /diff/branches?base=&head= — query params 를 RegisterGetWithQuery 로
+	// 노출하여 orchestrator auto-gen client 가 base/head 인자를 받도록 한다
+	// (Issue-2317 후속).
+	typed.RegisterGetWithQuery(g, "/diff/branches", tag,
 		branchDiffQuery,
 		typed.WithSummary("HandleBranchDiffQuery"),
 		typed.WithErrorMapper(diffErrorMapper),
 	)
 
-	typed.RegisterGet(g, "/diff/file", tag,
+	// GET /diff/file?path=&base=&head=.
+	typed.RegisterGetWithQuery(g, "/diff/file", tag,
 		fileDiff,
 		typed.WithSummary("HandleFileDiff"),
 		typed.WithErrorMapper(diffErrorMapper),
@@ -83,7 +87,8 @@ func RegisterRoutes(g gin.IRouter, h *DiffHandler) {
 		typed.WithErrorMapper(diffErrorMapper),
 	)
 
-	typed.RegisterGet(g, "/diff/expand-context", tag,
+	// GET /diff/expand-context — query 는 ExpandContextRequest 로 bind.
+	typed.RegisterGetWithQuery(g, "/diff/expand-context", tag,
 		expandContext,
 		typed.WithSummary("HandleExpandContext"),
 	)

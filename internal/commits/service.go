@@ -81,16 +81,19 @@ func (h *CommitsHandler) convertGitCommitToMetadata(commit Commit, groupBy strin
 }
 
 // validateAndExtractCommitsParams는 커밋 요청에서 파라미터를 추출하고 검증합니다.
-func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context) (*CommitsRequestParams, error) {
+//
+// req 는 typed.RegisterGetWithQuery wrapper 가 bind 한 CommitsListRequest —
+// owner/repo 는 path param, 그 외 query 는 req 에서 읽는다.
+func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context, req CommitsListRequest) (*CommitsRequestParams, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	ref := c.Query("ref")
-	sourceRef := c.Query("source_ref")
-	targetRef := c.Query("target_ref")
-	limitStr := c.Query("limit")
-	skipStr := c.Query("skip")
-	groupBy := c.Query("group_by")
+	ref := req.Ref
+	sourceRef := req.SourceRef
+	targetRef := req.TargetRef
+	limitStr := req.Limit
+	skipStr := req.Skip
+	groupBy := req.GroupBy
 
 	if owner == "" || repo == "" {
 		return nil, fmt.Errorf("missing required parameters: owner or repo")

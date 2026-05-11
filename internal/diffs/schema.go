@@ -39,6 +39,46 @@ type RequestParams struct {
 	Head  string
 }
 
+// BranchDiffQueryRequest 는 GET /diff/branches 의 query parameter 를
+// 나타낸다 — base/head 외 page, page_size 등은 handler 본문에서 c.Query 로
+// 읽으며 본 struct 에는 web 이 실제로 전달하는 base/head 만 노출 (Issue-2317
+// 후속).
+type BranchDiffQueryRequest struct {
+	Base string `form:"base" binding:"required"`
+	Head string `form:"head" binding:"required"`
+}
+
+// FileDiffRequest 는 GET /diff/file 의 query parameter 를 나타낸다 —
+// full_context / diff_mode / type / page / page_size 는 handler 본문에서
+// c.Query 로 읽으며 본 struct 에는 web 이 실제로 전달하는 path/base/head 만
+// 노출 (Issue-2317 후속).
+type FileDiffRequest struct {
+	Path string `form:"path" binding:"required"`
+	Base string `form:"base" binding:"required"`
+	Head string `form:"head" binding:"required"`
+}
+
+// ExpandContextRequest 는 GET /diff/expand-context 의 query parameter 를
+// 나타낸다.
+//
+// 두 가지 호출 모드 (web 사용):
+//   - "from_old/to_old/from_new" 직접 범위 지정 — base server-side mode
+//   - "start_old/start_new/count/direction" anchor + direction — web 의
+//     hunk expansion UI 가 사용하는 모드
+//
+// from_*/to_* 와 start_* 의 mutual exclusivity, side/diff_mode/type 등
+// 보조 파라미터의 검증·default 는 handler 본문에서 수행한다 — 기존 custom
+// error message 보존.
+type ExpandContextRequest struct {
+	Path      string `form:"path" binding:"required"`
+	Base      string `form:"base" binding:"required"`
+	Head      string `form:"head" binding:"required"`
+	StartOld  string `form:"start_old"`
+	StartNew  string `form:"start_new"`
+	Count     string `form:"count"`
+	Direction string `form:"direction"`
+}
+
 // PaginationParams는 페이지네이션 파라미터를 보유합니다
 type PaginationParams struct {
 	Page     int  `json:"page"`

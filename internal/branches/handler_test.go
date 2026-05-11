@@ -487,7 +487,7 @@ func Test_GetBranches_PaginationOutOfRange_ReturnsEmptyArray(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
+	router.GET("/repos/:owner/:repo/branches", adaptQuery(handler.HandleGetBranches))
 
 	// skip=10으로 범위를 벗어나는 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches?limit=10&skip=10", nil)
@@ -515,7 +515,7 @@ func Test_GetBranches_DefaultRepo_ReturnsArrayNotNull(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
+	router.GET("/repos/:owner/:repo/branches", adaptQuery(handler.HandleGetBranches))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
 	w := httptest.NewRecorder()
@@ -1727,7 +1727,7 @@ func Test_GetBranches_EmptyRepo_ReturnsEmptyArray(t *testing.T) {
 	initBareRepo(t, repoDir, "testowner", "testrepo")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
+	router.GET("/repos/:owner/:repo/branches", adaptQuery(handler.HandleGetBranches))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
 	w := httptest.NewRecorder()
@@ -1762,7 +1762,7 @@ func Test_GetBranches_WithBranches_ReturnsAll(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
+	router.GET("/repos/:owner/:repo/branches", adaptQuery(handler.HandleGetBranches))
 
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches", nil)
 	w := httptest.NewRecorder()
@@ -1796,7 +1796,7 @@ func Test_GetBranches_Pagination_ReturnsCorrectPage(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/branches", adapt(handler.HandleGetBranches))
+	router.GET("/repos/:owner/:repo/branches", adaptQuery(handler.HandleGetBranches))
 
 	// limit=2, skip=0으로 첫 페이지 요청
 	req := httptest.NewRequest("GET", "/repos/testowner/testrepo/branches?limit=2&skip=0", nil)

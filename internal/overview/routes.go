@@ -22,8 +22,8 @@ func RegisterRoutes(g gin.IRouter, h *RepositoryOverviewHandler) {
 		overviewMain   func(*gin.Context) (RepositoryOverviewResponse, error)
 		treeOverview   func(*gin.Context) (TreeOverviewResponse, error)
 		blobOverview   func(*gin.Context) (BlobOverviewResponse, error)
-		treeWithCommit func(*gin.Context) (TreeWithCommitOverviewResponse, error)
-		latestCommit   func(*gin.Context) (LatestCommitOverviewResponse, error)
+		treeWithCommit func(*gin.Context, TreeWithCommitOverviewRequest) (TreeWithCommitOverviewResponse, error)
+		latestCommit   func(*gin.Context, LatestCommitOverviewRequest) (LatestCommitOverviewResponse, error)
 		batchCommits   func(*gin.Context) (LatestCommitsBatchResponse, error)
 	)
 	if h != nil {
@@ -50,12 +50,15 @@ func RegisterRoutes(g gin.IRouter, h *RepositoryOverviewHandler) {
 		typed.WithSummary("HandleGetBlobOverview"),
 	)
 
-	typed.RegisterGet(g, "/overview/tree/commits", tag,
+	// GET /overview/tree/commits?ref=&path= — query params 를 spec 에 노출하기
+	// 위해 RegisterGetWithQuery 사용 (Issue-2317 후속).
+	typed.RegisterGetWithQuery(g, "/overview/tree/commits", tag,
 		treeWithCommit,
 		typed.WithSummary("HandleGetTreeWithCommitOverview"),
 	)
 
-	typed.RegisterGet(g, "/overview/latest-commit", tag,
+	// GET /overview/latest-commit?ref=&path=.
+	typed.RegisterGetWithQuery(g, "/overview/latest-commit", tag,
 		latestCommit,
 		typed.WithSummary("HandleGetLatestCommitOverview"),
 	)

@@ -31,6 +31,21 @@ type ComparisonSummaryRequest struct {
 	TargetRef string `form:"target_ref" binding:"required"` // Target ref (base; merge INTO)
 }
 
+// CommitsListRequest 는 GET /commits 의 query parameter 를 나타낸다.
+//
+// 모든 필드는 optional 이며 default / 범위 검증은 handler 본문에서 수행한다
+// — 기존 custom error message ("invalid limit parameter: must be between N and M"
+// 등) 를 보존. wrapper 가 form 태그를 reflect 하여 OpenAPI parameters (in: query)
+// 로 expand 한다 (Issue-2317 후속).
+type CommitsListRequest struct {
+	Ref       string `form:"ref"`        // default "HEAD"
+	SourceRef string `form:"source_ref"` // pair with target_ref
+	TargetRef string `form:"target_ref"` // pair with source_ref
+	Limit     string `form:"limit"`
+	Skip      string `form:"skip"`
+	GroupBy   string `form:"group_by"` // "" | "committer_date"
+}
+
 // ComparisonSummaryResponse는 두 커밋 간 비교 요약 응답입니다.
 type ComparisonSummaryResponse struct {
 	Success          bool   `json:"success"`
