@@ -1581,6 +1581,128 @@ func createTestRepoWithMixedTreeBlob(t *testing.T, repoPath string) {
 		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
 }
 
+// createTestRepoWithSubmodule creates a bare repo containing one regular file,
+// one folder, and one gitlink (submodule) entry at vendor/hello pinned to a
+// known commit SHA. A .gitmodules blob is added at the root with url/branch
+// metadata so the enrichment path can populate SubmoduleInfo (Issue-2431).
+func createTestRepoWithSubmodule(t *testing.T, repoPath string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	storeBlob := func(content string) plumbing.Hash {
+		obj := repo.Storer.NewEncodedObject()
+		obj.SetType(plumbing.BlobObject)
+		obj.SetSize(int64(len(content)))
+		w, err := obj.Writer()
+		require.NoError(t, err)
+		_, err = w.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		h, err := repo.Storer.SetEncodedObject(obj)
+		require.NoError(t, err)
+		return h
+	}
+	storeTree := func(entries []object.TreeEntry) plumbing.Hash {
+		tree := &object.Tree{Entries: entries}
+		enc := repo.Storer.NewEncodedObject()
+		require.NoError(t, tree.Encode(enc))
+		h, err := repo.Storer.SetEncodedObject(enc)
+		require.NoError(t, err)
+		return h
+	}
+
+	readmeBlob := storeBlob("# project\n")
+	gitmodulesContent := "" +
+		"[submodule \"vendor/hello\"]\n" +
+		"\tpath = vendor/hello\n" +
+		"\turl = https://github.com/example/hello\n" +
+		"\tbranch = main\n"
+	gitmodulesBlob := storeBlob(gitmodulesContent)
+
+	// 가상의 pinned submodule commit SHA — 실제 commit object 일 필요 없이
+	// gitlink 가 가리키는 hash 면 충분.
+	submoduleCommit := plumbing.NewHash("0123456789abcdef0123456789abcdef01234567")
+
+	vendorTree := storeTree([]object.TreeEntry{
+		{Name: "hello", Mode: filemode.Submodule, Hash: submoduleCommit},
+	})
+
+	rootTree := storeTree([]object.TreeEntry{
+		{Name: ".gitmodules", Mode: filemode.Regular, Hash: gitmodulesBlob},
+		{Name: "README.md", Mode: filemode.Regular, Hash: readmeBlob},
+		{Name: "vendor", Mode: filemode.Dir, Hash: vendorTree},
+	})
+
+	when := fixedBaseTime()
+	commit := &object.Commit{
+		Message:   "add submodule vendor/hello",
+		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		TreeHash:  rootTree,
+	}
+	enc := repo.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(enc))
+	commitHash, err := repo.Storer.SetEncodedObject(enc)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)))
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
+
+	// Submodule entry 가 vendor/ 안에 있어 sibling test repos 의 ref 와 같지
+	// 않도록, 최상단 sort 검증 편의를 위해 vendor 와 README 가 root 에 있어야
+	// 호출자가 path="vendor" 로 NativeGetTreeEntries 를 다시 호출 가능. 본
+	// 테스트는 path="" 만 사용 — vendor (tree) 가 entries 에 보임.
+	_ = repoPath
+}
+
+// createTestRepoWithSubmoduleNoGitmodules 는 gitlink 는 있지만 .gitmodules
+// 파일이 없는 (= partial setup) repo 를 만든다. enrichment 가 안전하게
+// nil index 를 처리하는지 검증.
+func createTestRepoWithSubmoduleNoGitmodules(t *testing.T, repoPath string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+
+	storeTree := func(entries []object.TreeEntry) plumbing.Hash {
+		tree := &object.Tree{Entries: entries}
+		enc := repo.Storer.NewEncodedObject()
+		require.NoError(t, tree.Encode(enc))
+		h, err := repo.Storer.SetEncodedObject(enc)
+		require.NoError(t, err)
+		return h
+	}
+
+	submoduleCommit := plumbing.NewHash("abcdef0123456789abcdef0123456789abcdef01")
+
+	rootTree := storeTree([]object.TreeEntry{
+		{Name: "orphan", Mode: filemode.Submodule, Hash: submoduleCommit},
+	})
+
+	when := fixedBaseTime()
+	commit := &object.Commit{
+		Message:   "orphan submodule without .gitmodules",
+		Author:    object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		Committer: object.Signature{Name: "Test", Email: "test@example.com", When: when},
+		TreeHash:  rootTree,
+	}
+	enc := repo.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(enc))
+	commitHash, err := repo.Storer.SetEncodedObject(enc)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)))
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.ReferenceName("refs/heads/main"))))
+}
+
 // assertTreesBeforeBlobs verifies that every "tree" entry appears before every "blob" entry.
 func assertTreesBeforeBlobs(t *testing.T, entries []GitTreeEntryWithCommit) {
 	t.Helper()
@@ -1636,6 +1758,82 @@ func Test_NativeGetTreeEntries_TreesBeforeBlobs(t *testing.T) {
 	require.Equal(t, "blob", entries[2].Type)
 	require.Equal(t, "gamma.txt", entries[3].Name)
 	require.Equal(t, "blob", entries[3].Type)
+}
+
+// Test_NativeGetTreeEntries_SubmoduleNormalization 은 gitlink (mode 160000)
+// entry 가 native fast-path 에서도 type="submodule" 로 정규화되고 .gitmodules
+// 메타 (url / branch / parsed) 가 채워지는지를 확인한다. service.go 의 go-git
+// 경로와 wire response 동등성 보장 (Issue-2431).
+func Test_NativeGetTreeEntries_SubmoduleNormalization(t *testing.T) {
+	t.Parallel()
+
+	repoPath := filepath.Join(t.TempDir(), "owner", "submod.git")
+	createTestRepoWithSubmodule(t, repoPath)
+
+	// submodule 은 vendor/hello 에 있으므로 path="vendor" 로 조회.
+	entries, err := NativeGetTreeEntries(context.Background(), repoPath, "main", "vendor")
+	require.NoError(t, err)
+
+	var submodule *GitTreeEntryWithCommit
+	for i := range entries {
+		if entries[i].Name == "hello" {
+			submodule = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, submodule, "expected submodule entry 'hello' under vendor/, got: %v", entryNames(entries))
+
+	// path="vendor" 조회 시 fullPath 가 "vendor/hello" 로 매겨져야
+	// .gitmodules 의 path="vendor/hello" 와 매칭됨 — enrichment 의 핵심 invariant.
+	require.Equal(t, "vendor/hello", submodule.Path)
+
+	// 1. type 정규화 — git ls-tree 의 raw "commit" 이 "submodule" 로 바뀜
+	require.Equal(t, "submodule", submodule.Type)
+
+	// 2. mode 는 그대로 160000
+	require.NotNil(t, submodule.Mode)
+	require.Equal(t, "160000", *submodule.Mode)
+
+	// 3. SubmoduleInfo 채워짐 — commit (pinned SHA) 은 hash 와 동일
+	require.NotNil(t, submodule.Submodule, "expected SubmoduleInfo populated")
+	require.NotNil(t, submodule.Hash)
+	require.Equal(t, *submodule.Hash, submodule.Submodule.Commit)
+
+	// 4. .gitmodules 메타 — url / branch / parsed
+	require.Equal(t, "https://github.com/example/hello", submodule.Submodule.URL)
+	require.Equal(t, "main", submodule.Submodule.Branch)
+	require.NotNil(t, submodule.Submodule.Parsed)
+	require.Equal(t, "github.com", submodule.Submodule.Parsed.Host)
+	require.Equal(t, "example", submodule.Submodule.Parsed.Owner)
+	require.Equal(t, "hello", submodule.Submodule.Parsed.Repo)
+}
+
+// Test_NativeGetTreeEntries_SubmoduleWithoutGitmodules 는 .gitmodules 가 없는
+// (또는 path 매칭 안되는) 경우에도 commit 만 채워진 SubmoduleInfo 가 노출되어
+// 클라이언트가 type=submodule 분기는 탈 수 있게 함을 검증.
+func Test_NativeGetTreeEntries_SubmoduleWithoutGitmodules(t *testing.T) {
+	t.Parallel()
+
+	repoPath := filepath.Join(t.TempDir(), "owner", "submod-bare.git")
+	createTestRepoWithSubmoduleNoGitmodules(t, repoPath)
+
+	entries, err := NativeGetTreeEntries(context.Background(), repoPath, "main", "")
+	require.NoError(t, err)
+
+	var submodule *GitTreeEntryWithCommit
+	for i := range entries {
+		if entries[i].Name == "orphan" {
+			submodule = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, submodule)
+	require.Equal(t, "submodule", submodule.Type)
+	require.NotNil(t, submodule.Submodule)
+	require.NotEmpty(t, submodule.Submodule.Commit)
+	require.Empty(t, submodule.Submodule.URL, ".gitmodules 부재 시 url 빈 문자열")
+	require.Empty(t, submodule.Submodule.Branch)
+	require.Nil(t, submodule.Submodule.Parsed)
 }
 
 func Test_OverviewEndpoints_TreesBeforeBlobs(t *testing.T) {

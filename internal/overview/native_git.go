@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/gitutil"
+	"github.com/collabops/git-executor/internal/repositories"
 )
 
 // ---------------------------------------------------------------------------
@@ -299,11 +300,57 @@ func NativeGetTreeEntries(ctx context.Context, repoPath, ref, path string) ([]Gi
 		entries = append(entries, entry)
 	}
 
-	// Sort: trees (directories) first, then blobs (files), alphabetical within each group.
+	// submodule 엔트리가 하나라도 있으면 ref 의 .gitmodules 를 한 번만 읽어
+	// URL/branch/parsed 메타를 채운다. .gitmodules 가 없거나 path 가 누락된
+	// 경우 commit 만 채워진 SubmoduleInfo 가 결과로 나간다 — service.go
+	// (go-git 경로) 의 동작과 동등.
+	hasSubmodule := false
+	for _, e := range entries {
+		if e.Type == "submodule" {
+			hasSubmodule = true
+			break
+		}
+	}
+	if hasSubmodule {
+		gitmods := nativeLoadGitmodules(ctx, repoPath, ref)
+		for i := range entries {
+			if entries[i].Type != "submodule" {
+				continue
+			}
+			si := &SubmoduleInfo{}
+			if entries[i].Hash != nil {
+				si.Commit = *entries[i].Hash
+			}
+			if cfg := gitmods.LookupByPath(entries[i].Path); cfg != nil {
+				si.URL = cfg.URL
+				si.Branch = cfg.Branch
+			}
+			if si.URL != "" {
+				si.Parsed = repositories.ParseRepoURL(si.URL)
+			}
+			entries[i].Submodule = si
+		}
+	}
+
+	// Sort: trees (directories) first, then submodules, then blobs (files).
+	// service.go 의 entryTypeSortKey 와 동일 우선순위 (0=tree, 1=blob, 2=submodule)
+	// 를 유지하기 위해 정렬 key 를 일관되게 매핑.
+	sortKey := func(t string) int {
+		switch t {
+		case "tree":
+			return 0
+		case "blob":
+			return 1
+		case "submodule", "commit":
+			return 2
+		default:
+			return 3
+		}
+	}
 	sort.Slice(entries, func(i, j int) bool {
-		ti, tj := entries[i].Type, entries[j].Type
-		if ti != tj {
-			return ti == "tree"
+		ki, kj := sortKey(entries[i].Type), sortKey(entries[j].Type)
+		if ki != kj {
+			return ki < kj
 		}
 		return entries[i].Name < entries[j].Name
 	})
@@ -524,6 +571,13 @@ func parseLsTreeLine(line, basePath string) (GitTreeEntryWithCommit, error) {
 	hash := metaParts[2]
 	sizeStr := metaParts[3]
 
+	// gitlink (mode 160000) 은 git ls-tree 가 raw type 으로 "commit" 을 노출.
+	// service.go 의 go-git 경로 (filemode.Submodule → "submodule") 와 일관되게
+	// "submodule" 로 정규화 — 두 코드 경로가 같은 wire response 를 내도록.
+	if entryType == "commit" {
+		entryType = "submodule"
+	}
+
 	fullPath := name
 	if basePath != "" {
 		fullPath = basePath + "/" + name
@@ -544,4 +598,26 @@ func parseLsTreeLine(line, basePath string) (GitTreeEntryWithCommit, error) {
 	}
 
 	return entry, nil
+}
+
+// nativeLoadGitmodules 는 ref 의 .gitmodules blob 을 native git 으로 읽어
+// 파싱한다. 파일이 없거나 파싱 실패 시 nil 반환 — 호출자는 "submodule 부가
+// 정보가 비어 있는 정상 케이스" 로 처리한다 (service.go 의
+// loadGitmodulesFromTree 와 동일 contract).
+func nativeLoadGitmodules(ctx context.Context, repoPath, ref string) *repositories.GitmodulesIndex {
+	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	target := ref
+	if target == "" {
+		target = "HEAD"
+	}
+
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath, "show", target+":.gitmodules")
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		// .gitmodules 부재 (대부분의 repo) — 정상.
+		return nil
+	}
+	return repositories.ParseGitmodules(out)
 }
