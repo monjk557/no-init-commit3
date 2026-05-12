@@ -12,7 +12,7 @@ services:
       - APP_ENV=${APP_ENV:-local}
       - APP_DEBUG=${APP_DEBUG:-true}
       - APP_NAME=${APP_NAME:-"Git Executor Service"}
-      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-DEBUG}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PORT=5001
     volumes:  
       - ../../../specs:/app/specs:ro
