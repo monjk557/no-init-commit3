@@ -24,6 +24,7 @@ import (
 	"github.com/collabops/git-executor/internal/fork"
 	"github.com/collabops/git-executor/internal/langstats"
 	"github.com/collabops/git-executor/internal/lfs"
+	"github.com/collabops/git-executor/internal/lfs/gc"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/merge"
 	"github.com/collabops/git-executor/internal/observability"
@@ -337,6 +338,16 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 	fork.RegisterRoutes(ownerRepoGroup, forkHandler)
+
+	// LFS GC reachability scan — orchestrator 의 GC cron 이 호출하는 internal endpoint.
+	// LFS feature flag 와 무관하게 항상 등록 (orchestrator 가 LFS 사용 전이라도 host
+	// 가 동일 패턴으로 polling 가능 — empty oid list 응답).
+	lfsGCHandler, err := gc.NewHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create LFS GC handler", zap.Error(err))
+	} else {
+		gc.RegisterRoutes(ownerRepoGroup, lfsGCHandler)
+	}
 
 	// LFS endpoints
 	// Git LFS 클라이언트는 remote URL에서 LFS 엔드포인트를 유추합니다.
