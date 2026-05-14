@@ -309,11 +309,22 @@ const (
 )
 
 // AnchorRequest는 단일 ReviewComment의 anchor 정보입니다.
+//
+// CommitSHA (Issue-2547): 해당 anchor 가 작성될 당시의 head SHA. 설정되면 알고리즘이
+// `diff(CommitSHA..HeadSHA)` 를 사용해 분류합니다. 비어있으면 request 의 BaseSHA 로
+// fallback (legacy 동작 보존). 권장 사용:
+//   - 코멘트가 특정 commit 의 diff 위에서 작성된 경우 그 commit_sha 를 같이 전달.
+//   - 결과 의미: "이 코멘트가 anchor 한 라인 영역이 그 시점 이후 변했는가?"
+//
+// 이 필드가 없으면 base..head diff 가 "added" 로 분류되는 파일의 anchor 가 항상
+// active 로 떨어지는 long-standing 버그가 남는다 (line 번호는 head-side 인데 알고리즘은
+// old-side 만 비교 → added 파일은 byOldPath 색인에서 제외됨).
 type AnchorRequest struct {
-	ID        string `json:"id"`         // 결과 매칭용 식별자 (예: ReviewComment.id)
-	Path      string `json:"path"`       // anchor 작성 시점 파일 경로 (base 기준)
-	StartLine int    `json:"start_line"` // 1-based, inclusive
-	EndLine   int    `json:"end_line"`   // 1-based, inclusive
+	ID        string `json:"id"`                   // 결과 매칭용 식별자 (예: ReviewComment.id)
+	Path      string `json:"path"`                 // anchor 작성 시점 파일 경로 (CommitSHA, fallback BaseSHA 기준)
+	StartLine int    `json:"start_line"`           // 1-based, inclusive
+	EndLine   int    `json:"end_line"`             // 1-based, inclusive
+	CommitSHA string `json:"commit_sha,omitempty"` // optional — 작성 시점 head SHA
 }
 
 // AnchorResult는 classify 결과 단일 항목입니다.

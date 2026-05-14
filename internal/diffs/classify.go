@@ -2,13 +2,17 @@
 //
 // Review Dismiss 2.0 (Phase B, simplified) — §14.
 // 3-state: active / stale / orphaned. SHIFTED/REVERTED는 active로 통합.
-// 알고리즘:
-//  1. head sha에 base sha로부터 diff 계산
-//  2. anchor의 path를 old-path 기준으로 diff에서 찾음
-//  3. 없으면(파일 변경 없음) → active
-//  4. status=deleted or is_binary → orphaned
-//  5. renamed → new_path 전달
-//  6. hunk의 old-range가 anchor range와 겹치면 → stale, 아니면 active
+//
+// 알고리즘 (Issue-2547 후 — content-aware via per-anchor CommitSHA):
+//  1. 각 anchor 의 "effective base SHA" 결정: anchor.CommitSHA 가 있으면 그것, 없으면 request.BaseSHA
+//  2. unique effective base 별로 한 번씩 diff 계산 (다중 commit_sha 그룹화 — N+1 회피)
+//  3. anchor 의 path 를 그 diff 의 old-path 기준으로 찾음
+//  4. 없으면(파일 변경 없음) → active
+//  5. status=deleted or is_binary → orphaned
+//  6. renamed → new_path 전달
+//  7. hunk의 old-range가 anchor range와 겹치면 → stale, 아니면 active
+//
+// CommitSHA 가 비어있을 때는 legacy 시맨틱 (request.BaseSHA 단일 사용) 유지.
 package diffs
 
 import (
@@ -66,42 +70,28 @@ func (h *DiffHandler) HandleClassifyAnchors(c *gin.Context) (ClassifyAnchorsResp
 	}, nil
 }
 
-// classifyAnchors는 repo path + base/head SHA + anchor 목록으로 분류 결과를 반환합니다.
+// effectiveBaseSHA 는 anchor 의 분류 기준 base SHA 를 반환합니다.
+// anchor 가 자체 CommitSHA 를 가지면 그것을, 없으면 request 의 globalBase 로 fallback.
+func effectiveBaseSHA(a AnchorRequest, globalBase string) string {
+	if a.CommitSHA != "" {
+		return a.CommitSHA
+	}
+	return globalBase
+}
+
+// buildOldPathIndex 는 DiffResponse 의 파일 목록을 old-path 기준 lookup map 으로
+// 변환합니다.
 //
-// 순수 함수 형태로 추출해 유닛 테스트가 용이하도록 만들었습니다.
-// Base가 unreachable이면 모든 anchor가 orphaned (전체 diff 실패).
-func classifyAnchors(
-	ctx context.Context,
-	repoPath string,
-	baseSHA string,
-	headSHA string,
-	anchors []AnchorRequest,
-) ([]AnchorResult, error) {
-	results := make([]AnchorResult, 0, len(anchors))
-
-	// base == head: 아무 변경도 없음 → 전부 active
-	if baseSHA == headSHA {
-		for _, a := range anchors {
-			results = append(results, AnchorResult{ID: a.ID, Status: AnchorStatusActive})
-		}
-		return results, nil
-	}
-
-	diff, err := nativeCalculateCommitDiff(ctx, repoPath, baseSHA, headSHA, 0)
-	if err != nil {
-		// base unreachable 등 diff 계산 자체 실패: 모든 anchor orphaned로 간주
-		for _, a := range anchors {
-			results = append(results, AnchorResult{ID: a.ID, Status: AnchorStatusOrphaned})
-		}
-		return results, nil
-	}
-
-	// fileDiff를 old-path (변경 전 경로) 기준으로 인덱싱.
-	// - renamed: OldPath → fileDiff (Path가 새 경로)
-	// - deleted: Path → fileDiff (OldPath는 비어있을 수 있음)
-	// - modified: Path → fileDiff
-	// - added: old-path가 없음 (anchor가 매칭될 일 없음)
-	byOldPath := make(map[string]*FileDiff, len(diff.Files))
+//   - renamed: OldPath → fileDiff (Path 는 새 경로)
+//   - deleted: Path → fileDiff (OldPath 가 비어있을 수 있음)
+//   - modified: Path → fileDiff
+//   - added: anchor 의 path 와 매칭될 수 없으므로 색인 제외
+//     (added 파일에 anchor 가 있다는 것은 그 파일이 anchor 생성 시점에 이미 존재했다는
+//     뜻이고, 그 시점은 anchor.CommitSHA — added 라는 결과는 base 가 잘못 지정됐을 때
+//     발생. 이 경우 classifyOneAnchor 가 "변경 없음"으로 보고 active 처리하는 것이
+//     legacy 동작이며 보존한다.)
+func buildOldPathIndex(diff *DiffResponse) map[string]*FileDiff {
+	index := make(map[string]*FileDiff, len(diff.Files))
 	for i := range diff.Files {
 		fd := &diff.Files[i]
 		key := fd.Path
@@ -109,12 +99,75 @@ func classifyAnchors(
 			key = fd.OldPath
 		}
 		if fd.Status == FileDiffStatusAdded {
-			continue // anchor는 base 기준이므로 added 파일은 매칭 대상 아님
+			continue
 		}
-		byOldPath[key] = fd
+		index[key] = fd
+	}
+	return index
+}
+
+// classifyAnchors 는 repo path + global base/head SHA + anchor 목록으로 분류 결과를
+// 반환합니다.
+//
+// Issue-2547: 각 anchor 의 effective base (anchor.CommitSHA, 또는 fallback 으로
+// globalBaseSHA) 별로 grouping 후 한 unique base 당 한 번씩 diff 를 계산합니다.
+// 동일 commit_sha 를 가진 anchor 가 다수일 때 N+1 diff 호출을 회피합니다.
+//
+// 그룹 단위 base 가 unreachable 이면 그 그룹의 모든 anchor 만 orphaned (다른 그룹은
+// 영향 없음). 결과 순서는 입력 anchors 순서를 보존합니다.
+//
+// 순수 함수 형태로 추출해 유닛 테스트가 용이하도록 만들었습니다.
+func classifyAnchors(
+	ctx context.Context,
+	repoPath string,
+	baseSHA string,
+	headSHA string,
+	anchors []AnchorRequest,
+) ([]AnchorResult, error) {
+	// unique effective base SHA 수집 — 한 번씩만 diff 계산하면 됨.
+	uniqueBases := make(map[string]struct{}, len(anchors))
+	for _, a := range anchors {
+		uniqueBases[effectiveBaseSHA(a, baseSHA)] = struct{}{}
 	}
 
+	// base → byOldPath index (nil 이면 base==head sentinel).
+	indexByBase := make(map[string]map[string]*FileDiff, len(uniqueBases))
+	// base → diff 계산 실패 여부 (그룹 전체 orphaned 처리).
+	failuresByBase := make(map[string]bool, len(uniqueBases))
+
+	for base := range uniqueBases {
+		if base == headSHA {
+			// base == head: 변경 없음 — sentinel nil 로 표시, classify 시 active 분기.
+			indexByBase[base] = nil
+			continue
+		}
+		diff, err := nativeCalculateCommitDiff(ctx, repoPath, base, headSHA, 0)
+		if err != nil {
+			failuresByBase[base] = true
+			continue
+		}
+		indexByBase[base] = buildOldPathIndex(diff)
+	}
+
+	// 입력 순서 보존 — anchor 순서대로 분류.
+	results := make([]AnchorResult, 0, len(anchors))
 	for _, a := range anchors {
+		base := effectiveBaseSHA(a, baseSHA)
+		if failuresByBase[base] {
+			results = append(results, AnchorResult{ID: a.ID, Status: AnchorStatusOrphaned})
+			continue
+		}
+		byOldPath, ok := indexByBase[base]
+		if !ok {
+			// 정상 흐름에서 발생하지 않음 — 방어적으로 orphaned.
+			results = append(results, AnchorResult{ID: a.ID, Status: AnchorStatusOrphaned})
+			continue
+		}
+		if byOldPath == nil {
+			// base == head 그룹: 변경 없음.
+			results = append(results, AnchorResult{ID: a.ID, Status: AnchorStatusActive})
+			continue
+		}
 		results = append(results, classifyOneAnchor(byOldPath, a))
 	}
 	return results, nil

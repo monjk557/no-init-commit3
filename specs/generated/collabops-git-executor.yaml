@@ -1222,6 +1222,8 @@ components:
           type: integer
         end_line:
           type: integer
+        commit_sha:
+          type: string
       required:
         - end_line
         - id
