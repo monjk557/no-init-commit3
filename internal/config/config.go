@@ -360,27 +360,29 @@ func applyOnpremOverrides(config *Config) {
 // ------------------------------------------------------------
 func parseServerConfig() (ServerConfig, error) {
 
-	// 필수 환경변수 파싱
-	port := os.Getenv("SERVER_PORT")
+	// 필수 환경변수 파싱 — doc-360 §4.7 self-prefix 제거. legacy SERVER_*
+	// 키는 helm-charts/values 가 Phase 2 에서 새 키로 갱신될 때까지 alias
+	// fallback 으로 받는다 (deprecation warning emit). Phase 3 에서 제거.
+	port := envWithAlias("PORT", "SERVER_PORT")
 	if port == "" {
-		return ServerConfig{}, fmt.Errorf("SERVER_PORT environment variable is required but not set")
+		return ServerConfig{}, fmt.Errorf("PORT environment variable is required but not set")
 	}
 	portInt, err := strconv.Atoi(port)
 	if err != nil {
-		return ServerConfig{}, fmt.Errorf("SERVER_PORT environment variable is not a valid integer: %w", err)
+		return ServerConfig{}, fmt.Errorf("PORT environment variable is not a valid integer: %w", err)
 	}
 
-	TCPGitPort := os.Getenv("SERVER_TCP_GIT_PORT")
+	TCPGitPort := envWithAlias("TCP_GIT_PORT", "SERVER_TCP_GIT_PORT")
 	if TCPGitPort == "" {
-		return ServerConfig{}, fmt.Errorf("SERVER_TCP_GIT_PORT environment variable is required but not set")
+		return ServerConfig{}, fmt.Errorf("TCP_GIT_PORT environment variable is required but not set")
 	}
 	TCPGitPortInt, err := strconv.Atoi(TCPGitPort)
 	if err != nil {
-		return ServerConfig{}, fmt.Errorf("SERVER_TCP_GIT_PORT environment variable is not a valid integer: %w", err)
+		return ServerConfig{}, fmt.Errorf("TCP_GIT_PORT environment variable is not a valid integer: %w", err)
 	}
-	basePath := os.Getenv("SERVER_BASE_PATH")
+	basePath := envWithAlias("BASE_PATH", "SERVER_BASE_PATH")
 	if basePath == "" {
-		return ServerConfig{}, fmt.Errorf("SERVER_BASE_PATH environment variable is required but not set")
+		return ServerConfig{}, fmt.Errorf("BASE_PATH environment variable is required but not set")
 	}
 
 	// 기본값 하드코딩

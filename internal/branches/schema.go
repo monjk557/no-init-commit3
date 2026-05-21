@@ -56,7 +56,7 @@ type GetBranchesRequest struct {
 	Limit  string `form:"limit"`
 	Skip   string `form:"skip"`
 	Search string `form:"search"`
-	Sort   string `form:"sort"`   // default "newest"
+	Sort   string `form:"sort"` // default "newest"
 	Email  string `form:"email"`
 	Status string `form:"status"` // "active" | "stale"
 }

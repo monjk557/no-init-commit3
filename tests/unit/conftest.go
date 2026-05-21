@@ -17,11 +17,11 @@ func SetupTestEnv() {
 	// Set test environment variables FIRST - before any app imports
 	// 이 환경변수들은 모든 unit 테스트에서 사용됩니다.
 
-	// Server Configuration - HTTP API 서버 설정
-	_ = os.Setenv("SERVER_PORT", "5001")
-	_ = os.Setenv("SERVER_TCP_GIT_PORT", "5222")
-	_ = os.Setenv("SERVER_BASE_PATH", "/")
-	_ = os.Setenv("SERVER_HOST_NAME", "0.0.0.0")
+	// Server Configuration - HTTP API 서버 설정 (doc-360 §4.7 self-prefix 제거)
+	_ = os.Setenv("PORT", "5001")
+	_ = os.Setenv("TCP_GIT_PORT", "5222")
+	_ = os.Setenv("BASE_PATH", "/")
+	_ = os.Setenv("HOST", "0.0.0.0") // 코드 미사용이나 helm/env 일관성 위해 권장명
 
 	// Git Repository Configuration - Git 저장소 루트 경로
 	_ = os.Setenv("GIT_REPO_ROOT", "/var/lib/git/repos")
