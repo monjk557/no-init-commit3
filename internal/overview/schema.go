@@ -152,24 +152,54 @@ type LFSPointerInfo struct {
 	Size int64  `json:"size"` // pointed object 의 byte size
 }
 
+// Preview state constants — BlobOverviewResponse.PreviewState 의 값.
+//
+// 클라이언트는 PreviewState 만 보고 분기한다 (Content 길이 / IsBinary 같은
+// indirect indicator 에 의존하지 않음). state != ok 일 때는 raw /blob 으로
+// 폴백하여 streaming/virtualized 렌더링을 사용한다 (Issue-3144).
+const (
+	// PreviewStateOK — 인라인 미리보기 가능. Content 채워짐.
+	PreviewStateOK = "ok"
+	// PreviewStateTooLarge — size 또는 LineCount 가 임계치 초과. Content 빈 값.
+	PreviewStateTooLarge = "too_large"
+	// PreviewStateLongLines — MaxLineLength 임계치 초과 (minified /
+	// inline sourcemap data URI 등). Content 빈 값.
+	PreviewStateLongLines = "long_lines"
+	// PreviewStateGenerated — 휴리스틱이 generated/bundled 파일로 판정.
+	// Content 빈 값.
+	PreviewStateGenerated = "generated"
+	// PreviewStateBinary — binary content. Content 빈 값 (기존 동작 유지).
+	PreviewStateBinary = "binary"
+	// PreviewStateLFSPointer — LFS pointer 파일. Content 빈 값, LFS 필드 채워짐.
+	PreviewStateLFSPointer = "lfs_pointer"
+)
+
 // BlobOverviewResponse is the response type for blob overview API.
 //
 // IsLFSPointer 가 true 면 Content / Lines 는 비어 있고 LFS 메타데이터는 LFS
 // 필드에서 읽는다. 이는 client (orchestrator/web) 가 raw blob 의 LFS JSON
 // 분기에 의존하지 않고 overview 에서 LFS 정보를 얻도록 하기 위한 책임 이전.
+//
+// PreviewState 는 인라인 Content 가능 여부의 single source of truth 이다 —
+// PreviewStateOK 가 아니면 클라이언트는 raw /blob streaming 으로 폴백한다
+// (Issue-3144). MaxLineLength 는 폴백 UI 가 "long-line" 안내 메시지를
+// 정확히 띄울 수 있도록 함께 노출한다.
 type BlobOverviewResponse struct {
-	Success      bool                     `json:"success"`
-	IsBinary     bool                     `json:"is_binary"`
-	IsLFSPointer bool                     `json:"is_lfs_pointer"`
-	LFS          *LFSPointerInfo          `json:"lfs,omitempty"`
-	Content      string                   `json:"content"`
-	ContentType  string                   `json:"content_type,omitempty"`
-	Lines        int                      `json:"lines"`
-	Size         int64                    `json:"size"`
-	Tree         []GitTreeEntryWithCommit `json:"tree"`
-	Branches     []GitBranch              `json:"branches"`
-	LatestCommit *GitCommit               `json:"latest_commit"`
-	Commits      []GitCommit              `json:"commits"`
+	Success       bool                     `json:"success"`
+	IsBinary      bool                     `json:"is_binary"`
+	IsLFSPointer  bool                     `json:"is_lfs_pointer"`
+	LFS           *LFSPointerInfo          `json:"lfs,omitempty"`
+	Content       string                   `json:"content"`
+	ContentType   string                   `json:"content_type,omitempty"`
+	Lines         int                      `json:"lines"`
+	MaxLineLength int                      `json:"max_line_length"`
+	Size          int64                    `json:"size"`
+	PreviewState  string                   `json:"preview_state"`
+	PreviewReason string                   `json:"preview_reason,omitempty"`
+	Tree          []GitTreeEntryWithCommit `json:"tree"`
+	Branches      []GitBranch              `json:"branches"`
+	LatestCommit  *GitCommit               `json:"latest_commit"`
+	Commits       []GitCommit              `json:"commits"`
 }
 
 // LatestCommitOverviewResponse is the response type for the lightweight

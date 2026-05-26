@@ -43,6 +43,29 @@ type Config struct {
 	MergeProtection MergeProtectionConfig
 	LFS             LFSConfig
 	Maintenance     MaintenanceConfig
+	Blob            BlobConfig
+}
+
+// BlobConfig 는 blob preview 응답 가드 임계치입니다.
+//
+// /overview/blob 핸들러가 size / line-count / max-line-length 가드를 적용해
+// 임계치 초과 시 Content 필드를 비우고 PreviewState sentinel 만 반환하도록
+// 한다. 클라이언트는 sentinel 을 받으면 raw /blob streaming 으로 폴백한다.
+// GitHub / GitLab 의 "서버가 미리보기 비용을 계산해 클라이언트에 contract 로
+// 제공한다" 패턴을 따른다 (Issue-3144).
+type BlobConfig struct {
+	// PreviewMaxBytes 는 인라인 미리보기를 허용하는 최대 파일 바이트 수.
+	// 초과 시 PreviewState=too_large.
+	PreviewMaxBytes int64 `json:"preview_max_bytes"`
+
+	// PreviewMaxLines 는 인라인 미리보기를 허용하는 최대 라인 수.
+	// 초과 시 PreviewState=too_large.
+	PreviewMaxLines int `json:"preview_max_lines"`
+
+	// PreviewMaxLineLength 는 단일 라인의 최대 바이트 수.
+	// 초과 시 PreviewState=long_lines. minified / inline sourcemap data URI
+	// 같은 케이스를 잡는다.
+	PreviewMaxLineLength int `json:"preview_max_line_length"`
 }
 
 // LFSConfig는 Git LFS 기능 설정입니다.
@@ -300,6 +323,7 @@ func Load() (*Config, error) {
 	mergeProtectionConfig := parseMergeProtectionConfig()
 	lfsConfig := parseLFSConfig(gitConfig.RepoRoot)
 	maintenanceConfig := parseMaintenanceConfig()
+	blobConfig := parseBlobConfig()
 
 	config := &Config{
 		Env:             appEnv,
@@ -312,6 +336,7 @@ func Load() (*Config, error) {
 		MergeProtection: mergeProtectionConfig,
 		LFS:             lfsConfig,
 		Maintenance:     maintenanceConfig,
+		Blob:            blobConfig,
 	}
 
 	// onprem 환경 오버라이드: 운영 + 내부망 제약 적용
@@ -736,6 +761,48 @@ func parseLFSConfig(repoRoot string) LFSConfig {
 func parseMaintenanceConfig() MaintenanceConfig {
 	return MaintenanceConfig{
 		Enabled: parseBoolFromEnv("GIT_MAINTENANCE_ENABLED", true),
+	}
+}
+
+// ------------------------------------------------------------
+// BlobConfig 파싱 (환경변수 + 하드코딩 기본값)
+// ------------------------------------------------------------
+//
+// 기본값 산정 근거 (Issue-3144):
+//   - PreviewMaxBytes (256KB): syntax highlighter 가 안정적으로 처리하는
+//     상한. GitHub UI 가 1MB, GitLab rendered 가 1MB 이지만 우리는 더
+//     보수적으로 시작해 메트릭 기반으로 조정.
+//   - PreviewMaxLines (10,000): TSX/JSX 토큰 span DOM 노드 폭증을 피하는
+//     선. 그 이상은 viewport-only 렌더가 필요.
+//   - PreviewMaxLineLength (4KB): minified / inline sourcemap data URI
+//     케이스 (라인당 100KB~수 MB) 를 잡는 1차 방어선. 정상 source 의 한 줄은
+//     보통 200 chars 미만이므로 4KB 도 매우 관대한 임계치.
+func parseBlobConfig() BlobConfig {
+	maxBytes := int64(256 * 1024)
+	if v := os.Getenv("BLOB_PREVIEW_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			maxBytes = n
+		}
+	}
+
+	maxLines := 10000
+	if v := os.Getenv("BLOB_PREVIEW_MAX_LINES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxLines = n
+		}
+	}
+
+	maxLineLen := 4096
+	if v := os.Getenv("BLOB_PREVIEW_MAX_LINE_LENGTH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxLineLen = n
+		}
+	}
+
+	return BlobConfig{
+		PreviewMaxBytes:      maxBytes,
+		PreviewMaxLines:      maxLines,
+		PreviewMaxLineLength: maxLineLen,
 	}
 }
 
