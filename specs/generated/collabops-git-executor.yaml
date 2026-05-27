@@ -1292,14 +1292,8 @@ components:
           type: string
         lines:
           type: integer
-        max_line_length:
-          type: integer
         size:
           type: integer
-        preview_state:
-          type: string
-        preview_reason:
-          type: string
         tree:
           type: array
           items:
@@ -1324,8 +1318,6 @@ components:
         - is_binary
         - is_lfs_pointer
         - lines
-        - max_line_length
-        - preview_state
         - size
         - success
         - tree

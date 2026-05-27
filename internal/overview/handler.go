@@ -518,116 +518,29 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 		commitsList = []GitCommit{}
 	}
 
-	// 라인 통계 — 1-pass 계산 (Issue-3144). 기존 strings.ReplaceAll 기반
-	// 복제 + 별도 Count 호출은 메모리 스파이크 (콘텐츠 ×2) 와 중복 순회를
-	// 일으켰음. ComputeLineStats 는 한 번의 byte loop 로 LineCount 와
-	// MaxLineLength 를 동시에 산출한다.
-	stats := blob.ComputeLineStats(blobContent)
-
-	// PreviewState 결정 — 단일 source of truth. 우선순위:
-	//   1. lfs_pointer  (콘텐츠가 pointer 자체이므로 미리보기 의미 없음)
-	//   2. binary       (텍스트 highlight 불가)
-	//   3. generated    (휴리스틱 매칭 — 빌드 산출물 / lockfile / minified)
-	//   4. long_lines   (라인 길이 임계치 초과 — highlighter freeze 방지)
-	//   5. too_large    (size / line-count 임계치 초과)
-	//   6. ok           (인라인 미리보기 가능)
-	previewState, previewReason := h.classifyPreview(
-		path,
-		blobContent,
-		stats,
-		isBinary,
-		isLFSPointer,
-	)
-
-	// Content / Lines 는 PreviewStateOK 일 때만 채운다. 다른 state 는
-	// 클라이언트가 raw /blob streaming 으로 폴백해야 하므로 인라인 콘텐츠를
-	// 보내면 안 됨 (브라우저 freeze / 메모리 폭증 회피).
-	var (
-		content string
-		lines   int
-	)
-	if previewState == PreviewStateOK {
+	var content string
+	var lines int
+	// LFS pointer 면 raw pointer 텍스트를 노출하지 않는다 — client 는
+	// IsLFSPointer + LFS 필드만 보고 처리.
+	if !isBinary && !isLFSPointer {
 		content = string(blobContent)
-		lines = stats.LineCount
-		if lines == 0 {
-			// 호환성: 기존 동작은 빈 문자열에서도 lines=1 을 반환. 빈 콘텐츠가
-			// PreviewStateOK 인 케이스는 빈 파일이며, 이 때 1 로 유지한다.
-			lines = 1
-		}
+		lines = strings.Count(strings.ReplaceAll(content, "\r\n", "\n"), "\n") + 1
 	}
 
 	return BlobOverviewResponse{
-		Success:       true,
-		IsBinary:      isBinary,
-		IsLFSPointer:  isLFSPointer,
-		LFS:           lfsInfo,
-		Content:       content,
-		ContentType:   contentType,
-		Lines:         lines,
-		MaxLineLength: stats.MaxLineLength,
-		Size:          int64(len(blobContent)),
-		PreviewState:  previewState,
-		PreviewReason: previewReason,
-		Tree:          treeEntries,
-		Branches:      []GitBranch{},
-		LatestCommit:  latestCommit,
-		Commits:       commitsList,
+		Success:      true,
+		IsBinary:     isBinary,
+		IsLFSPointer: isLFSPointer,
+		LFS:          lfsInfo,
+		Content:      content,
+		ContentType:  contentType,
+		Lines:        lines,
+		Size:         int64(len(blobContent)),
+		Tree:         treeEntries,
+		Branches:     []GitBranch{},
+		LatestCommit: latestCommit,
+		Commits:      commitsList,
 	}, nil
-}
-
-// classifyPreview 는 blob 메타데이터를 입력받아 인라인 미리보기 가능 여부를
-// 결정한다. 임계치는 h.config.Blob 에서 읽으며, 0 (또는 음수) 이면 해당
-// 가드를 비활성화 (운영 escape hatch).
-//
-// 반환값은 (state, human-readable reason). reason 은 클라이언트가 UI 에
-// "Why preview is disabled" 를 띄울 때 사용한다.
-func (h *RepositoryOverviewHandler) classifyPreview(
-	filePath string,
-	content []byte,
-	stats blob.LineStats,
-	isBinary bool,
-	isLFSPointer bool,
-) (string, string) {
-	if isLFSPointer {
-		return PreviewStateLFSPointer, "File is an LFS pointer"
-	}
-	if isBinary {
-		return PreviewStateBinary, "File appears to be binary"
-	}
-
-	cfg := h.config.Blob
-
-	// Generated 휴리스틱 — sourcemap data URI / minified / lockfile / build
-	// output. 1차 방어선이므로 크기/라인 가드보다 먼저 평가한다 — 휴리스틱이
-	// 잡히면 더 친화적인 사유를 노출할 수 있음.
-	if kind := blob.DetectGenerated(filePath, content); kind != blob.GeneratedNone {
-		return PreviewStateGenerated, kind.HumanReason()
-	}
-
-	// Long lines — minified / inline sourcemap data URI 가 휴리스틱을
-	// 뚫더라도 여기서 잡힌다. 정상 source 한 줄은 보통 < 200 chars 이므로
-	// 4KB 임계치는 매우 관대.
-	if cfg.PreviewMaxLineLength > 0 && stats.MaxLineLength >= cfg.PreviewMaxLineLength {
-		return PreviewStateLongLines,
-			fmt.Sprintf("File has a line of %d bytes (threshold: %d)",
-				stats.MaxLineLength, cfg.PreviewMaxLineLength)
-	}
-
-	// Total size — JSON 응답 payload 크기 상한.
-	if cfg.PreviewMaxBytes > 0 && int64(len(content)) >= cfg.PreviewMaxBytes {
-		return PreviewStateTooLarge,
-			fmt.Sprintf("File is %d bytes (threshold: %d)",
-				len(content), cfg.PreviewMaxBytes)
-	}
-
-	// Line count — DOM 노드 폭증 방지.
-	if cfg.PreviewMaxLines > 0 && stats.LineCount >= cfg.PreviewMaxLines {
-		return PreviewStateTooLarge,
-			fmt.Sprintf("File has %d lines (threshold: %d)",
-				stats.LineCount, cfg.PreviewMaxLines)
-	}
-
-	return PreviewStateOK, ""
 }
 
 // HandleGetTreeWithCommitOverview handles GET /overview/tree/commits.
