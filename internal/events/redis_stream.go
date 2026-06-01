@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -111,12 +112,37 @@ func NewRedisStreamClient(redisURL string, logger *zap.Logger) (RedisStreamClien
 	return newSingleRedisStreamClient(redisURL, logger)
 }
 
+// applyRedisACLEnv overrides Redis ACL credentials with the REDIS_USERNAME /
+// REDIS_PASSWORD environment variables when they are non-empty.
+//
+// Redis ACL Phase B (Issue-3372): redis-piper now provisions an `app` user with
+// a password. Infra injects REDIS_USERNAME=app + REDIS_PASSWORD=<secret>. When
+// both are empty (pre-ACL compat mode) the URL-derived credentials are kept, so
+// the client keeps connecting as the password-less `default` user — preserving
+// existing behavior.
+//
+// Always provide the username alongside the password: passing a password
+// without a username makes go-redis send a single-argument AUTH, which Redis
+// interprets as authenticating the `default` user and fails with
+// "AUTH <password> called without any password configured for the default user".
+func applyRedisACLEnv(username, password string) (string, string) {
+	if v := strings.TrimSpace(os.Getenv("REDIS_USERNAME")); v != "" {
+		username = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		password = v
+	}
+	return username, password
+}
+
 // 싱글 노드 전용 클라이언트 생성
 func newSingleRedisStreamClient(redisURL string, logger *zap.Logger) (RedisStreamClient, error) {
 	opt, err := redis.ParseURL(redisURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Redis URL: %w", err)
 	}
+
+	opt.Username, opt.Password = applyRedisACLEnv(opt.Username, opt.Password)
 
 	client := redis.NewClient(opt)
 
@@ -181,6 +207,8 @@ func newClusterRedisStreamClient(redisURLs string, logger *zap.Logger) (RedisStr
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("no valid Redis cluster addresses parsed")
 	}
+
+	username, password = applyRedisACLEnv(username, password)
 
 	clusterOpts := &redis.ClusterOptions{
 		Addrs:    addrs,
