@@ -670,14 +670,36 @@ func (s *DuplexTCPServer) publishRefChangeEvents(
 		if oldHash == newHash {
 			continue
 		}
-		if !strings.HasPrefix(refName, "refs/heads/") {
-			continue
+		switch {
+		case strings.HasPrefix(refName, "refs/heads/"):
+			s.logger.Info("Ref changed",
+				zap.String("ref", refName),
+				zap.String("old", oldHash),
+				zap.String("new", newHash))
+			s.addCommitEventToStream(repoPath, oldHash, newHash, refName, owner, repo, userID, events.EventTypePush)
+		case strings.HasPrefix(refName, "refs/tags/"):
+			// Peel to commit SHA so annotated tag object SHAs are never exposed
+			// downstream (Issue-2829 decision #4). Skip if it cannot be resolved.
+			commitHash, err := gitcmd.PeelToCommit(ctx, repoPath, newHash)
+			if err != nil {
+				s.logger.Debug("Skipping tag event; cannot peel tag to commit",
+					zap.String("ref", refName),
+					zap.String("new", newHash),
+					zap.Error(err))
+				continue
+			}
+			oldRev := oldHash
+			if oldHash != zeroHash {
+				if peeled, peelErr := gitcmd.PeelToCommit(ctx, repoPath, oldHash); peelErr == nil {
+					oldRev = peeled
+				}
+			}
+			s.logger.Info("Tag changed",
+				zap.String("ref", refName),
+				zap.String("old", oldRev),
+				zap.String("new", commitHash))
+			s.addCommitEventToStream(repoPath, oldRev, commitHash, refName, owner, repo, userID, events.EventTypeTagPush)
 		}
-		s.logger.Info("Ref changed",
-			zap.String("ref", refName),
-			zap.String("old", oldHash),
-			zap.String("new", newHash))
-		s.addCommitEventToStream(repoPath, oldHash, newHash, refName, owner, repo, userID, events.EventTypePush)
 	}
 
 	// Detect deleted refs
@@ -685,13 +707,23 @@ func (s *DuplexTCPServer) publishRefChangeEvents(
 		if _, stillExists := after[refName]; stillExists {
 			continue
 		}
-		if !strings.HasPrefix(refName, "refs/heads/") {
-			continue
+		switch {
+		case strings.HasPrefix(refName, "refs/heads/"):
+			s.logger.Info("Ref deleted",
+				zap.String("ref", refName),
+				zap.String("old", oldHash))
+			s.publishRefDeleteEvent(repoPath, oldHash, refName, owner, repo, userID, events.EventTypeBranchDelete)
+		case strings.HasPrefix(refName, "refs/tags/"):
+			// Best-effort peel; the tag object usually still exists pre-GC.
+			oldRev := oldHash
+			if peeled, err := gitcmd.PeelToCommit(ctx, repoPath, oldHash); err == nil {
+				oldRev = peeled
+			}
+			s.logger.Info("Tag deleted",
+				zap.String("ref", refName),
+				zap.String("old", oldRev))
+			s.publishRefDeleteEvent(repoPath, oldRev, refName, owner, repo, userID, events.EventTypeTagDelete)
 		}
-		s.logger.Info("Ref deleted",
-			zap.String("ref", refName),
-			zap.String("old", oldHash))
-		s.publishBranchDeleteEvent(repoPath, oldHash, refName, owner, repo, userID)
 	}
 }
 
@@ -862,10 +894,11 @@ func (s *DuplexTCPServer) addCommitEventToStream(repoPath, oldHash, commitHash, 
 	}()
 }
 
-// publishBranchDeleteEvent publishes a branch_delete event to Redis Stream.
-// Unlike addCommitEventToStream, this does not call GetCommitInfo because
-// the ref has already been deleted and the commit hash is the old (pre-delete) value.
-func (s *DuplexTCPServer) publishBranchDeleteEvent(repoPath, oldHash, refName, owner, repoName, userID string) {
+// publishRefDeleteEvent publishes a ref deletion event (branch_delete or
+// tag_delete) to Redis Stream. Unlike addCommitEventToStream, this does not call
+// GetCommitInfo because the ref has already been deleted and the commit hash is
+// the old (pre-delete) value.
+func (s *DuplexTCPServer) publishRefDeleteEvent(repoPath, oldHash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
 	if s.eventsClient == nil {
 		return
 	}
@@ -874,7 +907,7 @@ func (s *DuplexTCPServer) publishBranchDeleteEvent(repoPath, oldHash, refName, o
 
 	event := &events.CommitEvent{
 		RepoPath:   relativePath,
-		EventType:  events.EventTypeBranchDelete,
+		EventType:  eventType,
 		CommitHash: oldHash,
 		OldRev:     oldHash,
 		RefName:    refName,
@@ -889,9 +922,10 @@ func (s *DuplexTCPServer) publishBranchDeleteEvent(repoPath, oldHash, refName, o
 		defer cancel()
 
 		if err := s.eventsClient.AddCommitEventToStream(evCtx, event); err != nil {
-			s.logger.Warn("Failed to publish branch delete event",
+			s.logger.Warn("Failed to publish ref delete event",
 				zap.String("repo_path", repoPath),
 				zap.String("ref", refName),
+				zap.String("event_type", string(eventType)),
 				zap.Error(err))
 		}
 	}()
