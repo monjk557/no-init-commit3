@@ -13,6 +13,7 @@ import (
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
+	"go.uber.org/zap"
 )
 
 // RevertHandler handles REST API operations for revert operations.
@@ -42,7 +43,8 @@ func NewRevertHandler(cfg *config.Config) (*RevertHandler, error) {
 	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
 		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
 		if err != nil {
-			_ = err
+			logger.Warn("Failed to initialize Redis events client, continuing without events",
+				zap.Error(err))
 		}
 	}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
+	"go.uber.org/zap"
 )
 
 // ReceivePackRequest represents a parsed receive-pack request from the client
@@ -60,7 +61,8 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 		if err == nil {
 			eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
 			if err != nil {
-				_ = err
+				logger.Warn("Failed to initialize Redis events client, continuing without events",
+					zap.Error(err))
 			}
 		}
 	}

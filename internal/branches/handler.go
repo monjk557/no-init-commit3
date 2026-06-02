@@ -59,7 +59,8 @@ func NewBranchOperationsHandler(cfg *config.Config) (*BranchOperationsHandler, e
 	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
 		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
 		if err != nil {
-			_ = err
+			logger.Warn("Failed to initialize Redis events client, continuing without events",
+				zap.Error(err))
 		}
 	}
 
