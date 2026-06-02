@@ -463,28 +463,18 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repoPath stri
 		return fmt.Errorf("failed to update reference %s: %w", cmd.RefName, err)
 	}
 
-	// Emit event for branch/tag updates
-	if !isDelete && cmd.OldHash != cmd.NewHash {
+	// Emit event for branch updates
+	if !isDelete && cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
 		oldHashStr := ""
 		if cmd.OldHash != zeroHash {
 			oldHashStr = cmd.OldHash
 		}
-		switch {
-		case strings.HasPrefix(cmd.RefName, "refs/heads/"):
-			h.addCommitEventToStream(ctx, repoPath, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID, events.EventTypePush)
-		case strings.HasPrefix(cmd.RefName, "refs/tags/"):
-			h.addTagEventToStream(ctx, repoPath, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID)
-		}
+		h.addCommitEventToStream(ctx, repoPath, oldHashStr, cmd.NewHash, cmd.RefName, owner, repoName, userID, events.EventTypePush)
 	}
 
-	// Emit event for branch/tag deletion
-	if isDelete {
-		switch {
-		case strings.HasPrefix(cmd.RefName, "refs/heads/"):
-			h.publishRefDeleteEvent(ctx, repoPath, cmd.OldHash, cmd.RefName, owner, repoName, userID, events.EventTypeBranchDelete)
-		case strings.HasPrefix(cmd.RefName, "refs/tags/"):
-			h.publishRefDeleteEvent(ctx, repoPath, peelTagDeleteHash(ctx, repoPath, cmd.OldHash), cmd.RefName, owner, repoName, userID, events.EventTypeTagDelete)
-		}
+	// Emit event for branch deletion
+	if isDelete && strings.HasPrefix(cmd.RefName, "refs/heads/") {
+		h.publishBranchDeleteEvent(ctx, repoPath, cmd.OldHash, cmd.RefName, owner, repoName, userID)
 	}
 
 	return nil
@@ -561,52 +551,10 @@ func (h *ReceivePackHandler) addCommitEventToStream(ctx context.Context, repoPat
 	}()
 }
 
-// addTagEventToStream publishes a tag_push event to Redis Stream. The pushed ref
-// may point at a lightweight tag (commit), an annotated tag object, or a force
-// re-pointed floating major tag. The new (and best-effort old) hash is peeled to
-// its underlying commit SHA so the event payload only ever exposes commit SHAs —
-// the tag object SHA is never leaked downstream (Issue-2829 decision #4).
-func (h *ReceivePackHandler) addTagEventToStream(ctx context.Context, repoPath string, oldHash string, tagHash, refName, owner, repoName, userID string) {
-	if h.eventsClient == nil {
-		return
-	}
-
-	commitHash, err := gitcmd.PeelToCommit(ctx, repoPath, tagHash)
-	if err != nil {
-		// Cannot resolve the tag to a commit (e.g. dangling object); skip rather
-		// than emit a tag object SHA the orchestrator cannot interpret.
-		return
-	}
-
-	oldRev := oldHash
-	if oldHash != "" {
-		if peeled, peelErr := gitcmd.PeelToCommit(ctx, repoPath, oldHash); peelErr == nil {
-			oldRev = peeled
-		}
-	}
-
-	h.addCommitEventToStream(ctx, repoPath, oldRev, commitHash, refName, owner, repoName, userID, events.EventTypeTagPush)
-}
-
-// peelTagDeleteHash best-effort peels a deleted tag's old hash to its underlying
-// commit SHA. The ref is already gone by the time this runs, but the object
-// usually still exists (pre-GC), so peeling keeps tag_delete payloads consistent
-// with tag_push (commit SHA only). Falls back to the raw old hash on failure.
-func peelTagDeleteHash(ctx context.Context, repoPath, oldHash string) string {
-	if oldHash == "" || oldHash == zeroHash {
-		return oldHash
-	}
-	if peeled, err := gitcmd.PeelToCommit(ctx, repoPath, oldHash); err == nil {
-		return peeled
-	}
-	return oldHash
-}
-
-// publishRefDeleteEvent publishes a ref deletion event (branch_delete or
-// tag_delete) to Redis Stream. Unlike addCommitEventToStream, this does not call
-// GetCommitInfo because the ref has already been deleted and the commit hash is
-// the old (pre-delete) value.
-func (h *ReceivePackHandler) publishRefDeleteEvent(ctx context.Context, repoPath string, oldHash string, refName, owner, repoName, userID string, eventType events.CommitEventType) {
+// publishBranchDeleteEvent publishes a branch_delete event to Redis Stream.
+// Unlike addCommitEventToStream, this does not call GetCommitInfo because
+// the ref has already been deleted and the commit hash is the old (pre-delete) value.
+func (h *ReceivePackHandler) publishBranchDeleteEvent(ctx context.Context, repoPath string, oldHash string, refName, owner, repoName, userID string) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -620,7 +568,7 @@ func (h *ReceivePackHandler) publishRefDeleteEvent(ctx context.Context, repoPath
 
 	event := &events.CommitEvent{
 		RepoPath:   relativePath,
-		EventType:  eventType,
+		EventType:  events.EventTypeBranchDelete,
 		CommitHash: oldHash,
 		OldRev:     oldHash,
 		RefName:    refName,

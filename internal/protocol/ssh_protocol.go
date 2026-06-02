@@ -643,23 +643,13 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 				if err := pw.WriteLine(statusLine); err != nil {
 					return
 				}
-				// Publish events for successful ref updates (branch/tag push + delete).
-				if h.eventsClient != nil {
+				// Publish commit events for successful branch updates
+				if h.eventsClient != nil && cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/") {
 					oldHashStr := ""
 					if cmd.OldHash != zeroHash {
 						oldHashStr = cmd.OldHash
 					}
-					isDelete := cmd.NewHash == zeroHash
-					switch {
-					case isDelete && strings.HasPrefix(cmd.RefName, "refs/heads/"):
-						h.publishSSHRefDeleteEvent(ctx, sshReq.RepoPath, cmd.OldHash, cmd.RefName, sshReq.Owner, sshReq.Repo, sshReq.UserID, events.EventTypeBranchDelete)
-					case isDelete && strings.HasPrefix(cmd.RefName, "refs/tags/"):
-						h.publishSSHRefDeleteEvent(ctx, sshReq.RepoPath, peelTagDeleteHash(ctx, sshReq.RepoPath, cmd.OldHash), cmd.RefName, sshReq.Owner, sshReq.Repo, sshReq.UserID, events.EventTypeTagDelete)
-					case cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/heads/"):
-						h.addSSHCommitEventToStream(ctx, sshReq.RepoPath, oldHashStr, cmd.NewHash, cmd.RefName, sshReq.Owner, sshReq.Repo, sshReq.UserID, events.EventTypePush)
-					case cmd.OldHash != cmd.NewHash && strings.HasPrefix(cmd.RefName, "refs/tags/"):
-						h.addSSHTagEventToStream(ctx, sshReq.RepoPath, oldHashStr, cmd.NewHash, cmd.RefName, sshReq.Owner, sshReq.Repo, sshReq.UserID)
-					}
+					h.addSSHCommitEventToStream(ctx, sshReq.RepoPath, oldHashStr, cmd.NewHash, cmd.RefName, sshReq.Owner, sshReq.Repo, sshReq.UserID)
 				}
 			}
 		}
@@ -670,7 +660,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 }
 
 // addSSHCommitEventToStream adds a commit event to Redis Stream for SSH operations using native git.
-func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repoPath, oldHash, commitHash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
+func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repoPath, oldHash, commitHash, refName, owner, repoName, userID string) {
 	if h.eventsClient == nil {
 		return
 	}
@@ -687,7 +677,7 @@ func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo
 	// Create event
 	event := &events.CommitEvent{
 		RepoPath:      relativePath,
-		EventType:     eventType,
+		EventType:     events.EventTypePush,
 		CommitHash:    commitHash,
 		OldRev:        oldHash,
 		RefName:       refName,
@@ -706,58 +696,6 @@ func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo
 		if err := h.eventsClient.AddCommitEventToStream(pubCtx, event); err != nil {
 			_ = err
 		}
-	}()
-}
-
-// addSSHTagEventToStream publishes a tag_push event for an SSH push. The new (and
-// best-effort old) hash is peeled to the underlying commit SHA so annotated tag
-// object SHAs are never exposed downstream (mirrors the HTTP path).
-func (h *SSHProtocolHandler) addSSHTagEventToStream(ctx context.Context, repoPath, oldHash, tagHash, refName, owner, repoName, userID string) {
-	if h.eventsClient == nil {
-		return
-	}
-
-	commitHash, err := gitcmd.PeelToCommit(ctx, repoPath, tagHash)
-	if err != nil {
-		return
-	}
-
-	oldRev := oldHash
-	if oldHash != "" {
-		if peeled, peelErr := gitcmd.PeelToCommit(ctx, repoPath, oldHash); peelErr == nil {
-			oldRev = peeled
-		}
-	}
-
-	h.addSSHCommitEventToStream(ctx, repoPath, oldRev, commitHash, refName, owner, repoName, userID, events.EventTypeTagPush)
-}
-
-// publishSSHRefDeleteEvent publishes a branch_delete or tag_delete event for an
-// SSH push. Like the HTTP path, it does not call GetCommitInfo because the ref is
-// already gone; the old (pre-delete) hash is recorded as-is.
-func (h *SSHProtocolHandler) publishSSHRefDeleteEvent(ctx context.Context, repoPath, oldHash, refName, owner, repoName, userID string, eventType events.CommitEventType) {
-	if h.eventsClient == nil {
-		return
-	}
-
-	relativePath := events.GetRelativeRepoPath(repoPath, h.pathConfig.GetRepoRoot())
-
-	event := &events.CommitEvent{
-		RepoPath:   relativePath,
-		EventType:  eventType,
-		CommitHash: oldHash,
-		OldRev:     oldHash,
-		RefName:    refName,
-		Pusher:     "git",
-		UserID:     userID,
-		Timestamp:  time.Now(),
-		PushedAt:   time.Now(),
-	}
-
-	go func() {
-		pubCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = h.eventsClient.AddCommitEventToStream(pubCtx, event)
 	}()
 }
 

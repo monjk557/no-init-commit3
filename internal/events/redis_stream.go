@@ -22,8 +22,6 @@ const (
 	EventTypeCommit       CommitEventType = "commit"
 	EventTypeBranchDelete CommitEventType = "branch_delete"
 	EventTypeRename       CommitEventType = "rename"
-	EventTypeTagPush      CommitEventType = "tag_push"
-	EventTypeTagDelete    CommitEventType = "tag_delete"
 )
 
 // CommitEvent represents a commit creation event
@@ -278,7 +276,7 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 		CommitMessage: event.CommitMessage,
 	}
 	switch event.EventType {
-	case EventTypeBranchDelete, EventTypeTagDelete:
+	case EventTypeBranchDelete:
 		data.OldRev = event.CommitHash
 		data.NewRev = ""
 	case EventTypeRename:

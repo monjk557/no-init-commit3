@@ -134,27 +134,6 @@ func DiffTree(ctx context.Context, repoPath string, args ...string) ([]byte, err
 	return out, nil
 }
 
-// PeelToCommit resolves an object id to the commit it ultimately points at by
-// running `git rev-parse --verify <oid>^{commit}`. It is idempotent across the
-// three inputs we care about for tag refs:
-//   - a lightweight tag (oid already a commit) → same commit SHA
-//   - an annotated tag object → the peeled commit SHA (tag object SHA is never returned)
-//   - a commit oid → the same commit SHA
-//
-// Downstream consumers (orchestrator) therefore always receive a commit SHA in
-// the event payload, regardless of tag flavor (Issue-2829 design decision #4).
-func PeelToCommit(ctx context.Context, repoPath string, oid string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", oid+"^{commit}")
-	cmd.Dir = repoPath
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse %s^{commit}: %w (stderr: %s)", oid, err, stderr.String())
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // ObjectExists checks if an object exists in the repository and returns its type.
 // Returns the object type ("commit", "tree", "blob", "tag") or error if not found.
 func ObjectExists(ctx context.Context, repoPath string, oid string) (string, error) {
