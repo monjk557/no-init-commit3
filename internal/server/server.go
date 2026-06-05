@@ -27,6 +27,7 @@ import (
 	"github.com/collabops/git-executor/internal/lfs/gc"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/merge"
+	"github.com/collabops/git-executor/internal/middleware"
 	"github.com/collabops/git-executor/internal/observability"
 	"github.com/collabops/git-executor/internal/overview"
 	"github.com/collabops/git-executor/internal/protocol"
@@ -142,6 +143,15 @@ func (s *Server) SetupRouter() *gin.Engine {
 	router.Use(logging.GinRequestLogger(s.logger)) // Request logging (JSON event format)
 	router.Use(gin.Recovery())                     // Panic recovery
 
+	// Decision JWT verification (issue-3384): proves the request was authorized
+	// upstream by the orchestrator via a trusted gateway, closing the direct-bypass
+	// hole left by the spoofable X-Source header. Applied globally so every git
+	// protocol + REST API endpoint is covered through a single chokepoint; infra and
+	// documentation paths are exempt. Dual-accept — a complete no-op until the shared
+	// secret is provisioned, so this is safe to ship ahead of the gateway relay.
+	decisionVerifier := middleware.NewDecisionVerifier(s.config.Security.DecisionJWT, s.logger)
+	router.Use(decisionVerifier.Middleware(s.isDecisionExempt))
+
 	// Setup observability middleware and routes
 	s.observabilityManager.SetupMiddleware(router)
 	s.observabilityManager.SetupRoutes(router)
@@ -166,6 +176,25 @@ func (s *Server) SetupRouter() *gin.Engine {
 	}
 
 	return router
+}
+
+// isDecisionExempt reports whether a path is exempt from decision-JWT verification.
+// Infrastructure probes (health/ready/metrics) and API documentation never carry a
+// decision token, so gating them would break liveness checks and the docs UI once
+// strict mode is enabled.
+func (s *Server) isDecisionExempt(path string) bool {
+	switch path {
+	case "/", "/ready", "/metrics", s.config.Server.HealthCheckPath:
+		return true
+	}
+	// Swagger UI + OpenAPI spec (served under the configurable docs base path).
+	if strings.Contains(path, "/swagger") || strings.Contains(path, "/openapi") {
+		return true
+	}
+	if docs := s.config.Server.DocsPath; docs != "" && strings.Contains(path, docs) {
+		return true
+	}
+	return false
 }
 
 // setupAPIRoutesOnGroup configures API routes on a router group

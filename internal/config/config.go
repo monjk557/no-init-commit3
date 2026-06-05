@@ -160,8 +160,45 @@ type HealthConfig struct {
 
 // SecurityConfig holds security-related configuration
 type SecurityConfig struct {
-	TLS       TLSConfig       `json:"tls"`
-	RateLimit RateLimitConfig `json:"rate_limit"`
+	TLS         TLSConfig         `json:"tls"`
+	RateLimit   RateLimitConfig   `json:"rate_limit"`
+	DecisionJWT DecisionJWTConfig `json:"decision_jwt"`
+}
+
+// DecisionJWTConfig holds configuration for verifying authorization "decision" JWTs
+// minted by the orchestrator (collabops-o2). A request that arrives through a trusted
+// gateway (git-http / git-ssh) carries a short-lived, HS256-signed decision token in
+// the X-Decision-JWT header. The executor verifies it to prove the request was
+// already authorized upstream and was not delivered by a direct-bypass caller.
+//
+// Trust model: the JWT is symmetric (HS256), so Secret MUST match the orchestrator's
+// DECISION_JWT_SECRET exactly (injected with the same value via Helm). The executor
+// never mints tokens — it only verifies.
+//
+// Rollout is dual-accept by design:
+//   - Secret == "" → verification is fully disabled (no-op). Nothing can be verified
+//     before the shared secret is provisioned, so we must not reject. This is the
+//     safe default that keeps existing traffic flowing during migration.
+//   - Secret set, Required == false → verify-and-log only. Tokens are verified, but
+//     NOTHING is ever rejected: missing, invalid, or non-attested all fall back to
+//     legacy auth and emit a log. This must stay non-rejecting because upstream
+//     legitimately relays tokens this verifier does not yet accept (e.g. git-http's
+//     Layer-1 resolve path mints aud="api-service", not "git-executor"). The logs
+//     measure rollout readiness — when they reach zero, strict mode is safe.
+//   - Secret set, Required == true → strict. A missing, invalid, or non-attested
+//     token is rejected. Flip this only after the fallback logs are clean AND every
+//     relay path emits an accepted, attested token.
+type DecisionJWTConfig struct {
+	// Secret is the shared HS256 signing secret. Empty disables verification entirely.
+	Secret string `json:"-"` // never serialize the secret
+	// Required enables strict mode: reject requests lacking a valid, attested token.
+	Required bool `json:"required"`
+	// Audience is the expected `aud` claim (orchestrator ALLOWED_AUDIENCES entry).
+	Audience string `json:"audience"`
+	// Issuer is the expected `iss` claim.
+	Issuer string `json:"issuer"`
+	// LeewaySeconds tolerates clock skew between orchestrator and executor (exp/iat).
+	LeewaySeconds int `json:"leeway_seconds"`
 }
 
 // TLSConfig holds TLS configuration
@@ -300,6 +337,7 @@ func Load() (*Config, error) {
 	mergeProtectionConfig := parseMergeProtectionConfig()
 	lfsConfig := parseLFSConfig(gitConfig.RepoRoot)
 	maintenanceConfig := parseMaintenanceConfig()
+	securityConfig := parseSecurityConfig()
 
 	config := &Config{
 		Env:             appEnv,
@@ -312,6 +350,7 @@ func Load() (*Config, error) {
 		MergeProtection: mergeProtectionConfig,
 		LFS:             lfsConfig,
 		Maintenance:     maintenanceConfig,
+		Security:        securityConfig,
 	}
 
 	// onprem 환경 오버라이드: 운영 + 내부망 제약 적용
@@ -627,6 +666,53 @@ func parseMergeProtectionConfig() MergeProtectionConfig {
 		EnableAuditLogs:          enableAuditLogs,
 		SafetyMode:               safetyMode,
 		FallbackStrategy:         fallbackStrategy,
+	}
+}
+
+// Decision JWT defaults — MUST mirror the orchestrator issuer
+// (collabops-api-orchestrator app/services/authz/decision_jwt.py).
+const (
+	// defaultDecisionJWTIssuer is the orchestrator's DECISION_JWT_ISSUER.
+	defaultDecisionJWTIssuer = "collabops-o2"
+	// defaultDecisionJWTAudience is this service's entry in the orchestrator's
+	// ALLOWED_AUDIENCES set.
+	defaultDecisionJWTAudience = "git-executor"
+	// defaultDecisionJWTLeewaySeconds mirrors DECISION_JWT_CLOCK_SKEW_SECONDS.
+	defaultDecisionJWTLeewaySeconds = 5
+)
+
+// parseSecurityConfig assembles SecurityConfig from the environment.
+//
+// TLS / RateLimit currently rely on zero-value timeouts (unchanged behavior);
+// only the decision-JWT verification layer is environment-driven.
+//
+// Secret resolution prefers SECURITY_DECISION_JWT_SECRET (this service's own
+// namespace) and falls back to DECISION_JWT_SECRET so a single shared Helm secret
+// value can be injected under either name without divergence from the orchestrator.
+func parseSecurityConfig() SecurityConfig {
+	secret := strings.TrimSpace(os.Getenv("SECURITY_DECISION_JWT_SECRET"))
+	if secret == "" {
+		secret = strings.TrimSpace(os.Getenv("DECISION_JWT_SECRET"))
+	}
+
+	audience := strings.TrimSpace(os.Getenv("SECURITY_DECISION_JWT_AUDIENCE"))
+	if audience == "" {
+		audience = defaultDecisionJWTAudience
+	}
+
+	issuer := strings.TrimSpace(os.Getenv("SECURITY_DECISION_JWT_ISSUER"))
+	if issuer == "" {
+		issuer = defaultDecisionJWTIssuer
+	}
+
+	return SecurityConfig{
+		DecisionJWT: DecisionJWTConfig{
+			Secret:        secret,
+			Required:      parseBoolFromEnv("SECURITY_DECISION_JWT_REQUIRED", false),
+			Audience:      audience,
+			Issuer:        issuer,
+			LeewaySeconds: defaultDecisionJWTLeewaySeconds,
+		},
 	}
 }
 
