@@ -56,6 +56,12 @@ type FileDiffRequest struct {
 	Path string `form:"path" binding:"required"`
 	Base string `form:"base" binding:"required"`
 	Head string `form:"head" binding:"required"`
+	// LineOffset 은 윈도우 로드 시 반환을 시작할 LineChange 인덱스다 (Issue-3159).
+	// 0 이상이면 윈도우 모드. LineLimit 과 함께 큰 파일(too_large)을 부분 로드한다.
+	LineOffset int `form:"line_offset"`
+	// LineLimit 은 한 윈도우에 반환할 최대 LineChange 수다 (Issue-3159).
+	// >0 이면 윈도우 모드. 미지정(0)이면 큰 파일은 DefaultDiffWindowLines 로 자동 윈도잉.
+	LineLimit int `form:"line_limit"`
 }
 
 // ExpandContextRequest 는 GET /diff/expand-context 의 query parameter 를
@@ -173,6 +179,24 @@ type FileDiff struct {
 	LoadStatus      FileLoadStatus   `json:"loadStatus"`                 // 파일 diff 로드 상태: loaded, collapsed, too_large, binary, submodule
 	OldPath         string           `json:"old_path,omitempty"`         // 이름 변경시 사용
 	SubmoduleChange *SubmoduleChange `json:"submodule_change,omitempty"` // gitlink 변경 시에만 채워짐
+	// TotalChangedLines 는 이 파일의 전체 변경 라인 수(additions+deletions)다 (Issue-3159).
+	// too_large 로 마크되거나 윈도우 로드된 파일에서 채워져, 클라이언트가 변경 규모와
+	// 윈도우 로드 필요 여부를 판단하게 한다.
+	TotalChangedLines int `json:"total_changed_lines,omitempty"`
+	// Window 는 윈도우(부분) 로드 시의 메타데이터다 (Issue-3159). 윈도우 모드로
+	// /diff/file 을 호출했을 때만 채워지며, 클라이언트는 이 정보로 다음 윈도우를 이어 받는다.
+	Window *DiffWindow `json:"window,omitempty"`
+}
+
+// DiffWindow 는 단일 파일 diff 의 윈도우(부분) 로드 메타데이터다 (Issue-3159).
+// 거대 파일은 전체 LineChange 배열을 한 번에 싣지 않고 [Offset, Offset+Limit) 구간만
+// 잘라 보내며, 클라이언트는 HasMore 가 true 인 동안 Offset 을 늘려가며 이어 받는다.
+type DiffWindow struct {
+	Offset     int  `json:"offset"`      // 이 응답에 포함된 첫 LineChange 의 전체 배열 기준 인덱스
+	Limit      int  `json:"limit"`       // 요청된 윈도우 크기(LineChange 수)
+	Returned   int  `json:"returned"`    // 실제 반환된 LineChange 수 (합성 HUNK 헤더 제외)
+	TotalLines int  `json:"total_lines"` // 윈도우 가능한 전체 LineChange 수
+	HasMore    bool `json:"has_more"`    // 뒤에 더 받을 윈도우가 남았는지
 }
 
 // LineChange는 diff의 단일 라인 변경을 나타냅니다.
@@ -250,11 +274,21 @@ const (
 	// MaxPatchSize는 단일 patch의 최대 크기 (10MB)
 	MaxPatchSize = 10 * 1024 * 1024
 	// MaxChangedLines는 단일 파일의 최대 변경 라인 수 (additions + deletions)
-	// 이 값을 초과하면 해당 파일의 diff 내용(Changes)을 로드하지 않음
+	// 이 값을 초과하면 bulk diff 응답에서 해당 파일의 Changes 를 inline 으로 싣지 않고
+	// too_large 로 마크한다. 단, /diff/file 단일 조회는 이 값을 초과해도 윈도우 모드로
+	// 부분 로드를 제공한다 (Issue-3159) — too_large 가 더 이상 dead-end 가 아니다.
 	MaxChangedLines = 10000
 	// MaxFilesWithChanges는 Changes(라인별 diff)를 포함할 최대 파일 수
 	// 나머지 파일들은 메타데이터만 포함하고 Changes는 nil로 설정
 	MaxFilesWithChanges = 10
+	// DefaultDiffWindowLines 는 윈도우 크기를 명시하지 않은 윈도우 로드의 기본 LineChange 수다
+	// (Issue-3159). 큰 파일을 /diff/file 로 조회할 때 클라이언트가 line_limit 을 주지 않으면
+	// 이 크기로 첫 윈도우를 자동 반환한다.
+	DefaultDiffWindowLines = 2000
+	// MaxDiffWindowLines 는 단일 윈도우 요청이 반환할 수 있는 최대 LineChange 수다
+	// (Issue-3159). 클라이언트가 더 큰 line_limit 을 보내도 이 값으로 상한 고정해
+	// 응답 페이로드를 bound 한다.
+	MaxDiffWindowLines = 5000
 )
 
 // DiffTooLargeError는 diff가 너무 커서 표시할 수 없을 때 사용하는 에러입니다

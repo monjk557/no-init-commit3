@@ -668,6 +668,14 @@ paths:
           required: true
           schema:
             type: string
+        - name: line_offset
+          in: query
+          schema:
+            type: integer
+        - name: line_limit
+          in: query
+          schema:
+            type: integer
       responses:
         '200':
           description: Success
@@ -2321,6 +2329,25 @@ components:
         - total_deletions
     DiffTooLargeError:
       type: object
+    DiffWindow:
+      type: object
+      properties:
+        offset:
+          type: integer
+        limit:
+          type: integer
+        returned:
+          type: integer
+        total_lines:
+          type: integer
+        has_more:
+          type: boolean
+      required:
+        - has_more
+        - limit
+        - offset
+        - returned
+        - total_lines
     ExpandContextRequest:
       type: object
     ExpandContextResponse:
@@ -2374,6 +2401,10 @@ components:
           type: string
         submodule_change:
           $ref: '#/components/schemas/SubmoduleChange'
+        total_changed_lines:
+          type: integer
+        window:
+          $ref: '#/components/schemas/DiffWindow'
         content:
           $ref: '#/components/schemas/FileContent'
         conflicts:
@@ -2471,6 +2502,10 @@ components:
           type: string
         submodule_change:
           $ref: '#/components/schemas/SubmoduleChange'
+        total_changed_lines:
+          type: integer
+        window:
+          $ref: '#/components/schemas/DiffWindow'
       required:
         - additions
         - deletions

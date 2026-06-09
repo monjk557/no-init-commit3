@@ -153,6 +153,66 @@ func GenerateLineChangesFromPatch(patchText string, contextLines int) ([]LineCha
 	return trimContextAroundChanges(lineChanges, contextLines), hunks, nil
 }
 
+// windowLineChanges 는 전체 LineChange 슬라이스에서 [offset, offset+limit) 윈도우를
+// 잘라 메타데이터와 함께 반환한다 (Issue-3159). 거대 파일(특히 전부 바뀐 단일 hunk)을
+// 한 번에 싣지 않고 부분 로드하기 위한 핵심 헬퍼다.
+//
+// 윈도우가 hunk 중간에서 시작하면(첫 원소가 HUNK 타입이 아니면) 라인 번호 정렬을 위해
+// 합성 HUNK 헤더를 앞에 끼운다 — 합성 헤더는 offset/Returned 회계에는 포함되지 않으므로
+// 다음 윈도우는 그대로 offset+Returned 로 이어받으면 된다.
+func windowLineChanges(all []LineChange, offset, limit int) ([]LineChange, DiffWindow) {
+	total := len(all)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	window := all[offset:end]
+
+	out := make([]LineChange, 0, len(window)+1)
+	if len(window) > 0 && window[0].Type != LineChangeTypeHunk {
+		out = append(out, synthHunkHeader(window[0]))
+	}
+	out = append(out, window...)
+
+	return out, DiffWindow{
+		Offset:     offset,
+		Limit:      limit,
+		Returned:   len(window),
+		TotalLines: total,
+		HasMore:    end < total,
+	}
+}
+
+// synthHunkHeader 는 윈도우가 hunk 중간에서 시작할 때, 첫 LineChange 의 라인 번호로부터
+// "@@ -old +new @@" 합성 HUNK 헤더 LineChange 를 만든다 (Issue-3159). 클라이언트가
+// 윈도우 시작점의 old/new 라인 번호를 정렬할 수 있게 한다.
+func synthHunkHeader(first LineChange) LineChange {
+	oldStart, newStart := 0, 0
+	switch {
+	case first.Left != nil:
+		oldStart = *first.Left
+	case first.BlobLineNumber != nil:
+		oldStart = *first.BlobLineNumber
+	}
+	if first.Right != nil {
+		newStart = *first.Right
+	}
+	header := fmt.Sprintf("@@ -%d +%d @@", oldStart, newStart)
+	return LineChange{
+		Type:           LineChangeTypeHunk,
+		BlobLineNumber: intPtr(oldStart),
+		Text:           header,
+		Left:           intPtr(oldStart),
+		Right:          intPtr(newStart),
+	}
+}
+
 // trimContextAroundChanges keeps only context lines within contextLines of a change (add/del).
 func trimContextAroundChanges(changes []LineChange, contextLines int) []LineChange {
 	if len(changes) == 0 {
@@ -269,8 +329,8 @@ func CalculateMergeBaseDiff(ctx context.Context, repoPath, baseBranch, headBranc
 
 // calculateFileDiff는 ResolvedRange 기준으로 단일 파일의 diff를 계산합니다.
 // 호출자(핸들러)가 미리 mode를 해석해서 effective_base를 결정해 둔 상태로 들어옵니다.
-func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath string, rr *ResolvedRange, contextLines int) (*DiffResponse, error) {
-	return nativeCalculateFileDiff(ctx, repoPath, filePath, rr.EffectiveBase, rr.HeadHash, contextLines)
+func (h *DiffHandler) calculateFileDiff(ctx context.Context, repoPath, filePath string, rr *ResolvedRange, contextLines int, win fileDiffWindow) (*DiffResponse, error) {
+	return nativeCalculateFileDiff(ctx, repoPath, filePath, rr.EffectiveBase, rr.HeadHash, contextLines, win)
 }
 
 // parseDiffMode는 query string에서 diff_mode를 읽고, 없거나 알 수 없는 값이면 default를 반환합니다.

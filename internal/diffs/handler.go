@@ -302,7 +302,22 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context, req FileDiffRequest) (DiffR
 		}
 	}
 
-	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, rr, contextLines)
+	// 윈도우(부분) 로드 파라미터 해석 (Issue-3159). line_offset/line_limit 중 하나라도
+	// 주어지면 윈도우 모드. limit 은 미지정 시 기본값, 상한 초과 시 캡으로 bound.
+	win := fileDiffWindow{}
+	if req.LineOffset > 0 || req.LineLimit > 0 {
+		win.enabled = true
+		win.offset = req.LineOffset
+		win.limit = req.LineLimit
+		if win.limit <= 0 {
+			win.limit = DefaultDiffWindowLines
+		}
+		if win.limit > MaxDiffWindowLines {
+			win.limit = MaxDiffWindowLines
+		}
+	}
+
+	diffResp, err := h.calculateFileDiff(ctx, repoPath, filePath, rr, contextLines, win)
 	if err != nil {
 		if IsFileDiffNotFound(err) {
 			h.logger.Info("File not present in either base or head",

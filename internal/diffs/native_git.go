@@ -271,7 +271,17 @@ func IsFileDiffNotFound(err error) bool {
 // 빈 status 처리 (정정된 시맨틱):
 //   - 양쪽에 동일 blob → 200 응답 + 빈 hunks (load_status=loaded, additions=0, deletions=0)
 //   - 양쪽에 모두 없음 → fileDiffNotFoundError (호출자가 404로 매핑)
-func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, effectiveBase, headHash string, contextLines int) (*DiffResponse, error) {
+//
+// fileDiffWindow 는 단일 파일 diff 의 윈도우(부분) 로드 요청을 나타낸다 (Issue-3159).
+// enabled 가 true 면 MaxChangedLines 게이트를 우회하고 [offset, offset+limit) 구간만
+// 잘라 반환한다.
+type fileDiffWindow struct {
+	enabled bool
+	offset  int
+	limit   int
+}
+
+func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, effectiveBase, headHash string, contextLines int, win fileDiffWindow) (*DiffResponse, error) {
 	// 단일 파일 status 확인
 	statusOut, err := nativeRunGitCmd(ctx, repoPath, nativeGitTimeout,
 		"diff", "--name-status", "-M", effectiveBase+".."+headHash, "--", filePath)
@@ -352,25 +362,38 @@ func nativeCalculateFileDiff(ctx context.Context, repoPath, filePath, effectiveB
 		fileDiff.LoadStatus = FileLoadStatusCollapsed
 	} else {
 		changedLines := additions + deletions
-		if changedLines > MaxChangedLines {
-			fileDiff.LoadStatus = FileLoadStatusTooLarge
+		// 큰 파일은 too_large dead-end 대신 윈도우 모드로 자동 전환한다 (Issue-3159).
+		// 클라이언트가 명시적 윈도우(line_offset/line_limit)를 주지 않아도, 단일 파일
+		// 조회는 항상 부분 로드로 내용을 보여줄 수 있게 한다.
+		if !win.enabled && changedLines > MaxChangedLines {
+			win.enabled = true
+			win.offset = 0
+			win.limit = DefaultDiffWindowLines
+		}
+		patchText, err := nativeGetFilePatch(ctx, repoPath, effectiveBase, headHash, filePath, contextLines)
+		if err != nil {
+			fileDiff.LoadStatus = FileLoadStatusCollapsed
+		} else if patchText == "" {
+			fileDiff.LoadStatus = FileLoadStatusLoaded
 		} else {
-			patchText, err := nativeGetFilePatch(ctx, repoPath, effectiveBase, headHash, filePath, contextLines)
-			if err != nil {
+			lineChanges, hunks, parseErr := GenerateLineChangesFromPatch(patchText, contextLines)
+			if parseErr != nil {
 				fileDiff.LoadStatus = FileLoadStatusCollapsed
-			} else if patchText == "" {
+			} else if len(lineChanges) > MaxFileLines {
+				// 파싱조차 불가능한 진짜 hard cap — 윈도우로도 다룰 수 없다.
+				fileDiff.LoadStatus = FileLoadStatusTooLarge
+				fileDiff.TotalChangedLines = changedLines
+			} else if win.enabled {
+				windowed, meta := windowLineChanges(lineChanges, win.offset, win.limit)
+				fileDiff.Changes = windowed
+				fileDiff.Hunks = hunks
+				fileDiff.Window = &meta
+				fileDiff.TotalChangedLines = changedLines
 				fileDiff.LoadStatus = FileLoadStatusLoaded
 			} else {
-				lineChanges, hunks, parseErr := GenerateLineChangesFromPatch(patchText, contextLines)
-				if parseErr != nil {
-					fileDiff.LoadStatus = FileLoadStatusCollapsed
-				} else if len(lineChanges) > MaxFileLines {
-					fileDiff.LoadStatus = FileLoadStatusTooLarge
-				} else {
-					fileDiff.Changes = lineChanges
-					fileDiff.Hunks = hunks
-					fileDiff.LoadStatus = FileLoadStatusLoaded
-				}
+				fileDiff.Changes = lineChanges
+				fileDiff.Hunks = hunks
+				fileDiff.LoadStatus = FileLoadStatusLoaded
 			}
 		}
 	}
@@ -469,10 +492,12 @@ func nativeBuildDiffResponse(ctx context.Context, repoPath, baseHash, headHash, 
 		if fileDiffs[i].LoadStatus == FileLoadStatusSubmodule {
 			continue
 		}
-		// 변경된 라인 수 체크
+		// 변경된 라인 수 체크. bulk 응답에서는 inline 으로 싣지 않고 too_large 로 마크하되,
+		// 클라이언트가 /diff/file 윈도우 로드로 부분 조회할 수 있도록 변경 규모를 노출한다 (Issue-3159).
 		changedLines := fileDiffs[i].Additions + fileDiffs[i].Deletions
 		if changedLines > MaxChangedLines {
 			fileDiffs[i].LoadStatus = FileLoadStatusTooLarge
+			fileDiffs[i].TotalChangedLines = changedLines
 			continue
 		}
 
@@ -497,6 +522,7 @@ func nativeBuildDiffResponse(ctx context.Context, repoPath, baseHash, headHash, 
 
 		if len(lineChanges) > MaxFileLines {
 			fileDiffs[i].LoadStatus = FileLoadStatusTooLarge
+			fileDiffs[i].TotalChangedLines = changedLines
 			continue
 		}
 
