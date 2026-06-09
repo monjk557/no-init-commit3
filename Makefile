@@ -106,30 +106,34 @@ specs-fix: specs fix
 
 # [MANUAL 4] make format
 # Description: Auto-format code and check formatting (matches CI behavior)
+# ---------------------------------------------------------------------
+# CollabOps 사내 Go 공통 포맷/린트 표준 타겟 (fmt / fmt-check / lint / vet)
+# 포맷터는 golangci-lint v2 (gofmt + goimports) 로 통합 관리한다.
+# ---------------------------------------------------------------------
+GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT ?= $(shell go env GOPATH)/bin/golangci-lint
+GOLANGCI := $(shell command -v golangci-lint 2>/dev/null || echo $(GOLANGCI_LINT))
+
+.PHONY: ensure-golangci-lint
+ensure-golangci-lint:
+	@command -v golangci-lint >/dev/null 2>&1 || test -x "$(GOLANGCI_LINT)" || \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+.PHONY: fmt
+fmt: ensure-golangci-lint ## 포맷 자동 적용 (gofmt + goimports)
+	$(GOLANGCI) fmt
+
+.PHONY: fmt-check
+fmt-check: ensure-golangci-lint ## 포맷 검사만 (CI 게이트, 어긋나면 실패)
+	$(GOLANGCI) fmt --diff
+
+.PHONY: vet
+vet: ## go vet 정적 검사
+	go vet ./...
+
+# 하위호환: 기존 `make format` 호출은 표준 `fmt` 로 위임
 .PHONY: format
-format:
-	@echo "🎨 Formatting Go code..."
-	@find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec gofmt -w {} \;
-	@echo "📦 Organizing imports..."
-	@find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec goimports -w {} \; 2>/dev/null || echo "⚠️  goimports not found, skipping import organization"
-	@echo "🔍 Checking code formatting..."	
-	@UNFORMATTED=$$(find . -name "*.go" -not -path "./build/*" -not -path "./vendor/*" -exec gofmt -l {} \;); \
-	if [ -n "$$UNFORMATTED" ]; then \
-		echo "❌ Code not formatted:"; \
-		echo "$$UNFORMATTED"; \
-		exit 1; \
-	fi
-	@echo "🧹 Tidying modules..."
-	@TIDY_OUTPUT=$$(go mod tidy 2>&1); TIDY_EXIT=$$?; \
-	if [ $$TIDY_EXIT -ne 0 ]; then \
-		if echo "$$TIDY_OUTPUT" | grep -q "build/go-mod" && ! echo "$$TIDY_OUTPUT" | grep -v "build/go-mod" | grep -q "go:"; then \
-			echo "⚠️  go mod tidy: warnings about build/go-mod (ignored)"; \
-		else \
-			echo "$$TIDY_OUTPUT"; \
-			exit $$TIDY_EXIT; \
-		fi; \
-	fi
-	@echo "✅ Code formatting complete!"
+format: fmt
 
 # Build the application
 .PHONY: build
@@ -142,16 +146,8 @@ build:
 # [MANUAL 4.5] make lint
 # Description: Run linters and static analysis
 .PHONY: lint
-lint:
-	@echo "🔍 Running Go linters..."
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./cmd/... ./internal/... ./specs/... ./test/...; \
-	else \
-		echo "⚠️  golangci-lint not found, running basic checks..."; \
-		go vet ./...; \
-		if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; fi; \
-	fi
-	@echo "✅ Linting complete!"
+lint: ensure-golangci-lint ## golangci-lint (.golangci.yml 사용)
+	$(GOLANGCI) run ./...
 
 # [PERF] make bench-overview-update|bench-overview-check
 # Description: Generate/check benchmark baselines for overview performance (regression gate).
