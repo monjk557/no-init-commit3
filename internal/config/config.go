@@ -45,41 +45,21 @@ type Config struct {
 	Maintenance     MaintenanceConfig
 }
 
-// LFSConfig는 Git LFS 기능 설정입니다.
+// LFSConfig는 git-executor 가 LFS 와 관련해서 알아야 할 단 하나의 정보
+// — 외부에서 LFS HTTP API 에 도달할 수 있는 URL — 를 보관합니다.
+//
+// LFS HTTP API (Batch / Verify / Locks / Usage) 자체는 orchestrator 가
+// 소유하며 (Issue-3052, 옵션 B), git-executor 는 그 URL 을 직접 호출하지
+// 않습니다. 이 필드는 오로지 SSH 경유 `git-lfs-authenticate` 응답에서
+// 클라이언트에게 알려줄 LFS HTTP endpoint 를 만들기 위해 존재합니다.
+//
+// 비어 있으면 (`LFS_EXTERNAL_URL` env 미설정) SSH 경유 LFS 인증은 거절되며
+// 클라이언트는 `git config lfs.url` 로 endpoint 를 명시해야 합니다.
 type LFSConfig struct {
-	// 기능 활성화 여부
-	Enabled bool `json:"enabled"`
-
-	// 스토리지 백엔드 종류 ("gcs" 또는 "local")
-	StorageBackend string `json:"storage_backend"`
-
-	// GCS 버킷 이름 (StorageBackend=gcs일 때 필수)
-	GCSBucket string `json:"gcs_bucket"`
-
-	// GCP 프로젝트 ID (ADC 자동 감지 시 생략 가능)
-	GCSProject string `json:"gcs_project"`
-
-	// 로컬 스토리지 경로 (StorageBackend=local일 때 필수)
-	LocalPath string `json:"local_path"`
-
-	// git-executor 외부 접근 URL (StorageBackend=local일 때 필수)
-	// 로컬 백엔드는 클라이언트가 이 URL을 통해 업로드/다운로드합니다.
-	BaseURL string `json:"base_url"`
-
-	// Signed URL / 로컬 URL 유효시간
-	URLExpiry time.Duration `json:"url_expiry"`
-
-	// 단일 오브젝트 최대 크기
-	MaxObjectSize int64 `json:"max_object_size"`
-
-	// 메타데이터 SQLite DB 경로
-	MetadataDBPath string `json:"metadata_db_path"`
-
-	// 워크스페이스별 스토리지 한도 (bytes, 0 = 무제한)
-	StorageLimitPerOwner int64 `json:"storage_limit_per_owner"`
-
-	// 워크스페이스별 월간 대역폭 한도 (bytes, 0 = 무제한)
-	BandwidthLimitPerMonth int64 `json:"bandwidth_limit_per_month"`
+	// ExternalURL 은 클라이언트가 LFS HTTP API 에 도달하는 base URL.
+	// 예: https://api.collabops.ai/api/v2 (orchestrator 가 LFS 라우트를
+	// 노출하는 prefix). 빈 값이면 SSH 경유 lfs-authenticate 비활성.
+	ExternalURL string `json:"external_url"`
 }
 
 // MaintenanceConfig controls Git repository maintenance scheduling.
@@ -352,7 +332,7 @@ func Load() (*Config, error) {
 	}
 	orchestratorConfig := parseOrchestratorConfig()
 	mergeProtectionConfig := parseMergeProtectionConfig()
-	lfsConfig := parseLFSConfig(gitConfig.RepoRoot)
+	lfsConfig := parseLFSConfig()
 	maintenanceConfig := parseMaintenanceConfig()
 	securityConfig := parseSecurityConfig()
 
@@ -393,19 +373,8 @@ func applyOnpremOverrides(config *Config) {
 	// API 문서 비활성화 (운영 환경 — 보안)
 	config.Server.EnableDocs = false
 
-	// LFS 스토리지: onprem (air-gap) 환경에서는 GCS API endpoint (storage.googleapis.com)
-	// 도달 불가능 → local backend 로 강제 변경.
-	//
-	// 주의:
-	//   - 이 override 는 **onprem 환경 전용**. stage/prod 에서는 GCS backend 정상 동작.
-	//   - MinIO (collabops-service-objstore) backend 는 onprem 에 deploy 되어 있어
-	//     cluster-internal 도달 가능 → override 대상 아님. 향후 LFS_STORAGE_BACKEND=minio
-	//     케이스가 추가되어도 이 분기에서 건드리지 않음.
-	if config.LFS.Enabled && config.LFS.StorageBackend == "gcs" {
-		config.LFS.StorageBackend = "local"
-		config.LFS.GCSBucket = ""
-		config.LFS.GCSProject = ""
-	}
+	// LFS storage backend / metadata 는 git-executor 가 소유하지 않으므로
+	// onprem override 도 필요 없음 (api-service + MinIO 가 처리, Issue-3052).
 
 	// 외부 Observability exporter 비활성화 (내부망에서 외부 서비스 접근 불가)
 	config.Observability.Tracing.Endpoint = ""
@@ -796,77 +765,14 @@ func parseStringSliceFromEnv(key string, defaultValue []string) []string {
 }
 
 // ------------------------------------------------------------
-// LFSConfig 파싱 (환경변수 + 하드코딩)
-// ------------------------------------------------------------
-func parseLFSConfig(repoRoot string) LFSConfig {
-	enabled := parseBoolFromEnv("LFS_ENABLED", false)
-
-	// 스토리지 백엔드 (기본: "local", air-gap 환경 우선)
-	storageBackend := os.Getenv("LFS_STORAGE_BACKEND")
-	if storageBackend == "" {
-		storageBackend = "local"
-	}
-
-	gcsBucket := os.Getenv("LFS_GCS_BUCKET")
-	gcsProject := os.Getenv("LFS_GCS_PROJECT")
-
-	// 로컬 스토리지 경로 (기본: {repoRoot}/.lfs-objects)
-	localPath := os.Getenv("LFS_LOCAL_PATH")
-	if localPath == "" {
-		localPath = repoRoot + "/.lfs-objects"
-	}
-
-	// 로컬 백엔드용 git-executor 외부 접근 URL
-	baseURL := os.Getenv("LFS_BASE_URL")
-
-	urlExpiry := 15 * time.Minute
-	if v := os.Getenv("LFS_URL_EXPIRY"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			urlExpiry = d
-		}
-	}
-
-	// 단일 오브젝트 최대 5GB
-	maxObjectSize := int64(5 * 1024 * 1024 * 1024)
-	if v := os.Getenv("LFS_MAX_OBJECT_SIZE"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-			maxObjectSize = n
-		}
-	}
-
-	metadataDBPath := os.Getenv("LFS_METADATA_DB_PATH")
-	if metadataDBPath == "" {
-		metadataDBPath = repoRoot + "/.lfs-meta.db"
-	}
-
-	// 워크스페이스당 스토리지 한도 (기본 10GB, 0 = 무제한)
-	storageLimitPerOwner := int64(10 * 1024 * 1024 * 1024)
-	if v := os.Getenv("LFS_STORAGE_LIMIT_PER_OWNER"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			storageLimitPerOwner = n
-		}
-	}
-
-	// 월간 대역폭 한도 (기본 50GB, 0 = 무제한)
-	bandwidthLimitPerMonth := int64(50 * 1024 * 1024 * 1024)
-	if v := os.Getenv("LFS_BANDWIDTH_LIMIT_PER_MONTH"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			bandwidthLimitPerMonth = n
-		}
-	}
-
+// parseLFSConfig 는 git-executor 가 LFS 와 관련해서 알아야 할 단 하나의 정보
+// — 외부 LFS HTTP API base URL — 만 읽어옵니다 (Issue-3052, 옵션 B).
+//
+// Storage backend / metadata DB / quota 설정은 모두 api-service 로 이전됐기
+// 때문에 더 이상 git-executor 가 알 필요가 없습니다.
+func parseLFSConfig() LFSConfig {
 	return LFSConfig{
-		Enabled:                enabled,
-		StorageBackend:         storageBackend,
-		GCSBucket:              gcsBucket,
-		GCSProject:             gcsProject,
-		LocalPath:              localPath,
-		BaseURL:                baseURL,
-		URLExpiry:              urlExpiry,
-		MaxObjectSize:          maxObjectSize,
-		MetadataDBPath:         metadataDBPath,
-		StorageLimitPerOwner:   storageLimitPerOwner,
-		BandwidthLimitPerMonth: bandwidthLimitPerMonth,
+		ExternalURL: strings.TrimRight(os.Getenv("LFS_EXTERNAL_URL"), "/"),
 	}
 }
 
@@ -959,27 +865,7 @@ func validate(config *Config) error {
 		errors = append(errors, fmt.Sprintf("merge_protection.fallback_strategy must be one of: %v", validFallbackStrategies))
 	}
 
-	// LFS 설정 유효성 검사
-	if config.LFS.Enabled {
-		switch config.LFS.StorageBackend {
-		case "gcs":
-			if config.LFS.GCSBucket == "" {
-				errors = append(errors, "lfs.gcs_bucket is required when LFS storage backend is 'gcs'")
-			}
-		case "local":
-			if config.LFS.LocalPath == "" {
-				errors = append(errors, "lfs.local_path is required when LFS storage backend is 'local'")
-			}
-			if config.LFS.BaseURL == "" {
-				errors = append(errors, "lfs.base_url is required when LFS storage backend is 'local'")
-			}
-		default:
-			errors = append(errors, fmt.Sprintf("lfs.storage_backend must be 'gcs' or 'local', got '%s'", config.LFS.StorageBackend))
-		}
-		if config.LFS.MaxObjectSize <= 0 {
-			errors = append(errors, "lfs.max_object_size must be > 0")
-		}
-	}
+	// LFSConfig 는 ExternalURL 하나만 옵션으로 받으므로 필수 검사 없음.
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation errors: %s", strings.Join(errors, "; "))

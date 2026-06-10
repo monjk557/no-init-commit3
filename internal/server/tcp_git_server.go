@@ -757,19 +757,21 @@ func (s *DuplexTCPServer) runAutoGC(repoPath, tenantID string) {
 // handleLFSAuthenticate는 SSH 경유 LFS 인증 요청을 처리합니다.
 // Git LFS 클라이언트가 SSH push/pull 시 `git-lfs-authenticate <repo> upload/download`를 호출하면
 // LFS Batch API의 URL과 인증 정보를 JSON으로 반환합니다.
+//
+// LFS HTTP API 는 orchestrator + api-service 가 소유하므로 (Issue-3052) 응답
+// 의 href 는 LFS_EXTERNAL_URL env 로 주입된 orchestrator base URL 을 가리킨다.
+// 그 env 가 비어 있으면 클라이언트가 `git config lfs.url` 로 명시해야 한다.
 func (s *DuplexTCPServer) handleLFSAuthenticate(conn *connection.ProgressAwareConnection, owner, repo string) error {
-	if !s.config.LFS.Enabled {
+	if s.config.LFS.ExternalURL == "" {
 		writer := conn.GetWriter()
-		_, _ = writer.WriteString("error: LFS is not enabled on this server\n")
+		_, _ = writer.WriteString("error: LFS over SSH is not configured on this server (set LFS_EXTERNAL_URL or use `git config lfs.url`)\n")
 		_ = writer.Flush()
-		return fmt.Errorf("LFS not enabled")
+		return fmt.Errorf("LFS_EXTERNAL_URL not configured")
 	}
 
-	// LFS 서버의 HTTP 엔드포인트 URL 구성
-	// 클라이언트는 이 URL을 사용해 Batch API 요청을 보냄
-	serverPort := s.config.Server.Port
-	basePath := strings.TrimRight(s.config.Server.BasePath, "/")
-	lfsHref := fmt.Sprintf("http://127.0.0.1:%d%s/repos/%s/%s/info/lfs", serverPort, basePath, owner, repo)
+	// LFS 서버의 HTTP 엔드포인트 URL 구성 — orchestrator base URL 에 git protocol
+	// convention 의 `/<owner>/<repo>.git/info/lfs` 를 덧붙인다.
+	lfsHref := fmt.Sprintf("%s/%s/%s.git/info/lfs", s.config.LFS.ExternalURL, owner, repo)
 
 	// LFS authenticate 응답 (Git LFS 프로토콜 스펙)
 	authResp := map[string]interface{}{

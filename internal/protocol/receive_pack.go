@@ -12,8 +12,6 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
-	"github.com/collabops/git-executor/internal/lfs"
-	lfsstorage "github.com/collabops/git-executor/internal/lfs/storage"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
@@ -42,10 +40,13 @@ type ReceivePackHandler struct {
 	capabilities *ServerCapabilities
 	eventsClient events.RedisStreamClient
 	config       *config.Config
-	lfsStorage   lfsstorage.Backend // LFS 오브젝트 존재 확인용 (nil이면 검증 건너뜀)
 }
 
-// NewReceivePackHandler creates a new receive-pack handler for the executor
+// NewReceivePackHandler creates a new receive-pack handler for the executor.
+//
+// LFS pointer push-time storage 검증은 제거됨 — git-executor 가 LFS storage 를
+// 더이상 소유하지 않는다 (Issue-3052, 옵션 B). LFS object 무결성은 api-service
+// verify endpoint 가 책임진다.
 func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 	pathConfig, err := repositories.NewPathConfig(cfg.Git.RepoRoot)
 	if err != nil {
@@ -67,42 +68,12 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 		}
 	}
 
-	// LFS가 활성화된 경우 스토리지 백엔드 초기화 (포인터 검증용)
-	var lfsBackend lfsstorage.Backend
-	if cfg.LFS.Enabled {
-		switch cfg.LFS.StorageBackend {
-		case "local":
-			localBackend, localErr := lfsstorage.NewLocalBackend(
-				cfg.LFS.LocalPath,
-				cfg.LFS.BaseURL,
-				cfg.LFS.URLExpiry,
-				nil,
-			)
-			if localErr == nil {
-				lfsBackend = localBackend
-			}
-		case "gcs":
-			if cfg.LFS.GCSBucket != "" {
-				gcsBackend, gcsErr := lfsstorage.NewGCSBackend(
-					context.Background(),
-					cfg.LFS.GCSBucket,
-					cfg.LFS.URLExpiry,
-					nil,
-				)
-				if gcsErr == nil {
-					lfsBackend = gcsBackend
-				}
-			}
-		}
-	}
-
 	h := &ReceivePackHandler{
 		pathConfig:   pathConfig,
 		errorHandler: errorHandler,
 		capabilities: capabilities,
 		eventsClient: eventsClient,
 		config:       cfg,
-		lfsStorage:   lfsBackend,
 	}
 	return h, nil
 }
@@ -398,13 +369,9 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 		return fmt.Errorf("failed to write unpack status: %w", err)
 	}
 
-	// LFS 포인터 검증: push된 blob 중 LFS 포인터가 있으면 GCS에 실제 오브젝트 존재 확인
-	if h.lfsStorage != nil {
-		if err := h.validateLFSPointers(ctx, repoPath, req.Commands, owner, repoName); err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ng %s %s", req.Commands[0].RefName, err.Error()))
-			return pktWriter.Flush()
-		}
-	}
+	// LFS pointer push-time storage 검증은 제거됨 (Issue-3052). LFS object 무결성은
+	// api-service verify endpoint 가 책임진다. push 시점에는 pointer blob 자체만
+	// git object 로 저장되고, 실제 byte 부재는 fetch / pull 시점에 드러난다.
 
 	// Process ref updates
 	for _, cmd := range req.Commands {
@@ -637,75 +604,4 @@ func (h *ReceivePackHandler) publishRefDeleteEvent(ctx context.Context, repoPath
 		defer cancel()
 		_ = h.eventsClient.AddCommitEventToStream(evCtx, event)
 	}()
-}
-
-// validateLFSPointers는 push된 커밋에서 LFS 포인터 파일을 찾고,
-// 포인터가 가리키는 OID가 GCS에 실제 존재하는지 확인합니다.
-// 누락된 LFS 오브젝트가 있으면 에러를 반환하여 push를 거부합니다.
-func (h *ReceivePackHandler) validateLFSPointers(ctx context.Context, repoPath string, commands []RefUpdateCommand, owner, repo string) error {
-	for _, cmd := range commands {
-		if cmd.NewHash == zeroHash {
-			continue // 삭제는 검증 불필요
-		}
-
-		// 새 커밋에서 추가/변경된 blob 목록 추출
-		var output []byte
-		var err error
-		if cmd.OldHash == zeroHash {
-			// 새 브랜치: 전체 트리의 blob 확인
-			output, err = gitcmd.DiffTree(ctx, repoPath, "--no-commit-id", "-r", "--diff-filter=A", cmd.NewHash)
-		} else {
-			output, err = gitcmd.DiffTree(ctx, repoPath, "-r", "--diff-filter=AM", cmd.OldHash, cmd.NewHash)
-		}
-		if err != nil {
-			continue // diff 실패 시 검증 건너뜀 (push는 허용)
-		}
-
-		var missingOIDs []string
-		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			// diff-tree 출력: ":oldmode newmode oldhash newhash status\tpath"
-			fields := strings.Fields(line)
-			if len(fields) < 6 {
-				continue
-			}
-			blobHash := fields[3]
-			if blobHash == zeroHash {
-				continue
-			}
-
-			// blob 내용을 읽어 LFS 포인터인지 확인 (작은 blob만)
-			blobContent, err := gitcmd.CatBlob(ctx, repoPath, blobHash)
-			if err != nil {
-				continue
-			}
-
-			// LFS 포인터는 최대 200바이트 미만의 작은 텍스트 파일
-			if len(blobContent) > 200 {
-				continue
-			}
-
-			if lfs.IsLFSPointer(blobContent) {
-				oid, _, ok := lfs.ParseLFSPointer(blobContent)
-				if !ok {
-					continue
-				}
-
-				// GCS에서 실제 오브젝트 존재 확인
-				exists, err := h.lfsStorage.Exists(ctx, owner, repo, oid)
-				if err != nil || !exists {
-					missingOIDs = append(missingOIDs, oid[:12])
-				}
-			}
-		}
-
-		if len(missingOIDs) > 0 {
-			return fmt.Errorf("LFS objects missing from storage: %s (run 'git lfs push' first)", strings.Join(missingOIDs, ", "))
-		}
-	}
-
-	return nil
 }
