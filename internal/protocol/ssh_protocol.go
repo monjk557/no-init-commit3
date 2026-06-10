@@ -57,7 +57,7 @@ func NewSSHProtocolHandler(cfg *config.Config) (*SSHProtocolHandler, error) {
 
 	// Initialize events client if enabled
 	var eventsClient events.RedisStreamClient
-	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
+	if cfg.Events.Enabled {
 		// Events client will be initialized if needed
 		eventsClient = nil // Can be set up later if needed
 	}

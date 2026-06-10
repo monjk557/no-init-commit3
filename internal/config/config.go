@@ -227,11 +227,28 @@ type PerformanceConfig struct {
 	ConnectionTimeout   time.Duration `json:"connection_timeout"`
 }
 
-// EventsConfig holds event publishing configuration
+// EventsConfig holds event publishing (event bus Redis) configuration.
+//
+// Canonical schema (EVENT_BUS_REDIS_*) — Python 서비스(orchestrator 등)와 동일.
+// Redis ACL Phase B: 인프라가 EVENT_BUS_REDIS_USERNAME=app + PASSWORD=<secret> 주입.
 type EventsConfig struct {
-	RedisURL string `json:"redis_url"` // Redis connection URL (e.g., redis://localhost:6379/0)
-	Enabled  bool   `json:"enabled"`   // Whether to enable event publishing
+	Enabled       bool          `json:"enabled"`        // Whether to enable event publishing
+	Mode          string        `json:"mode"`           // "standalone" | "cluster"
+	NodeAddress   string        `json:"node_address"`   // host:port (cluster 면 csv)
+	Username      string        `json:"-"`              // Redis ACL username (빈값=무인증)
+	Password      string        `json:"-"`              // Redis ACL password
+	SocketTimeout time.Duration `json:"socket_timeout"` // 소켓 read/write timeout
+
+	// RedisURL 은 DEPRECATED 하위호환 경로 (EVENT_BUS_REDIS_NODE_ADDRESS 부재 시에만 사용).
+	// helm/env 가 EVENT_BUS_REDIS_* 로 온보딩 완료되면 별도 PR 로 제거 예정.
+	RedisURL string `json:"redis_url,omitempty"`
 }
+
+// RedisMode constants for EventsConfig.Mode.
+const (
+	RedisModeStandalone = "standalone"
+	RedisModeCluster    = "cluster"
+)
 
 // OrchestratorConfig holds API orchestrator integration configuration
 type OrchestratorConfig struct {
@@ -532,26 +549,62 @@ func parseObservabilityConfig() ObservabilityConfig {
 	}
 }
 
+// defaultRedisSocketTimeout is used when EVENT_BUS_REDIS_SOCKET_TIMEOUT_S is unset
+// or invalid. Mirrors the previously hardcoded 5s dial/ping budget.
+const defaultRedisSocketTimeout = 5 * time.Second
+
 // ------------------------------------------------------------
 // EventsConfig 파싱 (환경변수 + 하드코딩)
+//
+// Canonical: EVENT_BUS_REDIS_* (Python 서비스와 동일 스키마, Redis ACL Phase B).
+// 하위호환: EVENT_BUS_REDIS_NODE_ADDRESS 부재 시 기존 REDIS_URL 로 폴백하고
+// stderr 에 deprecation 경고를 1회 출력한다.
+// 둘 다 없으면 events 비활성 (테스트/로컬 환경).
 // ------------------------------------------------------------
 func parseEventsConfig() (EventsConfig, error) {
-	// Redis URL from environment variable (optional for testing)
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		// If REDIS_URL is not set, disable events (useful for testing environments)
+	// 1) Canonical EVENT_BUS_REDIS_* 스키마
+	if nodeAddress := strings.TrimSpace(os.Getenv("EVENT_BUS_REDIS_NODE_ADDRESS")); nodeAddress != "" {
+		mode := strings.ToLower(strings.TrimSpace(os.Getenv("EVENT_BUS_REDIS_MODE")))
+		if mode == "" {
+			mode = RedisModeStandalone
+		}
+		if mode != RedisModeStandalone && mode != RedisModeCluster {
+			return EventsConfig{}, fmt.Errorf("EVENT_BUS_REDIS_MODE must be %q or %q, got %q",
+				RedisModeStandalone, RedisModeCluster, mode)
+		}
+
+		socketTimeout := defaultRedisSocketTimeout
+		if raw := strings.TrimSpace(os.Getenv("EVENT_BUS_REDIS_SOCKET_TIMEOUT_S")); raw != "" {
+			seconds, err := strconv.ParseFloat(raw, 64)
+			if err != nil || seconds <= 0 {
+				return EventsConfig{}, fmt.Errorf("EVENT_BUS_REDIS_SOCKET_TIMEOUT_S must be a positive number (seconds), got %q", raw)
+			}
+			socketTimeout = time.Duration(seconds * float64(time.Second))
+		}
+
 		return EventsConfig{
-			RedisURL: "",
-			Enabled:  false,
+			Enabled:       true,
+			Mode:          mode,
+			NodeAddress:   nodeAddress,
+			Username:      os.Getenv("EVENT_BUS_REDIS_USERNAME"),
+			Password:      os.Getenv("EVENT_BUS_REDIS_PASSWORD"),
+			SocketTimeout: socketTimeout,
 		}, nil
 	}
-	// Enable events by default if REDIS_URL is set
-	enabled := true
 
-	return EventsConfig{
-		RedisURL: redisURL,
-		Enabled:  enabled,
-	}, nil
+	// 2) DEPRECATED 하위호환: REDIS_URL
+	if redisURL := strings.TrimSpace(os.Getenv("REDIS_URL")); redisURL != "" {
+		fmt.Fprintln(os.Stderr,
+			`{"level":"warn","event":"env_var_deprecated","deprecated_key":"REDIS_URL","use_instead":"EVENT_BUS_REDIS_NODE_ADDRESS","note":"event bus Redis 설정은 EVENT_BUS_REDIS_* 스키마로 이전하세요 (Issue-3658)"}`)
+		return EventsConfig{
+			Enabled:       true,
+			RedisURL:      redisURL,
+			SocketTimeout: defaultRedisSocketTimeout,
+		}, nil
+	}
+
+	// 3) 미설정 → events 비활성
+	return EventsConfig{Enabled: false}, nil
 }
 
 // ------------------------------------------------------------

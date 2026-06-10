@@ -44,8 +44,8 @@ func NewCommitsHandler(cfg *config.Config) (*CommitsHandler, error) {
 	transactionManager := NewTransactionManager(logger)
 
 	var eventsClient events.RedisStreamClient
-	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
-		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+	if cfg.Events.Enabled {
+		eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
 		if err != nil {
 			logger.Warn("Failed to initialize Redis events client, continuing without events",
 				zap.Error(err))

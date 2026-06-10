@@ -56,10 +56,10 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 	capabilities := DefaultServerCapabilities()
 
 	var eventsClient events.RedisStreamClient
-	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
+	if cfg.Events.Enabled {
 		logger, err := logging.NewLogger(cfg.Logging)
 		if err == nil {
-			eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+			eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
 			if err != nil {
 				logger.Warn("Failed to initialize Redis events client, continuing without events",
 					zap.Error(err))

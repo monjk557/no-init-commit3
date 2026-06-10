@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/config"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -112,6 +113,120 @@ func NewRedisStreamClient(redisURL string, logger *zap.Logger) (RedisStreamClien
 	}
 
 	return newSingleRedisStreamClient(redisURL, logger)
+}
+
+// redisConnOptions is the normalized connection input for the canonical
+// EVENT_BUS_REDIS_* schema (host:port + explicit mode + ACL, no redis:// URL).
+type redisConnOptions struct {
+	mode          string
+	addrs         []string // host:port list (standalone 은 1개)
+	username      string
+	password      string
+	socketTimeout time.Duration
+}
+
+// buildRedisConnOptions normalizes EventsConfig (EVENT_BUS_REDIS_*) into
+// redisConnOptions. Pure — no network — so it is unit-testable.
+func buildRedisConnOptions(cfg config.EventsConfig) (redisConnOptions, error) {
+	var addrs []string
+	for _, a := range strings.Split(cfg.NodeAddress, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			addrs = append(addrs, a)
+		}
+	}
+	if len(addrs) == 0 {
+		return redisConnOptions{}, fmt.Errorf("empty EVENT_BUS_REDIS_NODE_ADDRESS")
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if mode == "" {
+		mode = config.RedisModeStandalone
+	}
+	if mode != config.RedisModeStandalone && mode != config.RedisModeCluster {
+		return redisConnOptions{}, fmt.Errorf("invalid redis mode %q", cfg.Mode)
+	}
+
+	timeout := cfg.SocketTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+
+	return redisConnOptions{
+		mode:          mode,
+		addrs:         addrs,
+		username:      cfg.Username,
+		password:      cfg.Password,
+		socketTimeout: timeout,
+	}, nil
+}
+
+// NewRedisStreamClientFromConfig creates a stream client from the canonical
+// EVENT_BUS_REDIS_* schema. Falls back to the DEPRECATED redis:// URL path when
+// only EventsConfig.RedisURL is populated.
+func NewRedisStreamClientFromConfig(cfg config.EventsConfig, logger *zap.Logger) (RedisStreamClient, error) {
+	if logger == nil {
+		var err error
+		logger, err = zap.NewProduction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create default logger: %w", err)
+		}
+	}
+
+	// DEPRECATED 하위호환: NODE_ADDRESS 없고 REDIS_URL 만 있으면 기존 URL 경로 사용.
+	if cfg.NodeAddress == "" {
+		if strings.TrimSpace(cfg.RedisURL) != "" {
+			return NewRedisStreamClient(cfg.RedisURL, logger)
+		}
+		return nil, fmt.Errorf("no event bus Redis address configured")
+	}
+
+	opts, err := buildRedisConnOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newStreamClientFromOptions(opts, logger)
+}
+
+// newStreamClientFromOptions builds a single-node or cluster client from the
+// normalized host:port options and verifies connectivity. ACL credentials are
+// never logged.
+func newStreamClientFromOptions(opts redisConnOptions, logger *zap.Logger) (RedisStreamClient, error) {
+	var client redis.UniversalClient
+	if opts.mode == config.RedisModeCluster {
+		client = redis.NewClusterClient(&redis.ClusterOptions{
+			Addrs:        opts.addrs,
+			Username:     opts.username,
+			Password:     opts.password,
+			ReadTimeout:  opts.socketTimeout,
+			WriteTimeout: opts.socketTimeout,
+		})
+	} else {
+		client = redis.NewClient(&redis.Options{
+			Addr:         opts.addrs[0],
+			Username:     opts.username,
+			Password:     opts.password,
+			DB:           0,
+			ReadTimeout:  opts.socketTimeout,
+			WriteTimeout: opts.socketTimeout,
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.socketTimeout)
+	defer cancel()
+
+	if err := client.Ping(ctx).Err(); err != nil {
+		logger.Error("Failed to connect to Redis (event bus)",
+			zap.String("mode", opts.mode),
+			zap.Strings("addrs", opts.addrs),
+			zap.Error(err))
+		_ = client.Close()
+		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+	}
+
+	return &redisStreamClient{
+		client: client,
+		logger: logger,
+	}, nil
 }
 
 // applyRedisACLEnv overrides Redis ACL credentials with the REDIS_USERNAME /

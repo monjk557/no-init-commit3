@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,27 +63,15 @@ func NewRepositoryOverviewService(logger *logging.Logger, pathConfig *repositori
 	smartPagination := NewSmartPagination(logger)
 
 	// Phase 2 개선: 다층 캐싱 시스템 초기화
-	// L2 Redis 캐시는 CACHE_REDIS_URL 환경변수가 설정된 경우에만 활성화
-	cacheRedisURL := os.Getenv("CACHE_REDIS_URL")
-	l2Enabled := cacheRedisURL != ""
-	l2Address := "localhost:6379"
-	if cacheRedisURL != "" {
-		l2Address = cacheRedisURL
-	}
+	// 오버뷰 캐시는 Redis 를 사용하지 않는다 — Go in-memory L1 만 사용한다 (Issue-3658).
+	// 이전의 CACHE_REDIS_URL 기반 L2 는 ACL/URL 파싱 미지원으로 사실상 비활성 상태였고,
+	// 캐시 경로를 event bus Redis 와 분리하기 위해 제거했다.
 	multiTierCacheConfig := &cache.MultiTierConfig{
 		L1MaxSize:             1000,             // 메모리에 1000개 항목
 		L1DefaultTTL:          10 * time.Minute, // L1 캐시 10분 TTL
 		L1CleanupInterval:     1 * time.Minute,  // 1분마다 정리
-		L2Enabled:             l2Enabled,        // CACHE_REDIS_URL이 설정된 경우에만 L2 활성화
-		L2DefaultTTL:          1 * time.Hour,    // L2 캐시 1시간 TTL
-		L2Address:             l2Address,        // Redis 주소
-		L2DB:                  0,                // Redis DB 0
-		L2PoolSize:            10,               // 연결 풀 크기
-		EnableCacheWarming:    l2Enabled,        // L2가 있을 때만 워밍 활성화
-		WarmL1FromL2:          l2Enabled,        // L2가 있을 때만
+		L2Enabled:             false,            // Redis L2 미사용 (in-memory L1 전용)
 		EnablePerformanceMode: true,             // 성능 모드 활성화
-		MaxConcurrentWarming:  5,                // 동시 워밍 작업 제한
-		WarmingTimeout:        5 * time.Second,  // 워밍 타임아웃
 	}
 
 	multiTierCache, err := cache.NewMultiTierCache[TreeWithCommitOverviewResponse](multiTierCacheConfig, logger.Logger)

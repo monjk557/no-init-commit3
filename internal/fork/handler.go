@@ -42,8 +42,8 @@ func NewForkHandler(cfg *config.Config) (*ForkHandler, error) {
 	service := NewForkService(logger, pathConfig)
 
 	var eventsClient events.RedisStreamClient
-	if cfg.Events.Enabled && cfg.Events.RedisURL != "" {
-		eventsClient, err = events.NewRedisStreamClient(cfg.Events.RedisURL, logger.Logger)
+	if cfg.Events.Enabled {
+		eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
 		if err != nil {
 			// Log warning but continue without events
 			logger.Warn("Failed to initialize Redis events client, continuing without events",
