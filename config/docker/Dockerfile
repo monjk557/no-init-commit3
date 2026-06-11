@@ -1,7 +1,5 @@
 
-FROM golang:1.25.5-alpine AS builder
-
-RUN apk add --no-cache git ca-certificates tzdata curl bash build-base
+FROM golang:1.25.5-bookworm AS builder
 
 WORKDIR /app
 

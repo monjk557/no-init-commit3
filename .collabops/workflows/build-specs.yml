@@ -61,10 +61,9 @@ jobs:
           [ -f "Makefile" ] && echo "✓ Makefile exists" || { echo "✗ Makefile not found" ; exit 1; }
 
       - name: Setup Go and generate specs
-        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-alpine
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
         run: |
           set -eu
-          apk add --no-cache make
           cd /workspace/source
 
           echo "📦 Installing dependencies..."
@@ -172,10 +171,9 @@ jobs:
           git checkout "${COMMIT_SHA}"
 
       - name: Generate OpenAPI specs for build
-        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-alpine
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
         run: |
           set -eu
-          apk add --no-cache make
           cd /workspace/source
           go mod download
           make specs
