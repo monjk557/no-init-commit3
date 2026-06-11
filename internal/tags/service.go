@@ -10,23 +10,15 @@ import (
 // ErrTagAlreadyExists is returned when trying to create a tag that already exists
 var ErrTagAlreadyExists = errors.New("tag already exists")
 
-// SortOrder defines the sort order for tags
-type SortOrder string
-
-const (
-	SortByName SortOrder = "name"
-	SortByDate SortOrder = "date"
-)
-
-// GetTags는 저장소의 모든 태그를 가져옵니다 (페이지네이션 지원).
-// native git을 사용합니다.
+// GetTags는 저장소의 모든 태그를 기본 정렬(최신순)로 가져옵니다 (페이지네이션
+// 지원). native git을 사용합니다.
 func GetTags(ctx context.Context, repoPath string, limit, skip int) ([]Tag, int, error) {
-	return GetTagsSorted(ctx, repoPath, limit, skip, SortByName)
+	return GetTagsSorted(ctx, repoPath, limit, skip, TagSortNewest)
 }
 
 // GetTagsSorted는 저장소의 모든 태그를 정렬하여 가져옵니다.
 // native git for-each-ref를 사용합니다.
-func GetTagsSorted(ctx context.Context, repoPath string, limit, skip int, sortBy SortOrder) ([]Tag, int, error) {
+func GetTagsSorted(ctx context.Context, repoPath string, limit, skip int, sortBy TagSortField) ([]Tag, int, error) {
 	return NativeGetTagsSorted(ctx, repoPath, limit, skip, sortBy)
 }
 

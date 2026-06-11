@@ -13,19 +13,44 @@ import (
 
 const nativeGitTimeout = 5 * time.Second
 
+// TagSortField는 태그 정렬 기준을 나타냅니다. 값 자체가 git for-each-ref 의
+// --sort 플래그입니다 (브랜치의 BranchSortField 와 동일한 패턴).
+type TagSortField string
+
+const (
+	// TagSortNewest는 최신 생성일 순 정렬입니다 (기본값).
+	TagSortNewest TagSortField = "-creatordate"
+	// TagSortOldest는 오래된 생성일 순 정렬입니다.
+	TagSortOldest TagSortField = "creatordate"
+	// TagSortName은 이름 오름차순 정렬입니다.
+	TagSortName TagSortField = "refname"
+)
+
+// ParseTagSort는 쿼리 파라미터 문자열을 TagSortField로 변환합니다.
+// 지원: "newest" (기본), "oldest", "name" — 브랜치 list 의 ParseBranchSort 와
+// 동일한 파라미터 패턴.
+func ParseTagSort(s string) TagSortField {
+	switch s {
+	case "oldest":
+		return TagSortOldest
+	case "name":
+		return TagSortName
+	default:
+		return TagSortNewest
+	}
+}
+
 // NativeGetTagsSorted는 native git으로 태그 목록을 정렬하여 조회합니다.
 // go-git의 repo.References() + repo.TagObject() 조합을 대체합니다.
-func NativeGetTagsSorted(ctx context.Context, repoPath string, limit, skip int, sortBy SortOrder) ([]Tag, int, error) {
+func NativeGetTagsSorted(ctx context.Context, repoPath string, limit, skip int, sortBy TagSortField) ([]Tag, int, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	// 정렬 플래그 결정
-	var sortFlag string
-	switch sortBy {
-	case SortByDate:
-		sortFlag = "-creatordate" // 날짜 내림차순 (최신 먼저)
-	default:
-		sortFlag = "refname" // 이름 오름차순
+	// 정렬 플래그 결정 — TagSortField 값이 곧 --sort 플래그. zero value 는
+	// 기본 정렬(최신순)로 폴백.
+	sortFlag := string(sortBy)
+	if sortFlag == "" {
+		sortFlag = string(TagSortNewest)
 	}
 
 	// format: name\tsha\ttype\tderef_hash\tdate\ttagger_name\ttagger_email\tmessage

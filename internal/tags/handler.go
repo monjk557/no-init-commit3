@@ -37,15 +37,23 @@ func (e *invalidBindErr) Error() string { return e.inner.Error() }
 
 // HandleGetTags 는 GET /repos/{owner}/{repo}/tags 를 처리한다.
 //
-// Typed handler — limit/skip 은 query 에서 직접 읽음 (RegisterGet, no query
-// struct). 단순 4xx 는 typed.NewHTTPError, GetTags 실패는 raw error 로
-// 반환하여 ErrorMapper 가 details 필드를 첨부.
-func (h *TagsHandler) HandleGetTags(c *gin.Context) (TagsResponse, error) {
+// Typed handler — limit/skip/sort 는 GetTagsRequest query struct 로 바인딩
+// (RegisterGetWithQuery, 브랜치 list 와 동일 패턴). 단순 4xx 는
+// typed.NewHTTPError, GetTags 실패는 raw error 로 반환하여 ErrorMapper 가
+// details 필드를 첨부.
+func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
-	limitStr := c.Query("limit")
-	skipStr := c.Query("skip")
+	limitStr := req.Limit
+	skipStr := req.Skip
+
+	// sort: "newest" (기본) | "oldest" | "name" — 브랜치 list 와 동일.
+	sortParam := req.Sort
+	if sortParam == "" {
+		sortParam = "newest"
+	}
+	sort := ParseTagSort(sortParam)
 
 	limit := DefaultTagsLimit
 	if limitStr != "" {
@@ -74,7 +82,7 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context) (TagsResponse, error) {
 		return TagsResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
 	}
 
-	tagList, totalCount, err := GetTags(c.Request.Context(), repoPath, limit, skip)
+	tagList, totalCount, err := GetTagsSorted(c.Request.Context(), repoPath, limit, skip, sort)
 	if err != nil {
 		return TagsResponse{}, err
 	}

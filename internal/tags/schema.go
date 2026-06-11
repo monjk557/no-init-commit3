@@ -42,6 +42,18 @@ const (
 	MinTagsLimit     = 1
 )
 
+// GetTagsRequest 는 GET /tags 의 query parameter 를 나타낸다.
+//
+// 브랜치 list(GET /branches)의 GetBranchesRequest 와 동일한 패턴 —
+// RegisterGetWithQuery 로 등록하여 wrapper 가 form 태그를 reflect 하고 spec
+// generator 가 OpenAPI query parameter (in: query) 로 expand 한다. orchestrator
+// auto-gen client 가 limit/skip/sort 인자를 누락하지 않도록 노출하기 위함.
+type GetTagsRequest struct {
+	Limit string `form:"limit"`
+	Skip  string `form:"skip"`
+	Sort  string `form:"sort"` // "newest" (기본) | "oldest" | "name"
+}
+
 // CreateTagRequest는 태그 생성을 위한 요청 구조체입니다.
 type CreateTagRequest struct {
 	Name      string  `json:"name" binding:"required"` // 태그 이름 (필수)

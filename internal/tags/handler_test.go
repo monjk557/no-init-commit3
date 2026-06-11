@@ -447,7 +447,7 @@ func Test_GetTags_SortByName_ReturnsSorted(t *testing.T) {
 	}
 
 	// When: 이름순 정렬로 태그 목록 조회
-	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.SortByName)
+	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.TagSortName)
 
 	// Then: 이름순으로 정렬되어 반환
 	require.NoError(t, err)
@@ -498,7 +498,7 @@ func Test_GetTags_SortByDate_ReturnsSorted(t *testing.T) {
 	require.NoError(t, err)
 
 	// When: 날짜순 정렬로 태그 목록 조회
-	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.SortByDate)
+	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.TagSortNewest)
 
 	// Then: 날짜 내림차순으로 정렬 (최신 먼저)
 	require.NoError(t, err)
@@ -509,6 +509,30 @@ func Test_GetTags_SortByDate_ReturnsSorted(t *testing.T) {
 	assert.Equal(t, "new-tag", result[0].Name)
 	assert.Equal(t, "mid-tag", result[1].Name)
 	assert.Equal(t, "old-tag", result[2].Name)
+}
+
+func Test_ParseTagSort_MapsQueryParam(t *testing.T) {
+	// 회귀: "sort query 파라미터가 브랜치 list 와 동일하게 매핑되어야 한다"
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		param    string
+		expected tags.TagSortField
+	}{
+		{"newest", "newest", tags.TagSortNewest},
+		{"oldest", "oldest", tags.TagSortOldest},
+		{"name", "name", tags.TagSortName},
+		{"empty defaults to newest", "", tags.TagSortNewest},
+		{"unknown defaults to newest", "bogus", tags.TagSortNewest},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.expected, tags.ParseTagSort(tc.param))
+		})
+	}
 }
 
 // =============================================================================

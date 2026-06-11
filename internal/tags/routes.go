@@ -21,7 +21,7 @@ const tag = "Tags"
 // spec-only 모드 (등록만, 호출 없음).
 func RegisterRoutes(g gin.IRouter, h *TagsHandler) {
 	var (
-		getTags    func(*gin.Context) (TagsResponse, error)
+		getTags    func(*gin.Context, GetTagsRequest) (TagsResponse, error)
 		createTag  func(*gin.Context) (CreateTagResponse, error)
 		deleteTag  func(*gin.Context) (DeleteTagResponse, error)
 		bulkDelete func(*gin.Context) (BulkDeleteTagsResponse, error)
@@ -33,9 +33,10 @@ func RegisterRoutes(g gin.IRouter, h *TagsHandler) {
 		bulkDelete = h.HandleBulkDeleteTags
 	}
 
-	// GET /tags: limit/skip 은 query 에서 직접 읽음. GetTags 실패는 details
-	// 첨부 응답.
-	typed.RegisterGet(g, "/tags", tag,
+	// GET /tags: limit/skip/sort 를 GetTagsRequest query struct 로 바인딩
+	// (브랜치 list 와 동일 패턴). spec generator 가 query parameter 로 expand.
+	// GetTags 실패는 details 첨부 응답.
+	typed.RegisterGetWithQuery(g, "/tags", tag,
 		getTags,
 		typed.WithSummary("HandleGetTags"),
 		typed.WithErrorMapper(getTagsErrorMapper),
