@@ -42,7 +42,10 @@ func ParseTagSort(s string) TagSortField {
 
 // NativeGetTagsSorted는 native git으로 태그 목록을 정렬하여 조회합니다.
 // go-git의 repo.References() + repo.TagObject() 조합을 대체합니다.
-func NativeGetTagsSorted(ctx context.Context, repoPath string, limit, skip int, sortBy TagSortField) ([]Tag, int, error) {
+// search 가 비어 있지 않으면 페이지네이션 직전에 태그 이름 부분일치(대소문자
+// 무시)로 필터링하고 totalCount 를 필터 결과 기준으로 재계산합니다 (브랜치
+// list 와 동일).
+func NativeGetTagsSorted(ctx context.Context, repoPath string, limit, skip int, search string, sortBy TagSortField) ([]Tag, int, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
@@ -87,6 +90,19 @@ func NativeGetTagsSorted(ctx context.Context, repoPath string, limit, skip int, 
 			continue
 		}
 		allTags = append(allTags, tag)
+	}
+
+	// 검색 필터 — 페이지네이션 전에 적용하여 totalCount 가 필터 결과를
+	// 반영하도록 한다 (브랜치 list 와 동일한 순서: filter → count → slice).
+	if search != "" {
+		searchLower := strings.ToLower(search)
+		filtered := make([]Tag, 0, len(allTags))
+		for _, t := range allTags {
+			if strings.Contains(strings.ToLower(t.Name), searchLower) {
+				filtered = append(filtered, t)
+			}
+		}
+		allTags = filtered
 	}
 
 	totalCount := len(allTags)

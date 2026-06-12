@@ -47,6 +47,7 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsRes
 
 	limitStr := req.Limit
 	skipStr := req.Skip
+	searchQuery := req.Search
 
 	// sort: "newest" (기본) | "oldest" | "name" — 브랜치 list 와 동일.
 	sortParam := req.Sort
@@ -82,7 +83,7 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsRes
 		return TagsResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
 	}
 
-	tagList, totalCount, err := GetTagsSorted(c.Request.Context(), repoPath, limit, skip, sort)
+	tagList, totalCount, err := GetTagsSorted(c.Request.Context(), repoPath, limit, skip, searchQuery, sort)
 	if err != nil {
 		return TagsResponse{}, err
 	}

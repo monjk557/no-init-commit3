@@ -47,11 +47,12 @@ const (
 // 브랜치 list(GET /branches)의 GetBranchesRequest 와 동일한 패턴 —
 // RegisterGetWithQuery 로 등록하여 wrapper 가 form 태그를 reflect 하고 spec
 // generator 가 OpenAPI query parameter (in: query) 로 expand 한다. orchestrator
-// auto-gen client 가 limit/skip/sort 인자를 누락하지 않도록 노출하기 위함.
+// auto-gen client 가 limit/skip/search/sort 인자를 누락하지 않도록 노출하기 위함.
 type GetTagsRequest struct {
-	Limit string `form:"limit"`
-	Skip  string `form:"skip"`
-	Sort  string `form:"sort"` // "newest" (기본) | "oldest" | "name"
+	Limit  string `form:"limit"`
+	Skip   string `form:"skip"`
+	Search string `form:"search"` // 태그 이름 부분일치 필터 (대소문자 무시), 브랜치 list 와 동일
+	Sort   string `form:"sort"`   // "newest" (기본) | "oldest" | "name"
 }
 
 // CreateTagRequest는 태그 생성을 위한 요청 구조체입니다.

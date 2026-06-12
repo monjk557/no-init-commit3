@@ -13,13 +13,15 @@ var ErrTagAlreadyExists = errors.New("tag already exists")
 // GetTags는 저장소의 모든 태그를 기본 정렬(최신순)로 가져옵니다 (페이지네이션
 // 지원). native git을 사용합니다.
 func GetTags(ctx context.Context, repoPath string, limit, skip int) ([]Tag, int, error) {
-	return GetTagsSorted(ctx, repoPath, limit, skip, TagSortNewest)
+	return GetTagsSorted(ctx, repoPath, limit, skip, "", TagSortNewest)
 }
 
 // GetTagsSorted는 저장소의 모든 태그를 정렬하여 가져옵니다.
+// search 가 비어 있지 않으면 태그 이름 부분일치(대소문자 무시)로 필터링한 뒤
+// 페이지네이션을 적용합니다 (브랜치 list 와 동일한 순서).
 // native git for-each-ref를 사용합니다.
-func GetTagsSorted(ctx context.Context, repoPath string, limit, skip int, sortBy TagSortField) ([]Tag, int, error) {
-	return NativeGetTagsSorted(ctx, repoPath, limit, skip, sortBy)
+func GetTagsSorted(ctx context.Context, repoPath string, limit, skip int, search string, sortBy TagSortField) ([]Tag, int, error) {
+	return NativeGetTagsSorted(ctx, repoPath, limit, skip, search, sortBy)
 }
 
 // getTagDate returns the date of a tag (tagger date or zero time)

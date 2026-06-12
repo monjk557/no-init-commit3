@@ -447,7 +447,7 @@ func Test_GetTags_SortByName_ReturnsSorted(t *testing.T) {
 	}
 
 	// When: 이름순 정렬로 태그 목록 조회
-	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.TagSortName)
+	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, "", tags.TagSortName)
 
 	// Then: 이름순으로 정렬되어 반환
 	require.NoError(t, err)
@@ -458,6 +458,37 @@ func Test_GetTags_SortByName_ReturnsSorted(t *testing.T) {
 	assert.Equal(t, "a-tag", result[0].Name)
 	assert.Equal(t, "m-tag", result[1].Name)
 	assert.Equal(t, "z-tag", result[2].Name)
+}
+
+func Test_GetTags_Search_FiltersByName(t *testing.T) {
+	// 회귀: "search 쿼리는 태그 이름 부분일치(대소문자 무시)로 필터링하고
+	// totalCount 는 필터 결과를 반영해야 한다" — 브랜치 list 와 동일.
+	t.Parallel()
+
+	// Given: 이름이 다른 세 개의 태그
+	tempDir := t.TempDir()
+	repo, err := gogit.PlainInit(tempDir, false)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+
+	hash := commitFile(t, wt, tempDir, "file.txt", "content", "commit")
+
+	for _, name := range []string{"v1.0.0", "v1.1.0", "release-2.0"} {
+		tagRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/tags/"+name), hash)
+		require.NoError(t, repo.Storer.SetReference(tagRef))
+	}
+
+	// When: "v1" 로 검색 (대문자로 입력해도 대소문자 무시)
+	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, "V1", tags.TagSortName)
+
+	// Then: v1.* 만 매칭되고 totalCount 도 2
+	require.NoError(t, err)
+	assert.Equal(t, 2, totalCount)
+	require.Len(t, result, 2)
+	assert.Equal(t, "v1.0.0", result[0].Name)
+	assert.Equal(t, "v1.1.0", result[1].Name)
 }
 
 func Test_GetTags_SortByDate_ReturnsSorted(t *testing.T) {
@@ -498,7 +529,7 @@ func Test_GetTags_SortByDate_ReturnsSorted(t *testing.T) {
 	require.NoError(t, err)
 
 	// When: 날짜순 정렬로 태그 목록 조회
-	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, tags.TagSortNewest)
+	result, totalCount, err := tags.GetTagsSorted(context.Background(), filepath.Join(tempDir, ".git"), 100, 0, "", tags.TagSortNewest)
 
 	// Then: 날짜 내림차순으로 정렬 (최신 먼저)
 	require.NoError(t, err)
