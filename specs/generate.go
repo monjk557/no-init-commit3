@@ -536,6 +536,7 @@ func parseStringEnumsInFile(filePath string) (map[string]StringEnumInfo, error) 
 // parseAllSchemas / parseAllStringEnums 모두 같은 set 을 사용한다.
 func schemaFilePaths() []string {
 	return []string{
+		"internal/api/schema.go",
 		"internal/repositories/schema.go",
 		"internal/branches/schema.go",
 		"internal/commits/schema.go",
@@ -1371,18 +1372,53 @@ func openAPISchemaName(s string) string {
 func generateSchemasFromStructs(schemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, resolver typeResolver) string {
 	var buf strings.Builder
 
-	// Sort schema names for consistent output
-	names := make([]string, 0, len(schemas))
+	// component schema 이름 = struct + 승격된 named(`Enum` 접미사) string enum.
+	// 둘을 한 알파벳 정렬 목록으로 합쳐 결정적으로 emit 한다 (이름 공간은
+	// 서로 disjoint — 기존 11개 alias 중 `Enum` 으로 끝나는 것은 없음).
+	seen := make(map[string]bool, len(schemas)+len(stringEnums))
+	names := make([]string, 0, len(schemas)+len(stringEnums))
 	for name := range schemas {
-		names = append(names, name)
+		if !seen[name] {
+			names = append(names, name)
+			seen[name] = true
+		}
+	}
+	for name, ei := range stringEnums {
+		if isNamedEnum(name) && len(ei.Values) > 0 && !seen[name] {
+			names = append(names, name)
+			seen[name] = true
+		}
 	}
 	sort.Strings(names)
 
 	for _, name := range names {
-		schema := schemas[name]
-		buf.WriteString(renderSchemaYAML(schema, schemas, stringEnums, openAPISchemaName, resolver))
+		if schema, ok := schemas[name]; ok {
+			buf.WriteString(renderSchemaYAML(schema, schemas, stringEnums, openAPISchemaName, resolver))
+			continue
+		}
+		buf.WriteString(renderEnumSchemaYAML(stringEnums[name], openAPISchemaName))
 	}
 
+	return buf.String()
+}
+
+// isNamedEnum 은 typed-string enum alias 를 top-level components/schemas 엔트리
+// 로 emit (+ 사용 지점에서 $ref) 할지 판정한다. 규약: alias 이름이 `Enum` 으로
+// 끝나면 named component, 아니면 기존대로 사용 지점 inline.
+func isNamedEnum(name string) bool {
+	return strings.HasSuffix(name, "Enum")
+}
+
+// renderEnumSchemaYAML 은 string-enum 을 top-level component schema 로 그린다:
+//
+//	ErrorCodeEnum:
+//	  type: string
+//	  enum: [A, B, C]
+func renderEnumSchemaYAML(ei StringEnumInfo, schemaNameFn func(string) string) string {
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("    %s:\n", schemaNameFn(ei.Name)))
+	buf.WriteString("      type: string\n")
+	buf.WriteString(fmt.Sprintf("      enum: [%s]\n", strings.Join(ei.Values, ", ")))
 	return buf.String()
 }
 
@@ -1493,6 +1529,13 @@ func renderOpenAPIPropertyYAML(goType string, parentPkg string, knownSchemas map
 	// inline enum 으로 emit. 같은 이름의 struct schema 보다 우선 — string-typed
 	// alias 와 struct 이름이 충돌할 일은 없지만 의도를 명확히 한다.
 	if ei, ok := stringEnums[base]; ok && len(ei.Values) > 0 {
+		// `Enum` 접미사 alias 는 top-level component 로 승격되어 있으므로
+		// 사용 지점에서는 inline 대신 $ref 로 참조한다 (downstream codegen /
+		// orchestrator error-code enum sync 가 공유 타입으로 소비). 그 외
+		// alias 는 기존대로 inline enum 유지 (zero churn).
+		if isNamedEnum(base) {
+			return []string{fmt.Sprintf("$ref: '#/components/schemas/%s'", schemaNameFn(base))}
+		}
 		return []string{
 			"type: string",
 			fmt.Sprintf("enum: [%s]", strings.Join(ei.Values, ", ")),
