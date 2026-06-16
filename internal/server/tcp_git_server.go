@@ -18,6 +18,7 @@ import (
 	"github.com/collabops/git-executor/internal/connection"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/middleware"
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
@@ -774,12 +775,29 @@ func (s *DuplexTCPServer) handleLFSAuthenticate(conn *connection.ProgressAwareCo
 	lfsHref := fmt.Sprintf("%s/%s/%s.git/info/lfs", s.config.LFS.ExternalURL, owner, repo)
 
 	// LFS authenticate 응답 (Git LFS 프로토콜 스펙)
+	header := map[string]string{
+		"Content-Type": "application/vnd.git-lfs+json",
+	}
+	expiresIn := 3600
+
+	// SSH→HTTPS credential handoff: orchestrator 의 LFS HTTP API 는 인증을 요구하지만
+	// (get_current_active_user) SSH git-lfs 클라이언트엔 HTTP 자격증명이 없다. 이미
+	// 인증된 SSH user 의 UUID 로 short-lived decision token 을 발급해 header 에 실어
+	// 후속 batch/verify/lock 요청을 인증한다. shared secret 미설정 또는 user-id 가 UUID 가
+	// 아니면 token 을 생략하고 기존 동작(클라이언트 자격증명 helper / 401)으로 degrade.
+	_, _, userID, _ := conn.GetConnectionInfo()
+	if token, mintErr := s.mintLFSAuthToken(userID, owner, repo); mintErr != nil {
+		s.logger.Warn("LFS auth token not minted; client must supply its own credentials",
+			zap.String("owner", owner), zap.String("repo", repo), zap.Error(mintErr))
+	} else {
+		header["Authorization"] = "Bearer " + token
+		expiresIn = int(lfsAuthTokenTTL.Seconds())
+	}
+
 	authResp := map[string]interface{}{
-		"href": lfsHref,
-		"header": map[string]string{
-			"Content-Type": "application/vnd.git-lfs+json",
-		},
-		"expires_in": 3600,
+		"href":       lfsHref,
+		"header":     header,
+		"expires_in": expiresIn,
 	}
 
 	respBytes, err := json.Marshal(authResp)
@@ -801,6 +819,20 @@ func (s *DuplexTCPServer) handleLFSAuthenticate(conn *connection.ProgressAwareCo
 		zap.String("href", lfsHref))
 
 	return nil
+}
+
+// lfsAuthTokenTTL bounds how long the minted LFS auth token is valid. Short by
+// design — it only needs to cover a single git-lfs transfer negotiation.
+const lfsAuthTokenTTL = 5 * time.Minute
+
+// mintLFSAuthToken mints a short-lived decision token authenticating the SSH user
+// to the orchestrator's LFS HTTP API. Returns an error (token omitted, logged) when
+// signing is disabled (no shared secret) or userID is not a UUID — the handler then
+// degrades to the prior behaviour rather than failing the authenticate.
+func (s *DuplexTCPServer) mintLFSAuthToken(userID, owner, repo string) (string, error) {
+	signer := middleware.NewDecisionSigner(s.config.Security.DecisionJWT)
+	object := fmt.Sprintf("repository:%s/%s", owner, repo)
+	return signer.Mint(userID, object, "git.lfs", lfsAuthTokenTTL, time.Now())
 }
 
 // readPktLine reads a single pkt-line frame from the reader.
