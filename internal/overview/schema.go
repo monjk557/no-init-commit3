@@ -101,15 +101,14 @@ type GitTreeEntry struct {
 
 // SubmoduleInfo는 submodule (gitlink) 트리 엔트리의 부가 정보입니다.
 // pinned commit 은 항상 채워지고, URL/branch 는 .gitmodules 가 존재할 때만
-// 채워집니다. ResolvedRepo / IsResolvable 은 Phase 5 에서 채워질 예약 필드로,
-// 현재는 항상 빈 문자열 / false 입니다.
+// 채워집니다. mirror 매핑 / reachability 해석 (resolved_repo / is_resolvable) 은
+// 단일 인스턴스 git 연산만 담당하는 git-executor 의 책임이 아니므로 여기서
+// 노출하지 않는다. cross-repo 지식을 가진 orchestrator 가 최종 응답에서 채운다.
 type SubmoduleInfo struct {
-	Commit       string                      `json:"commit"`                  // pinned commit SHA (full hex)
-	URL          string                      `json:"url,omitempty"`           // .gitmodules 의 url
-	Branch       string                      `json:"branch,omitempty"`        // .gitmodules 의 branch (optional)
-	Parsed       *repositories.ParsedRepoURL `json:"parsed,omitempty"`        // url 파싱 성공 시 (host/owner/repo)
-	ResolvedRepo string                      `json:"resolved_repo,omitempty"` // mirror 매핑 결과 (Phase 5 reserved)
-	IsResolvable bool                        `json:"is_resolvable"`           // pin commit reachability (Phase 5 reserved)
+	Commit string                      `json:"commit"`           // pinned commit SHA (full hex)
+	URL    string                      `json:"url,omitempty"`    // .gitmodules 의 url
+	Branch string                      `json:"branch,omitempty"` // .gitmodules 의 branch (optional)
+	Parsed *repositories.ParsedRepoURL `json:"parsed,omitempty"` // url 파싱 성공 시 (host/owner/repo)
 }
 
 // GitTreeEntryWithCommit는 커밋 정보를 포함한 트리 항목입니다.

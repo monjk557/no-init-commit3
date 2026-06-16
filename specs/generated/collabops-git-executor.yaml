@@ -3862,13 +3862,8 @@ components:
           type: string
         parsed:
           $ref: '#/components/schemas/ParsedRepoURL'
-        resolved_repo:
-          type: string
-        is_resolvable:
-          type: boolean
       required:
         - commit
-        - is_resolvable
     Tag:
       type: object
       properties:
