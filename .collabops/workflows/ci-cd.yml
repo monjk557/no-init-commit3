@@ -63,6 +63,9 @@ jobs:
           set -eu
           cd /workspace/source
           make test
+          # 커버리지 리포트 생성 (SonarQube import용, doc-522 ①)
+          # 게이트는 위 `make test` 가 담당하고, 이 단계는 리포트 생성 전용(best-effort)이라 실패해도 빌드를 막지 않는다.
+          go test -coverprofile=coverage.out -covermode=atomic ./... || true
 
   build:
     name: Build Only (PR)
