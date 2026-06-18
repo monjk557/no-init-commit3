@@ -770,9 +770,11 @@ func (s *DuplexTCPServer) handleLFSAuthenticate(conn *connection.ProgressAwareCo
 		return fmt.Errorf("LFS_EXTERNAL_URL not configured")
 	}
 
-	// LFS 서버의 HTTP 엔드포인트 URL 구성 — orchestrator base URL 에 git protocol
-	// convention 의 `/<owner>/<repo>.git/info/lfs` 를 덧붙인다.
-	lfsHref := fmt.Sprintf("%s/%s/%s.git/info/lfs", s.config.LFS.ExternalURL, owner, repo)
+	// LFS 서버의 HTTP 엔드포인트 URL 구성. git-ssh 가 `repo` 로 resolved repository
+	// PK 를 넘겨주므로, LFS 서버(orchestrator)의 canonical numeric 라우트
+	// `/repositories/{key}/info/lfs` 를 가리킨다 (Platform Law 4 — int PK).
+	// owner 는 로깅 용도로만 유지한다.
+	lfsHref := fmt.Sprintf("%s/repositories/%s/info/lfs", s.config.LFS.ExternalURL, repo)
 
 	// LFS authenticate 응답 (Git LFS 프로토콜 스펙)
 	header := map[string]string{
