@@ -1,0 +1,49 @@
+name: sonarqube-scan
+
+# schedule 전용: 매일 02:00 KST(그룹 C · cron '0 17 * * *' UTC) main 스냅샷만 스캔 (Issue-4360).
+triggers:
+  schedule:
+    branch: main
+    cron: ['0 17 * * *']
+  workflow_dispatch: {}
+
+env:
+  GAR_MIRROR: asia-northeast3-docker.pkg.dev/collabops-shared/dockerhub
+
+jobs:
+  sonarqube:
+    name: SonarQube Scan
+    phase: test
+    steps:
+      - name: Checkout code
+        image: ${{ env.GAR_MIRROR }}/debian:bookworm-20260223-slim
+        env:
+          GIT_REPO_URL: ${{ vars.GIT_REPO_URL }}
+          COLLABOPS_REF: ${{ collabops.ref }}
+          COMMIT_SHA: ${{ collabops.sha }}
+        run: |
+          set -eu
+          apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+          git config --global http.sslVerify false
+          BRANCH_OR_TAG="${COLLABOPS_REF#refs/heads/}"
+          [ "$BRANCH_OR_TAG" = "$COLLABOPS_REF" ] && BRANCH_OR_TAG="${COLLABOPS_REF#refs/tags/}"
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" clone --depth 1 --branch "${BRANCH_OR_TAG}" "${GIT_REPO_URL}" /workspace/source
+          cd /workspace/source
+          git -c http.extraHeader="Authorization: Bearer ${COLLABOPS_JOB_TOKEN}" fetch origin "${COMMIT_SHA}"
+          git checkout "${COMMIT_SHA}"
+
+      - name: Generate Go coverage report
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          # SonarQube import용 커버리지 생성 (doc-522 ①). best-effort — 테스트 게이트는 메인 CI가 담당.
+          go test -coverprofile=coverage.out -covermode=atomic ./... || true
+
+      - name: sonar-scan
+        uses: "collabops/sonar-scan@v1"
+        with:
+          sonar-host-url: ${{ vars.SONAR_HOST_URL }}
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          project-key: "collabops-git-executor"
+          extra-args: "-Dsonar.sourceEncoding=UTF-8 -Dsonar.go.coverage.reportPaths=coverage.out -Dsonar.exclusions=**/vendor/**,**/*_test.go"
