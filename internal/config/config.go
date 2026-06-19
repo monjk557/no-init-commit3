@@ -772,8 +772,25 @@ func parseStringSliceFromEnv(key string, defaultValue []string) []string {
 // 때문에 더 이상 git-executor 가 알 필요가 없습니다.
 func parseLFSConfig() LFSConfig {
 	return LFSConfig{
-		ExternalURL: strings.TrimRight(os.Getenv("LFS_EXTERNAL_URL"), "/"),
+		ExternalURL: normalizeLFSExternalURL(os.Getenv("LFS_EXTERNAL_URL")),
 	}
+}
+
+// normalizeLFSExternalURL 은 LFS_EXTERNAL_URL 을 orchestrator LFS API base 로
+// 정규화한다. 값이 host base(예: https://api.stage.collabops.ai)면 orchestrator
+// 의 /api/v2 LFS mount 를 보강하고, 이미 /api/v{N} 을 포함한 full base 면 그대로
+// 둔다. git-http 의 LFS upstream 파생(ORCHESTRATOR_BASE_URL → /api/v2)과 동일
+// 컨벤션이라 두 게이트웨이가 같은 방식으로 base 를 다룬다. 빈 값이면 그대로 빈 값
+// (SSH LFS 비활성).
+func normalizeLFSExternalURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	if !strings.Contains(base, "/api/v") {
+		base += "/api/v2"
+	}
+	return base
 }
 
 // MaintenanceConfig 파싱 (환경변수 + 하드코딩)
