@@ -580,8 +580,9 @@ func parseEventsConfig() (EventsConfig, error) {
 // OrchestratorConfig 파싱 (환경변수 + 하드코딩)
 // ------------------------------------------------------------
 func parseOrchestratorConfig() OrchestratorConfig {
-	// Optional: if not set, orchestrator fallback is disabled
-	baseURL := os.Getenv("ORCHESTRATOR_BASE_URL")
+	// Optional: if not set, orchestrator fallback is disabled.
+	// doc-526: prefer BASE_URL_ORCHESTRATOR, fall back to legacy ORCHESTRATOR_BASE_URL.
+	baseURL := envWithAlias("BASE_URL_ORCHESTRATOR", "ORCHESTRATOR_BASE_URL")
 	sshKeyValidatePath := os.Getenv("ORCHESTRATOR_SSH_KEY_VALIDATE_PATH")
 	if sshKeyValidatePath == "" {
 		// Keep empty by default to avoid guessing endpoint
