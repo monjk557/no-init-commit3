@@ -324,9 +324,13 @@ func handleLsRefsNative(ctx context.Context, repoPath string, lsRefsReq *LsRefsR
 
 // RunPackObjectsForHTTP streams packfile via sideband for SSH/TCP handlers.
 func RunPackObjectsForHTTP(ctx context.Context, repoPath string, fetchReq *FetchReq, w io.Writer) error {
+	existingHaves, err := gitcmd.FilterExistingObjects(ctx, repoPath, fetchReq.Haves)
+	if err != nil {
+		return fmt.Errorf("filter haves: %w", err)
+	}
 	var knownHaves []string
 	for _, have := range fetchReq.Haves {
-		if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+		if existingHaves[have] {
 			knownHaves = append(knownHaves, have)
 		}
 	}
@@ -344,7 +348,7 @@ func RunPackObjectsForHTTP(ctx context.Context, repoPath string, fetchReq *Fetch
 		DeepenExclude: fetchReq.DeepenNot,
 		Filter:        fetchReq.Filter,
 	}
-	_, err := gitcmd.RunPackObjects(ctx, repoPath, opts, sbWriter)
+	_, err = gitcmd.RunPackObjects(ctx, repoPath, opts, sbWriter)
 	if err != nil {
 		return err
 	}
@@ -390,8 +394,12 @@ func RunGitPackObjectsRaw(ctx context.Context, repoPath string, fetchReq *FetchR
 		stdinBuf.WriteString(want)
 		stdinBuf.WriteByte('\n')
 	}
+	existingHaves, err := gitcmd.FilterExistingObjects(ctx, repoPath, fetchReq.Haves)
+	if err != nil {
+		return fmt.Errorf("filter haves: %w", err)
+	}
 	for _, have := range fetchReq.Haves {
-		if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+		if existingHaves[have] {
 			stdinBuf.WriteString("^")
 			stdinBuf.WriteString(have)
 			stdinBuf.WriteByte('\n')

@@ -456,13 +456,19 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 			// Filter haves to only those that exist on the server.
 			// Clients may send OIDs that were force-pushed away or GC'd on the server;
 			// passing unknown OIDs to pack-objects causes "fatal: bad object".
+			existingHaves, existErr := gitcmd.FilterExistingObjects(ctx, repoPath, fetchReq.Haves)
+			if existErr != nil {
+				_ = pktWriter.WriteLine(fmt.Sprintf("ERR filter haves: %s", existErr.Error()))
+				_ = pktWriter.Flush()
+				return
+			}
 			var knownHaves []string
 			if !fetchReq.Done {
 				if err := pktWriter.WriteLine("acknowledgments"); err != nil {
 					return
 				}
 				for _, have := range fetchReq.Haves {
-					if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+					if existingHaves[have] {
 						if err := pktWriter.WriteLine(fmt.Sprintf("ACK %s", have)); err != nil {
 							return
 						}
@@ -484,7 +490,7 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 			} else {
 				// Client sent "done" — still filter haves for pack-objects
 				for _, have := range fetchReq.Haves {
-					if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+					if existingHaves[have] {
 						knownHaves = append(knownHaves, have)
 					}
 				}

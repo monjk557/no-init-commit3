@@ -155,6 +155,62 @@ func PeelToCommit(ctx context.Context, repoPath string, oid string) (string, err
 	return strings.TrimSpace(string(out)), nil
 }
 
+// FilterExistingObjects returns the subset of oids that exist in the repository
+// as a membership set, using a single `git cat-file --batch-check` process.
+//
+// During fetch negotiation a client may advertise hundreds or thousands of
+// "have" OIDs. Checking each one with ObjectExists spawns a separate
+// `git cat-file -t` subprocess (O(N) fork/exec). Feeding every OID to one
+// batch-check process collapses that to a single fork — matching how native
+// git resolves haves in-process during upload-pack.
+//
+// Unknown OIDs (force-pushed away or GC'd) are reported by git as
+// "<oid> missing" and excluded. Callers should iterate their original ordered
+// slice and test membership against the returned set so that the
+// protocol-significant order of ACKs is preserved.
+func FilterExistingObjects(ctx context.Context, repoPath string, oids []string) (map[string]bool, error) {
+	existing := make(map[string]bool, len(oids))
+	if len(oids) == 0 {
+		return existing, nil
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "--batch-check=%(objectname) %(objecttype)")
+	cmd.Dir = repoPath
+
+	var stdin bytes.Buffer
+	for _, oid := range oids {
+		stdin.WriteString(oid)
+		stdin.WriteByte('\n')
+	}
+	cmd.Stdin = &stdin
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		return nil, fmt.Errorf("git cat-file --batch-check: %w (stderr: %s)", err, stderr.String())
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// "<oid> <type>" for an existing object; "<oid> missing" (or
+		// "ambiguous") otherwise. Whitelist real object types so non-existent
+		// or malformed entries are never treated as present.
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[1] {
+		case "commit", "tree", "blob", "tag":
+			existing[fields[0]] = true
+		}
+	}
+	return existing, nil
+}
+
 // ObjectExists checks if an object exists in the repository and returns its type.
 // Returns the object type ("commit", "tree", "blob", "tag") or error if not found.
 func ObjectExists(ctx context.Context, repoPath string, oid string) (string, error) {

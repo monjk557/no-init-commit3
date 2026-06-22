@@ -440,13 +440,17 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 			// Filter haves to only those that exist on the server.
 			// Clients may send OIDs that were force-pushed away or GC'd on the server;
 			// passing unknown OIDs to pack-objects causes "fatal: bad object".
+			existingHaves, err := gitcmd.FilterExistingObjects(ctx, repoPath, fetchReq.Haves)
+			if err != nil {
+				return fmt.Errorf("filter haves: %w", err)
+			}
 			var knownHaves []string
 			if !fetchReq.Done {
 				if err := pktWriter.WriteLine("acknowledgments"); err != nil {
 					return fmt.Errorf("write acknowledgments: %w", err)
 				}
 				for _, have := range fetchReq.Haves {
-					if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+					if existingHaves[have] {
 						if err := pktWriter.WriteLine(fmt.Sprintf("ACK %s", have)); err != nil {
 							return fmt.Errorf("write ACK: %w", err)
 						}
@@ -468,7 +472,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 			} else {
 				// Client sent "done" — still filter haves for pack-objects
 				for _, have := range fetchReq.Haves {
-					if _, err := gitcmd.ObjectExists(ctx, repoPath, have); err == nil {
+					if existingHaves[have] {
 						knownHaves = append(knownHaves, have)
 					}
 				}
