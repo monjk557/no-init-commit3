@@ -25,6 +25,13 @@ env:
 
 jobs:
   generate-openapi-specs:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
     name: Generate OpenAPI Specifications
     steps:
       - name: Checkout code
@@ -147,6 +154,13 @@ jobs:
           echo "✅ Specs are in sync"
 
   build-and-push:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 4Gi
     name: Build & Push Specs Server Image
     if: collabops.event_name == 'push'
     needs: [generate-openapi-specs]

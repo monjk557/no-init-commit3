@@ -15,6 +15,12 @@ env:
 
 jobs:
   test:
+    resources:
+      requests:
+        memory: 2.5Gi
+      limits:
+        cpu: "4"
+        memory: 5Gi
     name: Run Tests
     steps:
       - name: Checkout code
@@ -68,6 +74,13 @@ jobs:
           go test -coverprofile=coverage.out -covermode=atomic ./... || true
 
   build:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 4Gi
     name: Build Only (PR)
     needs: [test]
     if: collabops.event_name == 'change_request'
@@ -124,6 +137,13 @@ jobs:
             --no-push
 
   build-and-push:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: 2Gi
+      limits:
+        cpu: "4"
+        memory: 4Gi
     name: Build and Push
     needs: [test]
     if: collabops.event_name == 'push'

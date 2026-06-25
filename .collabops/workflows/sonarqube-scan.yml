@@ -12,6 +12,12 @@ env:
 
 jobs:
   sonarqube:
+    resources:
+      requests:
+        memory: 2.5Gi
+      limits:
+        cpu: "4"
+        memory: 5Gi
     name: SonarQube Scan
     phase: test
     steps:
