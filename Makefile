@@ -209,6 +209,19 @@ test:
 		cd .. && go test -v ./test/integration/...; \
 	fi
 
+# [MANUAL 6] make test-cover
+# Description: Run Go coverage over ./internal/... + the real cmd/git-executor and
+#              print the total. Throwaway cmd/test-* programs are intentionally
+#              excluded. Uses the repo-pinned Go toolchain (GOTOOLCHAIN).
+# Used: internal/..., cmd/git-executor
+.PHONY: test-cover
+test-cover:
+	@echo "🧪 Running coverage over ./internal/... + cmd/git-executor..."
+	@GOTOOLCHAIN=go1.25.10 go test -coverprofile=coverage.out \
+		./internal/... ./cmd/git-executor
+	@echo "📊 Total coverage:"
+	@GOTOOLCHAIN=go1.25.10 go tool cover -func=coverage.out | tail -1
+
 # [MANUAL 7] make clean
 # Description: Gracefully stop all services and clean up everything
 .PHONY: clean

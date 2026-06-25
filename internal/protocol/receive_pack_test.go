@@ -8,13 +8,46 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/collabops/git-executor/internal/config"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// initBareRepoWithCommit creates a bare repo whose refs/heads/main points to a
+// real (empty-tree) commit. Native git advertises only refs that resolve to
+// existing objects, so a zero-hash ref would never appear in info/refs output.
+func initBareRepoWithCommit(t *testing.T, repoPath string) {
+	t.Helper()
+	gitRepo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	require.NoError(t, gitRepo.Storer.SetReference(
+		plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
+
+	emptyTree := &object.Tree{}
+	treeObj := gitRepo.Storer.NewEncodedObject()
+	require.NoError(t, emptyTree.Encode(treeObj))
+	treeHash, err := gitRepo.Storer.SetEncodedObject(treeObj)
+	require.NoError(t, err)
+
+	commit := &object.Commit{
+		TreeHash:  treeHash,
+		Author:    object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Committer: object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+		Message:   "initial commit",
+	}
+	commitObj := gitRepo.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(commitObj))
+	commitHash, err := gitRepo.Storer.SetEncodedObject(commitObj)
+	require.NoError(t, err)
+
+	require.NoError(t, gitRepo.Storer.SetReference(
+		plumbing.NewHashReference("refs/heads/main", commitHash)))
+}
 
 func TestReceivePackInfoRefs_AdvertisesCapabilities(t *testing.T) {
 	tempDir := t.TempDir()
@@ -67,11 +100,9 @@ func Test_HTTP_InfoRefs_ReturnsRefs(t *testing.T) {
 	repoParam := "repo.git"
 	repoPath := filepath.Join(tempDir, owner, repoParam)
 	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
-	gitRepo, err := gogit.PlainInit(repoPath, true)
-	require.NoError(t, err)
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/main")))
-	emptyHash := plumbing.NewHash(strings.Repeat("0", 40))
-	require.NoError(t, gitRepo.Storer.SetReference(plumbing.NewHashReference("refs/heads/main", emptyHash)))
+	// Real commit on refs/heads/main: native git only advertises refs that
+	// resolve to existing objects, so a zero-hash ref would never be returned.
+	initBareRepoWithCommit(t, repoPath)
 	cfg := &config.Config{
 		Git:     config.GitConfig{RepoRoot: tempDir},
 		Logging: config.LoggingConfig{Level: "info", Format: "json"},
