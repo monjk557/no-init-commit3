@@ -202,24 +202,26 @@ func Test_CommitIndex_QueueLen_StartsAtZero(t *testing.T) {
 // perf_config bucket tests
 // ---------------------------------------------------------------------------
 
+// 회귀: time budget 버킷은 #217 (827c8bf) 에서 ms → s 로 의도적으로 상향됨
+// ("최소 1회 DiffTree + 여러 commit scan 이 가능할 만큼 길어야 함").
 func Test_PerfConfig_TimeBudgetForEntryCount_SmallDir(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, 500*time.Millisecond, timeBudgetForEntryCount(10))
+	assert.Equal(t, 5*time.Second, timeBudgetForEntryCount(10))
 }
 
 func Test_PerfConfig_TimeBudgetForEntryCount_MediumDir(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, 400*time.Millisecond, timeBudgetForEntryCount(150))
+	assert.Equal(t, 4*time.Second, timeBudgetForEntryCount(150))
 }
 
 func Test_PerfConfig_TimeBudgetForEntryCount_LargeDir(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, 200*time.Millisecond, timeBudgetForEntryCount(800))
+	assert.Equal(t, 2*time.Second, timeBudgetForEntryCount(800))
 }
 
 func Test_PerfConfig_TimeBudgetForEntryCount_HugeDir(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, 150*time.Millisecond, timeBudgetForEntryCount(5000))
+	assert.Equal(t, 1500*time.Millisecond, timeBudgetForEntryCount(5000))
 }
 
 func Test_PerfConfig_MaxCommitsForEntryCount_SmallDir(t *testing.T) {

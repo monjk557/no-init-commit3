@@ -11,6 +11,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// LanguageStatsMaxFileSize is the upper bound for files considered in language
+// distribution. Files larger than this are skipped, matching GitHub/GitLab
+// (linguist) behavior. All three detection paths (smart, parallel, sequential)
+// must use the same limit so results are consistent regardless of which path runs.
+const LanguageStatsMaxFileSize int64 = 1024 * 1024 // 1MB
+
 // SmartLanguageDetector provides optimized language detection with sampling
 // Research target: Reduce 50-80% overhead from reading entire files
 type SmartLanguageDetector struct {
@@ -49,9 +55,11 @@ func NewSmartLanguageDetector(logger *zap.Logger) *SmartLanguageDetector {
 	return &SmartLanguageDetector{
 		logger:            logger,
 		workerCount:       getOptimalWorkerCount(),
-		sampleSize:        8 * 1024,         // 8KB sample - sufficient for most languages
-		minConfidenceSize: 1 * 1024,         // 1KB minimum for confidence
-		maxFileSize:       10 * 1024 * 1024, // 10MB max file size
+		sampleSize:        8 * 1024, // 8KB sample - sufficient for most languages
+		minConfidenceSize: 1 * 1024, // 1KB minimum for confidence
+		// Language-distribution limit (linguist-style). Must match the parallel
+		// and sequential paths so big files are skipped consistently.
+		maxFileSize: LanguageStatsMaxFileSize,
 	}
 }
 

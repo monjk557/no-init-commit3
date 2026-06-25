@@ -200,8 +200,8 @@ func (ptp *ParallelTreeProcessor) processFile(ctx context.Context, file *object.
 		return FileProcessResult{Skipped: true, SkipReason: "configuration"}
 	}
 
-	// Skip very large files (>1MB)
-	if file.Size > 1024*1024 {
+	// Skip very large files (>1MB), consistent with the smart/sequential paths.
+	if file.Size > LanguageStatsMaxFileSize {
 		return FileProcessResult{Skipped: true, SkipReason: "too_large"}
 	}
 

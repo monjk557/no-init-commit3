@@ -30,6 +30,14 @@ func NewZeroCopyJSONStreamer() *ZeroCopyJSONStreamer {
 	}
 }
 
+// scopeFrame captures the writer state for a single container (object or
+// array) so that nested containers restore their parent's state on close.
+type scopeFrame struct {
+	inArray  bool
+	inObject bool
+	first    bool
+}
+
 // StreamingJSONWriter provides progressive JSON writing without full memory allocation
 type StreamingJSONWriter struct {
 	writer   io.Writer
@@ -39,6 +47,10 @@ type StreamingJSONWriter struct {
 	inArray  bool
 	inObject bool
 	first    bool
+	// scopes is a nesting stack of parent container states. Without it,
+	// closing a nested object/array would clobber the parent's state and
+	// produce invalid JSON when more fields are appended to the parent.
+	scopes []scopeFrame
 }
 
 // NewStreamingJSONWriter creates a new streaming JSON writer
@@ -54,6 +66,35 @@ func (s *ZeroCopyJSONStreamer) NewStreamingJSONWriter(w io.Writer) *StreamingJSO
 	}
 }
 
+// pushScope saves the current container state before entering a nested one.
+func (sjw *StreamingJSONWriter) pushScope() {
+	sjw.scopes = append(sjw.scopes, scopeFrame{
+		inArray:  sjw.inArray,
+		inObject: sjw.inObject,
+		first:    sjw.first,
+	})
+}
+
+// popScope restores the parent container state after closing a nested one. It
+// also marks the parent as having seen at least one element so subsequent
+// fields/values are separated by a comma. When there is no parent scope the
+// writer simply returns to a neutral state.
+func (sjw *StreamingJSONWriter) popScope() {
+	if len(sjw.scopes) == 0 {
+		sjw.inObject = false
+		sjw.inArray = false
+		sjw.first = false
+		return
+	}
+	parent := sjw.scopes[len(sjw.scopes)-1]
+	sjw.scopes = sjw.scopes[:len(sjw.scopes)-1]
+	sjw.inArray = parent.inArray
+	sjw.inObject = parent.inObject
+	// The nested container we just closed counts as an element of the parent,
+	// so the parent is no longer at its first element.
+	sjw.first = false
+}
+
 // WriteObjectStart starts streaming a JSON object
 func (sjw *StreamingJSONWriter) WriteObjectStart() error {
 	if !sjw.started {
@@ -64,7 +105,9 @@ func (sjw *StreamingJSONWriter) WriteObjectStart() error {
 			return err
 		}
 	}
+	sjw.pushScope()
 	sjw.inObject = true
+	sjw.inArray = false
 	sjw.first = true
 	_, err := sjw.writer.Write([]byte("{"))
 	return err
@@ -72,10 +115,11 @@ func (sjw *StreamingJSONWriter) WriteObjectStart() error {
 
 // WriteObjectEnd ends streaming a JSON object
 func (sjw *StreamingJSONWriter) WriteObjectEnd() error {
-	sjw.inObject = false
-	sjw.first = false
-	_, err := sjw.writer.Write([]byte("}"))
-	return err
+	if _, err := sjw.writer.Write([]byte("}")); err != nil {
+		return err
+	}
+	sjw.popScope()
+	return nil
 }
 
 // WriteArrayStart starts streaming a JSON array
@@ -83,7 +127,14 @@ func (sjw *StreamingJSONWriter) WriteArrayStart() error {
 	if !sjw.started {
 		sjw.started = true
 	}
+	if sjw.inArray && !sjw.first {
+		if _, err := sjw.writer.Write([]byte(",")); err != nil {
+			return err
+		}
+	}
+	sjw.pushScope()
 	sjw.inArray = true
+	sjw.inObject = false
 	sjw.first = true
 	_, err := sjw.writer.Write([]byte("["))
 	return err
@@ -91,10 +142,11 @@ func (sjw *StreamingJSONWriter) WriteArrayStart() error {
 
 // WriteArrayEnd ends streaming a JSON array
 func (sjw *StreamingJSONWriter) WriteArrayEnd() error {
-	sjw.inArray = false
-	sjw.first = false
-	_, err := sjw.writer.Write([]byte("]"))
-	return err
+	if _, err := sjw.writer.Write([]byte("]")); err != nil {
+		return err
+	}
+	sjw.popScope()
+	return nil
 }
 
 // WriteField writes a field name and value to the JSON stream

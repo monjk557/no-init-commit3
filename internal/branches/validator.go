@@ -29,6 +29,16 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 		return fmt.Errorf("branch name cannot start or end with a slash")
 	}
 
+	// 호스팅 서비스 정책: refs/ 접두사 및 다중 슬래시 금지.
+	// (단일 슬래시 namespace 예: feature/x 는 허용)
+	if strings.HasPrefix(name, "refs/") {
+		return fmt.Errorf("branch name cannot start with 'refs/'")
+	}
+
+	if strings.Count(name, "/") > 1 {
+		return fmt.Errorf("branch name cannot contain multiple slashes")
+	}
+
 	if strings.Contains(name, "//") {
 		return fmt.Errorf("branch name cannot contain consecutive slashes")
 	}

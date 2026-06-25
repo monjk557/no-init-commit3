@@ -16,6 +16,15 @@ import (
 
 const nativeGitTimeout = 5 * time.Second
 
+// refResolves reports whether ref resolves to a valid object in repoPath.
+// Used to distinguish "ref not found" from "path not found" when the combined
+// "<ref>:<path>" spec fails (git returns an identical error for both cases).
+func refResolves(ctx context.Context, repoPath, ref string) bool {
+	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	_, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputSmall)
+	return err == nil
+}
+
 // GetTreeEntries는 저장소의 트리 항목을 가져옵니다.
 // native git ls-tree를 사용합니다.
 func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger, repoPath, ref, path string) ([]TreeEntry, error) {
@@ -39,6 +48,14 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 			return nil, fmt.Errorf("path is not a tree: %s", path)
 		}
 		if strings.Contains(errMsg, "Not a valid object name") || strings.Contains(errMsg, "fatal") {
+			// git uses the same "Not a valid object name <ref>:<path>" message for
+			// both an unresolvable ref AND a path that doesn't exist under a valid
+			// ref. When a path was supplied, verify the ref independently so a
+			// missing path yields "path not found" (404) instead of being
+			// misclassified as a ref resolution failure.
+			if path != "" && refResolves(cmdCtx, repoPath, ref) {
+				return nil, fmt.Errorf("path not found: %s", path)
+			}
 			return nil, fmt.Errorf("failed to resolve reference: %s", ref)
 		}
 		return nil, fmt.Errorf("git ls-tree failed: %s: %w", errMsg, err)
@@ -64,6 +81,7 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 			continue
 		}
 
+		mode := metaParts[0]      // e.g. "100644", "040000", "120000", "160000"
 		entryType := metaParts[1] // "blob", "tree", "commit"
 		hash := metaParts[2]
 		name := gitutil.UnquoteGitPath(tabParts[1])
@@ -73,11 +91,17 @@ func GetTreeEntries(pathConfig *repositories.PathConfig, logger *logging.Logger,
 			Name: name,
 			Type: entryType,
 		}
+		switch {
 		// gitlink (mode 160000): expose pinned commit immediately so the
 		// handler can decorate with .gitmodules-derived URL/branch later.
-		if entryType == string(EntryTypeCommit) {
+		case entryType == string(EntryTypeCommit):
 			entry.Type = string(EntryTypeSubmodule)
 			entry.Submodule = &SubmoduleInfo{Commit: hash}
+		// symlink (mode 120000): git stores it as a blob, but we surface a
+		// distinct "symlink" type so callers don't treat the link target path
+		// (the blob content) as regular file content.
+		case mode == symlinkMode:
+			entry.Type = string(EntryTypeSymlink)
 		}
 		result = append(result, entry)
 	}

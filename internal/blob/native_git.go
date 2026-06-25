@@ -30,9 +30,18 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
-	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
+	// Blob content can be up to MaxBlobSize (50MB). We read one byte past the
+	// cap so that a blob *exceeding* MaxBlobSize is detected as "too large"
+	// (413) rather than being silently truncated at exactly the limit, which
+	// would make the service's len(content) > MaxBlobSize check unreachable.
+	out, err := gitutil.OutputWithLimit(cmd, MaxBlobSize+1)
 	if err != nil {
+		// Overflow past the read cap means the blob is larger than MaxBlobSize.
+		// Surface a distinct "too large" error so the handler returns 413.
+		if strings.Contains(err.Error(), "output exceeded limit") {
+			return nil, fmt.Errorf("file is too large (exceeds %d bytes)", MaxBlobSize)
+		}
+
 		errMsg := strings.TrimSpace(stderr.String())
 
 		// 경로가 디렉토리인 경우 감지

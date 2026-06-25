@@ -326,7 +326,7 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 				}
 
 				// 바이너리 파일과 매우 큰 파일(1MB 이상) 건너뛰기
-				if file.Size > 1024*1024 {
+				if file.Size > performance.LanguageStatsMaxFileSize {
 					return nil
 				}
 

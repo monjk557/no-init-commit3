@@ -16,7 +16,13 @@ const (
 	EntryTypeSubmodule EntryType = "submodule"
 	// EntryTypeCommit — ls-tree raw type. wire 응답에서는 "submodule" 로 매핑된다.
 	EntryTypeCommit EntryType = "commit"
+	// EntryTypeSymlink — 심볼릭 링크 (mode 120000). git 은 symlink 를 blob 으로
+	// 저장하지만 mode 로 구분 가능하므로 wire 응답에서는 "symlink" 로 노출한다.
+	EntryTypeSymlink EntryType = "symlink"
 )
+
+// symlinkMode 는 git 이 심볼릭 링크에 사용하는 파일 모드입니다.
+const symlinkMode = "120000"
 
 // SubmoduleInfo는 submodule (gitlink) 트리 엔트리의 부가 정보입니다.
 // pinned commit (ls-tree 의 mode 160000 hash) 은 항상 채워지고, URL/branch 는

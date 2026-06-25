@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -94,11 +95,23 @@ func (h *BranchOperationsHandler) validateAndGetRepoPath(_ context.Context, owne
 		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
+	// 경로 안전성 검증과 별개로 저장소 실제 존재 여부를 확인한다.
+	// GetAndValidateRepoPath 는 path traversal 등만 막고 존재는 검사하지 않음.
+	if !repoExists(repoPath) {
+		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+	}
+
 	return &repositoryContext{
 		owner:    owner,
 		repo:     repo,
 		repoPath: repoPath,
 	}, nil
+}
+
+// repoExists 는 저장소 경로가 파일시스템에 실제로 존재하는지 확인한다.
+func repoExists(repoPath string) bool {
+	_, err := os.Stat(repoPath)
+	return err == nil
 }
 
 // suggestBranchMaxAttempts는 대체 브랜치 이름을 찾기 위한 최대 시도 횟수입니다.
@@ -138,6 +151,9 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) (Vali
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
+		return ValidateBranchNameResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+	}
+	if !repoExists(repoPath) {
 		return ValidateBranchNameResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
@@ -398,6 +414,9 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) (ResolveBr
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
+		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+	}
+	if !repoExists(repoPath) {
 		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 

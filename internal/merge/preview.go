@@ -115,7 +115,7 @@ func (h *MergePreviewHandler) performMergePreview(ctx context.Context, repoPath 
 		PerformanceMetrics: metrics,
 		Warnings:           warnings,
 		Commits:            &CommitStats{Ahead: countSummary.Commits, Behind: 0},
-		Contributors:       []string{},
+		Contributors:       h.contributorEmails(ctx, repoPath, mergeBaseHash, sourceHash),
 		CommitsByDate:      []CommitsByDate{},
 		CountSummary:       countSummary,
 	}
@@ -364,20 +364,43 @@ func (h *MergePreviewHandler) calculateCountSummary(ctx context.Context, repoPat
 	summary.Commits = aheadCount
 
 	// Count unique contributors via git shortlog
-	rangeSpec := mergeBaseHash + ".." + sourceHash
-	out, err := runGit(ctx, repoPath, "shortlog", "-sne", rangeSpec)
-	if err == nil {
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		count := 0
-		for _, line := range lines {
-			if strings.TrimSpace(line) != "" {
-				count++
-			}
-		}
-		summary.Contributors = count
-	}
+	summary.Contributors = len(h.contributorEmails(ctx, repoPath, mergeBaseHash, sourceHash))
 
 	return summary
+}
+
+// contributorEmails returns the unique author emails of the commits in
+// mergeBase..source, ordered by commit count descending (git shortlog -sne
+// already sorts by count). Returns an empty slice (never nil) on error so the
+// API always exposes a JSON array.
+func (h *MergePreviewHandler) contributorEmails(ctx context.Context, repoPath, mergeBaseHash, sourceHash string) []string {
+	rangeSpec := mergeBaseHash + ".." + sourceHash
+	out, err := runGit(ctx, repoPath, "shortlog", "-sne", rangeSpec)
+	if err != nil {
+		return []string{}
+	}
+
+	emails := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: "<count>\t<name> <email>"
+		start := strings.LastIndex(line, "<")
+		end := strings.LastIndex(line, ">")
+		if start < 0 || end < 0 || end <= start+1 {
+			continue
+		}
+		email := line[start+1 : end]
+		if seen[email] {
+			continue
+		}
+		seen[email] = true
+		emails = append(emails, email)
+	}
+	return emails
 }
 
 // Helper methods for content analysis (used in "full" compare strategy)
