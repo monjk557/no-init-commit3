@@ -139,14 +139,29 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 
 	cmd := exec.CommandContext(r.Context(), "git", "upload-pack", "--stateless-rpc", repoPath)
 	cmd.Stdin = bytes.NewReader(bodyBytes)
-	cmd.Stdout = NewIdleWriter(w, sd)
+	mw := gitcmd.NewMeteredWriter(NewIdleWriter(w, sd))
+	cmd.Stdout = mw
 	cmd.Env = gitProtocolEnv(r)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("[upload-pack] error: %v, stderr: %s\n", err, stderr.String())
+	// Network-independent server-processing metric. CPUTime aggregates the
+	// upload-pack process and its pack-objects child (wait4 rusage), so it
+	// reflects pure server compute regardless of how slowly the client drains.
+	start := time.Now()
+	runErr := cmd.Run()
+	gitcmd.RecordTransfer(gitcmd.TransferStats{
+		Operation: "upload-pack",
+		Transport: "http",
+		CPUTime:   gitcmd.CPUTime(cmd.ProcessState),
+		WallTime:  time.Since(start),
+		TTFB:      gitcmd.TTFB(start, mw.FirstByteAt()),
+		Bytes:     mw.Bytes(),
+		Success:   runErr == nil,
+	})
+	if runErr != nil {
+		fmt.Printf("[upload-pack] error: %v, stderr: %s\n", runErr, stderr.String())
 	}
 }
 

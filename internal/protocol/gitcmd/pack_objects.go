@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PackObjectsOpts holds options for git pack-objects.
@@ -29,13 +30,19 @@ type PackObjectsOpts struct {
 	// Partial clone filter (e.g. "blob:none", "tree:0")
 	Filter string
 
+	// Transport labels the emitted transfer metric ("ssh" | "tcp"). HTTP
+	// download uses native git upload-pack, not this path. Empty -> "unknown".
+	Transport string
+
 	// Progress callback: called with stderr progress lines
 	OnProgress func(line string)
 }
 
 // RunPackObjects runs `git pack-objects --stdout --revs` and streams the packfile
-// to the given writer. Returns the number of objects packed.
-func RunPackObjects(ctx context.Context, repoPath string, opts *PackObjectsOpts, w io.Writer) (int, error) {
+// to the given writer. Returns the number of objects packed. It records a
+// network-independent transfer metric (CPU time, bytes, TTFB, objects, reused)
+// via the installed TransferMetricsRecorder, if any.
+func RunPackObjects(ctx context.Context, repoPath string, opts *PackObjectsOpts, w io.Writer) (objectCount int, err error) {
 	args := []string{"pack-objects", "--stdout", "--revs"}
 
 	if opts.ThinPack {
@@ -85,20 +92,38 @@ func RunPackObjects(ctx context.Context, repoPath string, opts *PackObjectsOpts,
 		stdinBuf.WriteByte('\n')
 	}
 	cmd.Stdin = strings.NewReader(stdinBuf.String())
-	cmd.Stdout = w
+	mw := NewMeteredWriter(w)
+	cmd.Stdout = mw
 
 	// Capture stderr for progress parsing
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return 0, fmt.Errorf("stderr pipe: %w", err)
+	stderrPipe, perr := cmd.StderrPipe()
+	if perr != nil {
+		return 0, fmt.Errorf("stderr pipe: %w", perr)
 	}
 
-	if err := cmd.Start(); err != nil {
+	start := time.Now()
+	reused := 0
+	// Emit a network-independent transfer metric regardless of success path.
+	// objectCount/reused/err are named returns captured at defer time.
+	defer func() {
+		RecordTransfer(TransferStats{
+			Operation: "upload-pack",
+			Transport: opts.Transport,
+			CPUTime:   CPUTime(cmd.ProcessState),
+			WallTime:  time.Since(start),
+			TTFB:      TTFB(start, mw.FirstByteAt()),
+			Bytes:     mw.Bytes(),
+			Objects:   objectCount,
+			Reused:    reused,
+			Success:   err == nil,
+		})
+	}()
+
+	if err = cmd.Start(); err != nil {
 		return 0, fmt.Errorf("start git pack-objects: %w", err)
 	}
 
 	// Parse stderr for progress and object count; capture fatal/error lines for diagnostics
-	objectCount := 0
 	var stderrErrors []string
 	scanner := bufio.NewScanner(stderrPipe)
 	scanner.Split(scanCROrLF)
@@ -107,9 +132,12 @@ func RunPackObjects(ctx context.Context, repoPath string, opts *PackObjectsOpts,
 		if opts.OnProgress != nil {
 			opts.OnProgress(line)
 		}
-		// Parse "Total N (delta D), reused R (delta D)" for object count
+		// Parse "Total N (delta D), reused R (delta D)" for object/reuse counts
 		if n := parsePackObjectsTotal(line); n > 0 {
 			objectCount = n
+		}
+		if r := parsePackObjectsReused(line); r >= 0 {
+			reused = r
 		}
 		// Capture fatal/error lines for error reporting
 		if strings.HasPrefix(line, "fatal:") || strings.HasPrefix(line, "error:") {
@@ -117,11 +145,13 @@ func RunPackObjects(ctx context.Context, repoPath string, opts *PackObjectsOpts,
 		}
 	}
 
-	if err := cmd.Wait(); err != nil {
+	if werr := cmd.Wait(); werr != nil {
 		if len(stderrErrors) > 0 {
-			return objectCount, fmt.Errorf("git pack-objects: %w (%s)", err, strings.Join(stderrErrors, "; "))
+			err = fmt.Errorf("git pack-objects: %w (%s)", werr, strings.Join(stderrErrors, "; "))
+		} else {
+			err = fmt.Errorf("git pack-objects: %w", werr)
 		}
-		return objectCount, fmt.Errorf("git pack-objects: %w", err)
+		return objectCount, err
 	}
 
 	return objectCount, nil
@@ -142,6 +172,29 @@ func parsePackObjectsTotal(line string) int {
 		return 0
 	}
 	return n
+}
+
+// parsePackObjectsReused extracts the reused object count from pack-objects
+// stderr ("Total N (delta D), reused R (delta D2)"). Returns -1 when the line is
+// not a Total line or the count cannot be parsed, so callers can ignore it.
+func parsePackObjectsReused(line string) int {
+	if !strings.HasPrefix(line, "Total ") {
+		return -1
+	}
+	const marker = "reused "
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return -1
+	}
+	fields := strings.Fields(line[idx+len(marker):])
+	if len(fields) == 0 {
+		return -1
+	}
+	r, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return -1
+	}
+	return r
 }
 
 // scanCROrLF is a bufio.SplitFunc that splits on \n or \r (for progress lines).

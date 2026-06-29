@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // IndexPackResult holds the result of git index-pack.
@@ -29,7 +31,11 @@ type IndexPackResult struct {
 //     --fix-thin resolves thin pack deltas using objects already in the repo.
 //     --stdin is required by git when using --fix-thin.
 //     git writes the final pack+idx directly into $GIT_DIR/objects/pack/.
-func IndexPackFromReader(ctx context.Context, repoPath string, r io.Reader) (*IndexPackResult, error) {
+//
+// transport labels the emitted receive-pack transfer metric ("http" | "ssh").
+// Because phase 2 reads from a LOCAL temp file, index-pack wall time is already
+// network-independent server compute by construction.
+func IndexPackFromReader(ctx context.Context, repoPath string, r io.Reader, transport string) (*IndexPackResult, error) {
 	// Ensure objects/pack/ directory exists.
 	packDir := filepath.Join(repoPath, "objects", "pack")
 	if err := os.MkdirAll(packDir, 0755); err != nil {
@@ -74,9 +80,20 @@ func IndexPackFromReader(ctx context.Context, repoPath string, r io.Reader) (*In
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	start := time.Now()
+	runErr := cmd.Run()
+	RecordTransfer(TransferStats{
+		Operation: "receive-pack",
+		Transport: transport,
+		CPUTime:   CPUTime(cmd.ProcessState),
+		WallTime:  time.Since(start),
+		Bytes:     n,
+		Objects:   parseIndexPackObjects(stderr.String()),
+		Success:   runErr == nil,
+	})
+	if runErr != nil {
 		stderrMsg := strings.TrimRight(stderr.String(), "\r\n")
-		return nil, fmt.Errorf("git index-pack: %w (stderr: %s)", err, stderrMsg)
+		return nil, fmt.Errorf("git index-pack: %w (stderr: %s)", runErr, stderrMsg)
 	}
 
 	packHash := strings.TrimSpace(stdout.String())
@@ -85,4 +102,30 @@ func IndexPackFromReader(ctx context.Context, repoPath string, r io.Reader) (*In
 	}
 
 	return &IndexPackResult{PackHash: packHash}, nil
+}
+
+// parseIndexPackObjects best-effort extracts the object count from index-pack
+// progress ("Indexing objects: 100% (N/M)"). git only emits progress when its
+// stderr is a TTY, so this returns 0 in the common buffered-stderr case; the
+// network-independent CPU/bytes metrics do not depend on it.
+func parseIndexPackObjects(stderr string) int {
+	const marker = "Indexing objects:"
+	idx := strings.LastIndex(stderr, marker)
+	if idx < 0 {
+		return 0
+	}
+	open := strings.IndexByte(stderr[idx:], '(')
+	if open < 0 {
+		return 0
+	}
+	seg := stderr[idx+open+1:]
+	slash := strings.IndexByte(seg, '/')
+	if slash < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(seg[:slash]))
+	if err != nil {
+		return 0
+	}
+	return n
 }

@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/resource"
+
+	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 )
 
 // Global singleton for application metrics to avoid duplicate registrations
@@ -74,6 +76,16 @@ type ApplicationMetrics struct {
 	// Commit index
 	commitIndexOpsTotal otelmetric.Int64Counter
 	commitIndexEntries  otelmetric.Float64Gauge
+
+	// Git transfer (network-independent server processing) — upload-pack/receive-pack.
+	// CPU time and work-volume counters do not move with client network speed,
+	// so they isolate server processing performance from transfer conditions.
+	transferCPUSeconds   otelmetric.Float64Histogram
+	transferWallSeconds  otelmetric.Float64Histogram
+	transferTTFBSeconds  otelmetric.Float64Histogram
+	transferBytesTotal   otelmetric.Int64Counter
+	transferObjectsTotal otelmetric.Int64Counter
+	transferReusedTotal  otelmetric.Int64Counter
 }
 
 // MetricsConfig는 메트릭 수집을 위한 설정을 보유합니다.
@@ -257,7 +269,38 @@ func NewApplicationMetrics() *ApplicationMetrics {
 			commitIndexEntries: must(m.Float64Gauge("git_executor_commit_index_entries",
 				otelmetric.WithDescription("current commit index entry count"),
 			)),
+
+			// Git transfer (network-independent server processing)
+			transferCPUSeconds: must(m.Float64Histogram("git_executor_transfer_cpu_seconds",
+				otelmetric.WithDescription("Git transfer server CPU time (user+system); network-independent"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+			)),
+			transferWallSeconds: must(m.Float64Histogram("git_executor_transfer_wall_seconds",
+				otelmetric.WithDescription("Git transfer subprocess wall time (includes client network stall)"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
+			)),
+			transferTTFBSeconds: must(m.Float64Histogram("git_executor_transfer_ttfb_seconds",
+				otelmetric.WithDescription("upload-pack time to first packfile byte (server-side)"),
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+			)),
+			transferBytesTotal: must(m.Int64Counter("git_executor_transfer_bytes",
+				otelmetric.WithDescription("Git transfer packfile bytes (generated for download / received for upload)"),
+				otelmetric.WithUnit("By"),
+			)),
+			transferObjectsTotal: must(m.Int64Counter("git_executor_transfer_objects",
+				otelmetric.WithDescription("Git transfer objects (packed for download / indexed for upload)"),
+			)),
+			transferReusedTotal: must(m.Int64Counter("git_executor_transfer_reused_objects",
+				otelmetric.WithDescription("upload-pack delta objects reused from existing packs"),
+			)),
 		}
+
+		// Wire the low-level git command layer to emit transfer metrics through
+		// this singleton (gitcmd cannot import observability — see transfer_metrics.go).
+		gitcmd.SetTransferMetricsRecorder(globalMetrics)
 	})
 	return globalMetrics
 }
@@ -385,6 +428,41 @@ func (am *ApplicationMetrics) RecordGitOperation(operation string, duration time
 	am.gitOperationDuration.Record(ctx(), duration.Seconds(), otelmetric.WithAttributes(
 		attribute.String("operation", operation),
 	))
+}
+
+// RecordTransfer records network-independent server-processing metrics for a git
+// transfer (upload-pack download or receive-pack upload). It implements
+// gitcmd.TransferMetricsRecorder so the low-level git command layer can report
+// without importing observability.
+func (am *ApplicationMetrics) RecordTransfer(s gitcmd.TransferStats) {
+	transport := s.Transport
+	if transport == "" {
+		transport = "unknown"
+	}
+	result := "success"
+	if !s.Success {
+		result = "error"
+	}
+	attrs := otelmetric.WithAttributes(
+		attribute.String("operation", s.Operation),
+		attribute.String("transport", transport),
+		attribute.String("result", result),
+	)
+
+	am.transferCPUSeconds.Record(ctx(), s.CPUTime.Seconds(), attrs)
+	am.transferWallSeconds.Record(ctx(), s.WallTime.Seconds(), attrs)
+	if s.TTFB > 0 {
+		am.transferTTFBSeconds.Record(ctx(), s.TTFB.Seconds(), attrs)
+	}
+	if s.Bytes > 0 {
+		am.transferBytesTotal.Add(ctx(), s.Bytes, attrs)
+	}
+	if s.Objects > 0 {
+		am.transferObjectsTotal.Add(ctx(), int64(s.Objects), attrs)
+	}
+	if s.Reused > 0 {
+		am.transferReusedTotal.Add(ctx(), int64(s.Reused), attrs)
+	}
 }
 
 // RecordError records an error metric

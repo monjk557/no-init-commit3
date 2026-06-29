@@ -353,7 +353,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 
 	if req.PackfileReader != nil {
 		// Stream packfile directly to git index-pack — never buffered in memory.
-		_, err := gitcmd.IndexPackFromReader(ctx, repoPath, req.PackfileReader)
+		_, err := gitcmd.IndexPackFromReader(ctx, repoPath, req.PackfileReader, "http")
 		if err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("unpack %s", err.Error()))
 			// V1 report-status requires ng lines for each ref; without them

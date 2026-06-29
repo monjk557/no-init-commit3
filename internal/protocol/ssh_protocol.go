@@ -538,6 +538,7 @@ func (h *SSHProtocolHandler) processSSHUploadPack(w http.ResponseWriter, r *http
 				DeepenSince:   fetchReq.DeepenSince,
 				DeepenExclude: fetchReq.DeepenNot,
 				Filter:        fetchReq.Filter,
+				Transport:     "ssh",
 			}
 			if _, err := gitcmd.RunPackObjects(ctx, repoPath, packOpts, sbWriter); err != nil {
 				_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
@@ -606,7 +607,7 @@ func (h *SSHProtocolHandler) processSSHReceivePack(w http.ResponseWriter, r *htt
 	// 4. Process packfile if present using native git index-pack — streamed, not buffered.
 	if receiveReq.PackfileReader != nil {
 		indexCtx, indexCancel := context.WithTimeout(ctx, 10*time.Minute)
-		_, indexErr := gitcmd.IndexPackFromReader(indexCtx, sshReq.RepoPath, receiveReq.PackfileReader)
+		_, indexErr := gitcmd.IndexPackFromReader(indexCtx, sshReq.RepoPath, receiveReq.PackfileReader, "ssh")
 		indexCancel()
 		if indexErr != nil {
 			pw := &PktWriter{W: writer, WithLF: false}

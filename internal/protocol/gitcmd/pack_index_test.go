@@ -41,7 +41,7 @@ func TestRunPackObjects_RoundTripIndex(t *testing.T) {
 	dst := t.TempDir()
 	gitInRepo(t, dst, "init", "-q", "--bare")
 
-	res, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(pack.Bytes()))
+	res, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(pack.Bytes()), "test")
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.NotEmpty(t, res.PackHash, "index-pack should return a non-empty pack hash")
@@ -85,7 +85,7 @@ func TestIndexPackFromReader_EmptyInput(t *testing.T) {
 	gitInRepo(t, dst, "init", "-q", "--bare")
 
 	// CopyPackfileFromStream 은 빈 스트림에서 0 바이트 → "empty packfile" 에러.
-	_, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(nil))
+	_, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(nil), "test")
 	require.Error(t, err)
 }
 
@@ -95,7 +95,7 @@ func TestIndexPackFromReader_GarbageInput(t *testing.T) {
 
 	// 유효한 packfile trailer 가 없는 쓰레기 입력 → 저장 또는 색인 단계에서 실패.
 	garbage := bytes.Repeat([]byte{0x00, 0x01, 0x02, 0x03}, 64)
-	_, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(garbage))
+	_, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(garbage), "test")
 	require.Error(t, err)
 }
 
@@ -110,7 +110,7 @@ func TestIndexPackFromReader_CreatesPackDir(t *testing.T) {
 	gitInRepo(t, dst, "init", "-q", "--bare")
 	require.NoError(t, os.RemoveAll(filepath.Join(dst, "objects", "pack")))
 
-	res, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(pack.Bytes()))
+	res, err := IndexPackFromReader(context.Background(), dst, bytes.NewReader(pack.Bytes()), "test")
 	require.NoError(t, err)
 	assert.NotEmpty(t, res.PackHash)
 

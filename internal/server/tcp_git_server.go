@@ -518,6 +518,7 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 				DeepenSince:   fetchReq.DeepenSince,
 				DeepenExclude: fetchReq.DeepenNot,
 				Filter:        fetchReq.Filter,
+				Transport:     "tcp",
 			}
 			if _, err := gitcmd.RunPackObjects(ctx, repoPath, packOpts, sbWriter); err != nil {
 				return fmt.Errorf("pack-objects: %w", err)
@@ -603,15 +604,29 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	// Spawn native git receive-pack — tied to connection context
 	var stderrBuf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", "receive-pack", repoPath)
-	cmd.Stdin = conn.GetReader()
+	mr := gitcmd.NewMeteredReader(conn.GetReader())
+	cmd.Stdin = mr
 	cmd.Stdout = &flushWriter{conn.GetWriter()}
 	cmd.Stderr = &stderrBuf
 
 	s.logger.Info("Starting native git receive-pack",
 		zap.String("repo", tenantID))
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git receive-pack: %w (stderr: %s)", err, stderrBuf.String())
+	// Network-independent server-processing metric for TCP push. CPUTime is
+	// pure server compute (delta resolution + fsck) regardless of how slowly
+	// the client uploaded the packfile.
+	receiveStart := time.Now()
+	runErr := cmd.Run()
+	gitcmd.RecordTransfer(gitcmd.TransferStats{
+		Operation: "receive-pack",
+		Transport: "tcp",
+		CPUTime:   gitcmd.CPUTime(cmd.ProcessState),
+		WallTime:  time.Since(receiveStart),
+		Bytes:     mr.Bytes(),
+		Success:   runErr == nil,
+	})
+	if runErr != nil {
+		return fmt.Errorf("git receive-pack: %w (stderr: %s)", runErr, stderrBuf.String())
 	}
 
 	// Post-push processing
