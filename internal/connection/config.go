@@ -152,11 +152,20 @@ func getDefaultIOConfig() IOConfig {
 	}
 }
 
-// getDefaultConcurrencyConfig returns default concurrency configuration
+// getDefaultConcurrencyConfig returns default concurrency configuration.
+//
+// Clone/push globals are sized for a memory-bound pod (e.g. 2Gi limit): each
+// granted pack operation now has a bounded RSS (see pack_limits.go, per-op
+// ~200MB), so the global cap × per-op ceiling must stay under the container
+// limit with headroom for the server itself. 6 concurrent clones ≈ 1.2GB fits
+// a 2Gi pod; the previous default of 50 let unbounded pack-objects processes
+// sum past the limit and OOM-kill the whole pod (Issue-5071). Override per
+// environment via GIT_EXECUTOR_MAX_CONCURRENT_CLONES / _PUSHES; raise these on
+// higher-memory pods alongside GIT_EXECUTOR_PACK_THREADS.
 func getDefaultConcurrencyConfig() ConcurrencyConfigSettings {
 	return ConcurrencyConfigSettings{
-		MaxConcurrentClones: 50,
-		MaxConcurrentPushes: 20,
+		MaxConcurrentClones: 6,
+		MaxConcurrentPushes: 6,
 		PerTenantLimit:      10,
 		PerIPLimit:          5,
 		QueueSize:           100,

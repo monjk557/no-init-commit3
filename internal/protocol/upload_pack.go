@@ -43,6 +43,12 @@ type UploadPackHandler struct {
 	// (see internal/protocol/streamdeadline.go for rationale).
 	// Zero disables the deadline entirely.
 	idleTimeout time.Duration
+
+	// packEnv carries GIT_CONFIG_* entries that bound per-operation pack
+	// memory (see pack_limits.go). Appended to the upload-pack command env so
+	// the pack-objects child stays within a predictable RSS ceiling. Computed
+	// once at construction; nil when all knobs are disabled.
+	packEnv []string
 }
 
 func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
@@ -54,6 +60,7 @@ func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
 	return &UploadPackHandler{
 		pathConfig:  pathConfig,
 		idleTimeout: cfg.Server.GitProtocolIdleTimeout,
+		packEnv:     packLimitEnv(),
 	}, nil
 }
 
@@ -141,7 +148,10 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	cmd.Stdin = bytes.NewReader(bodyBytes)
 	mw := gitcmd.NewMeteredWriter(NewIdleWriter(w, sd))
 	cmd.Stdout = mw
-	cmd.Env = gitProtocolEnv(r)
+	// packEnv bounds pack-objects memory so concurrent clones cannot OOM the
+	// pod (Issue-5071). Applied here (the pack-generating call), not on the
+	// advertise-refs path which does no pack generation.
+	cmd.Env = append(gitProtocolEnv(r), h.packEnv...)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

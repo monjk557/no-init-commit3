@@ -10,8 +10,19 @@
 package maintenance
 
 import (
+	"os"
+	"strings"
 	"time"
 )
+
+// envBool reads a boolean env var, returning def when unset/blank.
+func envBool(key string, def bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return def
+	}
+	return v == "true" || v == "1" || v == "yes" || v == "on"
+}
 
 // MaintenanceConfig controls the repository maintenance scheduler behavior.
 type MaintenanceConfig struct {
@@ -85,6 +96,25 @@ type RepackConfig struct {
 	// UseCruftPacks stores unreachable objects in cruft packs instead of loose files.
 	// Introduced by GitHub in git 2.37 to avoid loose object explosion during gc.
 	UseCruftPacks bool `json:"use_cruft_packs"`
+
+	// AtomicBitmap writes the multi-pack-index and its reachability bitmap as
+	// part of the geometric repack itself (git repack --write-midx
+	// --write-bitmap-index) instead of a separate `multi-pack-index write
+	// --bitmap` step. The separate step regularly fails with "Packfile doesn't
+	// have full closure (object … is missing)" on busy repos because it sees a
+	// pack set that changed since the repack; writing the bitmap atomically
+	// with the repack computes closure over the pack set repack just produced.
+	// Without a working bitmap, upload-pack cannot reuse existing pack bytes
+	// and every clone re-traverses + re-deltas the whole object graph — the
+	// dominant per-clone memory cost behind pod OOMs (Issue-5071). Opt-in while
+	// validating on stage; when true the separate MIDX step is skipped.
+	AtomicBitmap bool `json:"atomic_bitmap"`
+
+	// BitmapFsckDiagnostic runs `git fsck --connectivity-only` and logs the
+	// missing/broken objects when a bitmap write fails with a closure error.
+	// Read-only; surfaces the root cause into logs when direct pod exec is not
+	// available. Enabled by default.
+	BitmapFsckDiagnostic bool `json:"bitmap_fsck_diagnostic"`
 }
 
 // PruneConfig controls pruning of unreachable objects.
@@ -120,6 +150,10 @@ func DefaultMaintenanceConfig() *MaintenanceConfig {
 			WriteBitmap:         true,
 			WriteMultiPackIndex: true,
 			UseCruftPacks:       true,
+			// Opt-in on stage first (GIT_MAINTENANCE_ATOMIC_BITMAP=true), then
+			// promote the default once the closure failures clear.
+			AtomicBitmap:         envBool("GIT_MAINTENANCE_ATOMIC_BITMAP", false),
+			BitmapFsckDiagnostic: envBool("GIT_MAINTENANCE_BITMAP_FSCK_DIAGNOSTIC", true),
 		},
 		Prune: PruneConfig{
 			ExpireAge:      72 * time.Hour,

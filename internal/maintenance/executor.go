@@ -150,12 +150,22 @@ func (e *Executor) runPackRefs(ctx context.Context, repoPath string) (string, er
 // We run geometric repack for incremental pack consolidation (like GitHub/GitLab),
 // and separately handle unreachable objects via prune or a full cruft repack.
 //
-// Command: git repack --geometric=<factor> -d
+// Command: git repack --geometric=<factor> -d [--write-midx --write-bitmap-index]
 func (e *Executor) runGeometricRepack(ctx context.Context, repoPath string) (string, error) {
 	args := []string{
 		"repack",
 		"--geometric=" + strconv.Itoa(e.config.Repack.GeometricFactor),
 		"-d", // Remove redundant packs after repacking
+	}
+
+	// Atomic bitmap: let repack write the MIDX + reachability bitmap over the
+	// pack set it just produced, so closure is computed consistently. This
+	// replaces the separate `multi-pack-index write --bitmap` step (see
+	// runMultiPackIndex), which races with concurrent pushes and fails closure
+	// on busy repos. --write-bitmap-index requires --write-midx when more than
+	// one pack remains.
+	if e.config.Repack.AtomicBitmap && e.config.Repack.WriteBitmap {
+		args = append(args, "--write-midx", "--write-bitmap-index")
 	}
 
 	return e.runGit(ctx, repoPath, args...)
@@ -181,11 +191,65 @@ func (e *Executor) runCommitGraph(ctx context.Context, repoPath string) (string,
 //
 // Command: git multi-pack-index write [--bitmap]
 func (e *Executor) runMultiPackIndex(ctx context.Context, repoPath string) (string, error) {
+	// Under atomic-bitmap mode the geometric repack already wrote the MIDX and
+	// its bitmap. Re-running `multi-pack-index write` without --bitmap here
+	// would drop that bitmap, so skip the separate step entirely.
+	if e.config.Repack.AtomicBitmap && e.config.Repack.WriteBitmap {
+		return "skipped: MIDX+bitmap written atomically by repack", nil
+	}
+
 	args := []string{"multi-pack-index", "write"}
 	if e.config.Repack.WriteBitmap {
 		args = append(args, "--bitmap")
 	}
-	return e.runGit(ctx, repoPath, args...)
+	out, err := e.runGit(ctx, repoPath, args...)
+	if err != nil && isBitmapClosureError(err) && e.config.Repack.BitmapFsckDiagnostic {
+		// A working bitmap is what lets upload-pack reuse existing pack bytes;
+		// without it every clone re-deltas the whole graph (the per-clone
+		// memory behind pod OOMs, Issue-5071). We can't exec into pods to run
+		// fsck by hand, so surface the missing object here, in maintenance's
+		// own logs, to pinpoint the closure break (loose object / broken ref /
+		// prune interaction).
+		e.logBitmapClosureDiagnostic(ctx, repoPath, err)
+	}
+	return out, err
+}
+
+// isBitmapClosureError reports whether a MIDX bitmap write failed because the
+// pack set lacked full closure (a referenced object was absent), as opposed to
+// an unrelated failure.
+func isBitmapClosureError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "full closure") ||
+		strings.Contains(msg, "could not write multi-pack bitmap") ||
+		strings.Contains(msg, "failed to write bitmap")
+}
+
+// logBitmapClosureDiagnostic runs a read-only connectivity fsck and logs the
+// missing/broken objects and refs so the closure break can be diagnosed from
+// logs alone. Best-effort: its own failure is logged but never propagated.
+func (e *Executor) logBitmapClosureDiagnostic(ctx context.Context, repoPath string, cause error) {
+	out, fsckErr := e.runGit(ctx, repoPath, "fsck", "--connectivity-only", "--no-dangling", "--no-progress")
+	fields := []zap.Field{
+		zap.String("repo", repoPath),
+		zap.String("bitmap_error", cause.Error()),
+		zap.String("fsck_output", truncate(out, 4096)),
+	}
+	if fsckErr != nil {
+		fields = append(fields, zap.String("fsck_error", fsckErr.Error()))
+	}
+	e.logger.Warn("bitmap closure fsck diagnostic", fields...)
+}
+
+// truncate bounds a string to n bytes for log safety.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…(truncated)"
 }
 
 // runPrune removes unreachable loose objects older than the configured expire age.
