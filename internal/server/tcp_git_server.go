@@ -610,16 +610,18 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	// Rule validation (ruleset enforcement). The push wire is: pkt-line command
 	// section (ref updates) → flush → packfile. validatePushSection reads only the
 	// command section, validates each branch ref against the repo's rules/rulesets
-	// via the BFF, and returns a reader that re-splices the consumed command bytes
-	// in front of the remaining stream (byte-identical to what the client sent).
+	// via the BFF, and re-splices the consumed command bytes ahead of the pack.
 	//
-	// Dual-run: a transport error returns the original stream + nil deny (fail-open
-	// — the ssh gateway still validates until cutover). A genuine rule violation
-	// returns a non-nil deny and we reject before git ever runs.
-	gitStdin, denied := s.validatePushSection(ctx, conn)
-	if denied != nil {
-		return denied // rule violation → reject before running git
-	}
+	// LAZY (critical): in the interactive git protocol the client sends the command
+	// section only AFTER receive-pack advertises its refs. We must NOT read the
+	// client stream before git is spawned — that deadlocks (git hasn't advertised,
+	// so the client hasn't sent commands, so a pre-spawn read blocks forever; this
+	// was the SSH-push hang). Instead we wrap git's stdin and validate on git's
+	// first read (by then git has advertised and the client has sent its commands).
+	//
+	// Dual-run: a transport/parse error fails open (the ssh gateway still validates
+	// until cutover); a genuine rule violation surfaces as gitStdin.DenyErr().
+	gitStdin := s.newPushValidatingReader(ctx, conn)
 
 	// receive-pack indexes incoming packfiles (delta resolution, SHA verification)
 	// which can stall the wire for large pushes; use the lenient threshold.
@@ -652,6 +654,11 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 		Bytes:     mr.Bytes(),
 		Success:   runErr == nil,
 	})
+	// A rule violation surfaces as a stdin read error to git (non-zero exit); prefer
+	// the structured deny over the generic git error so the gateway/client see it.
+	if denied := gitStdin.DenyErr(); denied != nil {
+		return denied // rule violation → reject
+	}
 	if runErr != nil {
 		return fmt.Errorf("git receive-pack: %w (stderr: %s)", runErr, stderrBuf.String())
 	}
@@ -687,41 +694,74 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	return nil
 }
 
-// validatePushSection reads the receive-pack command section from the connection,
-// validates each branch ref update against the repo's rules/rulesets via the BFF,
-// and returns a reader that re-splices the consumed bytes ahead of the remaining
-// stream (so git receives a byte-identical wire). On a rule violation it returns
-// a non-nil deny error (reject the push). On any transport/parse error it returns
-// the re-spliced reader with a nil deny (fail-open — the ssh gateway still
-// validates during dual-run). A no-op (no rule context / no ruleClient) returns
-// the original reader untouched.
-func (s *DuplexTCPServer) validatePushSection(ctx context.Context, conn *connection.ProgressAwareConnection) (io.Reader, error) {
-	reader := conn.GetReader()
-	repositoryID, workspaceSlug, decisionToken := conn.GetPushContext()
+// pushValidatingReader lazily enforces ruleset rules on a receive-pack wire.
+//
+// It MUST be lazy: the interactive git protocol has receive-pack advertise its
+// refs before the client sends the command section, so reading the client stream
+// before git is spawned deadlocks. This reader is wired as git's stdin, so its
+// first Read only happens after git has advertised and the client has replied —
+// at which point the command section is available and ParseReceiveCommands won't
+// block. On that first Read it parses+validates the command section, then serves
+// the byte-identical wire (consumed command bytes re-spliced ahead of the pack).
+//
+// Dual-run: a transport/parse error fails open (the ssh gateway still validates);
+// a genuine rule violation is captured in denyErr and returned from Read so git
+// aborts, and handleReceivePack surfaces it via DenyErr().
+type pushValidatingReader struct {
+	ctx     context.Context
+	s       *DuplexTCPServer
+	conn    *connection.ProgressAwareConnection
+	started bool
+	stream  io.Reader // set on first Read: re-spliced wire (or raw reader on no-op)
+	denyErr error     // non-nil ⇒ rule violation; returned from Read
+}
 
-	// Degrade open when there's nothing to enforce with: no client, or the
-	// gateway didn't forward rule context. Don't touch the stream.
-	if s.ruleClient == nil || repositoryID == "" || decisionToken == "" {
-		return reader, nil
+func (s *DuplexTCPServer) newPushValidatingReader(ctx context.Context, conn *connection.ProgressAwareConnection) *pushValidatingReader {
+	return &pushValidatingReader{ctx: ctx, s: s, conn: conn}
+}
+
+// DenyErr reports a rule violation detected during streaming (nil if allowed).
+func (p *pushValidatingReader) DenyErr() error { return p.denyErr }
+
+func (p *pushValidatingReader) Read(b []byte) (int, error) {
+	if !p.started {
+		p.started = true
+		p.begin()
+	}
+	if p.denyErr != nil {
+		return 0, p.denyErr
+	}
+	return p.stream.Read(b)
+}
+
+// begin runs once, on git's first stdin read — safe because git has already
+// advertised by then, so the client's command section is in flight.
+func (p *pushValidatingReader) begin() {
+	reader := p.conn.GetReader()
+	repositoryID, workspaceSlug, decisionToken := p.conn.GetPushContext()
+
+	// Degrade open: no client or no forwarded rule context ⇒ don't touch the wire.
+	if p.s.ruleClient == nil || repositoryID == "" || decisionToken == "" {
+		p.stream = reader
+		return
 	}
 
 	commands, rawConsumed, perr := protocol.ParseReceiveCommands(reader)
-	// Always re-splice whatever we consumed so git gets the full wire, whether
-	// or not parsing fully succeeded.
-	respliced := io.MultiReader(bytes.NewReader(rawConsumed), reader)
+	// Always re-splice whatever we consumed so git gets the full, byte-identical wire.
+	p.stream = io.MultiReader(bytes.NewReader(rawConsumed), reader)
 	if perr != nil {
-		s.logger.Warn("rule validation: failed to parse push command section (allowing — gateway enforces)",
+		p.s.logger.Warn("rule validation: failed to parse push command section (allowing — gateway enforces)",
 			zap.Error(perr))
-		return respliced, nil
+		return
 	}
 
-	_, _, userID, _ := conn.GetConnectionInfo()
+	_, _, userID, _ := p.conn.GetConnectionInfo()
 	for _, cmd := range commands {
 		branch, ok := strings.CutPrefix(cmd.RefName, "refs/heads/")
 		if !ok {
 			continue // only branch updates carry branch rules
 		}
-		err := s.ruleClient.ValidatePush(ctx, ruleguard.PushTarget{
+		err := p.s.ruleClient.ValidatePush(p.ctx, ruleguard.PushTarget{
 			RepositoryID:  repositoryID,
 			WorkspaceSlug: workspaceSlug,
 			Branch:        branch,
@@ -733,13 +773,13 @@ func (s *DuplexTCPServer) validatePushSection(ctx context.Context, conn *connect
 		}
 		var denied *ruleguard.Denied
 		if errors.As(err, &denied) {
-			return respliced, denied // rule violation → reject
+			p.denyErr = denied // rule violation → reject (returned from Read)
+			return
 		}
 		// Transport/API error: fail-open during dual-run (gateway enforces).
-		s.logger.Warn("rule validation error (allowing — gateway enforces)",
+		p.s.logger.Warn("rule validation error (allowing — gateway enforces)",
 			zap.String("ref", cmd.RefName), zap.Error(err))
 	}
-	return respliced, nil
 }
 
 // snapshotRefs returns a map of refName → objectHash for all refs in the repository.
