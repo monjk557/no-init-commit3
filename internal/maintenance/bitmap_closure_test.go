@@ -38,15 +38,16 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestDefaultConfig_BitmapFlags(t *testing.T) {
-	// Defaults: atomic off (opt-in), fsck diagnostic on.
+	// Defaults: atomic ON (the separate step is broken), fsck diagnostic on.
 	cfg := DefaultMaintenanceConfig()
-	assert.False(t, cfg.Repack.AtomicBitmap, "AtomicBitmap should default off")
+	assert.True(t, cfg.Repack.AtomicBitmap, "AtomicBitmap should default on")
 	assert.True(t, cfg.Repack.BitmapFsckDiagnostic, "BitmapFsckDiagnostic should default on")
 
-	t.Setenv("GIT_MAINTENANCE_ATOMIC_BITMAP", "true")
+	// Env is an escape hatch: it can disable the atomic path.
+	t.Setenv("GIT_MAINTENANCE_ATOMIC_BITMAP", "false")
 	t.Setenv("GIT_MAINTENANCE_BITMAP_FSCK_DIAGNOSTIC", "false")
 	cfg = DefaultMaintenanceConfig()
-	assert.True(t, cfg.Repack.AtomicBitmap, "env should enable AtomicBitmap")
+	assert.False(t, cfg.Repack.AtomicBitmap, "env should disable AtomicBitmap")
 	assert.False(t, cfg.Repack.BitmapFsckDiagnostic, "env should disable diagnostic")
 }
 

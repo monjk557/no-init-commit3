@@ -106,8 +106,9 @@ type RepackConfig struct {
 	// with the repack computes closure over the pack set repack just produced.
 	// Without a working bitmap, upload-pack cannot reuse existing pack bytes
 	// and every clone re-traverses + re-deltas the whole object graph — the
-	// dominant per-clone memory cost behind pod OOMs (Issue-5071). Opt-in while
-	// validating on stage; when true the separate MIDX step is skipped.
+	// dominant per-clone memory cost behind pod OOMs (Issue-5071). Default ON
+	// (the separate step is broken); when true the separate MIDX step is
+	// skipped. GIT_MAINTENANCE_ATOMIC_BITMAP=false disables it as an escape hatch.
 	AtomicBitmap bool `json:"atomic_bitmap"`
 
 	// BitmapFsckDiagnostic runs `git fsck --connectivity-only` and logs the
@@ -150,9 +151,13 @@ func DefaultMaintenanceConfig() *MaintenanceConfig {
 			WriteBitmap:         true,
 			WriteMultiPackIndex: true,
 			UseCruftPacks:       true,
-			// Opt-in on stage first (GIT_MAINTENANCE_ATOMIC_BITMAP=true), then
-			// promote the default once the closure failures clear.
-			AtomicBitmap:         envBool("GIT_MAINTENANCE_ATOMIC_BITMAP", false),
+			// Default ON: the separate `multi-pack-index write --bitmap` step is
+			// demonstrably broken on busy repos (a snapshot race — fsck reports no
+			// missing objects), so it writes no bitmaps and every clone falls back
+			// to the expensive full path. Atomic writing is strictly better, not a
+			// tunable feature; the env is only an emergency off-switch
+			// (GIT_MAINTENANCE_ATOMIC_BITMAP=false). See Issue-5071.
+			AtomicBitmap:         envBool("GIT_MAINTENANCE_ATOMIC_BITMAP", true),
 			BitmapFsckDiagnostic: envBool("GIT_MAINTENANCE_BITMAP_FSCK_DIAGNOSTIC", true),
 		},
 		Prune: PruneConfig{

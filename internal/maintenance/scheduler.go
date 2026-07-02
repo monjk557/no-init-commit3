@@ -195,6 +195,23 @@ func (s *Scheduler) maintainRepository(ctx context.Context, repoPath string) {
 		return
 	}
 
+	// Coordinate across replicas: only one runner may repack a repo at a time
+	// (Issue-5071). Acquire just before the mutating Execute so read-only
+	// analysis never contends. A lock-infra error must not stall maintenance,
+	// so proceed best-effort in that case.
+	lock, acquired, lerr := tryLockRepo(repoPath)
+	switch {
+	case lerr != nil:
+		s.logger.Warn("maintenance lock error, proceeding best-effort",
+			zap.String("repo", repoPath), zap.Error(lerr))
+	case !acquired:
+		s.logger.Debug("repository maintained by another instance, skipping",
+			zap.String("repo", repoPath))
+		return
+	default:
+		defer func() { _ = lock.unlock() }()
+	}
+
 	result := s.executor.Execute(ctx, repoPath, plan)
 	s.totalReposMaintained.Add(1)
 	if !result.Success {
