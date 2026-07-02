@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -176,6 +177,25 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) (Vali
 	}, nil
 }
 
+// branchListHTTPError maps a GetBranches failure to an HTTP error. A deadline
+// (the listing was too slow under load — the repo itself is fine) becomes 429;
+// any other failure keeps the 422 corrupted-repo signal. See Issue-5071:
+// blanket-labelling timeouts as "repository corrupted" mislabels healthy repos.
+//
+// Why 429 and NOT 5xx: the orchestrator BFF auto-retries idempotent GETs on
+// >=500 (stop_after_attempt(3), base.py) — a 5xx here would re-run the same
+// expensive 5s for-each-ref up to 3× on an already-contended git-executor,
+// amplifying the very overload that caused the timeout (cf. INC-002). 429 is a
+// transient/back-off signal the BFF does NOT auto-retry (its predicate only
+// retries >=500 + connect errors), so it degrades honestly without a retry
+// storm; the web client backs off at user pace.
+func branchListHTTPError(err error) *typed.HTTPError {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return typed.NewHTTPError(http.StatusTooManyRequests, "branch listing timed out, retry shortly")
+	}
+	return typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+}
+
 // HandleGetBranches handles GET /branches.
 // Supports optional ?search=<keyword> to filter branches by name (case-insensitive substring match).
 //
@@ -231,9 +251,35 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
-	allBranches, err := h.service.GetBranches(ctx, repoPath, sort)
+	// Cost optimization (Issue-5071): committer email is the only for-each-ref
+	// field that forces reading every branch tip's commit object. With no email
+	// filter we scan cheaply without it, paginate, then enrich only the returned
+	// page — O(page) object reads instead of O(all branches). An email filter
+	// needs the email for every branch, so it falls back to the full scan.
+	lightScan := emailFilter == ""
+	var allBranches []BranchInfo
+	if lightScan {
+		allBranches, err = h.service.GetBranchesLight(ctx, repoPath, sort)
+	} else {
+		allBranches, err = h.service.GetBranches(ctx, repoPath, sort)
+	}
 	if err != nil {
-		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+		// A deadline hit means the listing was too slow under load (storage
+		// contention on a busy repo), NOT that the repo is corrupted. Log it
+		// and return 429 (transient, NOT auto-retried by the BFF — avoids a
+		// retry storm on the contended backend) instead of the blanket 422
+		// "repository corrupted" that mislabels healthy repos and hides the real
+		// cause (Issue-5071). Genuine git failures keep the 422 path — now logged.
+		if errors.Is(err, context.DeadlineExceeded) {
+			h.logger.LogWarning(ctx, "branch listing timed out",
+				zap.String("repo", repoPath),
+				zap.String("sort", string(sort)),
+				zap.Error(err))
+		} else {
+			h.logger.LogError(ctx, err, "branch listing failed",
+				zap.String("repo", repoPath))
+		}
+		return GetBranchesResponse{}, branchListHTTPError(err)
 	}
 
 	if allBranches == nil {
@@ -285,6 +331,17 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 			end = totalCount
 		}
 		branches = allBranches[skip:end]
+	}
+
+	// Light scan omitted committer emails; fill them in for just the page
+	// (O(page) object reads). Enrichment failure is non-fatal — return the
+	// branches with empty emails rather than failing the whole list.
+	if lightScan && len(branches) > 0 {
+		if eerr := h.service.EnrichCommitterEmails(ctx, repoPath, branches); eerr != nil {
+			h.logger.LogWarning(ctx, "committer email enrichment failed; returning branches without emails",
+				zap.String("repo", repoPath),
+				zap.Error(eerr))
+		}
 	}
 
 	currentPage := 1

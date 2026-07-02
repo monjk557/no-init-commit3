@@ -40,6 +40,17 @@ func (s *BranchService) GetBranches(ctx context.Context, repoPath string, sort B
 	return NativeGetBranches(ctx, repoPath, sort)
 }
 
+// GetBranchesLight lists branches without committer emails (cheap wide scan).
+// Pair with EnrichCommitterEmails on the paginated page. See Issue-5071.
+func (s *BranchService) GetBranchesLight(ctx context.Context, repoPath string, sort BranchSortField) ([]BranchInfo, error) {
+	return NativeGetBranchesLight(ctx, repoPath, sort)
+}
+
+// EnrichCommitterEmails fills committer emails for the given (paginated) branches.
+func (s *BranchService) EnrichCommitterEmails(ctx context.Context, repoPath string, branches []BranchInfo) error {
+	return NativeEnrichCommitterEmails(ctx, repoPath, branches)
+}
+
 // CreateBranch는 새로운 브랜치를 생성합니다 (native git).
 func (s *BranchService) CreateBranch(ctx context.Context, repoPath string, req CreateBranchRequest) (*CreateBranchResult, error) {
 	// Set default source if not provided - support both field names for compatibility

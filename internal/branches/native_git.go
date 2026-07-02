@@ -58,6 +58,14 @@ func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortFiel
 	cmd.Stderr = &stderr
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
+		// Distinguish a deadline hit (the listing was too slow under load — the
+		// repo is fine) from a genuine git failure, so callers can return a
+		// retryable 503 instead of mislabelling a healthy repo as "corrupted"
+		// (Issue-5071). The exec error on cancel is "signal: killed", so check
+		// the command context rather than errors.Is on err.
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("git for-each-ref timed out after %s: %w", nativeGitTimeout, context.DeadlineExceeded)
+		}
 		return nil, fmt.Errorf("git for-each-ref failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
 
@@ -104,6 +112,109 @@ func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortFiel
 	return branches, nil
 }
 
+// NativeGetBranchesLight lists branches WITHOUT the committer email — the only
+// for-each-ref field that forces reading each branch tip's commit object.
+// committerdate is served from the commit-graph, so this scan stays cheap even
+// on repos with many branches. Committer emails for the returned page are filled
+// in afterwards by NativeEnrichCommitterEmails (O(page) instead of O(all
+// branches)), which is the dominant cost the old single-scan path paid on every
+// request. See Issue-5071.
+func NativeGetBranchesLight(ctx context.Context, repoPath string, sort BranchSortField) ([]BranchInfo, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	format := "%(refname:short)\t%(objectname)\t%(committerdate:iso8601-strict)\t%(refname)"
+	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
+		"for-each-ref", "refs/heads/",
+		"--format="+format,
+		"--sort="+string(sort))
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("git for-each-ref timed out after %s: %w", nativeGitTimeout, context.DeadlineExceeded)
+		}
+		return nil, fmt.Errorf("git for-each-ref failed: %s: %w", strings.TrimSpace(stderr.String()), err)
+	}
+
+	headRef := nativeGetHead(ctx, repoPath)
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return []BranchInfo{}, nil
+	}
+
+	lines := strings.Split(raw, "\n")
+	branches := make([]BranchInfo, 0, len(lines))
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		name := parts[0]
+		refPath := parts[3]
+		date, _ := time.Parse(time.RFC3339, parts[2])
+		branches = append(branches, BranchInfo{
+			Name:      name,
+			CommitSHA: parts[1],
+			RefPath:   refPath,
+			IsHead:    headRef == refPath || headRef == "refs/heads/"+name,
+			Date:      date,
+		})
+	}
+	return branches, nil
+}
+
+// NativeEnrichCommitterEmails fills CommitterEmail for the given branches (the
+// paginated page) with a single for-each-ref restricted to their refs —
+// O(page) commit-object reads instead of O(all branches). Refs are git's own
+// output (refs/heads/…), not user input. Branches whose email can't be resolved
+// keep an empty CommitterEmail. See Issue-5071.
+func NativeEnrichCommitterEmails(ctx context.Context, repoPath string, branches []BranchInfo) error {
+	if len(branches) == 0 {
+		return nil
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	args := []string{"--git-dir", repoPath, "for-each-ref", "--format=%(refname)\t%(committeremail)"}
+	for _, b := range branches {
+		args = append(args, b.RefPath)
+	}
+	cmd := exec.CommandContext(cmdCtx, "git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("git for-each-ref (emails) timed out after %s: %w", nativeGitTimeout, context.DeadlineExceeded)
+		}
+		return fmt.Errorf("git for-each-ref (emails) failed: %s: %w", strings.TrimSpace(stderr.String()), err)
+	}
+
+	emailByRef := make(map[string]string, len(branches))
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		emailByRef[parts[0]] = strings.Trim(parts[1], "<>")
+	}
+	for i := range branches {
+		if e, ok := emailByRef[branches[i].RefPath]; ok {
+			branches[i].CommitterEmail = e
+		}
+	}
+	return nil
+}
+
 // NativeGetSimpleBranches는 native git으로 간단한 브랜치 목록을 조회합니다.
 // go-git의 GetBranches (package-level) 함수를 대체합니다.
 func NativeGetSimpleBranches(ctx context.Context, repoPath string) ([]SimpleBranchInfo, error) {
@@ -120,6 +231,14 @@ func NativeGetSimpleBranches(ctx context.Context, repoPath string) ([]SimpleBran
 	cmd.Stderr = &stderr
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
+		// Distinguish a deadline hit (the listing was too slow under load — the
+		// repo is fine) from a genuine git failure, so callers can return a
+		// retryable 503 instead of mislabelling a healthy repo as "corrupted"
+		// (Issue-5071). The exec error on cancel is "signal: killed", so check
+		// the command context rather than errors.Is on err.
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("git for-each-ref timed out after %s: %w", nativeGitTimeout, context.DeadlineExceeded)
+		}
 		return nil, fmt.Errorf("git for-each-ref failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
 
