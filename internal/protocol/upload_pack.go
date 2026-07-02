@@ -15,6 +15,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/gitutil"
+	"github.com/collabops/git-executor/internal/packcache"
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -49,6 +50,11 @@ type UploadPackHandler struct {
 	// the pack-objects child stays within a predictable RSS ceiling. Computed
 	// once at construction; nil when all knobs are disabled.
 	packEnv []string
+
+	// cache deduplicates identical upload-pack responses (C3). Off by default;
+	// nil or disabled means every request takes the direct-stream path below,
+	// so behaviour is unchanged unless explicitly enabled. See internal/packcache.
+	cache *packcache.Store
 }
 
 func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
@@ -57,10 +63,19 @@ func NewUploadPackHandler(cfg *config.Config) (*UploadPackHandler, error) {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
 
+	// A cache init failure must never break serving clones — fall back to the
+	// direct path with a warning.
+	cache, err := packcache.NewStore(packcache.FromEnv())
+	if err != nil {
+		fmt.Printf("[upload-pack] pack cache disabled (init failed: %v)\n", err)
+		cache = nil
+	}
+
 	return &UploadPackHandler{
 		pathConfig:  pathConfig,
 		idleTimeout: cfg.Server.GitProtocolIdleTimeout,
 		packEnv:     packLimitEnv(),
+		cache:       cache,
 	}, nil
 }
 
@@ -144,6 +159,17 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		fmt.Printf("[upload-pack] failed to install stream deadline: %v\n", err)
 	}
 
+	// C3 pack-objects cache: identical negotiations (e.g. a burst of parallel CI
+	// clones of the same repo+SHA) coalesce onto one generation and reuse the
+	// cached bytes. Returns true once the response is fully served; a false
+	// return means nothing was written to w yet, so we fall through to the
+	// direct path below (best-effort — never worse than no cache).
+	if h.cache != nil && h.cache.Enabled() {
+		if h.serveFromCache(r, owner, repo, repoPath, bodyBytes, w, sd) {
+			return
+		}
+	}
+
 	cmd := exec.CommandContext(r.Context(), "git", "upload-pack", "--stateless-rpc", repoPath)
 	cmd.Stdin = bytes.NewReader(bodyBytes)
 	mw := gitcmd.NewMeteredWriter(NewIdleWriter(w, sd))
@@ -173,6 +199,70 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	if runErr != nil {
 		fmt.Printf("[upload-pack] error: %v, stderr: %s\n", runErr, stderr.String())
 	}
+}
+
+// serveFromCache serves the upload-pack response through the C3 pack cache.
+//
+// Cache key = (owner/repo, request body). This is correct without a separate
+// generation token: `git upload-pack --stateless-rpc` output is deterministic
+// for a given negotiation (wants/haves/capabilities), and the wanted objects
+// are immutable content-addressed commits — a clone of a newly-pushed SHA sends
+// a different body and thus misses. The TTL bounds retention/eviction, not
+// correctness.
+//
+// On a miss the pack is generated to a cache file (single-flight coalesces
+// concurrent identical misses onto one generation) and then streamed to the
+// client. Trade-off: the miss path buffers to the local cache file before the
+// first byte reaches the client, rather than tee-streaming live; acceptable for
+// the small shallow packs CI produces. A streamcache-style live tee is a
+// documented follow-up.
+//
+// Returns true iff it fully handled the response. A false return guarantees
+// nothing was written to w (the generation writes to the cache file first), so
+// the caller may safely fall back to the direct path.
+func (h *UploadPackHandler) serveFromCache(
+	r *http.Request,
+	owner, repo, repoPath string,
+	bodyBytes []byte,
+	w http.ResponseWriter,
+	sd *StreamDeadliner,
+) bool {
+	key := packcache.DeriveKey(owner+"/"+repo, "", bodyBytes)
+
+	f, hit, err := h.cache.GetOrGenerate(key, func(cw io.Writer) error {
+		cmd := exec.CommandContext(r.Context(), "git", "upload-pack", "--stateless-rpc", repoPath)
+		cmd.Stdin = bytes.NewReader(bodyBytes)
+		cmd.Stdout = cw
+		cmd.Env = append(gitProtocolEnv(r), h.packEnv...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if runErr := cmd.Run(); runErr != nil {
+			return fmt.Errorf("%s: %w", strings.TrimSpace(stderr.String()), runErr)
+		}
+		return nil
+	})
+	if err != nil {
+		// Nothing was streamed to the client yet — fall back to direct serving.
+		fmt.Printf("[upload-pack] cache path failed (%v), falling back to direct\n", err)
+		return false
+	}
+	defer func() { _ = f.Close() }()
+
+	mw := gitcmd.NewMeteredWriter(NewIdleWriter(w, sd))
+	start := time.Now()
+	_, copyErr := io.Copy(mw, f)
+	gitcmd.RecordTransfer(gitcmd.TransferStats{
+		Operation: "upload-pack",
+		Transport: "http-cache",
+		WallTime:  time.Since(start),
+		TTFB:      gitcmd.TTFB(start, mw.FirstByteAt()),
+		Bytes:     mw.Bytes(),
+		Success:   copyErr == nil,
+	})
+	if copyErr != nil {
+		fmt.Printf("[upload-pack] cache stream error (hit=%v): %v\n", hit, copyErr)
+	}
+	return true
 }
 
 // decompressRequestBody reads the request body and decompresses gzip if detected.
