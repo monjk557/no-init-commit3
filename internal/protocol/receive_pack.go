@@ -3,7 +3,9 @@
 package protocol
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
+	"github.com/collabops/git-executor/internal/ruleguard"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +43,7 @@ type ReceivePackHandler struct {
 	capabilities *ServerCapabilities
 	eventsClient events.RedisStreamClient
 	config       *config.Config
+	ruleClient   *ruleguard.Client
 }
 
 // NewReceivePackHandler creates a new receive-pack handler for the executor.
@@ -74,8 +78,50 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 		capabilities: capabilities,
 		eventsClient: eventsClient,
 		config:       cfg,
+		ruleClient:   ruleguard.NewClient(cfg.Orchestrator.BaseURL, cfg.Orchestrator.Timeout),
 	}
 	return h, nil
+}
+
+// validateRefUpdates enforces repository/ruleset rules on each branch ref update
+// before the push is applied — the executor is the single choke point for every
+// push regardless of transport (ssh/http). Returns a *ruleguard.Denied (reject
+// the push) on a rule violation. Transport/API errors are logged and treated as
+// allow (fail-open) so a validation-service outage never blocks pushes during
+// dual-run — the ssh/http gateways still enforce until cutover.
+//
+// Context comes from headers the gateways set: X-USER-ID (principal),
+// X-Workspace-Slug, X-Repository-ID, and X-Decision-JWT (the orchestrator
+// decision token, forwarded to the BFF). Missing repository id / decision token
+// makes the client a no-op (degrade open).
+func (h *ReceivePackHandler) validateRefUpdates(ctx context.Context, r *http.Request, req *ReceivePackRequest) error {
+	if h.ruleClient == nil || req == nil {
+		return nil
+	}
+	target := ruleguard.PushTarget{
+		RepositoryID:  r.Header.Get("X-Repository-ID"),
+		WorkspaceSlug: r.Header.Get("X-Workspace-Slug"),
+		UserID:        r.Header.Get("X-USER-ID"),
+		DecisionToken: r.Header.Get("X-Decision-JWT"),
+	}
+	for _, cmd := range req.Commands {
+		branch, ok := strings.CutPrefix(cmd.RefName, "refs/heads/")
+		if !ok {
+			continue // only branch updates carry branch rules
+		}
+		target.Branch = branch
+		err := h.ruleClient.ValidatePush(ctx, target)
+		if err == nil {
+			continue
+		}
+		var denied *ruleguard.Denied
+		if errors.As(err, &denied) {
+			return denied // rule violation → reject the push
+		}
+		// Transport/API error: fail-open during dual-run (gateways enforce).
+		fmt.Printf("[receive-pack] rule validation error for %s (allowing — gateways enforce): %v\n", cmd.RefName, err)
+	}
+	return nil
 }
 
 // HandleInfoRefs handles Smart HTTP discovery for receive-pack (push).
@@ -184,6 +230,11 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	// v1 fallback: first line is not command=
 	if !strings.HasPrefix(cmds[0], "command=") {
 		receiveReq := h.parseV1CommandsFromSection(cmds)
+		if err := h.validateRefUpdates(ctx, r, receiveReq); err != nil {
+			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+			_ = pktWriter.Flush()
+			return
+		}
 		// After readSection consumed the flush, the remaining r.Body IS the packfile.
 		if h.hasPackfileCommands(receiveReq.Commands) {
 			receiveReq.PackfileReader = r.Body
@@ -231,6 +282,11 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	allCmds := append(cmds, pushOpts...)
 
 	receiveReq := h.parsePushCommands(allCmds)
+	if err := h.validateRefUpdates(ctx, r, receiveReq); err != nil {
+		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
+		_ = pktWriter.Flush()
+		return
+	}
 	// After reading all command sections, remaining r.Body IS the packfile.
 	if h.hasPackfileCommands(receiveReq.Commands) {
 		receiveReq.PackfileReader = r.Body
@@ -338,6 +394,33 @@ func (h *ReceivePackHandler) parsePushCommands(cmds []string) *ReceivePackReques
 }
 
 const zeroHash = "0000000000000000000000000000000000000000"
+
+// ParseReceiveCommands reads ONLY the pkt-line command section of a
+// receive-pack stream (ref updates, up to the flush packet) and returns the
+// parsed ref-update commands plus the exact raw bytes it consumed.
+//
+// The caller re-splices rawConsumed in front of the remaining reader (the
+// packfile) so the byte stream handed to git is byte-identical to the client's.
+// This lets a transport (ssh TCP) inspect ref updates for rule validation
+// without disturbing the packfile that follows.
+//
+// Both protocol v0/v1 ("<old> <new> <ref>\0caps") and v2 ("command=push" +
+// old-oid/new-oid/ref-name) command sections are recognized.
+func ParseReceiveCommands(r io.Reader) (cmds []RefUpdateCommand, rawConsumed []byte, err error) {
+	var buf bytes.Buffer
+	tee := io.TeeReader(r, &buf)
+	lines, err := readPktLineSection(tee)
+	if err != nil {
+		return nil, buf.Bytes(), err
+	}
+	var req *ReceivePackRequest
+	if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "command=") {
+		req = (&ReceivePackHandler{}).parsePushCommands(lines)
+	} else {
+		req = (&ReceivePackHandler{}).parseV1CommandsFromSection(lines)
+	}
+	return req.Commands, buf.Bytes(), nil
+}
 
 func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, pktWriter *pktLineWriter) error {
 	if pktWriter == nil {

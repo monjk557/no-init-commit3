@@ -231,6 +231,12 @@ type ProgressAwareConnection struct {
 	lastUsed time.Time
 	protoV2  bool
 
+	// Push rule-validation context (from ssh gateway handshake tokens). Only set
+	// on receive-pack; used by the executor to call the BFF rules-validate.
+	repositoryID  string
+	workspaceSlug string
+	decisionToken string
+
 	// Lifecycle management
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -444,6 +450,19 @@ func (pac *ProgressAwareConnection) SetConnectionInfo(owner, repo, userID string
 // GetConnectionInfo returns connection metadata
 func (pac *ProgressAwareConnection) GetConnectionInfo() (owner, repo, userID string, protoV2 bool) {
 	return pac.owner, pac.repo, pac.userID, pac.protoV2
+}
+
+// SetPushContext stores the rule-validation context parsed from the ssh
+// handshake tokens (repository-id / workspace-slug / decision-token).
+func (pac *ProgressAwareConnection) SetPushContext(repositoryID, workspaceSlug, decisionToken string) {
+	pac.repositoryID = repositoryID
+	pac.workspaceSlug = workspaceSlug
+	pac.decisionToken = decisionToken
+}
+
+// GetPushContext returns the rule-validation context for this connection.
+func (pac *ProgressAwareConnection) GetPushContext() (repositoryID, workspaceSlug, decisionToken string) {
+	return pac.repositoryID, pac.workspaceSlug, pac.decisionToken
 }
 
 // GetProgressTracker returns the progress tracker for direct manipulation

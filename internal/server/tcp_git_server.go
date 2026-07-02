@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"github.com/collabops/git-executor/internal/protocol"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
+	"github.com/collabops/git-executor/internal/ruleguard"
 	"go.uber.org/zap"
 )
 
@@ -37,6 +39,7 @@ type DuplexTCPServer struct {
 	metrics               *connection.MetricsCollector
 	mu                    sync.RWMutex
 	logger                *logging.Logger
+	ruleClient            *ruleguard.Client
 }
 
 // Legacy DuplexConnection type alias for compatibility during migration
@@ -98,6 +101,7 @@ func NewDuplexTCPServer(config *config.Config, cc *connection.ConcurrencyControl
 		timeoutPolicy:         timeoutPolicy,
 		metrics:               metrics,
 		logger:                logger,
+		ruleClient:            ruleguard.NewClient(config.Orchestrator.BaseURL, config.Orchestrator.Timeout),
 	}
 
 	logger.Info("Progress-aware Git executor server initialized",
@@ -270,7 +274,9 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *connection.ProgressAwareConnec
 		return fmt.Errorf("invalid service line (empty)")
 	}
 
-	// Parse optional key=value tokens (e.g., host=..., user-id=...)
+	// Parse optional key=value tokens (e.g., host=..., user-id=..., and the push
+	// rule-validation context: repository-id / workspace-slug / decision-token).
+	var pcRepositoryID, pcWorkspaceSlug, pcDecisionToken string
 	for _, raw := range parts0[1:] {
 		tok := strings.TrimSpace(string(raw))
 		if tok == "" {
@@ -285,16 +291,20 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *connection.ProgressAwareConnec
 		if v == "" {
 			continue
 		}
-		var userID string
 		switch k {
 		case "user-id", "user_id", "userid", "uid":
-			userID = v
-		}
-		// Set userID in connection metadata
-		if userID != "" {
 			owner, repo, _, protoV2Prev := conn.GetConnectionInfo()
-			conn.SetConnectionInfo(owner, repo, userID, protoV2Prev)
+			conn.SetConnectionInfo(owner, repo, v, protoV2Prev)
+		case "repository-id", "repository_id":
+			pcRepositoryID = v
+		case "workspace-slug", "workspace_slug":
+			pcWorkspaceSlug = v
+		case "decision-token", "decision_token":
+			pcDecisionToken = v
 		}
+	}
+	if pcRepositoryID != "" || pcWorkspaceSlug != "" || pcDecisionToken != "" {
+		conn.SetPushContext(pcRepositoryID, pcWorkspaceSlug, pcDecisionToken)
 	}
 
 	// 첫 토큰: "<service> /owner/repo.git"
@@ -597,6 +607,20 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	// Snapshot refs before push (for post-push event diff)
 	refsBefore := s.snapshotRefs(ctx, repoPath)
 
+	// Rule validation (ruleset enforcement). The push wire is: pkt-line command
+	// section (ref updates) → flush → packfile. validatePushSection reads only the
+	// command section, validates each branch ref against the repo's rules/rulesets
+	// via the BFF, and returns a reader that re-splices the consumed command bytes
+	// in front of the remaining stream (byte-identical to what the client sent).
+	//
+	// Dual-run: a transport error returns the original stream + nil deny (fail-open
+	// — the ssh gateway still validates until cutover). A genuine rule violation
+	// returns a non-nil deny and we reject before git ever runs.
+	gitStdin, denied := s.validatePushSection(ctx, conn)
+	if denied != nil {
+		return denied // rule violation → reject before running git
+	}
+
 	// receive-pack indexes incoming packfiles (delta resolution, SHA verification)
 	// which can stall the wire for large pushes; use the lenient threshold.
 	conn.GetProgressTracker().SetPackObjectsPhase(true)
@@ -604,7 +628,10 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	// Spawn native git receive-pack — tied to connection context
 	var stderrBuf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", "receive-pack", repoPath)
-	mr := gitcmd.NewMeteredReader(conn.GetReader())
+	// Meter the rule-validated stream (gitStdin re-splices the command section
+	// consumed during validation ahead of the packfile — see validatePushSection)
+	// so transfer metrics still count the full wire git actually reads.
+	mr := gitcmd.NewMeteredReader(gitStdin)
 	cmd.Stdin = mr
 	cmd.Stdout = &flushWriter{conn.GetWriter()}
 	cmd.Stderr = &stderrBuf
@@ -658,6 +685,61 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	// go s.runAutoGC(repoPath, tenantID)
 
 	return nil
+}
+
+// validatePushSection reads the receive-pack command section from the connection,
+// validates each branch ref update against the repo's rules/rulesets via the BFF,
+// and returns a reader that re-splices the consumed bytes ahead of the remaining
+// stream (so git receives a byte-identical wire). On a rule violation it returns
+// a non-nil deny error (reject the push). On any transport/parse error it returns
+// the re-spliced reader with a nil deny (fail-open — the ssh gateway still
+// validates during dual-run). A no-op (no rule context / no ruleClient) returns
+// the original reader untouched.
+func (s *DuplexTCPServer) validatePushSection(ctx context.Context, conn *connection.ProgressAwareConnection) (io.Reader, error) {
+	reader := conn.GetReader()
+	repositoryID, workspaceSlug, decisionToken := conn.GetPushContext()
+
+	// Degrade open when there's nothing to enforce with: no client, or the
+	// gateway didn't forward rule context. Don't touch the stream.
+	if s.ruleClient == nil || repositoryID == "" || decisionToken == "" {
+		return reader, nil
+	}
+
+	commands, rawConsumed, perr := protocol.ParseReceiveCommands(reader)
+	// Always re-splice whatever we consumed so git gets the full wire, whether
+	// or not parsing fully succeeded.
+	respliced := io.MultiReader(bytes.NewReader(rawConsumed), reader)
+	if perr != nil {
+		s.logger.Warn("rule validation: failed to parse push command section (allowing — gateway enforces)",
+			zap.Error(perr))
+		return respliced, nil
+	}
+
+	_, _, userID, _ := conn.GetConnectionInfo()
+	for _, cmd := range commands {
+		branch, ok := strings.CutPrefix(cmd.RefName, "refs/heads/")
+		if !ok {
+			continue // only branch updates carry branch rules
+		}
+		err := s.ruleClient.ValidatePush(ctx, ruleguard.PushTarget{
+			RepositoryID:  repositoryID,
+			WorkspaceSlug: workspaceSlug,
+			Branch:        branch,
+			UserID:        userID,
+			DecisionToken: decisionToken,
+		})
+		if err == nil {
+			continue
+		}
+		var denied *ruleguard.Denied
+		if errors.As(err, &denied) {
+			return respliced, denied // rule violation → reject
+		}
+		// Transport/API error: fail-open during dual-run (gateway enforces).
+		s.logger.Warn("rule validation error (allowing — gateway enforces)",
+			zap.String("ref", cmd.RefName), zap.Error(err))
+	}
+	return respliced, nil
 }
 
 // snapshotRefs returns a map of refName → objectHash for all refs in the repository.
