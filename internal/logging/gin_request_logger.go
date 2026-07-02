@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math/rand"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +24,56 @@ const (
 	HeaderRequestID = "X-Request-ID"
 	// maxBodySizeForKeys is the maximum request body size (bytes) to parse for request_body_keys
 	maxBodySizeForKeys = 64 * 1024
+	// defaultReadSampleRate mirrors the orchestrator's access-log policy
+	// (RequestLoggingMiddleware, _READ_SAMPLE_RATE=0.10): successful READ access
+	// logs are sampled to curb volume, while writes and errors are logged 100%.
+	defaultReadSampleRate = 0.10
 )
+
+// readSampleRate is the fraction of successful read-request access logs to keep.
+// Overridable via GIT_EXECUTOR_LOG_READ_SAMPLE_RATE ("1" logs all, "0" drops all
+// successful reads). Errors (>=400) and writes are never sampled.
+var readSampleRate = loadReadSampleRate()
+
+func loadReadSampleRate() float64 {
+	if v := strings.TrimSpace(os.Getenv("GIT_EXECUTOR_LOG_READ_SAMPLE_RATE")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f <= 1 {
+			return f
+		}
+	}
+	return defaultReadSampleRate
+}
+
+// isReadRequest reports whether a request is a read for access-log sampling.
+// GET/HEAD/OPTIONS are reads; git smart-HTTP upload-pack (clone/fetch) and the
+// ref advertisement are reads too despite using POST, whereas receive-pack
+// (push) is a write and is never sampled.
+func isReadRequest(method, path string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+	return strings.HasSuffix(path, "/git-upload-pack") || strings.HasSuffix(path, "/info/refs")
+}
+
+// sampleOutAccessLog reports whether this successful request's access log should
+// be dropped by sampling. Only successful reads are eligible; per-request METRICS
+// (transfer stats etc.) are emitted separately and unaffected.
+func sampleOutAccessLog(method, path string, status int) bool {
+	if status >= 400 {
+		return false // always log errors
+	}
+	if !isReadRequest(method, path) {
+		return false // always log writes (push, mutations)
+	}
+	if readSampleRate >= 1 {
+		return false
+	}
+	if readSampleRate <= 0 {
+		return true
+	}
+	return rand.Float64() >= readSampleRate
+}
 
 // GinRequestLogger returns a Gin middleware that logs each request as a single JSON event
 // with: event, request_id, global_trace_id, msg, method, path, metadata, duration_ms,
@@ -73,6 +125,16 @@ func GinRequestLogger(logger *Logger) gin.HandlerFunc {
 
 		durationMs := time.Since(start).Milliseconds()
 		status := c.Writer.Status()
+
+		// Access-log sampling (mirrors orchestrator V.1.4): keep all writes and
+		// errors, sample successful reads (incl. clone/fetch) to curb log volume.
+		// Uses the query-less path so suffix matching (…/git-upload-pack,
+		// …/info/refs) is unaffected by the query string. Transfer/CPU metrics
+		// are emitted elsewhere and are unaffected.
+		if sampleOutAccessLog(method, c.Request.URL.Path, status) {
+			return
+		}
+
 		level := levelFromStatus(status)
 		msg := "request completed"
 		if status >= 400 {

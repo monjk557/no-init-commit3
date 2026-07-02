@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -79,12 +80,23 @@ type decisionTokenClaims struct {
 	jwt.RegisteredClaims
 }
 
+// fallbackLogInterval bounds how often the dual-accept fallback is logged per
+// reason. The fallback fires on every tokenless request during rollout, so
+// per-request logging floods the log volume (and storage). One line per reason
+// per interval keeps the migration-readiness signal without the spam.
+const fallbackLogInterval = 60 * time.Second
+
 // DecisionVerifier verifies decision tokens against the shared HS256 secret.
 type DecisionVerifier struct {
 	cfg    config.DecisionJWTConfig
 	logger *logging.Logger
 	key    []byte
 	parser *jwt.Parser
+
+	// Rate-limit state for dual-accept fallback logging (per reason).
+	fbMu         sync.Mutex
+	fbLastLogged map[string]time.Time
+	fbSuppressed map[string]int
 }
 
 // NewDecisionVerifier builds a verifier from config. The parser options enforce the
@@ -103,10 +115,12 @@ func NewDecisionVerifier(cfg config.DecisionJWTConfig, logger *logging.Logger) *
 	)
 
 	return &DecisionVerifier{
-		cfg:    cfg,
-		logger: logger,
-		key:    []byte(cfg.Secret),
-		parser: parser,
+		cfg:          cfg,
+		logger:       logger,
+		key:          []byte(cfg.Secret),
+		parser:       parser,
+		fbLastLogged: make(map[string]time.Time),
+		fbSuppressed: make(map[string]int),
 	}
 }
 
@@ -253,16 +267,43 @@ func (v *DecisionVerifier) reject(c *gin.Context, reason string, err error) {
 // logFallback records a dual-accept fallback (token absent or non-attested while
 // running in non-strict mode). These logs measure migration readiness: when they
 // drop to zero, strict mode can be enabled safely.
+//
+// Rate-limited to one line per reason per fallbackLogInterval — the fallback
+// fires on nearly every read request during rollout, so per-request logging
+// dominated log volume/storage (Issue-5071). Each emitted line carries how many
+// occurrences were suppressed since the previous one, so the signal is intact.
 func (v *DecisionVerifier) logFallback(c *gin.Context, reason string) {
 	if v.logger == nil {
+		return
+	}
+	emit, suppressed := v.fallbackShouldLog(reason)
+	if !emit {
 		return
 	}
 	v.logger.LogWarning(c.Request.Context(), "decision token dual-accept fallback",
 		zap.String("path", c.Request.URL.Path),
 		zap.String("method", c.Request.Method),
 		zap.String("reason", reason),
+		zap.Int("suppressed_since_last", suppressed),
 		zap.String("request_id", c.Request.Header.Get("X-Request-ID")),
 	)
+}
+
+// fallbackShouldLog reports whether a fallback line should be emitted now for
+// reason, rate-limited to once per fallbackLogInterval per reason, and returns
+// how many occurrences were suppressed since the last emitted line.
+func (v *DecisionVerifier) fallbackShouldLog(reason string) (emit bool, suppressed int) {
+	v.fbMu.Lock()
+	defer v.fbMu.Unlock()
+	now := time.Now()
+	if last, seen := v.fbLastLogged[reason]; seen && now.Sub(last) < fallbackLogInterval {
+		v.fbSuppressed[reason]++
+		return false, 0
+	}
+	suppressed = v.fbSuppressed[reason]
+	v.fbSuppressed[reason] = 0
+	v.fbLastLogged[reason] = now
+	return true, suppressed
 }
 
 // extractDecisionToken pulls the token from the X-Decision-JWT header,
