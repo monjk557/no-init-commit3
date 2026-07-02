@@ -41,6 +41,14 @@ type RepoState struct {
 	// HasRefs indicates whether the repo has any refs (branches/tags).
 	// Empty repos (no commits) don't need commit-graph or repack.
 	HasRefs bool
+
+	// HasBitmap indicates whether a reachability bitmap exists (single-pack
+	// pack-*.bitmap or multi-pack-index bitmap). Without one, upload-pack cannot
+	// reuse existing pack bytes and every clone re-traverses the object graph —
+	// the dominant per-clone cost (Issue-5071). A repo that was repacked but
+	// whose bitmap write failed sits below the pack/loose thresholds yet has no
+	// bitmap, so bitmap presence is tracked as its own maintenance trigger.
+	HasBitmap bool
 }
 
 // MaintenancePlan describes what maintenance tasks should be performed.
@@ -118,11 +126,17 @@ func (a *Analyzer) AnalyzeRepository(_ context.Context, repoPath string) (*RepoS
 	packDir := filepath.Join(repoPath, "objects", "pack")
 	if entries, err := os.ReadDir(packDir); err == nil {
 		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".pack") {
+			name := entry.Name()
+			if strings.HasSuffix(name, ".pack") {
 				state.PackFileCount++
 				if info, err := entry.Info(); err == nil {
 					state.TotalPackSizeBytes += info.Size()
 				}
+			}
+			// A *.bitmap covers either a single pack (pack-*.bitmap) or the
+			// multi-pack-index (multi-pack-index-*.bitmap).
+			if strings.HasSuffix(name, ".bitmap") {
+				state.HasBitmap = true
 			}
 		}
 	}
@@ -196,6 +210,15 @@ func (a *Analyzer) Plan(state *RepoState) *MaintenancePlan {
 		plan.Reasons = append(plan.Reasons,
 			fmt.Sprintf("pack files (%d) exceed threshold (%d)",
 				state.PackFileCount, a.config.Thresholds.PackFilesThreshold))
+	}
+	// Missing reachability bitmap on a repo that has packs. Pack/loose counts
+	// can sit below their thresholds (e.g. a prior repack consolidated packs but
+	// its bitmap write failed), yet without a bitmap every clone is expensive.
+	// Trigger a repack so it (re)writes the bitmap. Only when bitmaps are enabled
+	// and the repo actually has packs to bitmap. See Issue-5071.
+	if a.config.Repack.WriteBitmap && !state.HasBitmap && state.PackFileCount > 0 {
+		needsRepack = true
+		plan.Reasons = append(plan.Reasons, "no reachability bitmap")
 	}
 	if needsRepack {
 		plan.Tasks = append(plan.Tasks, TaskGeometricRepack)
