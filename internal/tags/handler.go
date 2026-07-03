@@ -8,13 +8,22 @@ import (
 
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/protocol"
+	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
+// userIDHeader carries the acting user, forwarded by the gateway/orchestrator.
+// Same header the git-push path reads (ReceivePackHandler).
+const userIDHeader = "X-USER-ID"
+
 type TagsHandler struct {
-	pathConfig *repositories.PathConfig
+	pathConfig   *repositories.PathConfig
+	eventsClient events.RedisStreamClient
 }
 
 func NewTagsHandler(cfg *config.Config) (*TagsHandler, error) {
@@ -22,7 +31,26 @@ func NewTagsHandler(cfg *config.Config) (*TagsHandler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path config: %w", err)
 	}
-	return &TagsHandler{pathConfig: pathConfig}, nil
+
+	// Web tag create/delete must emit the same tag_push / tag_delete events as
+	// the git-push path, so downstream consumers see web-driven tags too
+	// (previously only pushed tags emitted). Best-effort: a missing events client
+	// degrades to no-op, exactly like the push path.
+	var eventsClient events.RedisStreamClient
+	if cfg.Events.Enabled {
+		logger, lerr := logging.NewLogger(cfg.Logging)
+		if lerr != nil {
+			return nil, fmt.Errorf("failed to create logger: %w", lerr)
+		}
+		eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
+		if err != nil {
+			logger.Warn("Failed to initialize Redis events client for tags, continuing without events",
+				zap.Error(err))
+			eventsClient = nil
+		}
+	}
+
+	return &TagsHandler{pathConfig: pathConfig, eventsClient: eventsClient}, nil
 }
 
 // invalidBindErr 는 c.ShouldBindJSON 실패를 details 포함 응답으로 변환하기
@@ -139,6 +167,10 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) (CreateTagResponse, error)
 		return CreateTagResponse{}, err
 	}
 
+	// Mirror the git-push path: emit a tag_push event so downstream consumers
+	// see web-created tags too.
+	h.publishTagPush(c.Request.Context(), repoPath, owner, repo, tag.Name, tag.Hash, c.GetHeader(userIDHeader))
+
 	return CreateTagResponse{Success: true, Tag: tag}, nil
 }
 
@@ -157,9 +189,16 @@ func (h *TagsHandler) HandleDeleteTag(c *gin.Context) (DeleteTagResponse, error)
 		return DeleteTagResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
 	}
 
-	if err := DeleteTag(c.Request.Context(), repoPath, tagName); err != nil {
+	ctx := c.Request.Context()
+	// Capture the tag's underlying commit BEFORE deletion so the tag_delete
+	// event carries a commit SHA (consistent with the push path). Best-effort.
+	oldCommit, _ := gitcmd.PeelToCommit(ctx, repoPath, "refs/tags/"+tagName)
+
+	if err := DeleteTag(ctx, repoPath, tagName); err != nil {
 		return DeleteTagResponse{}, err
 	}
+
+	h.publishTagDelete(owner, repo, tagName, oldCommit, c.GetHeader(userIDHeader))
 
 	return DeleteTagResponse{Success: true, Tag: tagName}, nil
 }
@@ -186,11 +225,16 @@ func (h *TagsHandler) HandleBulkDeleteTags(c *gin.Context) (BulkDeleteTagsRespon
 	}
 
 	ctx := c.Request.Context()
+	userID := c.GetHeader(userIDHeader)
 	results := make([]BulkDeleteTagResult, 0, len(req.Tags))
 	succeeded := 0
 	failed := 0
 
 	for _, tagName := range req.Tags {
+		// Capture the commit before deletion so each tag_delete event carries a
+		// commit SHA (consistent with the push path). Best-effort.
+		oldCommit, _ := gitcmd.PeelToCommit(ctx, repoPath, "refs/tags/"+tagName)
+
 		if delErr := DeleteTag(ctx, repoPath, tagName); delErr != nil {
 			results = append(results, BulkDeleteTagResult{
 				TagName: tagName,
@@ -206,6 +250,8 @@ func (h *TagsHandler) HandleBulkDeleteTags(c *gin.Context) (BulkDeleteTagsRespon
 			Success: true,
 		})
 		succeeded++
+
+		h.publishTagDelete(owner, repo, tagName, oldCommit, userID)
 	}
 
 	return BulkDeleteTagsResponse{
