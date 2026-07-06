@@ -366,6 +366,12 @@ type AnchorResult struct {
 	ID      string       `json:"id"`
 	Status  AnchorStatus `json:"status"`
 	NewPath string       `json:"new_path,omitempty"` // rename 시 head 기준 새 경로
+	// NewStartLine/NewEndLine 은 anchor 를 head 기준 새 라인으로 재배치한 값입니다
+	// (1-based). `active` 일 때만 채워지며 — 앵커보다 위쪽 hunk 들의 삽입/삭제만큼
+	// 밀린 라인. 앵커 라인 자체가 바뀐(`stale`)/삭제된(`orphaned`) 경우엔 깔끔히
+	// 매핑되지 않으므로 nil(omitted) 로 둔다. (Issue-5279)
+	NewStartLine *int `json:"new_start_line,omitempty"`
+	NewEndLine   *int `json:"new_end_line,omitempty"`
 }
 
 // ClassifyAnchorsRequest는 POST /diff/classify-anchors 요청 바디입니다.

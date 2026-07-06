@@ -164,8 +164,11 @@ func classifyAnchors(
 			continue
 		}
 		if byOldPath == nil {
-			// base == head 그룹: 변경 없음.
-			results = append(results, AnchorResult{ID: a.ID, Status: AnchorStatusActive})
+			// base == head 그룹: 변경 없음 → new == old.
+			results = append(results, AnchorResult{
+				ID: a.ID, Status: AnchorStatusActive,
+				NewStartLine: intPtr(a.StartLine), NewEndLine: intPtr(a.EndLine),
+			})
 			continue
 		}
 		results = append(results, classifyOneAnchor(byOldPath, a))
@@ -177,8 +180,11 @@ func classifyAnchors(
 func classifyOneAnchor(byOldPath map[string]*FileDiff, a AnchorRequest) AnchorResult {
 	fd, ok := byOldPath[a.Path]
 	if !ok {
-		// 파일에 아무 변경 없음 → active
-		return AnchorResult{ID: a.ID, Status: AnchorStatusActive}
+		// 파일에 아무 변경 없음 → active. 라인 밀림 없음 → new == old.
+		return AnchorResult{
+			ID: a.ID, Status: AnchorStatusActive,
+			NewStartLine: intPtr(a.StartLine), NewEndLine: intPtr(a.EndLine),
+		}
 	}
 
 	if fd.Status == FileDiffStatusDeleted {
@@ -211,5 +217,36 @@ func classifyOneAnchor(byOldPath map[string]*FileDiff, a AnchorRequest) AnchorRe
 		}
 	}
 
-	return AnchorResult{ID: a.ID, Status: AnchorStatusActive, NewPath: newPath}
+	// active — 앵커가 어떤 hunk 와도 안 겹침. 위쪽 hunk 들의 삽입/삭제 offset 만큼
+	// 밀린 새 라인을 계산해 재배치용으로 반환한다.
+	offset := lineOffsetAbove(fd.Hunks, a.StartLine)
+	return AnchorResult{
+		ID: a.ID, Status: AnchorStatusActive, NewPath: newPath,
+		NewStartLine: intPtr(a.StartLine + offset),
+		NewEndLine:   intPtr(a.EndLine + offset),
+	}
+}
+
+// lineOffsetAbove 는 old-side 라인 anchorStart 보다 완전히 위에 있는 hunk 들의
+// 순 라인 증감(count_new - count_old)을 합산한다. anchor 가 어떤 hunk 와도 겹치지
+// 않는(active) 전제에서 old→new 라인 매핑에 쓰인다.
+//
+//   - CountOld > 0: hunk 의 old-side 끝(StartOld+CountOld-1) 이 anchorStart 보다
+//     작으면 위에 있는 것 → offset += CountNew - CountOld.
+//   - CountOld == 0 (순수 삽입): old 라인이 없으므로 삽입 지점 StartOld 가
+//     anchorStart 보다 작으면 위에 있는 것 → offset += CountNew.
+func lineOffsetAbove(hunks []Hunk, anchorStart int) int {
+	offset := 0
+	for _, h := range hunks {
+		if h.CountOld == 0 {
+			if h.StartOld < anchorStart {
+				offset += h.CountNew
+			}
+			continue
+		}
+		if h.StartOld+h.CountOld-1 < anchorStart {
+			offset += h.CountNew - h.CountOld
+		}
+	}
+	return offset
 }

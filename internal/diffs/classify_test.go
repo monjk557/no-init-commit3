@@ -208,3 +208,77 @@ func TestBuildOldPathIndex_OrderPreservedAcrossMultipleStatuses(t *testing.T) {
 		t.Fatalf("색인 key set 불일치: want=%v got=%v", wantKeys, gotKeys)
 	}
 }
+
+// --- Issue-5279: active anchor 의 new-side 라인 재배치 ---
+
+func wantNewLines(t *testing.T, r AnchorResult, start, end int) {
+	t.Helper()
+	if r.Status != AnchorStatusActive {
+		t.Fatalf("expected active, got %s", r.Status)
+	}
+	if r.NewStartLine == nil || r.NewEndLine == nil {
+		t.Fatalf("active 인데 new 라인이 nil: %+v", r)
+	}
+	if *r.NewStartLine != start || *r.NewEndLine != end {
+		t.Fatalf("new 라인 불일치: want [%d,%d] got [%d,%d]", start, end, *r.NewStartLine, *r.NewEndLine)
+	}
+}
+
+func TestClassifyOneAnchor_NewLinesUnchangedWhenFileNotInDiff(t *testing.T) {
+	// 파일 자체가 diff 에 없음 → 밀림 0 → new == old.
+	r := classifyOneAnchor(map[string]*FileDiff{}, AnchorRequest{ID: "a", Path: "src/foo.py", StartLine: 5, EndLine: 7})
+	wantNewLines(t, r, 5, 7)
+}
+
+func TestClassifyOneAnchor_ShiftDownOnInsertionAbove(t *testing.T) {
+	// 앵커 [5,7], 위(old 라인 2 뒤)에 3줄 순수 삽입 "-2,0 +3,3" → 3줄 밀림 → [8,10].
+	m := map[string]*FileDiff{
+		"src/foo.py": fd("src/foo.py", "", FileDiffStatusModified, false, hunk(2, 0, 3, 3)),
+	}
+	r := classifyOneAnchor(m, AnchorRequest{ID: "a", Path: "src/foo.py", StartLine: 5, EndLine: 7})
+	wantNewLines(t, r, 8, 10)
+}
+
+func TestClassifyOneAnchor_ShiftUpOnDeletionAbove(t *testing.T) {
+	// 앵커 [10,12], 위(old [2,3])에서 2줄 삭제 "-2,2 +2,0" → 2줄 위로 → [8,10].
+	m := map[string]*FileDiff{
+		"src/foo.py": fd("src/foo.py", "", FileDiffStatusModified, false, hunk(2, 2, 2, 0)),
+	}
+	r := classifyOneAnchor(m, AnchorRequest{ID: "a", Path: "src/foo.py", StartLine: 10, EndLine: 12})
+	wantNewLines(t, r, 8, 10)
+}
+
+func TestClassifyOneAnchor_NoShiftWhenChangeBelow(t *testing.T) {
+	// 앵커 [5,7], 변경은 아래(old [20,22]) → 밀림 0 → new == old.
+	m := map[string]*FileDiff{
+		"src/foo.py": fd("src/foo.py", "", FileDiffStatusModified, false, hunk(20, 3, 20, 5)),
+	}
+	r := classifyOneAnchor(m, AnchorRequest{ID: "a", Path: "src/foo.py", StartLine: 5, EndLine: 7})
+	wantNewLines(t, r, 5, 7)
+}
+
+func TestClassifyOneAnchor_NetOffsetFromMultipleHunksAbove(t *testing.T) {
+	// 앵커 [30,31]. 위 hunk 둘: +5줄 삽입(-2,0+3,5) & -2줄 삭제(-10,2+... ,0) → 순 +3 → [33,34].
+	m := map[string]*FileDiff{
+		"src/foo.py": fd("src/foo.py", "", FileDiffStatusModified, false,
+			hunk(2, 0, 3, 5),   // +5
+			hunk(10, 2, 15, 0), // -2
+		),
+	}
+	r := classifyOneAnchor(m, AnchorRequest{ID: "a", Path: "src/foo.py", StartLine: 30, EndLine: 31})
+	wantNewLines(t, r, 33, 34)
+}
+
+func TestClassifyOneAnchor_NoNewLinesWhenStale(t *testing.T) {
+	// 앵커 라인 자체가 바뀐 stale → new 라인 nil (재배치 불가).
+	m := map[string]*FileDiff{
+		"src/foo.py": fd("src/foo.py", "", FileDiffStatusModified, false, hunk(12, 4, 12, 4)),
+	}
+	r := classifyOneAnchor(m, AnchorRequest{ID: "a", Path: "src/foo.py", StartLine: 10, EndLine: 20})
+	if r.Status != AnchorStatusStale {
+		t.Fatalf("expected stale, got %s", r.Status)
+	}
+	if r.NewStartLine != nil || r.NewEndLine != nil {
+		t.Fatalf("stale 인데 new 라인이 채워짐: %+v", r)
+	}
+}

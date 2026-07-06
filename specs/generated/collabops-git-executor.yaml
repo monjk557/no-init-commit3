@@ -1327,6 +1327,12 @@ components:
           enum: [active, stale, orphaned]
         new_path:
           type: string
+        new_start_line:
+          type: integer
+          nullable: true
+        new_end_line:
+          type: integer
+          nullable: true
       required:
         - id
         - status
