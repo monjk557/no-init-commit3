@@ -63,8 +63,12 @@ func nativeListTreeFiles(ctx context.Context, repoPath, sha, pathPrefix string) 
 
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
-		// 경로가 존재하지 않으면 빈 목록 반환
-		return nil, nil
+		// 존재하지 않는 path 는 git 이 exit 0 + 빈 출력으로 응답하므로 이 분기에 오지
+		// 않는다. 여기 도달하는 것은 invalid object / timeout / output overflow 등 실제
+		// 실패다. 삼켜서 빈 목록으로 반환하면 상위(computeDeletedWorkflows)가 "전부
+		// 삭제됨" 으로 오판해 downstream(piper)이 활성 schedule 메타를 잘못 soft-delete
+		// 한다 (Issue-5218). 실제 실패는 반드시 전파한다.
+		return nil, fmt.Errorf("git ls-tree failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
 
 	var files []string

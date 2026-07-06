@@ -12,4 +12,8 @@ type ContextResponse struct {
 	Success   bool              `json:"success"`
 	DiffFiles []string          `json:"diff_files"` // 변경된 파일 경로 목록
 	Workflows map[string]string `json:"workflows"`  // .collabops/workflows/*.yaml 파일명→내용
+	// DeletedWorkflows: oldRev 에는 있었으나 newRev 에서 사라진 워크플로우 파일명 목록
+	// (Workflows 키와 같은 basename 컨벤션). YAML 파일 자체가 삭제된 경우 downstream
+	// (piper) 이 해당 schedule / workflow_dispatch 메타데이터를 soft delete 하도록 신호.
+	DeletedWorkflows []string `json:"deleted_workflows"`
 }

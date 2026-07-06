@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -89,6 +90,54 @@ func newRepoWithWorkflow(t *testing.T) (repoPath, oldRev, newRev string) {
 	return repoPath, oldRev, newRev
 }
 
+// commitWithWorkflows builds a commit whose tree has readme.txt plus the given
+// workflow files under .collabops/workflows/. An empty workflows map omits the
+// .collabops directory entirely (models a repo with no workflows).
+func commitWithWorkflows(t *testing.T, repoPath, readme, msg string, workflows map[string]string, parents ...string) string {
+	t.Helper()
+	readmeBlob := hashObject(t, repoPath, readme)
+
+	// Tree entries must be written in git's canonical order (name, with trees
+	// sorted as if they carry a trailing "/"). ".collabops" (tree) sorts before
+	// "readme.txt", and workflow filenames are sorted lexically.
+	var rootSpec strings.Builder
+	if len(workflows) > 0 {
+		names := make([]string, 0, len(workflows))
+		for name := range workflows {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		var wfSpec strings.Builder
+		for _, name := range names {
+			blob := hashObject(t, repoPath, workflows[name])
+			wfSpec.WriteString("100644 blob " + blob + "\t" + name + "\n")
+		}
+		workflowsTree := makeTree(t, repoPath, wfSpec.String())
+		collabopsTree := makeTree(t, repoPath, "040000 tree "+workflowsTree+"\tworkflows\n")
+		rootSpec.WriteString("040000 tree " + collabopsTree + "\t.collabops\n")
+	}
+	rootSpec.WriteString("100644 blob " + readmeBlob + "\treadme.txt\n")
+
+	rootTree := makeTree(t, repoPath, rootSpec.String())
+	return commitTree(t, repoPath, rootTree, msg, parents...)
+}
+
+// newRepoWithWorkflowSets creates a bare repo with two commits: the first holds
+// oldWf, the second holds newWf (both under .collabops/workflows/). Returns
+// (repoPath, oldRev, newRev). Used to exercise added/modified/deleted workflows.
+func newRepoWithWorkflowSets(t *testing.T, oldWf, newWf map[string]string) (repoPath, oldRev, newRev string) {
+	t.Helper()
+	dir := t.TempDir()
+	repoPath = filepath.Join(dir, "repo.git")
+	out, err := exec.Command("git", "init", "--bare", repoPath).CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	oldRev = commitWithWorkflows(t, repoPath, "hello\n", "init", oldWf)
+	newRev = commitWithWorkflows(t, repoPath, "hello world\n", "change", newWf, oldRev)
+	require.NoError(t, exec.Command("git", "--git-dir", repoPath, "update-ref", "refs/heads/main", newRev).Run())
+	return repoPath, oldRev, newRev
+}
+
 func TestIsNullSHA(t *testing.T) {
 	assert.True(t, isNullSHA(nullSHA))
 	assert.False(t, isNullSHA("abc123"))
@@ -137,6 +186,15 @@ func TestNativeListTreeFilesAndShow(t *testing.T) {
 		files, err := nativeListTreeFiles(context.Background(), repoPath, newRev, "no/such/path/")
 		require.NoError(t, err)
 		assert.Empty(t, files)
+	})
+
+	t.Run("invalid sha propagates error (not silently empty)", func(t *testing.T) {
+		// 실제 실패(invalid object / timeout / overflow)를 빈 목록으로 삼키면
+		// computeDeletedWorkflows 가 "전부 삭제됨" 으로 오판한다 (Issue-5218 회귀 가드).
+		_, err := nativeListTreeFiles(
+			context.Background(), repoPath, "deadbeef"+strings.Repeat("0", 32), ".collabops/workflows/",
+		)
+		assert.Error(t, err)
 	})
 
 	t.Run("missing file errors", func(t *testing.T) {

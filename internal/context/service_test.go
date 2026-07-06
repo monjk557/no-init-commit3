@@ -58,6 +58,87 @@ func TestService_GetContext(t *testing.T) {
 	})
 }
 
+func TestService_GetContext_DeletedWorkflows(t *testing.T) {
+	svc := NewService(testLogger(t))
+	ctx := stdctx.Background()
+
+	t.Run("workflow removed between revs is reported", func(t *testing.T) {
+		repoPath, oldRev, newRev := newRepoWithWorkflowSets(t,
+			map[string]string{"ci.yaml": "name: ci\n", "nightly.yml": "name: nightly\n"},
+			map[string]string{"ci.yaml": "name: ci\n"},
+		)
+		resp, err := svc.GetContext(ctx, repoPath, oldRev, newRev)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"nightly.yml"}, resp.DeletedWorkflows)
+		assert.Contains(t, resp.Workflows, "ci.yaml")
+	})
+
+	t.Run("all workflows removed (dir gone) are reported", func(t *testing.T) {
+		repoPath, oldRev, newRev := newRepoWithWorkflowSets(t,
+			map[string]string{"ci.yaml": "name: ci\n", "nightly.yml": "name: nightly\n"},
+			map[string]string{},
+		)
+		resp, err := svc.GetContext(ctx, repoPath, oldRev, newRev)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"ci.yaml", "nightly.yml"}, resp.DeletedWorkflows)
+		assert.Empty(t, resp.Workflows)
+	})
+
+	t.Run("added workflow is not reported as deleted", func(t *testing.T) {
+		repoPath, oldRev, newRev := newRepoWithWorkflowSets(t,
+			map[string]string{"ci.yaml": "name: ci\n"},
+			map[string]string{"ci.yaml": "name: ci\n", "nightly.yml": "name: nightly\n"},
+		)
+		resp, err := svc.GetContext(ctx, repoPath, oldRev, newRev)
+		require.NoError(t, err)
+		assert.Empty(t, resp.DeletedWorkflows)
+	})
+
+	t.Run("modified workflow is not reported as deleted", func(t *testing.T) {
+		repoPath, oldRev, newRev := newRepoWithWorkflowSets(t,
+			map[string]string{"ci.yaml": "name: ci\n"},
+			map[string]string{"ci.yaml": "name: ci-v2\n"},
+		)
+		resp, err := svc.GetContext(ctx, repoPath, oldRev, newRev)
+		require.NoError(t, err)
+		assert.Empty(t, resp.DeletedWorkflows)
+		assert.Equal(t, "name: ci-v2\n", resp.Workflows["ci.yaml"])
+	})
+
+	t.Run("null oldRev (first push) reports no deletions", func(t *testing.T) {
+		repoPath, _, newRev := newRepoWithWorkflowSets(t,
+			map[string]string{},
+			map[string]string{"ci.yaml": "name: ci\n"},
+		)
+		resp, err := svc.GetContext(ctx, repoPath, nullSHA, newRev)
+		require.NoError(t, err)
+		assert.Empty(t, resp.DeletedWorkflows)
+	})
+
+	t.Run("rename is reported as delete of old name (intended: schedule follows file)", func(t *testing.T) {
+		// 파일명 변경 = 옛 이름 삭제 + 새 이름 추가. 옛 schedule 은 soft-delete 되고
+		// 새 이름으로 재등록되는 것이 의도된 계약 (basename 이 schedule 키이므로).
+		repoPath, oldRev, newRev := newRepoWithWorkflowSets(t,
+			map[string]string{"ci.yaml": "name: ci\n"},
+			map[string]string{"ci-v2.yaml": "name: ci\n"},
+		)
+		resp, err := svc.GetContext(ctx, repoPath, oldRev, newRev)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"ci.yaml"}, resp.DeletedWorkflows)
+		assert.Contains(t, resp.Workflows, "ci-v2.yaml")
+	})
+
+	t.Run("non-yaml file removed under workflows dir is ignored", func(t *testing.T) {
+		repoPath, oldRev, newRev := newRepoWithWorkflowSets(t,
+			map[string]string{"ci.yaml": "name: ci\n", "notes.txt": "x\n"},
+			map[string]string{"ci.yaml": "name: ci\n"},
+		)
+		resp, err := svc.GetContext(ctx, repoPath, oldRev, newRev)
+		require.NoError(t, err)
+		assert.Empty(t, resp.DeletedWorkflows)
+	})
+}
+
 // setupHandlerRepo places a bare repo at {root}/{owner}/{repo}.git and returns
 // the handler + revs.
 func setupHandlerRepo(t *testing.T) (*ContextHandler, string, string) {
