@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+// bitmapStaleMargin is how much newer the newest pack must be than the
+// reachability bitmap before the bitmap is treated as stale. It absorbs the
+// sub-second ordering of the atomic repack (which writes the pack, then the
+// bitmap) so a freshly-repacked repo does not self-trigger, while still
+// catching bitmaps left uncovered by later pushes (Issue-5273).
+const bitmapStaleMargin = 1 * time.Minute
+
 // RepoState captures the current state of a repository's object database
 // to determine what maintenance tasks are needed.
 type RepoState struct {
@@ -49,6 +56,17 @@ type RepoState struct {
 	// whose bitmap write failed sits below the pack/loose thresholds yet has no
 	// bitmap, so bitmap presence is tracked as its own maintenance trigger.
 	HasBitmap bool
+
+	// NewestPackModTime is the modification time of the most recently written
+	// *.pack file (zero when the repo has no packs). Compared against
+	// BitmapModTime to detect a bitmap that no longer covers the current pack
+	// set — the steady state of an actively-pushed repo whose pack/loose counts
+	// idle just below their thresholds (Issue-5273).
+	NewestPackModTime time.Time
+
+	// BitmapModTime is the modification time of the newest reachability bitmap
+	// (*.bitmap); zero when none exists.
+	BitmapModTime time.Time
 }
 
 // MaintenancePlan describes what maintenance tasks should be performed.
@@ -131,12 +149,18 @@ func (a *Analyzer) AnalyzeRepository(_ context.Context, repoPath string) (*RepoS
 				state.PackFileCount++
 				if info, err := entry.Info(); err == nil {
 					state.TotalPackSizeBytes += info.Size()
+					if info.ModTime().After(state.NewestPackModTime) {
+						state.NewestPackModTime = info.ModTime()
+					}
 				}
 			}
 			// A *.bitmap covers either a single pack (pack-*.bitmap) or the
 			// multi-pack-index (multi-pack-index-*.bitmap).
 			if strings.HasSuffix(name, ".bitmap") {
 				state.HasBitmap = true
+				if info, err := entry.Info(); err == nil && info.ModTime().After(state.BitmapModTime) {
+					state.BitmapModTime = info.ModTime()
+				}
 			}
 		}
 	}
@@ -219,6 +243,21 @@ func (a *Analyzer) Plan(state *RepoState) *MaintenancePlan {
 	if a.config.Repack.WriteBitmap && !state.HasBitmap && state.PackFileCount > 0 {
 		needsRepack = true
 		plan.Reasons = append(plan.Reasons, "no reachability bitmap")
+	}
+	// Bitmap present but stale: one or more packs are newer than the bitmap, so
+	// it does not cover them and upload-pack re-traverses + re-deltas the
+	// uncovered objects on every clone. This is the steady state of an
+	// actively-pushed repo that idles just below the loose/pack thresholds — it
+	// keeps an old bitmap (so the !HasBitmap trigger above never fires) yet
+	// accumulates uncovered packs, making every clone expensive (Issue-5273).
+	// Repack to rewrite a full-coverage multi-pack-index bitmap. Gated on >1 pack
+	// (a single bitmapped pack is the ideal, never stale) and bitmapStaleMargin
+	// so the atomic repack write race (pack then bitmap, sub-second apart) does
+	// not self-trigger; CooldownPeriod bounds repack frequency.
+	if a.config.Repack.WriteBitmap && state.HasBitmap && state.PackFileCount > 1 &&
+		state.NewestPackModTime.Sub(state.BitmapModTime) > bitmapStaleMargin {
+		needsRepack = true
+		plan.Reasons = append(plan.Reasons, "reachability bitmap stale (packs newer than bitmap)")
 	}
 	if needsRepack {
 		plan.Tasks = append(plan.Tasks, TaskGeometricRepack)
