@@ -21,12 +21,14 @@ const tag = "Commits"
 func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	var (
 		listCommits       func(*gin.Context, CommitsListRequest) (CommitsResponse, error)
+		commitActivity    func(*gin.Context, CommitActivityRequest) (CommitActivityResponse, error)
 		comparisonSummary func(*gin.Context, ComparisonSummaryRequest) (ComparisonSummaryResponse, error)
 		commitDetail      func(*gin.Context) (CommitDetailResponse, error)
 		multiFileCommit   func(*gin.Context) (MultiFileCommitResponse, error)
 	)
 	if h != nil {
 		listCommits = h.HandleCommitsAPI
+		commitActivity = h.HandleCommitActivity
 		comparisonSummary = h.HandleComparisonSummary
 		commitDetail = h.HandleGetCommitDetail
 		multiFileCommit = h.HandleMultiFileCommit
@@ -41,6 +43,14 @@ func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	typed.RegisterGetWithQuery(g, "/commits", tag,
 		listCommits,
 		typed.WithSummary("HandleCommitsAPI"),
+	)
+
+	// GET /commits/activity — 최근 N일 일자별 커밋 수 히스토그램 (sparkline).
+	// count-only + --since 윈도우 경량 API (Issue-5247). /:sha 보다 먼저 등록하여
+	// "activity" 가 sha param 으로 캡처되지 않게 한다 (compare/summary 와 동일 이유).
+	typed.RegisterGetWithQuery(g, "/commits/activity", tag,
+		commitActivity,
+		typed.WithSummary("HandleCommitActivity"),
 	)
 
 	// GET /commits/compare/summary — lightweight comparison.

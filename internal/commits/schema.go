@@ -46,6 +46,45 @@ type CommitsListRequest struct {
 	GroupBy   string `form:"group_by"` // "" | "committer_date"
 }
 
+// CommitActivityRequest 는 GET /commits/activity 의 query parameter 를 나타낸다.
+//
+// 최근 N일 커밋 활성도(일자별 커밋 수) sparkline 용 경량 히스토그램. full
+// commit 메타를 내리지 않고 커밋 날짜만 --since 윈도우로 집계한다 (Issue-5247).
+// 필드 검증/default 는 handler 본문에서 수행 (기존 commits API 관례와 일치).
+type CommitActivityRequest struct {
+	Ref     string `form:"ref"`      // default "HEAD"
+	Days    string `form:"days"`     // default 30, 1..365
+	GroupBy string `form:"group_by"` // "" (author date) | "committer_date"
+}
+
+// ActivityDayCount 는 하루치 커밋 수를 나타낸다.
+type ActivityDayCount struct {
+	Date  string `json:"date"`  // YYYY-MM-DD (UTC)
+	Count int    `json:"count"` // 해당 날짜의 커밋 수
+}
+
+// CommitActivityResponse 는 GET /commits/activity 의 응답이다.
+//
+// Buckets 는 [Since, Until] 윈도우의 모든 날짜를 오래된→최신 순으로 dense 하게
+// 채운다 (커밋 없는 날 count=0). 길이는 정확히 Days 이므로 FE 가 sparkline 을
+// 고정 길이 배열로 렌더할 수 있다.
+type CommitActivityResponse struct {
+	Success bool               `json:"success"`
+	Ref     string             `json:"ref"`
+	Days    int                `json:"days"`
+	Since   string             `json:"since"` // YYYY-MM-DD (UTC, inclusive)
+	Until   string             `json:"until"` // YYYY-MM-DD (UTC, inclusive = today)
+	Total   int                `json:"total"` // 윈도우 내 총 커밋 수
+	Buckets []ActivityDayCount `json:"buckets"`
+}
+
+// 커밋 활성도 히스토그램 윈도우(일) 기본/최소/최대.
+const (
+	DefaultActivityDays = 30
+	MaxActivityDays     = 365
+	MinActivityDays     = 1
+)
+
 // ComparisonSummaryResponse는 두 커밋 간 비교 요약 응답입니다.
 type ComparisonSummaryResponse struct {
 	Success          bool   `json:"success"`

@@ -385,6 +385,58 @@ func nativeGetCommitLog(ctx context.Context, repoPath, ref string, limit, skip i
 	return commits, nil
 }
 
+// nativeCommitActivityDates returns per-commit dates within the last `days`
+// window reachable from ref, using a lightweight `git log` that decodes only
+// the date field (no message/tree/diff — no `git show`/blob access). Cost is
+// O(commits-in-window), not O(repo history) (Issue-5247).
+//
+// `useCommitterDate` selects committer date (%cI) vs author date (%aI) for the
+// returned timestamps; the --since window itself always filters on commit date
+// (git's default), which is acceptable slop for an approximate sparkline.
+func nativeCommitActivityDates(ctx context.Context, repoPath, ref string, days int, useCommitterDate bool) ([]time.Time, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	dateFmt := "%aI"
+	if useCommitterDate {
+		dateFmt = "%cI"
+	}
+
+	args := []string{
+		"--git-dir", repoPath, "log",
+		fmt.Sprintf("--since=%d.days.ago", days),
+		"--pretty=" + dateFmt,
+		ref,
+	}
+
+	cmd := exec.CommandContext(cmdCtx, "git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit activity: %s", strings.TrimSpace(stderr.String()))
+	}
+
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return []time.Time{}, nil
+	}
+
+	var dates []time.Time
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		t, perr := time.Parse(time.RFC3339, line)
+		if perr != nil {
+			continue
+		}
+		dates = append(dates, t)
+	}
+	return dates, nil
+}
+
 // nativeRevListCount counts commits reachable from a ref.
 func nativeRevListCount(ctx context.Context, repoPath, ref string) (int, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)

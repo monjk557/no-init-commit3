@@ -3,7 +3,9 @@ package commits
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
@@ -151,6 +153,94 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context, req CommitsListRequest
 			PageSize:   params.Limit,
 		},
 	}, nil
+}
+
+// HandleCommitActivity는 GET /repos/{owner}/{repo}/commits/activity 요청을 처리합니다.
+//
+// 최근 N일(default 30) 일자별 커밋 수 히스토그램을 반환한다 — repo-list
+// sparkline 용 경량 API. full commit 메타를 내리지 않고 --since 윈도우로 커밋
+// 날짜만 집계하므로 비용이 O(commits-in-window) 이다 (Issue-5247).
+func (h *CommitsHandler) HandleCommitActivity(c *gin.Context, req CommitActivityRequest) (CommitActivityResponse, error) {
+	ctx := c.Request.Context()
+
+	owner := c.Param("owner")
+	repo := c.Param("repo")
+
+	ref := strings.TrimSpace(req.Ref)
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	days, err := parseActivityDays(req.Days)
+	if err != nil {
+		return CommitActivityResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	if req.GroupBy != "" && req.GroupBy != "committer_date" {
+		return CommitActivityResponse{}, typed.NewHTTPError(http.StatusBadRequest,
+			"invalid group_by parameter: must be empty or 'committer_date'")
+	}
+	useCommitterDate := req.GroupBy == "committer_date"
+
+	repoCtx, err := h.validateAndGetRepoPath(owner, repo, ref)
+	if err != nil {
+		return CommitActivityResponse{}, err
+	}
+
+	dates, err := nativeCommitActivityDates(ctx, repoCtx.repoPath, ref, days, useCommitterDate)
+	if err != nil {
+		return CommitActivityResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	return buildActivityResponse(ref, days, dates), nil
+}
+
+// parseActivityDays 는 days query 파라미터를 파싱/검증한다. 빈 값이면 default.
+func parseActivityDays(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultActivityDays, nil
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid days parameter: must be an integer")
+	}
+	if days < MinActivityDays || days > MaxActivityDays {
+		return 0, fmt.Errorf("invalid days parameter: must be between %d and %d", MinActivityDays, MaxActivityDays)
+	}
+	return days, nil
+}
+
+// buildActivityResponse 는 커밋 날짜 목록을 [since, until] 윈도우의 dense
+// 일자별 히스토그램으로 조립한다 (오래된→최신, 커밋 없는 날 0, 길이 == days).
+// until = 오늘(UTC), since = until - (days-1), 둘 다 inclusive.
+func buildActivityResponse(ref string, days int, dates []time.Time) CommitActivityResponse {
+	today := time.Now().UTC().Truncate(24 * time.Hour) // midnight UTC (epoch is midnight UTC)
+	start := today.AddDate(0, 0, -(days - 1))
+
+	counts := make(map[string]int, len(dates))
+	for _, t := range dates {
+		counts[t.UTC().Format("2006-01-02")]++
+	}
+
+	buckets := make([]ActivityDayCount, 0, days)
+	total := 0
+	for i := 0; i < days; i++ {
+		key := start.AddDate(0, 0, i).Format("2006-01-02")
+		cnt := counts[key]
+		total += cnt
+		buckets = append(buckets, ActivityDayCount{Date: key, Count: cnt})
+	}
+
+	return CommitActivityResponse{
+		Success: true,
+		Ref:     ref,
+		Days:    days,
+		Since:   start.Format("2006-01-02"),
+		Until:   today.Format("2006-01-02"),
+		Total:   total,
+		Buckets: buckets,
+	}
 }
 
 // HandleComparisonSummary는 GET /repos/{owner}/{repo}/commits/compare/summary 요청을 처리합니다.

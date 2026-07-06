@@ -389,6 +389,36 @@ paths:
                 $ref: '#/components/schemas/MultiFileCommitResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/commits/activity:
+    get:
+      summary: HandleCommitActivity
+      operationId: handlecommitactivity
+      tags:
+        - Commits
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          schema:
+            type: string
+        - name: days
+          in: query
+          schema:
+            type: string
+        - name: group_by
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitActivityResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/commits/compare/summary:
     get:
       summary: HandleComparisonSummary
@@ -1259,6 +1289,16 @@ components:
         example: "testrepo"
 
   schemas:
+    ActivityDayCount:
+      type: object
+      properties:
+        date:
+          type: string
+        count:
+          type: integer
+      required:
+        - count
+        - date
     AnchorRequest:
       type: object
       properties:
@@ -1736,6 +1776,36 @@ components:
         - parent_hashes
         - sha
         - tree_hash
+    CommitActivityRequest:
+      type: object
+    CommitActivityResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        ref:
+          type: string
+        days:
+          type: integer
+        since:
+          type: string
+        until:
+          type: string
+        total:
+          type: integer
+        buckets:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityDayCount'
+          nullable: true
+      required:
+        - buckets
+        - days
+        - ref
+        - since
+        - success
+        - total
+        - until
     CommitAuthor:
       type: object
       properties:
