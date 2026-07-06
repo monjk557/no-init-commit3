@@ -595,6 +595,30 @@ paths:
                 $ref: '#/components/schemas/DiffResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/diff/compare-changed:
+    post:
+      summary: HandleCompareChanged
+      operationId: handlecomparechanged
+      tags:
+        - Diff
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompareChangedRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompareChangedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/diff/expand-context:
     get:
       summary: HandleExpandContext
@@ -1890,6 +1914,38 @@ components:
         - message
         - pagination
         - results
+        - success
+    CompareChangedRequest:
+      type: object
+      properties:
+        base_sha:
+          type: string
+        old_head_sha:
+          type: string
+        new_head_sha:
+          type: string
+      required:
+        - base_sha
+        - new_head_sha
+        - old_head_sha
+    CompareChangedResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        base_sha:
+          type: string
+        old_head_sha:
+          type: string
+        new_head_sha:
+          type: string
+        content_changed:
+          type: boolean
+      required:
+        - base_sha
+        - content_changed
+        - new_head_sha
+        - old_head_sha
         - success
     ComparisonSummaryRequest:
       type: object

@@ -41,6 +41,7 @@ func RegisterRoutes(g gin.IRouter, h *DiffHandler) {
 		expandContext    func(*gin.Context, ExpandContextRequest) (ExpandContextResponse, error)
 		fileSearch       func(*gin.Context) (DiffFileSearchResponse, error)
 		classifyAnchors  func(*gin.Context) (ClassifyAnchorsResponse, error)
+		compareChanged   func(*gin.Context) (CompareChangedResponse, error)
 	)
 	if h != nil {
 		commitDiff = h.HandleCommitDiff
@@ -51,6 +52,7 @@ func RegisterRoutes(g gin.IRouter, h *DiffHandler) {
 		expandContext = h.HandleExpandContext
 		fileSearch = h.HandleDiffFileSearch
 		classifyAnchors = h.HandleClassifyAnchors
+		compareChanged = h.HandleCompareChanged
 	}
 
 	typed.RegisterGet(g, "/diff/commits/:base/:head", tag,
@@ -118,6 +120,13 @@ func RegisterRoutes(g gin.IRouter, h *DiffHandler) {
 		classifyAnchors,
 		typed.WithSummary("HandleClassifyAnchors"),
 		typed.WithRequestBody(reflect.TypeOf(ClassifyAnchorsRequest{})),
+	)
+
+	// POST /diff/compare-changed — 두 head 의 CR diff content 동일 여부 (Issue-5254).
+	typed.RegisterNoBody(g, "POST", "/diff/compare-changed", tag,
+		compareChanged,
+		typed.WithSummary("HandleCompareChanged"),
+		typed.WithRequestBody(reflect.TypeOf(CompareChangedRequest{})),
 	)
 }
 

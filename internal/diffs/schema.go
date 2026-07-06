@@ -382,3 +382,21 @@ type ClassifyAnchorsResponse struct {
 	HeadSHA string         `json:"head_sha"`
 	Results []AnchorResult `json:"results"`
 }
+
+// CompareChangedRequest는 POST /diff/compare-changed 요청입니다 (Issue-5254).
+// base 기준 old_head_sha / new_head_sha 두 diff 가 실제 파일 내용상 다른지 판정한다.
+type CompareChangedRequest struct {
+	BaseSHA    string `json:"base_sha" binding:"required"`     // 비교 기준 (CR target commit sha)
+	OldHeadSHA string `json:"old_head_sha" binding:"required"` // 이전 source head
+	NewHeadSHA string `json:"new_head_sha" binding:"required"` // 새 source head (push 후)
+}
+
+// CompareChangedResponse는 POST /diff/compare-changed 응답입니다.
+// content_changed=false 면 두 diff 가 동일 — trivial rebase / no-code-change.
+type CompareChangedResponse struct {
+	Success        bool   `json:"success"`
+	BaseSHA        string `json:"base_sha"`
+	OldHeadSHA     string `json:"old_head_sha"`
+	NewHeadSHA     string `json:"new_head_sha"`
+	ContentChanged bool   `json:"content_changed"`
+}
