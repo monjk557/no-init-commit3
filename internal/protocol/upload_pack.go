@@ -170,6 +170,20 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	// Flush the response header before pack generation starts. git upload-pack
+	// emits no bytes until it finishes counting + delta-compressing objects,
+	// which takes tens of seconds on a repo whose reachability bitmap is stale
+	// or missing (Issue-5273). The fronting collabops-git-http reverse proxy
+	// aborts the relay with HTTP 502 ("timeout awaiting response headers") when
+	// headers do not arrive within its ResponseHeaderTimeout (~60s), so a slow
+	// first byte fails an otherwise-healthy clone. Sending the header now
+	// decouples header latency from pack-compute latency; the packfile body
+	// then streams under the idle StreamDeadliner primed above.
+	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
 	cmd := exec.CommandContext(r.Context(), "git", "upload-pack", "--stateless-rpc", repoPath)
 	cmd.Stdin = bytes.NewReader(bodyBytes)
 	mw := gitcmd.NewMeteredWriter(NewIdleWriter(w, sd))
