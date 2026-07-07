@@ -434,7 +434,8 @@ func makeErrResp(t *testing.T, status int, code, msg string) *httptest.ResponseR
 	t.Helper()
 	resp := httptest.NewRecorder()
 	resp.Code = status
-	body := `{"success":false,"error":{"code":"` + code + `","message":"` + msg + `"}}`
+	// FLAT error envelope (Issue-5360): {success, error, code}.
+	body := `{"success":false,"error":"` + msg + `","code":"` + code + `"}`
 	_, err := resp.Body.WriteString(body)
 	require.NoError(t, err)
 	return resp
@@ -505,7 +506,7 @@ func TestAssertions_SchemaAndBody(t *testing.T) {
 	RequireStableSchema(t, resp, "success", "error", "code")
 	RequireBodyContains(t, resp, "INVALID_REF")
 	require.True(t, AssertBodyContains(t, resp, "bad ref message"))
-	RequireJSONField(t, resp, "error.code", "INVALID_REF")
+	RequireJSONField(t, resp, "code", "INVALID_REF")
 }
 
 func TestAssertions_TruncationContract(t *testing.T) {

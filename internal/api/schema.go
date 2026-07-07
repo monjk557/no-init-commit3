@@ -4,9 +4,8 @@ package api
 // source 다 (schemaFilePaths() 목록에 등록됨). 런타임 로직은 두지 않는다 —
 // error envelope 와 error.code enum 의 single source of truth 만 정의한다.
 
-// ErrorCodeEnum 은 git-executor 가 HTTP 에러 응답 body 의 `error.code`(또는
-// 일부 legacy 핸들러의 `error_code`) 필드로 실제 내려보내는 머신 판독용 에러
-// 코드 값의 집합이다.
+// ErrorCodeEnum 은 git-executor 가 HTTP 에러 응답 body 의 flat `code` 필드로
+// 실제 내려보내는 머신 판독용 에러 코드 값의 집합이다.
 //
 // 이 alias + 아래 const 블록은 spec generator 가 `components/schemas/
 // ErrorCodeEnum` (type: string enum) 으로 emit 하는 SoT 다. 접미사가 `Enum`
@@ -31,7 +30,7 @@ const (
 	ErrCodeCommitNotFound ErrorCodeEnum = "COMMIT_NOT_FOUND"
 	// ErrCodeConcurrentLimitExceeded: 동시 요청 한도 초과 (rate limiter 429).
 	ErrCodeConcurrentLimitExceeded ErrorCodeEnum = "CONCURRENT_LIMIT_EXCEEDED"
-	// ErrCodeConcurrentUpdate: 동시 ref 업데이트 충돌 (merge 409, key=error_code).
+	// ErrCodeConcurrentUpdate: 동시 ref 업데이트 충돌 (merge 409).
 	ErrCodeConcurrentUpdate ErrorCodeEnum = "CONCURRENT_UPDATE"
 	// ErrCodeConflict: merge 충돌 — 수동 해소 필요 (merge 409).
 	ErrCodeConflict ErrorCodeEnum = "CONFLICT"
@@ -51,6 +50,11 @@ const (
 	ErrCodeIPBanned ErrorCodeEnum = "IP_BANNED"
 	// ErrCodeLocked: 리소스 잠김 (merge 423).
 	ErrCodeLocked ErrorCodeEnum = "LOCKED"
+	// ErrCodeMergeConflict: merge 결과 파일 충돌 — 수동 해소 필요 (merge 409).
+	// CONFLICT 와 구분: MERGE_CONFLICT 는 source→target 병합 시 실제 파일 단위
+	// 충돌이 감지된 경우로, params(source_ref/target_ref/conflict_count) 를 함께
+	// 실어 orchestrator 가 GIT_MERGE_CONFLICT 카탈로그로 보간하도록 한다.
+	ErrCodeMergeConflict ErrorCodeEnum = "MERGE_CONFLICT"
 	// ErrCodeNotFound: 리소스를 찾을 수 없음 (merge 404).
 	ErrCodeNotFound ErrorCodeEnum = "NOT_FOUND"
 	// ErrCodeObjectNotFound: git object(commit SHA) 를 찾을 수 없음 (diffs 404).
@@ -74,17 +78,26 @@ const (
 )
 
 // ErrorResponse 는 REST 엔드포인트가 반환하는 표준 에러 envelope 이다.
-// `success: false` + 사람이 읽는 `error` 메시지 + 머신 판독용 `code`(선택).
+// `success: false` + 사람이 읽는 `error` 메시지 + 머신 판독용 `code`(선택) +
+// 언어 중립 보간용 `params`(선택).
 //
 // generator 가 `components/schemas/ErrorResponse` 로 emit 하며, template 의
 // responses(BadRequest/Unauthorized/NotFound/...) 가 이 schema 를 `$ref` 로
 // 참조한다. `code` 는 omitempty — 모든 핸들러가 코드를 채우지는 않으므로
 // (예: typed wrapper 기본 응답은 `{success, error}` 만) optional 로 둔다.
+//
+// wire shape 는 flat 이다: git-executor 는 localization 을 하지 않고, 언어
+// 중립 machine code + params 만 실어 보낸다. upstream orchestrator(O2) 가
+// `GIT_<code>` 를 i18n 카탈로그에서 조회하고 `params` 를 보간한다.
 type ErrorResponse struct {
 	// Success 는 항상 false (에러 응답).
 	Success bool `json:"success"`
-	// Error 는 사람이 읽을 수 있는 에러 메시지.
+	// Error 는 사람이 읽을 수 있는 에러 메시지 (개발자용, 비현지화).
 	Error string `json:"error"`
 	// Code 는 머신 판독용 에러 코드. 일부 핸들러만 채운다.
 	Code ErrorCodeEnum `json:"code,omitempty"`
+	// Params 는 orchestrator 가 카탈로그 메시지를 보간할 때 쓰는 언어 중립
+	// key-value 집합. 비어 있으면 생략된다 (예: MERGE_CONFLICT 는
+	// source_ref/target_ref/conflict_count 를 싣는다).
+	Params map[string]string `json:"params,omitempty"`
 }

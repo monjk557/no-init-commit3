@@ -1087,10 +1087,10 @@ func Test_MergePreview_PolicyRejects_MergeAlsoRejects_SameErrorCode(t *testing.T
 		var previewErr, mergeErr map[string]interface{}
 		if err := json.Unmarshal(previewW.Body.Bytes(), &previewErr); err == nil {
 			if err := json.Unmarshal(mergeW.Body.Bytes(), &mergeErr); err == nil {
-				previewErrCode := previewErr["error_code"]
-				mergeErrCode := mergeErr["error_code"]
+				previewErrCode := previewErr["code"]
+				mergeErrCode := mergeErr["code"]
 				require.Equal(t, previewErrCode, mergeErrCode,
-					"preview and merge should return same error_code for same policy violation, preview=%v merge=%v",
+					"preview and merge should return same code for same policy violation, preview=%v merge=%v",
 					previewErrCode, mergeErrCode)
 			}
 		}
@@ -1199,11 +1199,11 @@ func Test_Merge_PolicyStateChangesBetweenPreviewAndMerge_Returns409Or403_ByContr
 		// error.code가 있어야 함
 		var mergeErr map[string]interface{}
 		if err := json.Unmarshal(mergeW.Body.Bytes(), &mergeErr); err == nil {
-			// error_code가 있으면 POLICY_VIOLATION 또는 CONCURRENT_UPDATE여야 함
-			if errCode, ok := mergeErr["error_code"].(string); ok {
+			// code가 있으면 POLICY_VIOLATION 또는 CONCURRENT_UPDATE여야 함
+			if errCode, ok := mergeErr["code"].(string); ok {
 				assert.True(t,
 					errCode == "POLICY_VIOLATION" || errCode == "CONCURRENT_UPDATE",
-					"error_code should be POLICY_VIOLATION or CONCURRENT_UPDATE, got %s",
+					"code should be POLICY_VIOLATION or CONCURRENT_UPDATE, got %s",
 					errCode)
 			}
 		}

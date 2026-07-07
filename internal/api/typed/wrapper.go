@@ -24,6 +24,12 @@ import (
 type HTTPError struct {
 	Status  int
 	Message string
+	// Code 는 언어 중립 machine error code (예: "REF_NOT_FOUND"). 비어 있으면
+	// 응답 body 에 `code` 필드가 생략된다.
+	Code string
+	// Params 는 orchestrator 가 카탈로그 메시지를 보간할 때 쓰는 key-value.
+	// 비어 있으면 응답 body 에 `params` 필드가 생략된다.
+	Params map[string]string
 }
 
 // Error 는 error 인터페이스 만족용. wrapper 가 사용자에게 노출하는 텍스트.
@@ -36,11 +42,34 @@ func NewHTTPError(status int, message string) *HTTPError {
 	return &HTTPError{Status: status, Message: message}
 }
 
+// NewHTTPErrorWithCode 는 status + message 에 더해 언어 중립 machine code 와
+// 보간용 params 를 함께 실은 *HTTPError 를 만든다. wrapper 가 응답 body 에
+// `code` (+ 비어 있지 않으면 `params`) 를 flat 하게 추가한다 — git-executor 는
+// localization 을 하지 않고 orchestrator 가 `GIT_<code>` 로 카탈로그 조회.
+func NewHTTPErrorWithCode(status int, message, code string, params map[string]string) *HTTPError {
+	return &HTTPError{Status: status, Message: message, Code: code, Params: params}
+}
+
 // writeError 는 단순 에러 응답을 작성한다. 기존 handler 들의
 // `c.JSON(status, gin.H{"success": false, "error": <msg>})` 형태와 byte
 // equivalent — 회귀 보호를 위해 키 순서·개수 모두 유지.
 func writeError(c *gin.Context, status int, msg string) {
-	c.JSON(status, gin.H{"success": false, "error": msg})
+	writeErrorWithCode(c, status, msg, "", nil)
+}
+
+// writeErrorWithCode 는 error envelope 에 optional machine code + params 를
+// 실어 응답한다. code 가 빈 문자열이고 params 가 비어 있으면 legacy 와 byte
+// equivalent (`{success, error}` 2 키) 를 유지하고, 값이 있을 때만 flat 하게
+// `code`/`params` 키를 추가한다.
+func writeErrorWithCode(c *gin.Context, status int, msg, code string, params map[string]string) {
+	body := gin.H{"success": false, "error": msg}
+	if code != "" {
+		body["code"] = code
+	}
+	if len(params) > 0 {
+		body["params"] = params
+	}
+	c.JSON(status, body)
 }
 
 // mapAndWriteError 는 handler 가 반환한 error 를 응답으로 변환한다.
@@ -57,7 +86,7 @@ func mapAndWriteError(c *gin.Context, err error, ep Endpoint) {
 	}
 	var he *HTTPError
 	if errors.As(err, &he) {
-		writeError(c, he.Status, he.Message)
+		writeErrorWithCode(c, he.Status, he.Message, he.Code, he.Params)
 		return
 	}
 	writeError(c, http.StatusInternalServerError, err.Error())

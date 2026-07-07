@@ -16,15 +16,17 @@ import (
 // ⚠️ Error Mapper 없음: 핸들러가 직접 분기한 결과를 검증
 // =============================================================================
 
-// APIError represents the standard error response structure
+// APIError represents the standard FLAT error envelope git-executor emits.
+//
+// wire shape 는 flat 이다 (Issue-5360): `{"success": false, "error": "<msg>",
+// "code": "<MACHINE_CODE>", "params": {...}}`. 과거 nested `{error:{code}}`
+// 형태를 가정하던 assertion 을 production 실제 shape 에 맞춰 정정했다.
+// git-executor 는 localization 을 하지 않고 machine code + params 만 싣는다.
 type APIError struct {
-	Success bool `json:"success"`
-	Error   struct {
-		Code      string                 `json:"code"`
-		Message   string                 `json:"message"`
-		RequestID string                 `json:"request_id,omitempty"`
-		Details   map[string]interface{} `json:"details,omitempty"`
-	} `json:"error"`
+	Success bool              `json:"success"`
+	Error   string            `json:"error"`
+	Code    string            `json:"code"`
+	Params  map[string]string `json:"params,omitempty"`
 }
 
 // RequireStatus asserts the HTTP status code
@@ -46,8 +48,8 @@ func AssertStatus(t *testing.T, resp *httptest.ResponseRecorder, expected int) b
 	return true
 }
 
-// RequireErrCode asserts the error.code field in response
-// 회귀: "machine-readable error.code가 예상대로 반환되는지 검증"
+// RequireErrCode asserts the top-level `code` field in the flat error envelope.
+// 회귀: "machine-readable code가 예상대로 반환되는지 검증"
 func RequireErrCode(t *testing.T, resp *httptest.ResponseRecorder, expectedCode string) {
 	t.Helper()
 
@@ -56,12 +58,12 @@ func RequireErrCode(t *testing.T, resp *httptest.ResponseRecorder, expectedCode 
 	require.NoError(t, err, "response body should be valid JSON: %s", resp.Body.String())
 
 	require.False(t, apiErr.Success, "success should be false for error response")
-	require.Equal(t, expectedCode, apiErr.Error.Code,
-		"expected error.code=%s, got=%s\nFull response: %s",
-		expectedCode, apiErr.Error.Code, resp.Body.String())
+	require.Equal(t, expectedCode, apiErr.Code,
+		"expected code=%s, got=%s\nFull response: %s",
+		expectedCode, apiErr.Code, resp.Body.String())
 }
 
-// AssertErrCode asserts error code (non-fatal)
+// AssertErrCode asserts the top-level `code` field (non-fatal).
 func AssertErrCode(t *testing.T, resp *httptest.ResponseRecorder, expectedCode string) bool {
 	t.Helper()
 
@@ -77,12 +79,29 @@ func AssertErrCode(t *testing.T, resp *httptest.ResponseRecorder, expectedCode s
 		return false
 	}
 
-	if apiErr.Error.Code != expectedCode {
-		t.Errorf("expected error.code=%s, got=%s\nFull response: %s",
-			expectedCode, apiErr.Error.Code, resp.Body.String())
+	if apiErr.Code != expectedCode {
+		t.Errorf("expected code=%s, got=%s\nFull response: %s",
+			expectedCode, apiErr.Code, resp.Body.String())
 		return false
 	}
 	return true
+}
+
+// RequireErrParam asserts a specific key in the flat error envelope's `params`.
+// 회귀: "orchestrator 보간용 params(source_ref/target_ref/ref 등)가 flat
+// 하게 실려 내려오는지 검증"
+func RequireErrParam(t *testing.T, resp *httptest.ResponseRecorder, key, expected string) {
+	t.Helper()
+
+	var apiErr APIError
+	err := json.Unmarshal(resp.Body.Bytes(), &apiErr)
+	require.NoError(t, err, "response body should be valid JSON: %s", resp.Body.String())
+
+	got, ok := apiErr.Params[key]
+	require.True(t, ok, "params should contain key %q\nFull response: %s", key, resp.Body.String())
+	require.Equal(t, expected, got,
+		"expected params[%s]=%s, got=%s\nFull response: %s",
+		key, expected, got, resp.Body.String())
 }
 
 // RequireRetryAfter asserts that Retry-After header is present

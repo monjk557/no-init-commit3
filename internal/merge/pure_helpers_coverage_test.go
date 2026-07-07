@@ -1,8 +1,6 @@
 package merge
 
 import (
-	"errors"
-	"net/http"
 	"testing"
 	"time"
 
@@ -268,89 +266,16 @@ func Test_toNativeSignature_Cov(t *testing.T) {
 // types_errors.go
 // ---------------------------------------------------------------------------
 
-func Test_TypedErrors_ErrorAndUnwrap_Cov(t *testing.T) {
+// Test_ConcurrentUpdateError_ErrorAndUnwrap_Cov 는 유일하게 남은 typed error
+// (handler 에서 errors.As 로 감지) 의 Error()/Unwrap() 을 검증한다. Issue-5360
+// 에서 나머지 dead 택소노미(ToAPIError/APIError/NotFoundError 등)는 제거됨.
+func Test_ConcurrentUpdateError_ErrorAndUnwrap_Cov(t *testing.T) {
 	t.Parallel()
-
-	nf := NotFoundError{Kind: "ref", Name: "main"}
-	require.Equal(t, "ref not found: main", nf.Error())
-	require.ErrorIs(t, nf, ErrNotFound)
-
-	ce := ConflictError{ConflictCount: 3}
-	require.Equal(t, "merge has 3 conflicts", ce.Error())
-	require.Equal(t, "custom", ConflictError{Message: "custom"}.Error())
-	require.ErrorIs(t, ce, ErrConflict)
-
-	ve := ValidationError{Field: "source_ref", Message: "required"}
-	require.Equal(t, "validation failed for source_ref: required", ve.Error())
-	require.Equal(t, "msg only", ValidationError{Message: "msg only"}.Error())
-	require.ErrorIs(t, ve, ErrInvalidInput)
-
-	le := LockedError{Resource: "repo"}
-	require.Equal(t, "resource is locked: repo", le.Error())
-	require.Equal(t, "boom", LockedError{Message: "boom"}.Error())
-	require.ErrorIs(t, le, ErrLocked)
 
 	cu := ConcurrentUpdateError{Resource: "ref"}
 	require.Equal(t, "concurrent update on resource: ref", cu.Error())
 	require.Equal(t, "cc", ConcurrentUpdateError{Message: "cc"}.Error())
 	require.ErrorIs(t, cu, ErrConflict)
-
-	inner := errors.New("inner")
-	ie := InternalError{Op: "merge", Message: "failed", Err: inner}
-	require.Equal(t, "merge: failed: inner", ie.Error())
-	require.ErrorIs(t, ie, inner) // Unwrap returns inner
-	require.Equal(t, "merge: failed", InternalError{Op: "merge", Message: "failed"}.Error())
-	require.ErrorIs(t, InternalError{Op: "x", Message: "y"}, ErrInternalError)
-
-	env := EnvironmentConflictError{Path: ".env", Message: "env conflict"}
-	require.Equal(t, "env conflict", env.Error())
-	require.ErrorIs(t, env, ErrConflict)
-	require.Equal(t, http.StatusConflict, env.HTTPStatusCode())
-
-	cx := ComplexConflictError{Path: "x", Message: "complex"}
-	require.Equal(t, "complex", cx.Error())
-	require.ErrorIs(t, cx, ErrConflict)
-	require.Equal(t, http.StatusConflict, cx.HTTPStatusCode())
-
-	api := APIError{Message: "api err"}
-	require.Equal(t, "api err", api.Error())
-}
-
-func Test_ToAPIError_AllPaths_Cov(t *testing.T) {
-	t.Parallel()
-
-	require.Equal(t, http.StatusInternalServerError, ToAPIError(nil).Status)
-	require.Equal(t, "UNKNOWN", ToAPIError(nil).Code)
-
-	require.Equal(t, http.StatusNotFound, ToAPIError(NotFoundError{Kind: "ref", Name: "x"}).Status)
-	require.Equal(t, http.StatusConflict, ToAPIError(ConflictError{ConflictCount: 1}).Status)
-	require.Equal(t, http.StatusBadRequest, ToAPIError(ValidationError{Field: "f", Message: "m"}).Status)
-	require.Equal(t, http.StatusLocked, ToAPIError(LockedError{Resource: "r"}).Status)
-	require.Equal(t, http.StatusInternalServerError, ToAPIError(InternalError{Op: "o", Message: "m"}).Status)
-
-	// Sentinel-only errors (no typed wrapper).
-	require.Equal(t, http.StatusNotFound, ToAPIError(WrapMergeError("op", ErrNotFound)).Status)
-	require.Equal(t, http.StatusConflict, ToAPIError(WrapMergeError("op", ErrConflict)).Status)
-	require.Equal(t, http.StatusBadRequest, ToAPIError(WrapMergeError("op", ErrInvalidInput)).Status)
-	require.Equal(t, http.StatusLocked, ToAPIError(WrapMergeError("op", ErrLocked)).Status)
-
-	// Plain error → internal.
-	require.Equal(t, http.StatusInternalServerError, ToAPIError(errors.New("plain")).Status)
-}
-
-func Test_ErrorConstructors_Cov(t *testing.T) {
-	t.Parallel()
-
-	require.ErrorIs(t, NewNotFoundError("ref", "x"), ErrNotFound)
-	require.ErrorIs(t, NewConflictError(5), ErrConflict)
-	require.Contains(t, NewConflictError(5).Error(), "5 conflicts")
-	require.ErrorIs(t, NewValidationError("f", "m"), ErrInvalidInput)
-	require.ErrorIs(t, NewLockedError("r"), ErrLocked)
-	innerErr := errors.New("e")
-	require.ErrorIs(t, NewInternalError("op", "m", innerErr), innerErr)
-
-	require.Nil(t, WrapMergeError("op", nil))
-	require.ErrorContains(t, WrapMergeError("op", errors.New("inner")), "op: inner")
 }
 
 // ---------------------------------------------------------------------------

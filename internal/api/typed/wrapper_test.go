@@ -189,6 +189,54 @@ func TestMapAndWriteError_HTTPErrorWrappedByFmt(t *testing.T) {
 	}
 }
 
+// TestMapAndWriteError_HTTPErrorWithCodeAndParams 는 NewHTTPErrorWithCode 로
+// 생성한 에러가 flat error envelope 에 `code` 와 `params` 를 함께 싣는지
+// 검증한다 (Issue-5360). git-executor 는 localization 을 하지 않고 machine
+// code + params 만 실어 orchestrator 가 카탈로그 조회/보간하게 한다.
+func TestMapAndWriteError_HTTPErrorWithCodeAndParams(t *testing.T) {
+	c, w := newTestContext()
+	mapAndWriteError(c, NewHTTPErrorWithCode(http.StatusNotFound,
+		"Failed to resolve source ref: unknown revision",
+		"REF_NOT_FOUND", map[string]string{"ref": "feature/x"}), Endpoint{})
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response 가 JSON 이 아님: %v\n%s", err, w.Body.String())
+	}
+	if got["success"] != false {
+		t.Errorf("success = %v, want false", got["success"])
+	}
+	if got["code"] != "REF_NOT_FOUND" {
+		t.Errorf("code = %v, want REF_NOT_FOUND\nbody=%s", got["code"], w.Body.String())
+	}
+	params, ok := got["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("params 필드 누락 또는 타입 불일치: %s", w.Body.String())
+	}
+	if params["ref"] != "feature/x" {
+		t.Errorf("params.ref = %v, want feature/x", params["ref"])
+	}
+}
+
+// TestMapAndWriteError_HTTPErrorNoCode_StaysTwoKeys 는 코드 없는 기존
+// NewHTTPError 응답이 legacy `{success, error}` 2 키 shape 를 그대로 유지하는지
+// (byte-equivalence 회귀 가드) 검증한다.
+func TestMapAndWriteError_HTTPErrorNoCode_StaysTwoKeys(t *testing.T) {
+	c, w := newTestContext()
+	mapAndWriteError(c, NewHTTPError(http.StatusBadRequest, "bad"), Endpoint{})
+
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response 가 JSON 이 아님: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("키 개수 = %d, want 2 (success, error). got=%+v", len(got), got)
+	}
+}
+
 func TestAbsolutePath_EmptyOrSlashPathReturnsBaseOnly(t *testing.T) {
 	e := gin.New()
 	g := e.Group("/repos/:owner/:repo")

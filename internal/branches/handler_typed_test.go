@@ -16,7 +16,15 @@ func invokeTyped[Resp any](c *gin.Context, fn func(*gin.Context) (Resp, error)) 
 	if err != nil {
 		var he *typed.HTTPError
 		if errors.As(err, &he) {
-			c.JSON(he.Status, gin.H{"success": false, "error": he.Message})
+			// production wrapper (writeErrorWithCode) mirror — flat code/params.
+			body := gin.H{"success": false, "error": he.Message}
+			if he.Code != "" {
+				body["code"] = he.Code
+			}
+			if len(he.Params) > 0 {
+				body["params"] = he.Params
+			}
+			c.JSON(he.Status, body)
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})

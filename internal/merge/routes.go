@@ -19,12 +19,20 @@ import (
 const tag = "Merge"
 
 // responseErr 는 multi-field error response 를 위한 wrapper. handler 가
-// 단순 {success, error} 가 아닌 conflicts/safety_warning/code 등 추가 필드
-// 를 가진 응답을 반환할 때 사용. mergeErrorMapper 가 status + body 를 그대로
-// 응답에 사용한다.
+// 단순 {success, error} 가 아닌 conflicts/safety_warning 등 추가 필드를 가진
+// 응답을 반환할 때 사용. mergeErrorMapper 가 status + body 를 그대로 응답에
+// 사용하되, code/params 가 채워져 있으면 flat 하게 body 에 주입한다.
+//
+// code/params 는 언어 중립 machine error code + 보간용 key-value 로,
+// orchestrator(O2) 가 `GIT_<code>` 카탈로그 조회 + params 보간에 사용한다.
+// git-executor 자체는 localization 을 하지 않는다.
 type responseErr struct {
 	status int
 	body   gin.H
+	// code 는 언어 중립 machine error code (비면 body 에 미주입).
+	code string
+	// params 는 orchestrator 보간용 key-value (비면 body 에 미주입).
+	params map[string]string
 }
 
 func (e *responseErr) Error() string {
@@ -81,13 +89,46 @@ func RegisterRoutes(g gin.IRouter, opsH *MergeOperationsHandler, previewH *Merge
 func mergeErrorMapper(err error) (int, any) {
 	var rich *responseErr
 	if errors.As(err, &rich) {
-		return rich.status, rich.body
+		return rich.status, mergeRichBody(rich)
 	}
 	var he *typed.HTTPError
 	if errors.As(err, &he) {
-		return he.Status, gin.H{"success": false, "error": he.Message}
+		return he.Status, httpErrorBody(he)
 	}
 	return http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()}
+}
+
+// mergeRichBody 는 responseErr.body 에 flat code/params 를 주입한 새 gin.H 를
+// 반환한다 (원본 body 를 mutate 하지 않음). code/params 가 비어 있으면 기존
+// body 와 동일한 키 집합을 유지한다.
+func mergeRichBody(rich *responseErr) gin.H {
+	if rich.code == "" && len(rich.params) == 0 {
+		return rich.body
+	}
+	body := make(gin.H, len(rich.body)+2)
+	for k, v := range rich.body {
+		body[k] = v
+	}
+	if rich.code != "" {
+		body["code"] = rich.code
+	}
+	if len(rich.params) > 0 {
+		body["params"] = rich.params
+	}
+	return body
+}
+
+// httpErrorBody 는 typed.HTTPError 를 flat error envelope 로 변환한다 — code/
+// params 가 있으면 함께 싣는다 (writeErrorWithCode 와 동일 shape).
+func httpErrorBody(he *typed.HTTPError) gin.H {
+	body := gin.H{"success": false, "error": he.Message}
+	if he.Code != "" {
+		body["code"] = he.Code
+	}
+	if len(he.Params) > 0 {
+		body["params"] = he.Params
+	}
+	return body
 }
 
 // mergeDiffErrorMapper 는 HandleMergeDiff 의 에러를 매핑한다. mergeErrorMapper

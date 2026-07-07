@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
@@ -466,23 +467,29 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) (ResolveBr
 	repo := c.Param("repo")
 	ref := strings.TrimPrefix(protocol.SafeParam(c, "ref"), "/")
 	if ref == "" {
-		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "branch name is required")
+		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusBadRequest,
+			"branch name is required", string(api.ErrCodeInvalidInput), nil)
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound,
+			"repository not found", string(api.ErrCodeNotFound), nil)
 	}
 	if !repoExists(repoPath) {
-		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound,
+			"repository not found", string(api.ErrCodeNotFound), nil)
 	}
 
 	exists, hash, err := NativeCheckBranchExists(ctx, repoPath, ref)
 	if err != nil {
-		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusUnprocessableEntity,
+			"repository corrupted", string(api.ErrCodeInternalError), nil)
 	}
 	if !exists {
-		return ResolveBranchResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("branch '%s' not found", ref))
+		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound,
+			fmt.Sprintf("branch '%s' not found", ref), string(api.ErrCodeRefNotFound),
+			map[string]string{"ref": ref})
 	}
 
 	return ResolveBranchResponse{

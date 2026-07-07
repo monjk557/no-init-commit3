@@ -1919,6 +1919,11 @@ func Test_ResolveBranch_EmptyRef_Returns400(t *testing.T) {
 
 	requireStatus(t, w, http.StatusBadRequest)
 	requireBodyContains(t, w, "branch name is required")
+
+	// Issue-5360: flat machine code INVALID_INPUT.
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "INVALID_INPUT", resp["code"])
 }
 
 // Test_ResolveBranch_RepoNotFound_Returns404
@@ -1937,6 +1942,11 @@ func Test_ResolveBranch_RepoNotFound_Returns404(t *testing.T) {
 
 	requireStatus(t, w, http.StatusNotFound)
 	requireBodyContains(t, w, "repository not found")
+
+	// Issue-5360: flat machine code NOT_FOUND.
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "NOT_FOUND", resp["code"])
 }
 
 // Test_ResolveBranch_BranchNotFound_Returns404
@@ -1956,6 +1966,14 @@ func Test_ResolveBranch_BranchNotFound_Returns404(t *testing.T) {
 
 	requireStatus(t, w, http.StatusNotFound)
 	requireBodyContains(t, w, "branch 'nonexistent' not found")
+
+	// Issue-5360: flat machine code REF_NOT_FOUND + params.ref for interpolation.
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "REF_NOT_FOUND", resp["code"])
+	params, ok := resp["params"].(map[string]interface{})
+	require.True(t, ok, "params should be present: %s", w.Body.String())
+	require.Equal(t, "nonexistent", params["ref"])
 }
 
 // =============================================================================

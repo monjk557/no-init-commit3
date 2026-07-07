@@ -14,14 +14,14 @@ func TestMatchPath(t *testing.T) {
 		path, pattern string
 		want          bool
 	}{
-		{".env", ".env", true},          // exact
-		{"foo.env", "*.env", true},      // leading wildcard (suffix match)
-		{"foo.txt", "*.env", false},     // leading wildcard no match
+		{".env", ".env", true},                          // exact
+		{"foo.env", "*.env", true},                      // leading wildcard (suffix match)
+		{"foo.txt", "*.env", false},                     // leading wildcard no match
 		{"config/secrets.yml", "config/secrets*", true}, // trailing wildcard (prefix match)
 		{"other/secrets.yml", "config/secrets*", false},
-		{".env.local", ".env.*", true},  // special .env.* branch
-		{".envlocal", ".env.*", false},  // missing dot after .env
-		{"x", ".env.*", false},          // too short
+		{".env.local", ".env.*", true}, // special .env.* branch
+		{".envlocal", ".env.*", false}, // missing dot after .env
+		{"x", ".env.*", false},         // too short
 	}
 	for _, c := range cases {
 		if got := matchPath(c.path, c.pattern); got != c.want {

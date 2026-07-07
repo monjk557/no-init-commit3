@@ -26,11 +26,11 @@ func buildAheadBehindRepo(t *testing.T) string {
 	run("init", "-q", "-b", "master")
 	run("config", "user.email", "t@example.com")
 	run("config", "user.name", "T")
-	run("commit", "--allow-empty", "-q", "-m", "base")   // commit A (merge-base)
+	run("commit", "--allow-empty", "-q", "-m", "base") // commit A (merge-base)
 	run("branch", "feature")
 	run("commit", "--allow-empty", "-q", "-m", "master2") // master ahead by 1
 	run("checkout", "-q", "feature")
-	run("commit", "--allow-empty", "-q", "-m", "feat2")   // feature ahead by 1
+	run("commit", "--allow-empty", "-q", "-m", "feat2") // feature ahead by 1
 	run("checkout", "-q", "master")
 	return filepath.Join(dir, ".git")
 }

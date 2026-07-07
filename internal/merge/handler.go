@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/diffs"
@@ -154,7 +156,10 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 		if strings.Contains(err.Error(), "unknown revision") {
 			status = http.StatusNotFound
 		}
-		return MergeResponse{}, typed.NewHTTPError(status, fmt.Sprintf("Failed to resolve source ref: %v", err))
+		return MergeResponse{}, typed.NewHTTPErrorWithCode(status,
+			fmt.Sprintf("Failed to resolve source ref: %v", err),
+			string(api.ErrCodeRefNotFound),
+			map[string]string{"ref": req.SourceRef})
 	}
 
 	targetHash, err := gitRevParse(ctx, repoPath, req.TargetRef)
@@ -163,7 +168,10 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 		if strings.Contains(err.Error(), "unknown revision") {
 			status = http.StatusNotFound
 		}
-		return MergeResponse{}, typed.NewHTTPError(status, fmt.Sprintf("Failed to resolve target ref: %v", err))
+		return MergeResponse{}, typed.NewHTTPErrorWithCode(status,
+			fmt.Sprintf("Failed to resolve target ref: %v", err),
+			string(api.ErrCodeRefNotFound),
+			map[string]string{"ref": req.TargetRef})
 	}
 
 	if h.hooks != nil && h.hooks.AfterReadTargetRef != nil {
@@ -254,13 +262,24 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 		}, nil
 	}
 
-	// Conflict safety checks (multi-field error responses)
+	// Conflict safety checks (multi-field error responses).
+	//
+	// code=MERGE_CONFLICT + params(source_ref/target_ref/conflict_count) 를
+	// 함께 실어 orchestrator 가 GIT_MERGE_CONFLICT 로 카탈로그 조회/보간하게
+	// 한다. 기존 conflicts[] / resolution_options 등 리치 필드는 그대로 보존.
 	if conflictAnalysis.HasConflicts {
 		hasEnvironmentConflicts := h.hasEnvironmentFileConflicts(conflictAnalysis)
+		conflictParams := map[string]string{
+			"source_ref":     req.SourceRef,
+			"target_ref":     req.TargetRef,
+			"conflict_count": strconv.Itoa(conflictAnalysis.ConflictCount),
+		}
 
 		if hasEnvironmentConflicts && !req.ForceConflict {
 			return MergeResponse{}, &responseErr{
 				status: http.StatusConflict,
+				code:   string(api.ErrCodeMergeConflict),
+				params: conflictParams,
 				body: gin.H{
 					"success":             false,
 					"error":               "Environment file conflicts detected - manual resolution required",
@@ -274,6 +293,8 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 		if !req.ForceConflict {
 			return MergeResponse{}, &responseErr{
 				status: http.StatusConflict,
+				code:   string(api.ErrCodeMergeConflict),
+				params: conflictParams,
 				body: gin.H{
 					"success":   false,
 					"error":     fmt.Sprintf("Merge has %d conflicts requiring resolution", conflictAnalysis.ConflictCount),
@@ -308,10 +329,10 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 		if errors.As(err, &concurrentErr) {
 			return MergeResponse{}, &responseErr{
 				status: http.StatusConflict,
+				code:   string(api.ErrCodeConcurrentUpdate),
 				body: gin.H{
-					"success":    false,
-					"error_code": "CONCURRENT_UPDATE",
-					"error":      concurrentErr.Message,
+					"success": false,
+					"error":   concurrentErr.Message,
 				},
 			}
 		}
