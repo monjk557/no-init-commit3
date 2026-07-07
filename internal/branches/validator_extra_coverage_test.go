@@ -17,7 +17,7 @@ func newValidatorHandler() *BranchOperationsHandler {
 func TestValidateBranchName_AllBranches(t *testing.T) {
 	h := newValidatorHandler()
 
-	valid := []string{"feature/foo", "release-1.2", "fix_bug", "a/b/c"}
+	valid := []string{"feature/foo", "release-1.2", "fix_bug"}
 	for _, n := range valid {
 		if err := h.validateBranchName(n); err != nil {
 			t.Errorf("validateBranchName(%q) unexpected err: %v", n, err)
@@ -31,7 +31,8 @@ func TestValidateBranchName_AllBranches(t *testing.T) {
 		"foo.":            "trailing dot",
 		"/foo":            "leading slash",
 		"foo/":            "trailing slash",
-		"a//b":            "consecutive slashes",
+		"a/b/c":           "multiple slashes",
+		"a//b":            "multiple slashes (count>1 caught first)",
 		"a..b":            "consecutive dots",
 		"a b":             "space",
 		"a@{b":            "@{ sequence",
