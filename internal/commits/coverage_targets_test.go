@@ -227,7 +227,7 @@ func Test_GetCommits_CancelledContext_ReturnsCtxErr(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := GetCommits(ctx, repoPath, "main", 10, 0)
+	_, err := GetCommits(ctx, repoPath, "main", 10, 0, "")
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -237,7 +237,7 @@ func Test_GetCommits_InvalidRef_ReturnsError(t *testing.T) {
 	repoPath := newBareRepoNative(t)
 	createInitialCommitNative(t, repoPath, "a.txt", []byte("A"))
 
-	_, err := GetCommits(context.Background(), repoPath, "does-not-exist", 10, 0)
+	_, err := GetCommits(context.Background(), repoPath, "does-not-exist", 10, 0, "")
 	require.Error(t, err)
 }
 
@@ -247,7 +247,7 @@ func Test_GetCommits_Success_ReturnsCommits(t *testing.T) {
 	repoPath := newBareRepoNative(t)
 	createInitialCommitNative(t, repoPath, "a.txt", []byte("A"))
 
-	commits, err := GetCommits(context.Background(), repoPath, "main", 10, 0)
+	commits, err := GetCommits(context.Background(), repoPath, "main", 10, 0, "")
 	require.NoError(t, err)
 	require.Len(t, commits, 1)
 }
@@ -265,7 +265,7 @@ func Test_GetCommitsFromMergeBase_CancelledContext_ReturnsCtxErr(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := GetCommitsFromMergeBase(ctx, repoPath, "main", "main", 10, 0)
+	_, _, err := GetCommitsFromMergeBase(ctx, repoPath, "main", "main", 10, 0, "")
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -275,7 +275,7 @@ func Test_GetCommitsFromMergeBase_EmptyRefs_ReturnsError(t *testing.T) {
 	repoPath := newBareRepoNative(t)
 	createInitialCommitNative(t, repoPath, "a.txt", []byte("A"))
 
-	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "", "main", 10, 0)
+	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "", "main", 10, 0, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "required")
 }
@@ -286,7 +286,7 @@ func Test_GetCommitsFromMergeBase_BadSourceRef_ReturnsError(t *testing.T) {
 	repoPath := newBareRepoNative(t)
 	createInitialCommitNative(t, repoPath, "a.txt", []byte("A"))
 
-	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "nope-source", "main", 10, 0)
+	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "nope-source", "main", 10, 0, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "source_ref")
 }
@@ -297,7 +297,7 @@ func Test_GetCommitsFromMergeBase_BadTargetRef_ReturnsError(t *testing.T) {
 	repoPath := newBareRepoNative(t)
 	createInitialCommitNative(t, repoPath, "a.txt", []byte("A"))
 
-	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "main", "nope-target", 10, 0)
+	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "main", "nope-target", 10, 0, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "target_ref")
 }
@@ -309,7 +309,7 @@ func Test_GetCommitsFromMergeBase_NoCommonAncestor_ReturnsError(t *testing.T) {
 	createInitialCommitNative(t, repoPath, "a.txt", []byte("A"))
 	createUnrelatedRootNative(t, repoPath, "other", "b.txt", []byte("B"))
 
-	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "main", "other", 10, 0)
+	_, _, err := GetCommitsFromMergeBase(context.Background(), repoPath, "main", "other", 10, 0, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "merge base")
 }
@@ -333,7 +333,7 @@ func Test_GetCommitsFromMergeBase_Success_ReturnsCommitsAndBase(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, nativeUpdateRef(ctx, repoPath, "refs/heads/feature", feat))
 
-	commits, mergeBase, err := GetCommitsFromMergeBase(ctx, repoPath, "feature", "main", 10, 0)
+	commits, mergeBase, err := GetCommitsFromMergeBase(ctx, repoPath, "feature", "main", 10, 0, "")
 	require.NoError(t, err)
 	require.Equal(t, base, mergeBase)
 	require.Len(t, commits, 1, "only the feature commit (past merge-base) should be listed")

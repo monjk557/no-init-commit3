@@ -307,7 +307,11 @@ func nativeMergeBase(ctx context.Context, repoPath, hash1, hash2 string) (string
 
 // nativeGetCommitLog returns commits using git log with a structured format.
 // format: hash\tauthor_name\tauthor_email\tauthor_date\tcommitter_name\tcommitter_email\tcommitter_date\tparent_hashes\ttree_hash\tsubject
-func nativeGetCommitLog(ctx context.Context, repoPath, ref string, limit, skip int, excludeAncestorsOf string) ([]Commit, error) {
+//
+// path가 비어 있지 않으면 `-- <path>` pathspec을 붙여 해당 subtree/file을
+// 건드린 커밋만 반환한다. pathspec은 반드시 모든 revision 뒤 `--` 구분자
+// 다음에 와야 하며, `--`가 leading-`-` path의 옵션 오인도 함께 차단한다.
+func nativeGetCommitLog(ctx context.Context, repoPath, ref string, limit, skip int, excludeAncestorsOf, path string) ([]Commit, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -325,6 +329,11 @@ func nativeGetCommitLog(ctx context.Context, repoPath, ref string, limit, skip i
 	args = append(args, ref)
 	if excludeAncestorsOf != "" {
 		args = append(args, "^"+excludeAncestorsOf)
+	}
+
+	// Optional pathspec — must follow a `--` separator after all revisions.
+	if path != "" {
+		args = append(args, "--", path)
 	}
 
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
@@ -473,7 +482,7 @@ func nativeCatFileType(ctx context.Context, repoPath, hash string) (string, erro
 
 // nativeGetCommitInfo returns commit info for a single commit hash.
 func nativeGetCommitInfo(ctx context.Context, repoPath, hash string) (*Commit, error) {
-	commits, err := nativeGetCommitLog(ctx, repoPath, hash, 1, 0, "")
+	commits, err := nativeGetCommitLog(ctx, repoPath, hash, 1, 0, "", "")
 	if err != nil {
 		return nil, err
 	}

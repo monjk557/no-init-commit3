@@ -44,6 +44,7 @@ type CommitsListRequest struct {
 	Limit     string `form:"limit"`
 	Skip      string `form:"skip"`
 	GroupBy   string `form:"group_by"` // "" | "committer_date"
+	Path      string `form:"path"`     // optional subtree/file pathspec — filters to commits touching this path
 }
 
 // CommitActivityRequest 는 GET /commits/activity 의 query parameter 를 나타낸다.
@@ -109,6 +110,9 @@ type CommitsRequestParams struct {
 	// "committer_date": committer date 기준 그룹핑 (rebase 등 반영)
 	// 기본값(빈 문자열): author date 기준 그룹핑 (하위호환)
 	GroupBy string
+	// Path는 선택적 pathspec입니다. 비어 있지 않으면 해당 경로(subtree/file)를
+	// 건드린 커밋만 반환합니다 (git log <ref> -- <path>).
+	Path string
 }
 
 // CommitsResponse는 커밋 로그 엔드포인트의 응답 구조를 나타냅니다.

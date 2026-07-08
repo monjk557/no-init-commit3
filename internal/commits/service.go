@@ -44,7 +44,7 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, 
 			return nil, 0, "", fmt.Errorf("both source_ref and target_ref must be provided together")
 		}
 
-		commits, mergeBase, err := GetCommitsFromMergeBase(ctx, repoPath, params.SourceRef, params.TargetRef, requestLimit, params.Skip)
+		commits, mergeBase, err := GetCommitsFromMergeBase(ctx, repoPath, params.SourceRef, params.TargetRef, requestLimit, params.Skip, params.Path)
 		if err != nil {
 			return nil, 0, "", fmt.Errorf("failed to get commits (merge-base): %w", err)
 		}
@@ -53,7 +53,7 @@ func (h *CommitsHandler) getCommitHistory(ctx context.Context, repoPath string, 
 		return commits, totalCount, mergeBase, nil
 	}
 
-	commits, err := GetCommits(ctx, repoPath, params.Ref, requestLimit, params.Skip)
+	commits, err := GetCommits(ctx, repoPath, params.Ref, requestLimit, params.Skip, params.Path)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("failed to get commits: %w", err)
 	}
@@ -94,9 +94,18 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context, req Com
 	limitStr := req.Limit
 	skipStr := req.Skip
 	groupBy := req.GroupBy
+	path := strings.TrimSpace(req.Path)
 
 	if owner == "" || repo == "" {
 		return nil, fmt.Errorf("missing required parameters: owner or repo")
+	}
+
+	// Path(pathspec)가 제공되면 tree API 와 동일한 검증을 적용해
+	// traversal(`..`)·절대경로·git 특수 경로를 차단한다.
+	if path != "" {
+		if err := h.pathValidator.ValidateFilePath(path); err != nil {
+			return nil, fmt.Errorf("invalid path parameter: %w", err)
+		}
 	}
 
 	if ref == "" {
@@ -144,6 +153,7 @@ func (h *CommitsHandler) validateAndExtractCommitsParams(c *gin.Context, req Com
 		Limit:     limit,
 		Skip:      skip,
 		GroupBy:   groupBy,
+		Path:      path,
 	}, nil
 }
 
@@ -155,6 +165,7 @@ func GetCommitsFromMergeBase(
 	targetRef string,
 	limit int,
 	skip int,
+	path string,
 ) ([]Commit, string, error) {
 	select {
 	case <-ctx.Done():
@@ -183,8 +194,8 @@ func GetCommitsFromMergeBase(
 	}
 
 	// Get commits from source excluding ancestors of merge-base
-	// git log source ^mergeBase with limit and skip
-	commits, err := nativeGetCommitLog(ctx, repoPath, sourceHash, limit, skip, mergeBase)
+	// git log source ^mergeBase with limit and skip (optionally filtered by path)
+	commits, err := nativeGetCommitLog(ctx, repoPath, sourceHash, limit, skip, mergeBase, path)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get commit log: %w", err)
 	}
@@ -259,14 +270,15 @@ func buildPagination(totalCount, currentPage, pageSize int, baseURL string) Pagi
 }
 
 // GetCommits는 페이지네이션을 사용하여 커밋 히스토리를 조회합니다.
-func GetCommits(ctx context.Context, repoPath string, ref string, limit, skip int) ([]Commit, error) {
+// path가 비어 있지 않으면 해당 pathspec을 건드린 커밋으로 필터링합니다.
+func GetCommits(ctx context.Context, repoPath string, ref string, limit, skip int, path string) ([]Commit, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
 
-	commits, err := nativeGetCommitLog(ctx, repoPath, ref, limit, skip, "")
+	commits, err := nativeGetCommitLog(ctx, repoPath, ref, limit, skip, "", path)
 	if err != nil {
 		return nil, err
 	}
