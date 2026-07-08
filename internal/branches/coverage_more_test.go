@@ -733,9 +733,12 @@ func Test_HandleGetBranches_EmailFilter_ReturnMatching(t *testing.T) {
 	require.GreaterOrEqual(t, len(resp.Results), 2, "main + feature 모두 매칭")
 }
 
-// HandleGetBranches 는 GetAndValidateRepoPath 만 호출 → 디스크 미존재 repo 는
-// GetBranches(for-each-ref) 가 실패하여 422 "repository corrupted" 로 떨어진다.
-func Test_HandleGetBranches_RepoMissing_Returns422(t *testing.T) {
+// HandleGetBranches 는 경로 형식만 검증하는 GetAndValidateRepoPath 뒤에 존재
+// 게이트(repoExists)를 두어, 디스크에 없는 repo(materialize 안 된 orphan)는
+// for-each-ref 를 실행하지 않고 404 "repository not found" 를 낸다. 예전에는
+// for-each-ref 가 "not a git repository" 로 실패하여 422 "repository corrupted"
+// + ERROR 로그로 오분류됐다 (Issue-5558).
+func Test_HandleGetBranches_RepoMissing_Returns404(t *testing.T) {
 	t.Parallel()
 
 	handler, _ := newHandler(t)
@@ -747,8 +750,8 @@ func Test_HandleGetBranches_RepoMissing_Returns422(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	requireStatus(t, w, http.StatusUnprocessableEntity)
-	requireBodyContains(t, w, "repository corrupted")
+	requireStatus(t, w, http.StatusNotFound)
+	requireBodyContains(t, w, "repository not found")
 }
 
 // =============================================================================

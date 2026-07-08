@@ -194,7 +194,29 @@ func branchListHTTPError(err error) *typed.HTTPError {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return typed.NewHTTPError(http.StatusTooManyRequests, "branch listing timed out, retry shortly")
 	}
+	// The repo vanished on disk between the existence gate and for-each-ref (a
+	// concurrent delete), so git reports "not a git repository". That is a
+	// missing resource, not corruption — 404, not the 422 reserved for a repo
+	// that is present but genuinely damaged (Issue-5558). Neither is auto-retried
+	// by the BFF.
+	if isRepoMissingErr(err) {
+		return typed.NewHTTPError(http.StatusNotFound, "repository not found")
+	}
 	return typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+}
+
+// isRepoMissingErr reports whether a git command error means the on-disk
+// repository is absent / not a valid git dir (as opposed to a present-but-broken
+// repo or an unrelated failure). git prints "not a git repository" (exit 128)
+// when the --git-dir path is missing or lacks the basic HEAD/objects/refs layout.
+func isRepoMissingErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not a git repository") ||
+		strings.Contains(msg, "repository does not exist") ||
+		strings.Contains(msg, "does not contain a valid git repository")
 }
 
 // HandleGetBranches handles GET /branches.
@@ -252,6 +274,18 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
 	}
 
+	// GetAndValidateRepoPath only validates the path format, not that the repo
+	// exists on disk. Gate on existence here — as the sibling ValidateBranchName
+	// / ResolveBranch handlers already do — so a missing/never-materialized repo
+	// (orphan DB record with no on-disk git dir) returns a clean 404 instead of
+	// falling through to for-each-ref, which fails "not a git repository" and was
+	// mislabelled 422 "repository corrupted" with an ERROR+stacktrace log per poll
+	// (Issue-5558). 404 is honest (the git resource is absent) and, like 429, is
+	// not auto-retried by the BFF.
+	if !repoExists(repoPath) {
+		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+	}
+
 	// Cost optimization (Issue-5071): committer email is the only for-each-ref
 	// field that forces reading every branch tip's commit object. With no email
 	// filter we scan cheaply without it, paginate, then enrich only the returned
@@ -271,12 +305,20 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 		// retry storm on the contended backend) instead of the blanket 422
 		// "repository corrupted" that mislabels healthy repos and hides the real
 		// cause (Issue-5071). Genuine git failures keep the 422 path — now logged.
-		if errors.Is(err, context.DeadlineExceeded) {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
 			h.logger.LogWarning(ctx, "branch listing timed out",
 				zap.String("repo", repoPath),
 				zap.String("sort", string(sort)),
 				zap.Error(err))
-		} else {
+		case isRepoMissingErr(err):
+			// Repo deleted mid-request (raced past the existence gate). An
+			// expected data-hygiene condition, not a server fault — WARN without a
+			// stacktrace so it does not spam ERROR logs per poll (Issue-5558).
+			h.logger.LogWarning(ctx, "branch listing: repository missing on disk",
+				zap.String("repo", repoPath))
+		default:
+			// Repo is present but git failed — genuine corruption. Keep ERROR.
 			h.logger.LogError(ctx, err, "branch listing failed",
 				zap.String("repo", repoPath))
 		}

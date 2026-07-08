@@ -35,6 +35,13 @@ func TestBranchListHTTPError(t *testing.T) {
 			err:        errors.New("git for-each-ref failed: fatal: bad object"),
 			wantStatus: http.StatusUnprocessableEntity,
 		},
+		{
+			// Repo dir missing / not a git repo → 404, not the 422 reserved for a
+			// present-but-corrupted repo (Issue-5558).
+			name:       "missing repo (not a git repository) → 404",
+			err:        errors.New("git for-each-ref failed: fatal: not a git repository: '/var/lib/git/repos/x/y.git': exit status 128"),
+			wantStatus: http.StatusNotFound,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
