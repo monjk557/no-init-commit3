@@ -636,6 +636,25 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 		}
 	}
 
+	// An empty repository (created but never pushed → unborn HEAD, zero commits)
+	// is a valid state, not an error: there is simply no latest commit. Resolve
+	// the ref first and, if it does not point at a commit, return 200 with a null
+	// commit — mirroring the main overview's empty-repo path (IsEmpty). Otherwise
+	// `git log HEAD` fails exit 128 and was mislabelled 422 "failed to resolve
+	// latest commit" (Issue-5560). The LatestCommitsBatch sibling already avoids
+	// this by resolving the ref up front.
+	if resolved, rerr := nativeResolveRef(ctx, repoCtx.repoPath, repoCtx.ref); rerr != nil || resolved == "" {
+		return LatestCommitOverviewResponse{
+			Success:    true,
+			Repository: fmt.Sprintf("%s/%s", owner, repo),
+			Owner:      owner,
+			Name:       repo,
+			Ref:        repoCtx.ref,
+			Path:       path,
+			Commit:     nil,
+		}, nil
+	}
+
 	var (
 		commit  *GitCommit
 		nateErr error
