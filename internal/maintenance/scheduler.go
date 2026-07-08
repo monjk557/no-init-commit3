@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,10 +96,18 @@ func (s *Scheduler) Stats() map[string]interface{} {
 func (s *Scheduler) loop() {
 	defer s.wg.Done()
 
-	// Run once at startup after a brief delay to let the server stabilize.
+	// Run once at startup after a brief delay to let the server stabilize. A
+	// fresh pod re-evaluates every repository at once, so its first scan is the
+	// moment the most repacks fire together — the "startup repack wave" behind
+	// the largest memory spikes (Issue-5414). Two mitigations:
+	//   1. Per-pod startup jitter spreads that wave across replicas so they do
+	//      not all repack the same repo set (and contend on repo locks) at once.
+	//   2. The first scan runs single-jobbed (maxJobs=1) so, while every repo is
+	//      eligible, at most one repack executes at a time during cold start;
+	//      steady-state scans use the configured concurrency.
 	select {
-	case <-time.After(s.config.InitialDelay):
-		s.runScan()
+	case <-time.After(s.config.InitialDelay + s.startupJitter()):
+		s.runScan(1)
 	case <-s.stopChan:
 		return
 	}
@@ -109,15 +118,36 @@ func (s *Scheduler) loop() {
 	for {
 		select {
 		case <-ticker.C:
-			s.runScan()
+			s.runScan(s.config.MaxConcurrentJobs)
 		case <-s.stopChan:
 			return
 		}
 	}
 }
 
+// startupJitter returns a deterministic per-pod delay in [0, ScanInterval/4),
+// derived from the hostname, that offsets replicas' startup scans so they do
+// not repack in lockstep. Deterministic (not random) so a pod restart lands on
+// the same offset instead of reshuffling the whole fleet.
+func (s *Scheduler) startupJitter() time.Duration {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return 0
+	}
+	// Spread across whole seconds of the span to avoid overflow/precision traps
+	// of nanosecond modulo (a raw uint32 of ns is only ~4.3s, far short of span).
+	spanSec := int64(s.config.ScanInterval / 4 / time.Second)
+	if spanSec <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(host))
+	return time.Duration(int64(h.Sum32())%spanSec) * time.Second
+}
+
 // runScan discovers all repositories and runs maintenance on those that need it.
-func (s *Scheduler) runScan() {
+// maxJobs bounds how many repositories are maintained concurrently.
+func (s *Scheduler) runScan(maxJobs int) {
 	s.totalRuns.Add(1)
 	s.lastRunAt.Store(time.Now())
 
@@ -137,7 +167,10 @@ func (s *Scheduler) runScan() {
 		zap.Int("repository_count", len(repos)))
 
 	// Use a semaphore to limit concurrent maintenance jobs.
-	sem := make(chan struct{}, s.config.MaxConcurrentJobs)
+	if maxJobs < 1 {
+		maxJobs = 1
+	}
+	sem := make(chan struct{}, maxJobs)
 	var scanWg sync.WaitGroup
 
 	ctx, cancel := context.WithCancel(context.Background())

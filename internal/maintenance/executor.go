@@ -262,18 +262,73 @@ func (e *Executor) runPrune(ctx context.Context, repoPath string) (string, error
 	return e.runGit(ctx, repoPath, "prune", expireArg)
 }
 
+// Maintenance pack-memory bounds. A geometric repack spawns pack-objects whose
+// delta-search window is the dominant allocation; left at git's defaults
+// (unbounded window, one thread per core) a repack of a large repo can spike to
+// 1–2GB and, running in-process outside the clone concurrency budget, stack on
+// top of concurrent clones to trip a pod OOM (Issue-5071/5414). These mirror the
+// clone path's ceilings (protocol/pack_limits.go) so a repack stays ~200MB.
+// Override per environment; "", "0", or "off" (case-insensitive) drops a knob
+// and lets git use its own default.
+const (
+	envMaintPackWindowMemory   = "GIT_EXECUTOR_MAINT_PACK_WINDOW_MEMORY"
+	envMaintPackThreads        = "GIT_EXECUTOR_MAINT_PACK_THREADS"
+	envMaintPackDeltaCacheSize = "GIT_EXECUTOR_MAINT_PACK_DELTA_CACHE_SIZE"
+
+	defaultMaintPackWindowMemory   = "128m"
+	defaultMaintPackThreads        = "1"
+	defaultMaintPackDeltaCacheSize = "64m"
+)
+
+// maintGitConfigEnv builds the GIT_CONFIG_* environment entries applied to every
+// maintenance git command: gc.autoDetach=false (keep background gc under lock
+// control) plus the pack-memory ceilings above. Only pack-objects (repack) reads
+// the pack.* knobs, so applying them to every command is harmless.
+func maintGitConfigEnv() []string {
+	type kv struct{ key, value string }
+	pairs := []kv{{"gc.autoDetach", "false"}}
+	if v := maintPackValue(envMaintPackWindowMemory, defaultMaintPackWindowMemory); v != "" {
+		pairs = append(pairs, kv{"pack.windowMemory", v})
+	}
+	if v := maintPackValue(envMaintPackThreads, defaultMaintPackThreads); v != "" {
+		pairs = append(pairs, kv{"pack.threads", v})
+	}
+	if v := maintPackValue(envMaintPackDeltaCacheSize, defaultMaintPackDeltaCacheSize); v != "" {
+		pairs = append(pairs, kv{"pack.deltaCacheSize", v})
+	}
+
+	env := make([]string, 0, len(pairs)*2+1)
+	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(pairs)))
+	for i, p := range pairs {
+		idx := strconv.Itoa(i)
+		env = append(env, "GIT_CONFIG_KEY_"+idx+"="+p.key)
+		env = append(env, "GIT_CONFIG_VALUE_"+idx+"="+p.value)
+	}
+	return env
+}
+
+// maintPackValue resolves one knob: an unset env falls back to def; an explicit
+// "", "0", or "off" (case-insensitive) disables it (returns "").
+func maintPackValue(envKey, def string) string {
+	raw, ok := os.LookupEnv(envKey)
+	if !ok {
+		return def
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "0" || strings.EqualFold(raw, "off") {
+		return ""
+	}
+	return raw
+}
+
 // runGit executes a git command against the given repository.
 func (e *Executor) runGit(ctx context.Context, repoPath string, args ...string) (string, error) {
 	fullArgs := append([]string{"--git-dir", repoPath}, args...)
 	cmd := exec.CommandContext(ctx, "git", fullArgs...)
 
-	// Disable auto-detach to prevent background gc from escaping lock control.
-	// This is a critical server-side setting recommended by git documentation.
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=gc.autoDetach",
-		"GIT_CONFIG_VALUE_0=false",
-	)
+	// Disable auto-detach (keep background gc under lock control) and bound the
+	// pack-objects memory a repack may use — see maintGitConfigEnv.
+	cmd.Env = append(os.Environ(), maintGitConfigEnv()...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

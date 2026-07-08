@@ -22,9 +22,10 @@ func TestConfigManager_Defaults(t *testing.T) {
 		t.Errorf("Expected operation max timeout 30m, got %v", config.Timeouts.OperationMax)
 	}
 
-	// Check default concurrency values (2Gi-safe default; see Issue-5071).
-	if config.Concurrency.MaxConcurrentClones != 6 {
-		t.Errorf("Expected max concurrent clones 6, got %d", config.Concurrency.MaxConcurrentClones)
+	// Check default concurrency values (4Gi pod with bounded repacks; see
+	// Issue-5071/5414).
+	if config.Concurrency.MaxConcurrentClones != 12 {
+		t.Errorf("Expected max concurrent clones 12, got %d", config.Concurrency.MaxConcurrentClones)
 	}
 
 	// Check default I/O values
@@ -218,7 +219,7 @@ func TestDefaultFunctionIntegration(t *testing.T) {
 	}
 
 	concurrencyConfig := DefaultConcurrencyConfig()
-	if concurrencyConfig.MaxConcurrentClones != 6 {
+	if concurrencyConfig.MaxConcurrentClones != 12 {
 		t.Errorf("DefaultConcurrencyConfig should use config manager, got %d", concurrencyConfig.MaxConcurrentClones)
 	}
 }
@@ -236,7 +237,7 @@ func TestConfigFromFunction_WithNil(t *testing.T) {
 	}
 
 	concurrencyConfig := ConcurrencyConfigFromConfig(nil)
-	if concurrencyConfig.MaxConcurrentClones != 6 {
+	if concurrencyConfig.MaxConcurrentClones != 12 {
 		t.Error("ConcurrencyConfigFromConfig(nil) should return default")
 	}
 }

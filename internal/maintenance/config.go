@@ -134,17 +134,28 @@ type PruneConfig struct {
 // benchmarking GitHub, GitLab, Gitea, and Bitbucket strategies.
 func DefaultMaintenanceConfig() *MaintenanceConfig {
 	return &MaintenanceConfig{
-		Enabled:           true,
-		ScanInterval:      1 * time.Hour,
-		CooldownPeriod:    6 * time.Hour,
+		Enabled:      true,
+		ScanInterval: 1 * time.Hour,
+		// CooldownPeriod raised 6h→16h (Bitbucket's value, Issue-5414). Now that
+		// atomic bitmap writes land reliably (Issue-5273/5414), every repack
+		// produces a full-coverage bitmap, so the stale-bitmap re-trigger fires
+		// far less and there is no need to repack a repo as eagerly. A longer
+		// cooldown cuts repack frequency — and the unbounded-memory spark each
+		// repack used to cause — while bitmap freshness stays well within the
+		// window an actively-pushed repo tolerates.
+		CooldownPeriod:    16 * time.Hour,
 		MaxConcurrentJobs: 2,
 		OperationTimeout:  30 * time.Minute,
 		InitialDelay:      30 * time.Second,
 		Thresholds: ThresholdConfig{
 			LooseObjectsThreshold: 1024,
-			PackFilesThreshold:    30,
-			LooseRefsThreshold:    512,
-			CommitGraphStaleness:  24 * time.Hour,
+			// PackFilesThreshold raised 30→50 (git/Bitbucket default, Issue-5414):
+			// with reliable bitmaps, letting a few more packs accumulate before a
+			// geometric repack is cheap for clones (the MIDX bitmap still spans
+			// them) but meaningfully reduces repack frequency and its memory spike.
+			PackFilesThreshold:   50,
+			LooseRefsThreshold:   512,
+			CommitGraphStaleness: 24 * time.Hour,
 		},
 		Repack: RepackConfig{
 			GeometricFactor:     2,

@@ -154,20 +154,31 @@ func getDefaultIOConfig() IOConfig {
 
 // getDefaultConcurrencyConfig returns default concurrency configuration.
 //
-// Clone/push globals are sized for a memory-bound pod (e.g. 2Gi limit): each
-// granted pack operation now has a bounded RSS (see pack_limits.go, per-op
-// ~200MB), so the global cap × per-op ceiling must stay under the container
-// limit with headroom for the server itself. 6 concurrent clones ≈ 1.2GB fits
-// a 2Gi pod; the previous default of 50 let unbounded pack-objects processes
-// sum past the limit and OOM-kill the whole pod (Issue-5071). Override per
-// environment via GIT_EXECUTOR_MAX_CONCURRENT_CLONES / _PUSHES; raise these on
-// higher-memory pods alongside GIT_EXECUTOR_PACK_THREADS.
+// Clone/push globals are sized against the container memory limit: each granted
+// pack operation has a bounded RSS (see pack_limits.go, per-op ~200MB) and, as
+// of Issue-5414, maintenance repacks are bounded the same way (executor.go), so
+// the only unbounded consumers left are gone. The global cap × per-op ceiling
+// must stay under the container limit with headroom for the server itself.
+//
+// 12 concurrent clones ≈ 2.4GB fits a 4Gi pod alongside bounded maintenance;
+// the value was raised from 6 (Issue-5071's 2Gi-era guard) once bitmap pack
+// reuse landed reliably (Issue-5273/5414) — reused clones cost far less than
+// the ~200MB delta-search ceiling, and the pod limit moved 2Gi→4Gi. The prior
+// default of 50 let unbounded pack-objects sum past the limit and OOM-kill the
+// whole pod. Override per environment via GIT_EXECUTOR_MAX_CONCURRENT_CLONES /
+// _PUSHES; raise alongside GIT_EXECUTOR_PACK_THREADS on higher-memory pods.
+//
+// PerIPLimit tracks the global clone cap rather than sitting below it: all Git
+// traffic reaches the executor through the single git-http proxy IP, so a low
+// per-IP cap would bind before the global one and 429 legitimate CI bursts
+// (Issue-5414). Pushes stay at 6 — receive-pack's index-pack RSS is not bounded
+// by the pack.* clone knobs, so it keeps the conservative ceiling.
 func getDefaultConcurrencyConfig() ConcurrencyConfigSettings {
 	return ConcurrencyConfigSettings{
-		MaxConcurrentClones: 6,
+		MaxConcurrentClones: 12,
 		MaxConcurrentPushes: 6,
-		PerTenantLimit:      10,
-		PerIPLimit:          5,
+		PerTenantLimit:      12,
+		PerIPLimit:          12,
 		QueueSize:           100,
 	}
 }
