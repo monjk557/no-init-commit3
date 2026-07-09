@@ -2,12 +2,11 @@ package commits
 
 import (
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -82,12 +81,12 @@ func (h *CommitsHandler) validateAndGetRepoPath(owner, repo, ref string) (*repos
 	}
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	return &repositoryContext{
@@ -110,7 +109,7 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context, req CommitsListRequest
 
 	params, err := h.validateAndExtractCommitsParams(c, req)
 	if err != nil {
-		return CommitsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return CommitsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	repoCtx, err := h.validateAndGetRepoPath(params.Owner, params.Repo, params.Ref)
@@ -120,7 +119,7 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context, req CommitsListRequest
 
 	commitList, totalCount, mergeBase, err := h.getCommitHistory(ctx, repoCtx.repoPath, params)
 	if err != nil {
-		return CommitsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return CommitsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	if commitList == nil {
@@ -173,11 +172,11 @@ func (h *CommitsHandler) HandleCommitActivity(c *gin.Context, req CommitActivity
 
 	days, err := parseActivityDays(req.Days)
 	if err != nil {
-		return CommitActivityResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return CommitActivityResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	if req.GroupBy != "" && req.GroupBy != "committer_date" {
-		return CommitActivityResponse{}, typed.NewHTTPError(http.StatusBadRequest,
+		return CommitActivityResponse{}, api.NewCoded(api.ErrCodeInvalidInput,
 			"invalid group_by parameter: must be empty or 'committer_date'")
 	}
 	useCommitterDate := req.GroupBy == "committer_date"
@@ -189,7 +188,7 @@ func (h *CommitsHandler) HandleCommitActivity(c *gin.Context, req CommitActivity
 
 	dates, err := nativeCommitActivityDates(ctx, repoCtx.repoPath, ref, days, useCommitterDate)
 	if err != nil {
-		return CommitActivityResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return CommitActivityResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	return buildActivityResponse(ref, days, dates), nil
@@ -267,20 +266,20 @@ func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context, req ComparisonS
 	if err != nil {
 		sourceHash, err = nativeResolveRef(ctx, repoCtx.repoPath, "refs/heads/"+sourceRef)
 		if err != nil {
-			return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("failed to resolve source ref '%s'", sourceRef))
+			return ComparisonSummaryResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("failed to resolve source ref '%s'", sourceRef))
 		}
 	}
 	targetHash, err := nativeResolveRef(ctx, repoCtx.repoPath, targetRef)
 	if err != nil {
 		targetHash, err = nativeResolveRef(ctx, repoCtx.repoPath, "refs/heads/"+targetRef)
 		if err != nil {
-			return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("failed to resolve target ref '%s'", targetRef))
+			return ComparisonSummaryResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("failed to resolve target ref '%s'", targetRef))
 		}
 	}
 
 	mergeBase, err := nativeMergeBase(ctx, repoCtx.repoPath, sourceHash, targetHash)
 	if err != nil {
-		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusBadRequest, "no common ancestor found between the two refs")
+		return ComparisonSummaryResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "no common ancestor found between the two refs")
 	}
 
 	type countResult struct {
@@ -303,10 +302,10 @@ func (h *CommitsHandler) HandleComparisonSummary(c *gin.Context, req ComparisonS
 	fileResult := <-fileCh
 
 	if commitResult.err != nil {
-		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusInternalServerError, commitResult.err.Error())
+		return ComparisonSummaryResponse{}, api.NewCoded(api.ClassifyGitError(commitResult.err), commitResult.err.Error())
 	}
 	if fileResult.err != nil {
-		return ComparisonSummaryResponse{}, typed.NewHTTPError(http.StatusInternalServerError, fileResult.err.Error())
+		return ComparisonSummaryResponse{}, api.NewCoded(api.ClassifyGitError(fileResult.err), fileResult.err.Error())
 	}
 
 	return ComparisonSummaryResponse{
@@ -329,7 +328,7 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) (CommitDetailResp
 	sha := c.Param("sha")
 
 	if sha == "" {
-		return CommitDetailResponse{}, typed.NewHTTPError(http.StatusBadRequest, "commit sha is required")
+		return CommitDetailResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "commit sha is required")
 	}
 
 	repoCtx, err := h.validateAndGetRepoPath(owner, repo, "HEAD")
@@ -340,9 +339,9 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) (CommitDetailResp
 	commit, err := nativeGetCommitInfo(ctx, repoCtx.repoPath, sha)
 	if err != nil {
 		if strings.Contains(err.Error(), "commit not found") {
-			return CommitDetailResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("commit not found: %s", sha))
+			return CommitDetailResponse{}, api.NewCoded(api.ErrCodeCommitNotFound, fmt.Sprintf("commit not found: %s", sha))
 		}
-		return CommitDetailResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return CommitDetailResponse{}, api.NewCoded(api.ClassifyGitError(err), err.Error())
 	}
 
 	fullMessage, err := nativeGetCommitFullMessage(ctx, repoCtx.repoPath, sha)
@@ -378,7 +377,7 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) (CommitDetailResp
 //
 // Typed handler — bind error 의 친화 메시지 + 다중 status 매핑 (failed to
 // resolve → 400, not found → 404, already exists → 409, validation/operation
-// → 400, default → 500) 을 모두 inline 으로 typed.NewHTTPError 처리.
+// → 400, default → 500) 을 모두 inline 으로 api.NewCoded 처리.
 func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) (MultiFileCommitResponse, error) {
 	ctx := c.Request.Context()
 
@@ -387,16 +386,16 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) (MultiFileCommitR
 
 	var req MultiFileCommitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	if len(req.Operations) == 0 {
-		return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, "At least one operation is required")
+		return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "At least one operation is required")
 	}
 
 	for i, op := range req.Operations {
 		if err := validateMultiFileOperation(&op); err != nil {
-			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid operation %d: %v", i, err))
+			return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid operation %d: %v", i, err))
 		}
 	}
 
@@ -416,15 +415,15 @@ func (h *CommitsHandler) HandleMultiFileCommit(c *gin.Context) (MultiFileCommitR
 		errMsg := err.Error()
 		switch {
 		case strings.Contains(errMsg, "failed to resolve"):
-			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, errMsg)
+			return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeInvalidInput, errMsg)
 		case strings.Contains(errMsg, "not found"):
-			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusNotFound, errMsg)
+			return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeNotFound, errMsg)
 		case strings.Contains(errMsg, "already exists"):
-			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusConflict, errMsg)
+			return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeConflict, errMsg)
 		case strings.Contains(errMsg, "validation failed") || strings.Contains(errMsg, "operation"):
-			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusBadRequest, errMsg)
+			return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeInvalidInput, errMsg)
 		default:
-			return MultiFileCommitResponse{}, typed.NewHTTPError(http.StatusInternalServerError, errMsg)
+			return MultiFileCommitResponse{}, api.NewCoded(api.ErrCodeInternalError, errMsg)
 		}
 	}
 

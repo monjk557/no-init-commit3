@@ -131,6 +131,14 @@ fmt-check: ensure-golangci-lint ## 포맷 검사만 (CI 게이트, 어긋나면 
 vet: ## go vet 정적 검사
 	go vet ./...
 
+# [GUARD] make guard-errcodes
+# Description: Issue-5577 ratchet — fail if handlers emit bare typed.NewHTTPError
+# (no error_code) or HTTP 422 in production code. Keeps the central error catalog
+# the single source of truth for error responses.
+.PHONY: guard-errcodes
+guard-errcodes: ## errcode ratchet (bare NewHTTPError / HTTP 422 금지)
+	@bash scripts/check-error-codes.sh
+
 # 하위호환: 기존 `make format` 호출은 표준 `fmt` 로 위임
 .PHONY: format
 format: fmt

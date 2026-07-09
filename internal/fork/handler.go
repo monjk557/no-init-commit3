@@ -3,10 +3,9 @@ package fork
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -78,10 +77,7 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context, req ForkRepositoryReq
 		zap.String("source_repo", sourceRepo))
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", sourceOwner, sourceRepo)); err != nil {
-		return ForkRepositoryResponse{}, typed.NewHTTPError(
-			http.StatusBadRequest,
-			fmt.Sprintf("Invalid source path: %v", err),
-		)
+		return ForkRepositoryResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid source path: %v", err))
 	}
 
 	targetRepo := req.Repo
@@ -90,10 +86,7 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context, req ForkRepositoryReq
 	}
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", req.Owner, targetRepo)); err != nil {
-		return ForkRepositoryResponse{}, typed.NewHTTPError(
-			http.StatusBadRequest,
-			fmt.Sprintf("Invalid target path: %v", err),
-		)
+		return ForkRepositoryResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid target path: %v", err))
 	}
 
 	userID := c.GetHeader("X-USER-ID")
@@ -155,15 +148,12 @@ func (h *ForkHandler) HandleGetForkInfo(c *gin.Context) (ForkInfoResponse, error
 	repo := c.Param("repo")
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return ForkInfoResponse{}, typed.NewHTTPError(
-			http.StatusBadRequest,
-			fmt.Sprintf("Invalid path: %v", err),
-		)
+		return ForkInfoResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid path: %v", err))
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return ForkInfoResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ForkInfoResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	if !h.service.IsFork(repoPath) {
@@ -176,10 +166,7 @@ func (h *ForkHandler) HandleGetForkInfo(c *gin.Context) (ForkInfoResponse, error
 
 	metadata, err := h.service.GetForkMetadata(repoPath)
 	if err != nil {
-		return ForkInfoResponse{}, typed.NewHTTPError(
-			http.StatusInternalServerError,
-			fmt.Sprintf("failed to read fork metadata: %v", err),
-		)
+		return ForkInfoResponse{}, api.NewCoded(api.ErrCodeInternalError, fmt.Sprintf("failed to read fork metadata: %v", err))
 	}
 
 	return ForkInfoResponse{
@@ -206,15 +193,12 @@ func (h *ForkHandler) HandleSyncUpstream(c *gin.Context) (SyncUpstreamResponse, 
 		zap.String("repo", repo))
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return SyncUpstreamResponse{}, typed.NewHTTPError(
-			http.StatusBadRequest,
-			fmt.Sprintf("Invalid path: %v", err),
-		)
+		return SyncUpstreamResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid path: %v", err))
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return SyncUpstreamResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return SyncUpstreamResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	result, err := h.service.SyncUpstream(ctx, repoPath)

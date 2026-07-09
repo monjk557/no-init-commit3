@@ -67,15 +67,64 @@ const (
 	ErrCodeRateLimitExceeded ErrorCodeEnum = "RATE_LIMIT_EXCEEDED"
 	// ErrCodeRefNotFound: branch/tag/ref 를 찾을 수 없음 (merge/diffs 404).
 	ErrCodeRefNotFound ErrorCodeEnum = "REF_NOT_FOUND"
+	// ErrCodeRepositoryCorrupted: repo 는 디스크에 존재하나 git 이 예기치 않게
+	// 실패 — 진짜 손상/불변식 위반 (server 500). 과거 여러 핸들러가 "not a git
+	// repository"(=없음) 와 손상을 뭉뚱그려 422 로 냈으나, 없음은 404
+	// (REPOSITORY_NOT_FOUND), 손상만 이 코드로 분리한다 (Issue-5577).
+	ErrCodeRepositoryCorrupted ErrorCodeEnum = "REPOSITORY_CORRUPTED"
+	// ErrCodeRepositoryEmpty: repo 는 존재하나 커밋이 0 (unborn HEAD). 에러가
+	// 아니라 유효 상태이므로 200 + empty/null marker 로 응답한다. 200 계열이라
+	// 에러 envelope 에는 거의 쓰이지 않으나 카탈로그 완전성을 위해 등록.
+	ErrCodeRepositoryEmpty ErrorCodeEnum = "REPOSITORY_EMPTY"
+	// ErrCodeRepositoryNotFound: repo 의 on-disk git dir 가 없음 (never
+	// materialized/orphan). NOT_FOUND 와 구분되는 저장소 부재 신호 (404).
+	ErrCodeRepositoryNotFound ErrorCodeEnum = "REPOSITORY_NOT_FOUND"
 	// ErrCodeRequestTooLarge: 요청 본문 크기 초과 (validation 413).
 	ErrCodeRequestTooLarge ErrorCodeEnum = "REQUEST_TOO_LARGE"
 	// ErrCodeRevertConflict: revert 적용 충돌 (revert 409).
 	ErrCodeRevertConflict ErrorCodeEnum = "REVERT_CONFLICT"
+	// ErrCodeTimeout: 작업이 deadline 초과 — 부하로 느려짐 (server 429, retry
+	// 유도지만 BFF auto-retry 는 안 함). Issue-5071 retry-storm 회피.
+	ErrCodeTimeout ErrorCodeEnum = "TIMEOUT"
 	// ErrCodeUnknown: 분류되지 않은 에러 (merge 500).
 	ErrCodeUnknown ErrorCodeEnum = "UNKNOWN"
 	// ErrCodeUnknownError: 래핑되지 않은 미상 에러 (internal 500).
 	ErrCodeUnknownError ErrorCodeEnum = "UNKNOWN_ERROR"
 )
+
+// AllErrorCodes 는 정의된 모든 ErrorCodeEnum 값의 목록이다 (알파벳 순, const
+// 선언과 동일). 에러 카탈로그 완전성 guard 와 spec generator 가 단일 원천으로
+// 사용한다 — 새 코드를 추가하면 여기에도 반드시 등록한다.
+var AllErrorCodes = []ErrorCodeEnum{
+	ErrCodeBranchAlreadyExists,
+	ErrCodeCommitNotFound,
+	ErrCodeConcurrentLimitExceeded,
+	ErrCodeConcurrentUpdate,
+	ErrCodeConflict,
+	ErrCodeFileNotFound,
+	ErrCodeInternalError,
+	ErrCodeInvalidInput,
+	ErrCodeInvalidParent,
+	ErrCodeInvalidRequestBody,
+	ErrCodeInvalidURLParameters,
+	ErrCodeIPBanned,
+	ErrCodeLocked,
+	ErrCodeMergeConflict,
+	ErrCodeNotFound,
+	ErrCodeObjectNotFound,
+	ErrCodeOverloaded,
+	ErrCodePanic,
+	ErrCodeRateLimitExceeded,
+	ErrCodeRefNotFound,
+	ErrCodeRepositoryCorrupted,
+	ErrCodeRepositoryEmpty,
+	ErrCodeRepositoryNotFound,
+	ErrCodeRequestTooLarge,
+	ErrCodeRevertConflict,
+	ErrCodeTimeout,
+	ErrCodeUnknown,
+	ErrCodeUnknownError,
+}
 
 // ErrorResponse 는 REST 엔드포인트가 반환하는 표준 에러 envelope 이다.
 // `success: false` + 사람이 읽는 `error` 메시지 + 머신 판독용 `code`(선택) +

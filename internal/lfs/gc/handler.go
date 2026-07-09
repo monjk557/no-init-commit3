@@ -2,12 +2,11 @@ package gc
 
 import (
 	"fmt"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -49,12 +48,12 @@ func (h *Handler) HandleScanReachableOIDs(c *gin.Context) (ScanReachableOIDsResp
 	repo := c.Param("repo")
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return ScanReachableOIDsResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ScanReachableOIDsResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return ScanReachableOIDsResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ScanReachableOIDsResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	// RLock — git refs / objects 를 읽는 동안 다른 write 가 pack 을 재구성하지 않도록.
@@ -69,10 +68,7 @@ func (h *Handler) HandleScanReachableOIDs(c *gin.Context) (ScanReachableOIDsResp
 			zap.String("repo", repo),
 			zap.Error(err),
 		)
-		return ScanReachableOIDsResponse{}, typed.NewHTTPError(
-			http.StatusUnprocessableEntity,
-			fmt.Sprintf("scan failed: %v", err),
-		)
+		return ScanReachableOIDsResponse{}, api.NewCoded(api.ErrCodeInternalError, fmt.Sprintf("scan failed: %v", err))
 	}
 
 	h.logger.Info("LFS GC scan completed",

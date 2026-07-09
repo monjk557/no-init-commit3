@@ -3,12 +3,11 @@ package revert
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -66,21 +65,21 @@ func (h *RevertHandler) HandleRevert(c *gin.Context) (RevertResponse, error) {
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		return RevertResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return RevertResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	var req RevertRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return RevertResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return RevertResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	if err := h.validateRevertRequest(&req); err != nil {
-		return RevertResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return RevertResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return RevertResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
+		return RevertResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound, err.Error())
 	}
 
 	// Serialize writes to prevent concurrent conflicts

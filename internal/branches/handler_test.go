@@ -1943,10 +1943,11 @@ func Test_ResolveBranch_RepoNotFound_Returns404(t *testing.T) {
 	requireStatus(t, w, http.StatusNotFound)
 	requireBodyContains(t, w, "repository not found")
 
-	// Issue-5360: flat machine code NOT_FOUND.
+	// Issue-5577: on-disk repo 부재는 REPOSITORY_NOT_FOUND (일반 NOT_FOUND 와
+	// 구분되는 저장소 부재 코드).
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Equal(t, "NOT_FOUND", resp["code"])
+	require.Equal(t, "REPOSITORY_NOT_FOUND", resp["code"])
 }
 
 // Test_ResolveBranch_BranchNotFound_Returns404

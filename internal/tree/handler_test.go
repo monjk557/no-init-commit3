@@ -705,7 +705,9 @@ func TestHandleTreeAPI_ContextCancellation(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	// 요청 타임아웃 에러 응답 검증
-	assert.Equal(t, http.StatusRequestTimeout, w.Code)
+	// Issue-5577: a cancelled/timed-out request maps to TIMEOUT (429), unified
+	// with the other timeout paths, instead of 408.
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
 
 	var response map[string]interface{}
 	err := json.Unmarshal(w.Body.Bytes(), &response)

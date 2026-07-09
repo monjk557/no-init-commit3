@@ -218,17 +218,19 @@ func Require409AlreadyExists(t *testing.T, resp *httptest.ResponseRecorder) {
 	RequireErrCode(t, resp, "ALREADY_EXISTS")
 }
 
-// Require422MergeConflict asserts 422 with MERGE_CONFLICT code
-func Require422MergeConflict(t *testing.T, resp *httptest.ResponseRecorder) {
+// Require409MergeConflict asserts 409 with MERGE_CONFLICT code. Merge conflicts
+// are a Conflict (409), not the 422 they were once mislabelled as (Issue-5577).
+func Require409MergeConflict(t *testing.T, resp *httptest.ResponseRecorder) {
 	t.Helper()
-	RequireStatus(t, resp, http.StatusUnprocessableEntity)
+	RequireStatus(t, resp, http.StatusConflict)
 	RequireErrCode(t, resp, "MERGE_CONFLICT")
 }
 
-// Require422NoCommonAncestor asserts 422 with NO_COMMON_ANCESTOR code
-func Require422NoCommonAncestor(t *testing.T, resp *httptest.ResponseRecorder) {
+// Require409NoCommonAncestor asserts 409 with NO_COMMON_ANCESTOR code (unrelated
+// histories cannot merge — a Conflict, not 422).
+func Require409NoCommonAncestor(t *testing.T, resp *httptest.ResponseRecorder) {
 	t.Helper()
-	RequireStatus(t, resp, http.StatusUnprocessableEntity)
+	RequireStatus(t, resp, http.StatusConflict)
 	RequireErrCode(t, resp, "NO_COMMON_ANCESTOR")
 }
 

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/protocol"
@@ -63,7 +63,7 @@ func extractContextLines(c *gin.Context) int {
 //
 // errors.As 를 사용해 wrap 된 *DiffTooLargeError 도 감지 (fmt.Errorf("...: %w",
 // dtlErr) 처럼 wrap 되어도 동작).
-func classifyDiffError(err error, defaultStatus int, code string) error {
+func classifyDiffError(err error, defaultCode, notFoundCode api.ErrorCodeEnum) error {
 	var diffErr *DiffTooLargeError
 	if errors.As(err, &diffErr) {
 		return &responseOverride{
@@ -76,7 +76,7 @@ func classifyDiffError(err error, defaultStatus int, code string) error {
 		}
 	}
 	errStr := err.Error()
-	if code != "" && (strings.Contains(errStr, "object not found") ||
+	if notFoundCode != "" && (strings.Contains(errStr, "object not found") ||
 		strings.Contains(errStr, "not found") ||
 		strings.Contains(errStr, "reference not found") ||
 		strings.Contains(errStr, "Invalid revision range") ||
@@ -86,11 +86,11 @@ func classifyDiffError(err error, defaultStatus int, code string) error {
 			body: gin.H{
 				"success": false,
 				"error":   err.Error(),
-				"code":    code,
+				"code":    string(notFoundCode),
 			},
 		}
 	}
-	return typed.NewHTTPError(defaultStatus, err.Error())
+	return api.NewCoded(defaultCode, err.Error())
 }
 
 // HandleCommitDiff handles GET /diff/commits/:base/:head.
@@ -99,27 +99,27 @@ func (h *DiffHandler) HandleCommitDiff(c *gin.Context) (DiffResponse, error) {
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	base := protocol.SafeParam(c, "base")
 	head := protocol.SafeParam(c, "head")
 	if base == "" || head == "" {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base or head")
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required parameters: base or head")
 	}
 	params.Base = base
 	params.Head = head
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	contextLines := extractContextLines(c)
 
 	diffResp, err := h.calculateCommitDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		return DiffResponse{}, classifyDiffError(err, http.StatusInternalServerError, "OBJECT_NOT_FOUND")
+		return DiffResponse{}, classifyDiffError(err, api.ErrCodeInternalError, api.ErrCodeObjectNotFound)
 	}
 
 	if c.Query("page") != "" || c.Query("page_size") != "" {
@@ -151,27 +151,27 @@ func (h *DiffHandler) HandleBranchDiff(c *gin.Context) (DiffResponse, error) {
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	base := protocol.SafeParam(c, "base")
 	head := protocol.SafeParam(c, "head")
 	if base == "" || head == "" {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base or head")
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required parameters: base or head")
 	}
 	params.Base = base
 	params.Head = head
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	contextLines := extractContextLines(c)
 
 	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		return DiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "REF_NOT_FOUND")
+		return DiffResponse{}, classifyDiffError(err, api.ErrCodeInvalidInput, api.ErrCodeRefNotFound)
 	}
 
 	if c.Query("page") != "" || c.Query("page_size") != "" {
@@ -210,7 +210,7 @@ func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context, req BranchDiffQueryR
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	base := req.Base
@@ -220,14 +220,14 @@ func (h *DiffHandler) HandleBranchDiffQuery(c *gin.Context, req BranchDiffQueryR
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	contextLines := extractContextLines(c)
 
 	diffResp, err := h.CalculateBranchDiff(ctx, repoPath, params.Base, params.Head, contextLines)
 	if err != nil {
-		return DiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "REF_NOT_FOUND")
+		return DiffResponse{}, classifyDiffError(err, api.ErrCodeInvalidInput, api.ErrCodeRefNotFound)
 	}
 
 	if c.Query("page") != "" || c.Query("page_size") != "" {
@@ -269,7 +269,7 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context, req FileDiffRequest) (DiffR
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	filePath := req.Path
@@ -280,7 +280,7 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context, req FileDiffRequest) (DiffR
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		return DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	contextLines := extractContextLines(c)
@@ -335,7 +335,7 @@ func (h *DiffHandler) HandleFileDiff(c *gin.Context, req FileDiffRequest) (DiffR
 			zap.String("base", rr.BaseHash), zap.String("head", rr.HeadHash),
 			zap.String("effective_base", rr.EffectiveBase), zap.String("merge_base", rr.MergeBase),
 			zap.Error(err))
-		return DiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "")
+		return DiffResponse{}, classifyDiffError(err, api.ErrCodeInvalidInput, "")
 	}
 
 	// 응답 envelope에 mode 메타 채우기 — 호출자가 trees/file diff 정렬 여부를 검증할 수 있도록.
@@ -354,24 +354,24 @@ func (h *DiffHandler) HandleSingleCommitDiff(c *gin.Context) (SingleCommitDiffRe
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		return SingleCommitDiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return SingleCommitDiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	sha := c.Param("sha")
 	if sha == "" {
-		return SingleCommitDiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: sha")
+		return SingleCommitDiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required parameter: sha")
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		return SingleCommitDiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return SingleCommitDiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	contextLines := extractContextLines(c)
 
 	response, err := h.calculateSingleCommitDiff(ctx, repoPath, sha, contextLines)
 	if err != nil {
-		return SingleCommitDiffResponse{}, classifyDiffError(err, http.StatusBadRequest, "")
+		return SingleCommitDiffResponse{}, classifyDiffError(err, api.ErrCodeInvalidInput, "")
 	}
 
 	return *response, nil
@@ -390,7 +390,7 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context, req ExpandContextReque
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	filePath := req.Path
@@ -402,23 +402,23 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context, req ExpandContextReque
 	if startOldStr := req.StartOld; startOldStr != "" {
 		startOld, err := strconv.Atoi(startOldStr)
 		if err != nil || startOld < 1 {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_old must be a positive integer")
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "start_old must be a positive integer")
 		}
 
 		startNewStr := req.StartNew
 		if startNewStr == "" {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_new is required when using start_old")
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "start_new is required when using start_old")
 		}
 		startNew, err := strconv.Atoi(startNewStr)
 		if err != nil || startNew < 1 {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "start_new must be a positive integer")
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "start_new must be a positive integer")
 		}
 
 		count := 20
 		if countStr := req.Count; countStr != "" {
 			count, err = strconv.Atoi(countStr)
 			if err != nil || count < 1 {
-				return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "count must be a positive integer")
+				return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "count must be a positive integer")
 			}
 		}
 
@@ -451,30 +451,30 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context, req ExpandContextReque
 		fromNewStr := c.Query("from_new")
 
 		if fromOldStr == "" || toOldStr == "" || fromNewStr == "" {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "required parameters: path, base, head, and either (start_old, start_new, count) or (from_old, to_old, from_new)")
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "required parameters: path, base, head, and either (start_old, start_new, count) or (from_old, to_old, from_new)")
 		}
 
 		fromOld, err = strconv.Atoi(fromOldStr)
 		if err != nil || fromOld < 1 {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "from_old must be a positive integer")
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "from_old must be a positive integer")
 		}
 		toOld, err = strconv.Atoi(toOldStr)
 		if err != nil || toOld < fromOld {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "to_old must be >= from_old")
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "to_old must be >= from_old")
 		}
 		fromNew, err = strconv.Atoi(fromNewStr)
 		if err != nil || fromNew < 1 {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "from_new must be a positive integer")
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "from_new must be a positive integer")
 		}
 	}
 
 	if toOld-fromOld+1 > 500 {
-		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, "line range too large (max 500 lines)")
+		return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "line range too large (max 500 lines)")
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	// diff_mode 결정 + effective_base 해석 (Issue-2095).
@@ -498,9 +498,9 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context, req ExpandContextReque
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "not found") {
-			return ExpandContextResponse{}, typed.NewHTTPError(http.StatusNotFound, errStr)
+			return ExpandContextResponse{}, api.NewCoded(api.ErrCodeFileNotFound, errStr)
 		}
-		return ExpandContextResponse{}, typed.NewHTTPError(http.StatusInternalServerError, errStr)
+		return ExpandContextResponse{}, api.NewCoded(api.ErrCodeInternalError, errStr)
 	}
 
 	return *response, nil
@@ -560,7 +560,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchRespon
 
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
-		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffFileSearchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	base := c.Query("base")
@@ -568,10 +568,10 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchRespon
 	query := c.Query("query")
 
 	if base == "" || head == "" {
-		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameters: base, head")
+		return DiffFileSearchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required parameters: base, head")
 	}
 	if query == "" {
-		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: query")
+		return DiffFileSearchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required parameter: query")
 	}
 
 	// diff_mode 결정. 명시 우선; 없으면 레거시 type 별칭; 둘 다 없으면 merge_base.
@@ -579,7 +579,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchRespon
 	if rawMode := strings.TrimSpace(c.Query("diff_mode")); rawMode != "" {
 		m := DiffMode(rawMode)
 		if !m.IsValid() {
-			return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "diff_mode must be 'merge_base' or 'direct'")
+			return DiffFileSearchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "diff_mode must be 'merge_base' or 'direct'")
 		}
 		mode = m
 	} else if rawType := strings.TrimSpace(c.Query("type")); rawType != "" {
@@ -589,7 +589,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchRespon
 		case "commit":
 			mode = DiffModeDirect
 		default:
-			return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "type must be 'commit' or 'branch'")
+			return DiffFileSearchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "type must be 'commit' or 'branch'")
 		}
 	}
 
@@ -598,7 +598,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchRespon
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
-		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return DiffFileSearchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	rr, err := nativeResolveDiffRange(ctx, repoPath, base, head, mode)
@@ -612,7 +612,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchRespon
 
 	fileMetas, err := nativeGetDiffFileList(ctx, repoPath, rr.EffectiveBase, rr.HeadHash)
 	if err != nil {
-		return DiffFileSearchResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return DiffFileSearchResponse{}, api.NewCoded(api.ClassifyGitError(err), err.Error())
 	}
 
 	queryLower := strings.ToLower(query)

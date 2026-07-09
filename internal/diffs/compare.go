@@ -5,11 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -29,18 +28,18 @@ func (h *DiffHandler) HandleCompareChanged(c *gin.Context) (CompareChangedRespon
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
 		h.logger.Error("compare-changed: invalid params", zap.Error(err))
-		return CompareChangedResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return CompareChangedResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	var req CompareChangedRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return CompareChangedResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return CompareChangedResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
 		h.logger.Error("compare-changed: invalid repo path", zap.Error(err))
-		return CompareChangedResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return CompareChangedResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	// 같은 sha 면 diff 계산 없이 변경 없음 (fast path).
@@ -55,7 +54,7 @@ func (h *DiffHandler) HandleCompareChanged(c *gin.Context) (CompareChangedRespon
 	changed, err := compareDiffChanged(ctx, repoPath, req.BaseSHA, req.OldHeadSHA, req.NewHeadSHA)
 	if err != nil {
 		h.logger.Error("compare-changed: compute failed", zap.Error(err))
-		return CompareChangedResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return CompareChangedResponse{}, api.NewCoded(api.ClassifyGitError(err), err.Error())
 	}
 
 	return CompareChangedResponse{

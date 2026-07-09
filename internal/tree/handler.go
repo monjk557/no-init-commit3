@@ -57,14 +57,14 @@ func NewTreeHandler(cfg *config.Config) (*TreeHandler, error) {
 // Typed handler — query string 은 typed.RegisterGetWithQuery wrapper 가
 // TreeAPIRequest 로 자동 바인딩한다. substring 기반 status 매핑
 // ("path is not a tree" → 400) 은 routes.go 의 ErrorMapper 가 담당.
-// 단순 4xx 는 typed.NewHTTPError.
+// 단순 4xx 는 api.NewCoded.
 func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEntriesRecursiveResponse, error) {
 	ctx := c.Request.Context()
 
 	// Context 취소 확인 (Handler에서 관리)
 	select {
 	case <-ctx.Done():
-		return TreeEntriesRecursiveResponse{}, typed.NewHTTPError(http.StatusRequestTimeout, "Request cancelled or timeout")
+		return TreeEntriesRecursiveResponse{}, typed.NewHTTPErrorWithCode(http.StatusTooManyRequests, "Request cancelled or timeout", "TIMEOUT", nil)
 	default:
 	}
 
@@ -80,20 +80,20 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEnt
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return TreeEntriesRecursiveResponse{}, typed.NewHTTPError(http.StatusNotFound, "Invalid repository path")
+		return TreeEntriesRecursiveResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound, "Invalid repository path", "REPOSITORY_NOT_FOUND", nil)
 	}
 
 	exists, err := h.repoManager.RepositoryExists(repoPath)
 	if err != nil {
-		return TreeEntriesRecursiveResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository does not exist")
+		return TreeEntriesRecursiveResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound, "Repository does not exist", "REPOSITORY_NOT_FOUND", nil)
 	}
 	if !exists {
-		return TreeEntriesRecursiveResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
+		return TreeEntriesRecursiveResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound, "Repository not found", "REPOSITORY_NOT_FOUND", nil)
 	}
 
 	if path != "" {
 		if err := h.pathValidator.ValidateFilePath(path); err != nil {
-			return TreeEntriesRecursiveResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+			return TreeEntriesRecursiveResponse{}, typed.NewHTTPErrorWithCode(http.StatusBadRequest, err.Error(), "INVALID_INPUT", nil)
 		}
 	}
 
@@ -130,7 +130,7 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEnt
 //
 // Typed handler — query string 은 typed.RegisterGetWithQuery wrapper 가
 // TreeSearchRequest 로 자동 바인딩한다. "failed to resolve reference" → 404,
-// 그 외 raw 는 500. 단순 4xx 는 typed.NewHTTPError.
+// 그 외 raw 는 500. 단순 4xx 는 api.NewCoded.
 func (h *TreeHandler) HandleTreeSearch(c *gin.Context, req TreeSearchRequest) (TreeSearchResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -138,7 +138,7 @@ func (h *TreeHandler) HandleTreeSearch(c *gin.Context, req TreeSearchRequest) (T
 	query := req.Query
 
 	if query == "" {
-		return TreeSearchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "query parameter is required")
+		return TreeSearchResponse{}, typed.NewHTTPErrorWithCode(http.StatusBadRequest, "query parameter is required", "INVALID_INPUT", nil)
 	}
 
 	if ref == "" {
@@ -156,12 +156,12 @@ func (h *TreeHandler) HandleTreeSearch(c *gin.Context, req TreeSearchRequest) (T
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return TreeSearchResponse{}, typed.NewHTTPError(http.StatusNotFound, "Invalid repository path")
+		return TreeSearchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound, "Invalid repository path", "REPOSITORY_NOT_FOUND", nil)
 	}
 
 	exists, err := h.repoManager.RepositoryExists(repoPath)
 	if err != nil || !exists {
-		return TreeSearchResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
+		return TreeSearchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound, "Repository not found", "REPOSITORY_NOT_FOUND", nil)
 	}
 
 	entries, totalMatches, err := SearchFiles(repoPath, ref, query, limit)

@@ -126,12 +126,12 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		return MergeResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return MergeResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	var req MergeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return MergeResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return MergeResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	if req.Method == "" {
@@ -142,12 +142,12 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 	}
 
 	if err := h.validateMergeRequest(&req); err != nil {
-		return MergeResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return MergeResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return MergeResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
+		return MergeResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound, err.Error())
 	}
 
 	sourceHash, err := gitRevParse(ctx, repoPath, req.SourceRef)
@@ -180,7 +180,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 
 	conflictAnalysis, err := h.analyzeMerge(ctx, repoPath, sourceHash, targetHash, &req)
 	if err != nil {
-		return MergeResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return MergeResponse{}, api.NewCoded(api.ClassifyGitError(err), err.Error())
 	}
 
 	// Dry run
@@ -188,7 +188,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 		if req.Method == MergeMethodRebase {
 			rebaseAnalysis, err := h.analyzeRebaseDryRun(ctx, repoPath, sourceHash, targetHash, &req)
 			if err != nil {
-				return MergeResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+				return MergeResponse{}, api.NewCoded(api.ClassifyGitError(err), err.Error())
 			}
 
 			details := map[string]interface{}{
@@ -336,7 +336,7 @@ func (h *MergeOperationsHandler) HandleMerge(c *gin.Context) (MergeResponse, err
 				},
 			}
 		}
-		return MergeResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return MergeResponse{}, api.NewCoded(api.ClassifyGitError(err), err.Error())
 	}
 
 	response := MergeResponse{
@@ -403,7 +403,7 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context, req MergePrevie
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return MergePreviewResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	if req.Strategy == "" {
@@ -419,33 +419,32 @@ func (h *MergePreviewHandler) HandleMergePreview(c *gin.Context, req MergePrevie
 		req.CompareStrategy = "tree"
 	}
 
-	status, err := h.validateMergePreviewRequest(&req)
-	if err != nil {
-		return MergePreviewResponse{}, typed.NewHTTPError(status, err.Error())
+	if _, err := h.validateMergePreviewRequest(&req); err != nil {
+		return MergePreviewResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
+		return MergePreviewResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound, err.Error())
 	}
 
 	sourceHash, err := gitRevParse(ctx, repoPath, req.SourceRef)
 	if err != nil {
-		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("Failed to resolve source ref: %v", err))
+		return MergePreviewResponse{}, api.NewCoded(api.ErrCodeRefNotFound, fmt.Sprintf("Failed to resolve source ref: %v", err))
 	}
 
 	targetHash, err := gitRevParse(ctx, repoPath, req.TargetRef)
 	if err != nil {
-		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusNotFound, fmt.Sprintf("Failed to resolve target ref: %v", err))
+		return MergePreviewResponse{}, api.NewCoded(api.ErrCodeRefNotFound, fmt.Sprintf("Failed to resolve target ref: %v", err))
 	}
 
 	if sourceHash == targetHash {
-		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Source and target references point to the same commit")
+		return MergePreviewResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Source and target references point to the same commit")
 	}
 
 	previewResult, err := h.performMergePreview(ctx, repoPath, sourceHash, targetHash, &req, startTime)
 	if err != nil {
-		return MergePreviewResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return MergePreviewResponse{}, api.NewCoded(api.ClassifyGitError(err), err.Error())
 	}
 
 	return *previewResult, nil
@@ -469,7 +468,7 @@ func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context, req MergeDiffReque
 	repo := c.Param("repo")
 
 	if err := h.validatePath(owner, repo); err != nil {
-		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return diffs.DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	sourceRef := req.SourceRef
@@ -485,7 +484,7 @@ func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context, req MergeDiffReque
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusNotFound, err.Error())
+		return diffs.DiffResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound, err.Error())
 	}
 
 	// base = target (merge INTO), head = source (merge FROM)
@@ -514,7 +513,7 @@ func (h *MergePreviewHandler) HandleMergeDiff(c *gin.Context, req MergeDiffReque
 				},
 			}
 		}
-		return diffs.DiffResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return diffs.DiffResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	// 페이지네이션 — req.Page 또는 req.PageSize 둘 중 하나라도 query string

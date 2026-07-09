@@ -2,9 +2,8 @@ package state
 
 import (
 	"fmt"
-	"net/http"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -63,10 +62,7 @@ func (h *StateHandler) HandleGetRepositoryState(c *gin.Context) (RepositoryState
 		zap.String("repo", repo))
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return RepositoryStateData{}, typed.NewHTTPError(
-			http.StatusBadRequest,
-			fmt.Sprintf("Invalid path: %v", err),
-		)
+		return RepositoryStateData{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid path: %v", err))
 	}
 
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
@@ -76,10 +72,7 @@ func (h *StateHandler) HandleGetRepositoryState(c *gin.Context) (RepositoryState
 			zap.String("owner", owner),
 			zap.String("repo", repo),
 			zap.Error(err))
-		return RepositoryStateData{}, typed.NewHTTPError(
-			http.StatusInternalServerError,
-			fmt.Sprintf("Failed to get repository state: %v", err),
-		)
+		return RepositoryStateData{}, api.NewCoded(api.ErrCodeInternalError, fmt.Sprintf("Failed to get repository state: %v", err))
 	}
 
 	return *state, nil

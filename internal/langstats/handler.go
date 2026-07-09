@@ -3,10 +3,9 @@ package langstats
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -62,13 +61,13 @@ func (h *Handler) HandleGetLanguageStats(c *gin.Context) (LanguageStatsResponse,
 
 	// 경로 검증
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return LanguageStatsResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return LanguageStatsResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	// 저장소 경로
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return LanguageStatsResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return LanguageStatsResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	// Read lock (push와 동시 접근 방지)
@@ -87,7 +86,7 @@ func (h *Handler) HandleGetLanguageStats(c *gin.Context) (LanguageStatsResponse,
 			zap.String("ref", ref),
 			zap.Error(err),
 		)
-		return LanguageStatsResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "failed to compute language stats")
+		return LanguageStatsResponse{}, api.NewCoded(api.ErrCodeInternalError, "failed to compute language stats")
 	}
 
 	resp.Repository = fmt.Sprintf("%s/%s", owner, repo)

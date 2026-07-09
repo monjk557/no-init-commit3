@@ -65,10 +65,7 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) (Crea
 		zap.String("repo", repo))
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return CreateRepositoryResponse{}, typed.NewHTTPError(
-			http.StatusBadRequest,
-			fmt.Sprintf("Invalid path: %v", err),
-		)
+		return CreateRepositoryResponse{}, typed.NewHTTPErrorWithCode(http.StatusBadRequest, fmt.Sprintf("Invalid path: %v", err), "INVALID_INPUT", nil)
 	}
 
 	var req CreateRepositoryRequest
@@ -85,10 +82,7 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) (Crea
 
 	repoPath := h.pathConfig.FormatRepoPath(owner, repo)
 	if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
-		return CreateRepositoryResponse{}, typed.NewHTTPError(
-			http.StatusConflict,
-			fmt.Sprintf("Repository %s/%s already exists", owner, repo),
-		)
+		return CreateRepositoryResponse{}, typed.NewHTTPErrorWithCode(http.StatusConflict, fmt.Sprintf("Repository %s/%s already exists", owner, repo), "CONFLICT", nil)
 	}
 
 	createdRepo, err := h.createRepository(owner, repo, &req)
@@ -97,10 +91,7 @@ func (h *RepositoryCreationHandler) HandleCreateRepository(c *gin.Context) (Crea
 			zap.String("owner", owner),
 			zap.String("repo", repo),
 			zap.Error(err))
-		return CreateRepositoryResponse{}, typed.NewHTTPError(
-			http.StatusInternalServerError,
-			fmt.Sprintf("Failed to create repository: %v", err),
-		)
+		return CreateRepositoryResponse{}, typed.NewHTTPErrorWithCode(http.StatusInternalServerError, fmt.Sprintf("Failed to create repository: %v", err), "INTERNAL_ERROR", nil)
 	}
 
 	return *createdRepo, nil

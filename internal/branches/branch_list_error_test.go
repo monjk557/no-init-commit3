@@ -31,9 +31,9 @@ func TestBranchListHTTPError(t *testing.T) {
 			wantStatus: http.StatusTooManyRequests,
 		},
 		{
-			name:       "genuine git failure → 422",
+			name:       "genuine git failure (present but damaged) → 500",
 			err:        errors.New("git for-each-ref failed: fatal: bad object"),
-			wantStatus: http.StatusUnprocessableEntity,
+			wantStatus: http.StatusInternalServerError,
 		},
 		{
 			// Repo dir missing / not a git repo → 404, not the 422 reserved for a

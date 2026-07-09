@@ -2,11 +2,10 @@ package tags
 
 import (
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
@@ -67,7 +66,7 @@ func (e *invalidBindErr) Error() string { return e.inner.Error() }
 //
 // Typed handler — limit/skip/sort 는 GetTagsRequest query struct 로 바인딩
 // (RegisterGetWithQuery, 브랜치 list 와 동일 패턴). 단순 4xx 는
-// typed.NewHTTPError, GetTags 실패는 raw error 로 반환하여 ErrorMapper 가
+// api.NewCoded, GetTags 실패는 raw error 로 반환하여 ErrorMapper 가
 // details 필드를 첨부.
 func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsResponse, error) {
 	owner := c.Param("owner")
@@ -88,7 +87,7 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsRes
 	if limitStr != "" {
 		parsedLimit, err := strconv.Atoi(limitStr)
 		if err != nil || parsedLimit < MinTagsLimit {
-			return TagsResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid limit: must be >= %d", MinTagsLimit))
+			return TagsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("invalid limit: must be >= %d", MinTagsLimit))
 		}
 		if parsedLimit > MaxTagsLimit {
 			limit = MaxTagsLimit
@@ -101,14 +100,14 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsRes
 	if skipStr != "" {
 		parsedSkip, err := strconv.Atoi(skipStr)
 		if err != nil || parsedSkip < 0 {
-			return TagsResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid skip: must be >= 0")
+			return TagsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "invalid skip: must be >= 0")
 		}
 		skip = parsedSkip
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return TagsResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
+		return TagsResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	tagList, totalCount, err := GetTagsSorted(c.Request.Context(), repoPath, limit, skip, searchQuery, sort)
@@ -159,7 +158,7 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) (CreateTagResponse, error)
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return CreateTagResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
+		return CreateTagResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	tag, err := CreateTag(c.Request.Context(), repoPath, &req)
@@ -186,7 +185,7 @@ func (h *TagsHandler) HandleDeleteTag(c *gin.Context) (DeleteTagResponse, error)
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return DeleteTagResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
+		return DeleteTagResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	ctx := c.Request.Context()
@@ -216,12 +215,12 @@ func (h *TagsHandler) HandleBulkDeleteTags(c *gin.Context) (BulkDeleteTagsRespon
 
 	var req BulkDeleteTagsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return BulkDeleteTagsResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body: tags array is required")
+		return BulkDeleteTagsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "invalid request body: tags array is required")
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return BulkDeleteTagsResponse{}, typed.NewHTTPError(http.StatusNotFound, "Repository not found")
+		return BulkDeleteTagsResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	ctx := c.Request.Context()

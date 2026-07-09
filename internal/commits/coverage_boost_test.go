@@ -787,9 +787,10 @@ func Test_HandleGetCommitDetail_EmptySha_Returns400(t *testing.T) {
 	requireBodyContains(t, w, "commit sha is required")
 }
 
-// 존재하지 않는 sha 는 git 이 "bad object" 로 실패하므로 (commit not found
-// 문자열 분기가 아님) handler 가 500 으로 매핑한다 — error 분기 커버리지.
-func Test_HandleGetCommitDetail_BadObject_Returns500(t *testing.T) {
+// 존재하지 않는 sha 는 git 이 "bad object" 로 실패한다. ClassifyGitError 가
+// 이를 OBJECT_NOT_FOUND(404) 로 분류 — 없는 커밋은 client 관점에서 not found
+// 이지 서버 결함(500)이 아니다 (Issue-5577 후속).
+func Test_HandleGetCommitDetail_BadObject_Returns404(t *testing.T) {
 	t.Parallel()
 
 	handler, _ := newCommitsHandlerWithRepo(t)
@@ -804,12 +805,12 @@ func Test_HandleGetCommitDetail_BadObject_Returns500(t *testing.T) {
 
 	invokeTyped(c, handler.HandleGetCommitDetail)
 
-	requireStatus(t, w, http.StatusInternalServerError)
+	requireStatus(t, w, http.StatusNotFound)
 }
 
-// repo 경로 검증은 통과하지만 (디렉토리 존재) git 레벨에서 실패하는 케이스.
-// owner/repo 경로가 path 검증을 통과하도록 실제 핸들러 + 존재하는 sha 형식.
-func Test_HandleGetCommitDetail_GitLevelFailure_Returns500(t *testing.T) {
+// repo 경로 검증은 통과하지만 git 레벨에서 실패하는 케이스. "zzz" 는
+// unknown revision → ClassifyGitError 가 REF_NOT_FOUND(404) 로 분류한다.
+func Test_HandleGetCommitDetail_GitLevelFailure_Returns404(t *testing.T) {
 	t.Parallel()
 
 	handler := newCommitsHandler(t)
@@ -823,7 +824,7 @@ func Test_HandleGetCommitDetail_GitLevelFailure_Returns500(t *testing.T) {
 
 	invokeTyped(c, handler.HandleGetCommitDetail)
 
-	requireStatus(t, w, http.StatusInternalServerError)
+	requireStatus(t, w, http.StatusNotFound)
 }
 
 // =============================================================================

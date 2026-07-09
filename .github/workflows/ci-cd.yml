@@ -38,6 +38,11 @@ jobs:
       - name: Format
         run: make format
 
+      # Issue-5577 ratchet: fail if a handler reintroduces a bare
+      # typed.NewHTTPError (no error_code) or an HTTP 422.
+      - name: Error code guard
+        run: make guard-errcodes
+
       - name: Run tests
         run: make test
 

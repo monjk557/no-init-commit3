@@ -54,6 +54,16 @@ jobs:
           cd /workspace/source
           make format
 
+      # Issue-5577 ratchet: fail the build if any handler reintroduces a bare
+      # typed.NewHTTPError (no error_code) or an HTTP 422. Keeps the central
+      # error catalog the single source of truth for error responses.
+      - name: Error code guard
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make guard-errcodes
+
       # - name: Lint
       #   image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
       #   run: |

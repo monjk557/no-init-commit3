@@ -5,13 +5,12 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/lfs"
@@ -93,12 +92,12 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(_ context.Context,
 	}
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	repoLock := repositories.GetRepoRWLock(repoPath)
@@ -107,7 +106,7 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(_ context.Context,
 	repoWrapper, err := repositories.OpenRepositoryNoCache(repoPath)
 	if err != nil {
 		repoLock.RUnlock()
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	if ref != "" && ref != "HEAD" {
@@ -115,7 +114,7 @@ func (h *RepositoryOverviewHandler) validateAndOpenRepository(_ context.Context,
 		if err != nil {
 			repoLock.RUnlock()
 			_ = repoWrapper.Close()
-			return nil, typed.NewHTTPError(http.StatusNotFound, "reference not found")
+			return nil, api.NewCoded(api.ErrCodeRefNotFound)
 		}
 	}
 
@@ -137,12 +136,12 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 	}
 
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	repoPath, err := repositories.GetRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	repoLock := repositories.GetRepoRWLock(repoPath)
@@ -150,13 +149,13 @@ func (h *RepositoryOverviewHandler) validateRepositoryNative(ctx context.Context
 
 	if err := nativeCheckRepoExists(ctx, repoPath); err != nil {
 		repoLock.RUnlock()
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	if ref != "" && ref != "HEAD" {
 		if _, err := nativeResolveRef(ctx, repoPath, ref); err != nil {
 			repoLock.RUnlock()
-			return nil, typed.NewHTTPError(http.StatusNotFound, "reference not found")
+			return nil, api.NewCoded(api.ErrCodeRefNotFound)
 		}
 	}
 
@@ -370,9 +369,9 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) 
 		if strings.Contains(errMsg, "not a tree object") ||
 			strings.Contains(errMsg, "does not exist") ||
 			strings.Contains(errMsg, "path not found") {
-			return RepositoryOverviewResponse{}, typed.NewHTTPError(http.StatusNotFound, "path not found")
+			return RepositoryOverviewResponse{}, api.NewCoded(api.ErrCodeFileNotFound, "path not found")
 		}
-		return RepositoryOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+		return RepositoryOverviewResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted)
 	}
 
 	return RepositoryOverviewResponse{
@@ -412,7 +411,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) (TreeO
 
 	treeEntries, err := NativeGetTreeEntries(ctx, repoCtx.repoPath, repoCtx.ref, path)
 	if err != nil {
-		return TreeOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+		return TreeOverviewResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted)
 	}
 
 	var latestCommit *GitCommit
@@ -460,7 +459,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 	ref := c.Query("ref")
 
 	if path == "" {
-		return BlobOverviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required parameter: path")
+		return BlobOverviewResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required parameter: path")
 	}
 
 	repoCtx, err := h.validateRepositoryNative(ctx, owner, repo, ref)
@@ -471,7 +470,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 
 	blobContent, err := NativeGetBlobContent(ctx, repoCtx.repoPath, repoCtx.ref, path)
 	if err != nil {
-		return BlobOverviewResponse{}, typed.NewHTTPError(http.StatusNotFound, "file not found")
+		return BlobOverviewResponse{}, api.NewCoded(api.ErrCodeFileNotFound)
 	}
 
 	contentType := blob.DetectContentType(blobContent, path)
@@ -497,7 +496,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 	}
 	treeEntries, err := NativeGetTreeEntries(ctx, repoCtx.repoPath, repoCtx.ref, parentPath)
 	if err != nil {
-		return BlobOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+		return BlobOverviewResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted)
 	}
 
 	latestCommit, _ := NativeGetLatestCommitForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
@@ -569,7 +568,7 @@ func (h *RepositoryOverviewHandler) HandleGetTreeWithCommitOverview(c *gin.Conte
 	treeEntries, err := NativeGetTreeEntries(ctx, repoCtx.repoPath, repoCtx.ref, repoCtx.path)
 	if err != nil {
 		m.RecordTreeWithCommit("error", time.Since(start), 0)
-		return TreeWithCommitOverviewResponse{}, typed.NewHTTPError(http.StatusNotFound, "path not found")
+		return TreeWithCommitOverviewResponse{}, api.NewCoded(api.ErrCodeFileNotFound, "path not found")
 	}
 
 	paths := make([]string, 0, len(treeEntries))
@@ -632,7 +631,7 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 
 	if path != "" {
 		if err := h.pathValidator.ValidateFilePath(path); err != nil {
-			return LatestCommitOverviewResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+			return LatestCommitOverviewResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 		}
 	}
 
@@ -672,7 +671,7 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 			zap.String("path", path),
 			zap.Error(nateErr),
 		)
-		return LatestCommitOverviewResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "failed to resolve latest commit")
+		return LatestCommitOverviewResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted, "failed to resolve latest commit")
 	}
 
 	if h.logger != nil {
@@ -707,32 +706,53 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 
 	var req LatestCommitsBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body")
+		return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "invalid request body")
 	}
 	if strings.TrimSpace(req.Ref) == "" {
-		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required field: ref")
+		return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required field: ref")
 	}
 	if len(req.Paths) == 0 {
-		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Missing required field: paths")
+		return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required field: paths")
 	}
 
 	dirPath := strings.Trim(req.DirPath, "/")
 	if dirPath != "" {
 		if err := h.pathValidator.ValidateFilePath(dirPath); err != nil {
-			return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+			return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 		}
 	}
 
-	repoCtx, err := h.validateAndOpenRepository(ctx, owner, repo, req.Ref)
+	// Open with an empty ref (→ HEAD, no ref rejection) so an empty repo is not
+	// pre-rejected 404 by validateAndOpenRepository before we can classify it;
+	// req.Ref is resolved explicitly below.
+	repoCtx, err := h.validateAndOpenRepository(ctx, owner, repo, "")
 	if err != nil {
 		return LatestCommitsBatchResponse{}, err
 	}
 	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 	defer func() { _ = repoCtx.repoWrapper.Close() }()
+	repoCtx.ref = req.Ref
 
 	resolvedHash, err := repoCtx.repoWrapper.ResolveReference(repoCtx.ref)
 	if err != nil {
-		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusNotFound, "reference not found")
+		// Distinguish an empty repository (unborn HEAD, zero commits) from a
+		// genuinely bad ref. An empty repo has no latest commit for any path —
+		// a valid state, not an error — so return 200 with empty results,
+		// unifying with the main overview / latest-commit empty handling
+		// (Issue-5577), instead of the 404 the batch endpoint used to emit.
+		if _, headErr := nativeResolveRef(ctx, repoCtx.repoPath, "HEAD"); headErr != nil {
+			m.RecordLatestCommitsBatch("empty_repo", time.Since(start), len(req.Paths), 0)
+			return LatestCommitsBatchResponse{
+				Success:       true,
+				Repository:    fmt.Sprintf("%s/%s", owner, repo),
+				Owner:         owner,
+				Name:          repo,
+				DirPath:       dirPath,
+				CommitsByPath: map[string]*GitCommit{},
+				Meta:          LatestCommitsMeta{},
+			}, nil
+		}
+		return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeRefNotFound)
 	}
 	resolvedRefHash := resolvedHash.String()
 
@@ -750,7 +770,7 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 		}
 
 		if err := h.pathValidator.ValidateFilePath(full); err != nil {
-			return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+			return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 		}
 
 		if _, ok := seen[full]; ok {
@@ -761,7 +781,7 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 		pathInfos = append(pathInfos, CommitPathInfo{Path: full, IsTree: false})
 	}
 	if len(pathInfos) == 0 {
-		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "paths must not be empty")
+		return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "paths must not be empty")
 	}
 
 	sortedFull := make([]string, 0, len(seen))
@@ -815,7 +835,7 @@ func (h *RepositoryOverviewHandler) HandlePostLatestCommitsBatch(c *gin.Context)
 	})
 	if sfErr != nil {
 		m.RecordLatestCommitsBatch("error", time.Since(start), len(pathInfos), 0)
-		return LatestCommitsBatchResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+		return LatestCommitsBatchResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted)
 	}
 	if shared {
 		m.RecordOverviewSingleflightShared("latest_commits_batch")

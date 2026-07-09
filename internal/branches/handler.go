@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -89,18 +88,18 @@ type repositoryContext struct {
 // *typed.HTTPError 반환 (path validation → 400, repo not found → 404).
 func (h *BranchOperationsHandler) validateAndGetRepoPath(_ context.Context, owner, repo string) (*repositoryContext, error) {
 	if err := h.pathValidator.ValidateFilePath(fmt.Sprintf("%s/%s", owner, repo)); err != nil {
-		return nil, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid path: %v", err))
+		return nil, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid path: %v", err))
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	// 경로 안전성 검증과 별개로 저장소 실제 존재 여부를 확인한다.
 	// GetAndValidateRepoPath 는 path traversal 등만 막고 존재는 검사하지 않음.
 	if !repoExists(repoPath) {
-		return nil, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return nil, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	return &repositoryContext{
@@ -153,15 +152,15 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) (Vali
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return ValidateBranchNameResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ValidateBranchNameResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 	if !repoExists(repoPath) {
-		return ValidateBranchNameResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ValidateBranchNameResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	exists, _, err := NativeCheckBranchExists(ctx, repoPath, name)
 	if err != nil {
-		return ValidateBranchNameResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+		return ValidateBranchNameResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted)
 	}
 
 	if !exists {
@@ -178,12 +177,13 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) (Vali
 	}, nil
 }
 
-// branchListHTTPError maps a GetBranches failure to an HTTP error. A deadline
-// (the listing was too slow under load — the repo itself is fine) becomes 429;
-// any other failure keeps the 422 corrupted-repo signal. See Issue-5071:
-// blanket-labelling timeouts as "repository corrupted" mislabels healthy repos.
+// branchListHTTPError maps a GetBranches failure to a coded error: a deadline
+// (listing too slow under load — the repo is fine) → TIMEOUT(429); a repo that
+// vanished on disk → REPOSITORY_NOT_FOUND(404); anything else (repo present but
+// git failed unexpectedly) → REPOSITORY_CORRUPTED(500). No 422 (Issue-5558/5577:
+// missing/corrupted are not client errors).
 //
-// Why 429 and NOT 5xx: the orchestrator BFF auto-retries idempotent GETs on
+// Why 429 and NOT 5xx for the timeout: the orchestrator BFF auto-retries idempotent GETs on
 // >=500 (stop_after_attempt(3), base.py) — a 5xx here would re-run the same
 // expensive 5s for-each-ref up to 3× on an already-contended git-executor,
 // amplifying the very overload that caused the timeout (cf. INC-002). 429 is a
@@ -192,7 +192,7 @@ func (h *BranchOperationsHandler) HandleValidateBranchName(c *gin.Context) (Vali
 // storm; the web client backs off at user pace.
 func branchListHTTPError(err error) *typed.HTTPError {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return typed.NewHTTPError(http.StatusTooManyRequests, "branch listing timed out, retry shortly")
+		return api.NewCoded(api.ErrCodeTimeout, "branch listing timed out, retry shortly")
 	}
 	// The repo vanished on disk between the existence gate and for-each-ref (a
 	// concurrent delete), so git reports "not a git repository". That is a
@@ -200,9 +200,9 @@ func branchListHTTPError(err error) *typed.HTTPError {
 	// that is present but genuinely damaged (Issue-5558). Neither is auto-retried
 	// by the BFF.
 	if isRepoMissingErr(err) {
-		return typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
-	return typed.NewHTTPError(http.StatusUnprocessableEntity, "repository corrupted")
+	return api.NewCoded(api.ErrCodeRepositoryCorrupted)
 }
 
 // isRepoMissingErr reports whether a git command error means the on-disk
@@ -244,14 +244,14 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 	statusFilter := req.Status
 
 	if statusFilter != "" && statusFilter != "active" && statusFilter != "stale" {
-		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid status: must be 'active' or 'stale'")
+		return GetBranchesResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "invalid status: must be 'active' or 'stale'")
 	}
 
 	limit := DefaultBranchesLimit
 	if limitStr != "" {
 		parsedLimit, err := strconv.Atoi(limitStr)
 		if err != nil || parsedLimit < MinBranchesLimit {
-			return GetBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid limit: must be >= %d", MinBranchesLimit))
+			return GetBranchesResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("invalid limit: must be >= %d", MinBranchesLimit))
 		}
 		if parsedLimit > MaxBranchesLimit {
 			limit = MaxBranchesLimit
@@ -264,14 +264,14 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 	if skipStr != "" {
 		parsedSkip, err := strconv.Atoi(skipStr)
 		if err != nil || parsedSkip < 0 {
-			return GetBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid skip: must be >= 0")
+			return GetBranchesResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "invalid skip: must be >= 0")
 		}
 		skip = parsedSkip
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return GetBranchesResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	// GetAndValidateRepoPath only validates the path format, not that the repo
@@ -283,7 +283,7 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 	// (Issue-5558). 404 is honest (the git resource is absent) and, like 429, is
 	// not auto-retried by the BFF.
 	if !repoExists(repoPath) {
-		return GetBranchesResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return GetBranchesResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	// Cost optimization (Issue-5071): committer email is the only for-each-ref
@@ -418,16 +418,16 @@ func (h *BranchOperationsHandler) HandleBranchStats(c *gin.Context) (BranchStats
 
 	var req BranchStatsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return BranchStatsResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
+		return BranchStatsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("invalid request: %v", err))
 	}
 
 	if len(req.Branches) > MaxBranchesLimit {
-		return BranchStatsResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("too many branches: max %d", MaxBranchesLimit))
+		return BranchStatsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("too many branches: max %d", MaxBranchesLimit))
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return BranchStatsResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return BranchStatsResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	headRef := nativeGetHead(ctx, repoPath)
@@ -509,29 +509,24 @@ func (h *BranchOperationsHandler) HandleResolveBranch(c *gin.Context) (ResolveBr
 	repo := c.Param("repo")
 	ref := strings.TrimPrefix(protocol.SafeParam(c, "ref"), "/")
 	if ref == "" {
-		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusBadRequest,
-			"branch name is required", string(api.ErrCodeInvalidInput), nil)
+		return ResolveBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "branch name is required")
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound,
-			"repository not found", string(api.ErrCodeNotFound), nil)
+		return ResolveBranchResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 	if !repoExists(repoPath) {
-		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound,
-			"repository not found", string(api.ErrCodeNotFound), nil)
+		return ResolveBranchResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	exists, hash, err := NativeCheckBranchExists(ctx, repoPath, ref)
 	if err != nil {
-		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusUnprocessableEntity,
-			"repository corrupted", string(api.ErrCodeInternalError), nil)
+		return ResolveBranchResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted)
 	}
 	if !exists {
-		return ResolveBranchResponse{}, typed.NewHTTPErrorWithCode(http.StatusNotFound,
-			fmt.Sprintf("branch '%s' not found", ref), string(api.ErrCodeRefNotFound),
-			map[string]string{"ref": ref})
+		return ResolveBranchResponse{}, api.NewCodedWithParams(api.ErrCodeRefNotFound,
+			fmt.Sprintf("branch '%s' not found", ref), map[string]string{"ref": ref})
 	}
 
 	return ResolveBranchResponse{
@@ -552,12 +547,12 @@ func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) (Validate
 
 	var req ValidateReopenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body: "+err.Error())
+		return ValidateReopenResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "invalid request body: "+err.Error())
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusNotFound, "repository not found")
+		return ValidateReopenResponse{}, api.NewCoded(api.ErrCodeRepositoryNotFound)
 	}
 
 	type branchResult struct {
@@ -581,16 +576,16 @@ func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) (Validate
 	targetRes := <-targetCh
 
 	if sourceRes.err != nil {
-		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "failed to check source branch")
+		return ValidateReopenResponse{}, api.NewCoded(api.ErrCodeInternalError, "failed to check source branch")
 	}
 	if !sourceRes.exists {
-		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusConflict, fmt.Sprintf("source branch '%s' no longer exists", req.SourceBranchName))
+		return ValidateReopenResponse{}, api.NewCoded(api.ErrCodeConflict, fmt.Sprintf("source branch '%s' no longer exists", req.SourceBranchName))
 	}
 	if targetRes.err != nil {
-		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusUnprocessableEntity, "failed to check target branch")
+		return ValidateReopenResponse{}, api.NewCoded(api.ErrCodeInternalError, "failed to check target branch")
 	}
 	if !targetRes.exists {
-		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusConflict, fmt.Sprintf("target branch '%s' no longer exists", req.TargetBranchName))
+		return ValidateReopenResponse{}, api.NewCoded(api.ErrCodeConflict, fmt.Sprintf("target branch '%s' no longer exists", req.TargetBranchName))
 	}
 
 	currentSourceTip := sourceRes.hash
@@ -605,7 +600,7 @@ func (h *BranchOperationsHandler) HandleValidateReopen(c *gin.Context) (Validate
 	}
 
 	if !lineageValid {
-		return ValidateReopenResponse{}, typed.NewHTTPError(http.StatusConflict, "source branch has been recreated from a different merge base")
+		return ValidateReopenResponse{}, api.NewCoded(api.ErrCodeConflict, "source branch has been recreated from a different merge base")
 	}
 
 	return ValidateReopenResponse{
@@ -630,11 +625,11 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) (CreateBran
 
 	var req CreateBranchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return CreateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return CreateBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	if err := h.validateBranchName(req.Name); err != nil {
-		return CreateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid branch name: %v", err))
+		return CreateBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid branch name: %v", err))
 	}
 
 	repoCtx, err := h.validateAndGetRepoPath(ctx, owner, repo)
@@ -644,13 +639,13 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) (CreateBran
 
 	result, err := h.service.CreateBranch(c.Request.Context(), repoCtx.repoPath, req)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
+		code := api.ErrCodeInternalError
 		if strings.Contains(err.Error(), "already exists") {
-			statusCode = http.StatusConflict
+			code = api.ErrCodeBranchAlreadyExists
 		} else if strings.Contains(err.Error(), "failed to resolve") {
-			statusCode = http.StatusBadRequest
+			code = api.ErrCodeInvalidInput
 		}
-		return CreateBranchResponse{}, typed.NewHTTPError(statusCode, err.Error())
+		return CreateBranchResponse{}, api.NewCoded(code, err.Error())
 	}
 
 	return CreateBranchResponse{
@@ -688,25 +683,25 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) (UpdateBran
 
 	var req UpdateBranchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return UpdateBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid JSON: %v", err))
 	}
 
 	hasTarget := req.Target != ""
 	hasNewName := req.NewName != ""
 	if !hasTarget && !hasNewName {
-		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Either 'target' (for commit update) or 'new_name' (for rename) must be provided")
+		return UpdateBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Either 'target' (for commit update) or 'new_name' (for rename) must be provided")
 	}
 	if hasTarget && hasNewName {
-		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, "Cannot provide both 'target' and 'new_name'. Use 'target' for commit update or 'new_name' for rename")
+		return UpdateBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Cannot provide both 'target' and 'new_name'. Use 'target' for commit update or 'new_name' for rename")
 	}
 
 	if err := h.validateBranchName(branchName); err != nil {
-		return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid branch name: %v", err))
+		return UpdateBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid branch name: %v", err))
 	}
 
 	if hasNewName {
 		if err := h.validateBranchName(req.NewName); err != nil {
-			return UpdateBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid new branch name: %v", err))
+			return UpdateBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid new branch name: %v", err))
 		}
 	}
 
@@ -717,17 +712,17 @@ func (h *BranchOperationsHandler) HandleUpdateBranch(c *gin.Context) (UpdateBran
 
 	result, err := h.service.UpdateBranch(c.Request.Context(), repoCtx.repoPath, branchName, req)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
+		code := api.ErrCodeInternalError
 		if strings.Contains(err.Error(), "does not exist") {
-			statusCode = http.StatusNotFound
+			code = api.ErrCodeRefNotFound
 		} else if strings.Contains(err.Error(), "cannot be the same") {
-			statusCode = http.StatusBadRequest
+			code = api.ErrCodeInvalidInput
 		} else if strings.Contains(err.Error(), "already exists") {
-			statusCode = http.StatusConflict
+			code = api.ErrCodeBranchAlreadyExists
 		} else if strings.Contains(err.Error(), "not a fast-forward") || strings.Contains(err.Error(), "must be provided") {
-			statusCode = http.StatusBadRequest
+			code = api.ErrCodeInvalidInput
 		}
-		return UpdateBranchResponse{}, typed.NewHTTPError(statusCode, err.Error())
+		return UpdateBranchResponse{}, api.NewCoded(code, err.Error())
 	}
 
 	// Publish branch rename event to Redis Stream (non-blocking)
@@ -807,7 +802,7 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) (DeleteBran
 		zap.String("request_path", c.Request.URL.Path))
 
 	if err := h.validateBranchName(branchName); err != nil {
-		return DeleteBranchResponse{}, typed.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid branch name: %v", err))
+		return DeleteBranchResponse{}, api.NewCoded(api.ErrCodeInvalidInput, fmt.Sprintf("Invalid branch name: %v", err))
 	}
 
 	repoCtx, err := h.validateAndGetRepoPath(ctx, owner, repo)
@@ -817,11 +812,11 @@ func (h *BranchOperationsHandler) HandleDeleteBranch(c *gin.Context) (DeleteBran
 
 	result, err := h.service.DeleteBranch(c.Request.Context(), repoCtx.repoPath, branchName)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
+		code := api.ErrCodeInternalError
 		if strings.Contains(err.Error(), "does not exist") {
-			statusCode = http.StatusNotFound
+			code = api.ErrCodeRefNotFound
 		}
-		return DeleteBranchResponse{}, typed.NewHTTPError(statusCode, err.Error())
+		return DeleteBranchResponse{}, api.NewCoded(code, err.Error())
 	}
 
 	if h.eventsClient != nil {
@@ -866,7 +861,7 @@ func (h *BranchOperationsHandler) HandleBulkDeleteBranches(c *gin.Context) (Bulk
 
 	var req BulkDeleteBranchesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return BulkDeleteBranchesResponse{}, typed.NewHTTPError(http.StatusBadRequest, "invalid request body: branches array is required")
+		return BulkDeleteBranchesResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "invalid request body: branches array is required")
 	}
 
 	repoCtx, err := h.validateAndGetRepoPath(ctx, owner, repo)

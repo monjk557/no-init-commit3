@@ -17,9 +17,8 @@ package diffs
 
 import (
 	"context"
-	"net/http"
 
-	"github.com/collabops/git-executor/internal/api/typed"
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -34,12 +33,12 @@ func (h *DiffHandler) HandleClassifyAnchors(c *gin.Context) (ClassifyAnchorsResp
 	params, err := h.validateAndExtractParams(c)
 	if err != nil {
 		h.logger.Error("classify-anchors: invalid params", zap.Error(err))
-		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return ClassifyAnchorsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	var req ClassifyAnchorsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return ClassifyAnchorsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 	if len(req.Anchors) == 0 {
 		return ClassifyAnchorsResponse{
@@ -53,13 +52,13 @@ func (h *DiffHandler) HandleClassifyAnchors(c *gin.Context) (ClassifyAnchorsResp
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, params.Owner, params.Repo)
 	if err != nil {
 		h.logger.Error("classify-anchors: invalid repo path", zap.Error(err))
-		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusBadRequest, err.Error())
+		return ClassifyAnchorsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
 	}
 
 	results, err := classifyAnchors(ctx, repoPath, req.BaseSHA, req.HeadSHA, req.Anchors)
 	if err != nil {
 		h.logger.Error("classify-anchors: compute failed", zap.Error(err))
-		return ClassifyAnchorsResponse{}, typed.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return ClassifyAnchorsResponse{}, api.NewCoded(api.ErrCodeInternalError, err.Error())
 	}
 
 	return ClassifyAnchorsResponse{
