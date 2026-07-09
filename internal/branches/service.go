@@ -41,14 +41,22 @@ func (s *BranchService) GetBranches(ctx context.Context, repoPath string, sort B
 }
 
 // GetBranchesLight lists branches without committer emails (cheap wide scan).
-// Pair with EnrichCommitterEmails on the paginated page. See Issue-5071.
-func (s *BranchService) GetBranchesLight(ctx context.Context, repoPath string, sort BranchSortField) ([]BranchInfo, error) {
-	return NativeGetBranchesLight(ctx, repoPath, sort)
+// includeDate=false also omits committerdate (name sort / no date filter), so
+// the scan is a pure ref enumeration; pair with EnrichCommitterDates on the
+// page. Pair with EnrichCommitterEmails on the page too. See Issue-5071/5618.
+func (s *BranchService) GetBranchesLight(ctx context.Context, repoPath string, sort BranchSortField, includeDate bool) ([]BranchInfo, error) {
+	return NativeGetBranchesLight(ctx, repoPath, sort, includeDate)
 }
 
 // EnrichCommitterEmails fills committer emails for the given (paginated) branches.
 func (s *BranchService) EnrichCommitterEmails(ctx context.Context, repoPath string, branches []BranchInfo) error {
 	return NativeEnrichCommitterEmails(ctx, repoPath, branches)
+}
+
+// EnrichCommitterDates fills Date for the given (paginated) branches when the
+// light scan omitted committerdate (Issue-5618).
+func (s *BranchService) EnrichCommitterDates(ctx context.Context, repoPath string, branches []BranchInfo) error {
+	return NativeEnrichCommitterDates(ctx, repoPath, branches)
 }
 
 // CreateBranch는 새로운 브랜치를 생성합니다 (native git).

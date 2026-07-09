@@ -53,7 +53,7 @@ func TestNativeGetBranchesLight_OmitsEmail_EnrichMatchesFull(t *testing.T) {
 		fullByRef[b.RefPath] = b
 	}
 
-	light, err := NativeGetBranchesLight(ctx, bare, BranchSortNewest)
+	light, err := NativeGetBranchesLight(ctx, bare, BranchSortNewest, true)
 	require.NoError(t, err)
 	require.Equal(t, len(full), len(light))
 

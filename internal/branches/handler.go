@@ -292,9 +292,14 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 	// page — O(page) object reads instead of O(all branches). An email filter
 	// needs the email for every branch, so it falls back to the full scan.
 	lightScan := emailFilter == ""
+	// committerdate is only needed up-front when we sort by it or filter by it
+	// (status = active/stale is a date threshold). For name sort with no status
+	// filter, omit it from the wide scan and enrich the page instead — the same
+	// deferral the email path uses (Issue-5618).
+	includeDate := sort != BranchSortName || statusFilter != ""
 	var allBranches []BranchInfo
 	if lightScan {
-		allBranches, err = h.service.GetBranchesLight(ctx, repoPath, sort)
+		allBranches, err = h.service.GetBranchesLight(ctx, repoPath, sort, includeDate)
 	} else {
 		allBranches, err = h.service.GetBranches(ctx, repoPath, sort)
 	}
@@ -384,6 +389,15 @@ func (h *BranchOperationsHandler) HandleGetBranches(c *gin.Context, req GetBranc
 			h.logger.LogWarning(ctx, "committer email enrichment failed; returning branches without emails",
 				zap.String("repo", repoPath),
 				zap.Error(eerr))
+		}
+		// Wide scan omitted committerdate (name sort, no date filter); fill it in
+		// for just the page (O(page)). Non-fatal — a zero Date on failure.
+		if !includeDate {
+			if derr := h.service.EnrichCommitterDates(ctx, repoPath, branches); derr != nil {
+				h.logger.LogWarning(ctx, "committer date enrichment failed; returning branches without dates",
+					zap.String("repo", repoPath),
+					zap.Error(derr))
+			}
 		}
 	}
 

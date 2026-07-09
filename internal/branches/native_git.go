@@ -112,18 +112,28 @@ func NativeGetBranches(ctx context.Context, repoPath string, sort BranchSortFiel
 	return branches, nil
 }
 
-// NativeGetBranchesLight lists branches WITHOUT the committer email — the only
-// for-each-ref field that forces reading each branch tip's commit object.
-// committerdate is served from the commit-graph, so this scan stays cheap even
-// on repos with many branches. Committer emails for the returned page are filled
-// in afterwards by NativeEnrichCommitterEmails (O(page) instead of O(all
-// branches)), which is the dominant cost the old single-scan path paid on every
-// request. See Issue-5071.
-func NativeGetBranchesLight(ctx context.Context, repoPath string, sort BranchSortField) ([]BranchInfo, error) {
+// NativeGetBranchesLight lists branches WITHOUT the committer email — the field
+// that forces reading each branch tip's commit object. Committer emails for the
+// returned page are filled in afterwards by NativeEnrichCommitterEmails (O(page)
+// instead of O(all branches)). See Issue-5071.
+//
+// includeDate controls %(committerdate): git evaluates committerdate per ref
+// (from the commit-graph when it covers the tip, else by inflating the commit
+// object), so on a many-branch repo — or one whose commit-graph lags its most
+// recent pushes — including it makes the wide scan O(branches) and can breach
+// the 5s deadline (Issue-5618). Callers that neither sort by date nor filter by
+// date pass includeDate=false to skip it entirely (pure ref enumeration, no
+// per-ref commit lookup) and enrich only the returned page via
+// NativeEnrichCommitterDates. Date sort / date filter must pass true.
+func NativeGetBranchesLight(ctx context.Context, repoPath string, sort BranchSortField, includeDate bool) ([]BranchInfo, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
 	defer cancel()
 
-	format := "%(refname:short)\t%(objectname)\t%(committerdate:iso8601-strict)\t%(refname)"
+	// Field order: refname:short, objectname, [committerdate,] refname.
+	format := "%(refname:short)\t%(objectname)\t%(refname)"
+	if includeDate {
+		format = "%(refname:short)\t%(objectname)\t%(committerdate:iso8601-strict)\t%(refname)"
+	}
 	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
 		"for-each-ref", "refs/heads/",
 		"--format="+format,
@@ -145,19 +155,26 @@ func NativeGetBranchesLight(ctx context.Context, repoPath string, sort BranchSor
 		return []BranchInfo{}, nil
 	}
 
+	nFields := 3
+	if includeDate {
+		nFields = 4
+	}
 	lines := strings.Split(raw, "\n")
 	branches := make([]BranchInfo, 0, len(lines))
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) < 4 {
+		parts := strings.SplitN(line, "\t", nFields)
+		if len(parts) < nFields {
 			continue
 		}
 		name := parts[0]
-		refPath := parts[3]
-		date, _ := time.Parse(time.RFC3339, parts[2])
+		refPath := parts[nFields-1]
+		var date time.Time
+		if includeDate {
+			date, _ = time.Parse(time.RFC3339, parts[2])
+		}
 		branches = append(branches, BranchInfo{
 			Name:      name,
 			CommitSHA: parts[1],
@@ -167,6 +184,54 @@ func NativeGetBranchesLight(ctx context.Context, repoPath string, sort BranchSor
 		})
 	}
 	return branches, nil
+}
+
+// NativeEnrichCommitterDates fills Date for the given branches (the paginated
+// page) with a single for-each-ref restricted to their refs — O(page) instead
+// of O(all branches). Mirrors NativeEnrichCommitterEmails; used when the light
+// scan omitted committerdate (name sort, no date filter). Refs are git's own
+// output, not user input; unresolved branches keep a zero Date (Issue-5618).
+func NativeEnrichCommitterDates(ctx context.Context, repoPath string, branches []BranchInfo) error {
+	if len(branches) == 0 {
+		return nil
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, nativeGitTimeout)
+	defer cancel()
+
+	args := []string{"--git-dir", repoPath, "for-each-ref", "--format=%(refname)\t%(committerdate:iso8601-strict)"}
+	for _, b := range branches {
+		args = append(args, b.RefPath)
+	}
+	cmd := exec.CommandContext(cmdCtx, "git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("git for-each-ref (dates) timed out after %s: %w", nativeGitTimeout, context.DeadlineExceeded)
+		}
+		return fmt.Errorf("git for-each-ref (dates) failed: %s: %w", strings.TrimSpace(stderr.String()), err)
+	}
+
+	dateByRef := make(map[string]time.Time, len(branches))
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		if d, perr := time.Parse(time.RFC3339, parts[1]); perr == nil {
+			dateByRef[parts[0]] = d
+		}
+	}
+	for i := range branches {
+		if d, ok := dateByRef[branches[i].RefPath]; ok {
+			branches[i].Date = d
+		}
+	}
+	return nil
 }
 
 // NativeEnrichCommitterEmails fills CommitterEmail for the given branches (the
