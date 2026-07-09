@@ -674,6 +674,13 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 		return LatestCommitOverviewResponse{}, api.NewCoded(api.ErrCodeRepositoryCorrupted, "failed to resolve latest commit")
 	}
 
+	// Best-effort commit count for the header ("N commits" affordance).
+	// path-scoped (`git rev-list --count <ref> -- <path>`) or ref-total when path=="".
+	// 절대 치명적이지 않다 — 타임아웃/에러면 count를 생략(nil)하고 소비측은 History 라벨로
+	// 폴백한다. (repoPath, refHash, path)로 캐시하며, path=="" 키는 overview 엔드포인트가
+	// 채운 ref-total 캐시와 공유된다.
+	commitCount, commitCountApprox := h.resolveLatestCommitCount(ctx, repoCtx, path, commit != nil)
+
 	if h.logger != nil {
 		h.logger.Debug("latest-commit native git",
 			zap.String("repo", fmt.Sprintf("%s/%s", owner, repo)),
@@ -685,14 +692,57 @@ func (h *RepositoryOverviewHandler) HandleGetLatestCommitOverview(c *gin.Context
 	}
 
 	return LatestCommitOverviewResponse{
-		Success:    true,
-		Repository: fmt.Sprintf("%s/%s", owner, repo),
-		Owner:      owner,
-		Name:       repo,
-		Ref:        repoCtx.ref,
-		Path:       path,
-		Commit:     commit,
+		Success:                true,
+		Repository:             fmt.Sprintf("%s/%s", owner, repo),
+		Owner:                  owner,
+		Name:                   repo,
+		Ref:                    repoCtx.ref,
+		Path:                   path,
+		Commit:                 commit,
+		CommitCount:            commitCount,
+		CommitCountApproximate: commitCountApprox,
 	}, nil
+}
+
+// resolveLatestCommitCount는 latest-commit 헤더용 커밋 수를 best-effort로 계산한다.
+// hasCommit이 false면(빈 repo/경로) 계산을 건너뛰고 (nil, false)를 반환한다.
+// 캐시 우선 조회 → miss 시 native rev-list → 성공하고 non-approximate면 캐시에 저장.
+// 어떤 실패도 nil을 반환할 뿐 에러를 전파하지 않는다(응답 본체 보존).
+func (h *RepositoryOverviewHandler) resolveLatestCommitCount(
+	ctx context.Context, repoCtx *repositoryContext, path string, hasCommit bool,
+) (*int, bool) {
+	if !hasCommit {
+		return nil, false
+	}
+
+	refHash := ""
+	if resolved, resolveErr := nativeResolveRef(ctx, repoCtx.repoPath, repoCtx.ref); resolveErr == nil {
+		refHash = resolved
+	}
+
+	if refHash != "" {
+		if cached, ok := h.overviewCache.GetCommitCountForPath(repoCtx.repoPath, refHash, path); ok {
+			// 캐시에는 non-approximate 값만 저장하므로 approximate=false.
+			return &cached, false
+		}
+	}
+
+	count, approx, err := NativeCountCommitsForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("latest-commit count failed (omitting)",
+				zap.String("ref", repoCtx.ref),
+				zap.String("path", path),
+				zap.Error(err),
+			)
+		}
+		return nil, false
+	}
+
+	if refHash != "" && !approx {
+		h.overviewCache.SetCommitCountForPath(repoCtx.repoPath, refHash, path, count)
+	}
+	return &count, approx
 }
 
 // HandlePostLatestCommitsBatch handles POST /overview/latest-commits.

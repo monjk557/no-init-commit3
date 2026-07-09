@@ -394,6 +394,24 @@ func NativeGetLatestCommit(ctx context.Context, repoPath, ref string) (*GitCommi
 // NativeCountCommits는 native git으로 ref의 커밋 수를 카운트합니다.
 // overviewCommitCountCap 초과 시 approximate=true를 반환합니다.
 func NativeCountCommits(ctx context.Context, repoPath, ref string) (count int, approximate bool, err error) {
+	return nativeCountCommitsPathspec(ctx, repoPath, ref, "")
+}
+
+// NativeCountCommitsForPath는 native git으로 ref에서 특정 path(pathspec)를 건드린
+// 커밋 수를 카운트합니다: `git rev-list --count <ref> -- <path>`. path가 빈 문자열이면
+// NativeCountCommits와 동일하게 ref 전체를 셉니다. overviewCommitCountCap 초과 시
+// approximate=true.
+//
+// 주의: pathspec 카운트는 history simplification 때문에 ref 전체 카운트보다 무거울 수
+// 있습니다(경로를 건드린 커밋을 찾기 위해 그래프를 walk). 호출부는 3초 타임아웃에 의존해
+// best-effort로 다뤄야 하며, 실패해도 latest-commit 응답 본체(커밋)는 유지해야 합니다.
+func NativeCountCommitsForPath(ctx context.Context, repoPath, ref, path string) (count int, approximate bool, err error) {
+	return nativeCountCommitsPathspec(ctx, repoPath, ref, path)
+}
+
+// nativeCountCommitsPathspec는 NativeCountCommits / NativeCountCommitsForPath의 공통 구현.
+// path != "" 이면 `-- <path>` pathspec을 붙여 경로별로 카운트합니다.
+func nativeCountCommitsPathspec(ctx context.Context, repoPath, ref, path string) (count int, approximate bool, err error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -402,8 +420,12 @@ func NativeCountCommits(ctx context.Context, repoPath, ref string) (count int, a
 		target = "HEAD"
 	}
 
-	cmd := exec.CommandContext(cmdCtx, "git", "--git-dir", repoPath,
-		"rev-list", "--count", target)
+	args := []string{"--git-dir", repoPath, "rev-list", "--count", target}
+	if path != "" {
+		args = append(args, "--", path)
+	}
+
+	cmd := exec.CommandContext(cmdCtx, "git", args...)
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return 0, false, fmt.Errorf("git rev-list --count: %w", err)

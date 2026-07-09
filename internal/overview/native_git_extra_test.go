@@ -302,6 +302,56 @@ func Test_NativeCountCommits_InvalidRepo_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// createTestRepositoryWithMultiplePathCommits는 root/src/docs/src 순으로 커밋을 만든다:
+//   - README.md (root)  → 1 commit
+//   - src/main.go, src/util.go → src 경로 2 commits
+//   - docs/README.md → docs 경로 1 commit
+//   - ref 전체 4 commits
+func Test_NativeCountCommitsForPath_ScopesToPathspec(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tempDir := t.TempDir()
+	owner, repo := "o", "r"
+	createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+
+	srcCount, approx, err := NativeCountCommitsForPath(ctx, repoPath, "main", "src")
+	require.NoError(t, err)
+	assert.Equal(t, 2, srcCount, "src/ 는 2개 커밋이 건드림")
+	assert.False(t, approx)
+
+	docsCount, _, err := NativeCountCommitsForPath(ctx, repoPath, "main", "docs")
+	require.NoError(t, err)
+	assert.Equal(t, 1, docsCount, "docs/ 는 1개 커밋이 건드림")
+}
+
+func Test_NativeCountCommitsForPath_EmptyPath_EqualsRefTotal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tempDir := t.TempDir()
+	owner, repo := "o", "r"
+	createTestRepositoryWithMultiplePathCommits(t, tempDir, owner, repo)
+	repoPath := filepath.Join(tempDir, owner, repo+".git")
+
+	total, _, err := NativeCountCommitsForPath(ctx, repoPath, "main", "")
+	require.NoError(t, err)
+	assert.Equal(t, 4, total, "path 없으면 ref 전체 커밋 수")
+
+	refTotal, _, err := NativeCountCommits(ctx, repoPath, "main")
+	require.NoError(t, err)
+	assert.Equal(t, total, refTotal, "path=='' 는 NativeCountCommits 와 동일해야 함")
+}
+
+func Test_NativeCountCommitsForPath_InvalidRepo_ReturnsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, _, err := NativeCountCommitsForPath(ctx, filepath.Join(t.TempDir(), "nope.git"), "main", "src")
+	require.Error(t, err)
+}
+
 func Test_NativeCountBranches_SingleMain(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -184,6 +184,14 @@ type LatestCommitOverviewResponse struct {
 	Ref        string     `json:"ref"`
 	Path       string     `json:"path,omitempty"`
 	Commit     *GitCommit `json:"commit"`
+
+	// CommitCount는 Ref에서 Path를 건드린 커밋 수입니다(Path가 비면 ref 전체),
+	// 즉 `git rev-list --count <ref> -- <path>`. best-effort로 계산되며 타임아웃/에러로
+	// 산정 실패 시 nil입니다 — 소비측(web)이 "unknown"(History 라벨 폴백)과 실제 숫자를
+	// 구분할 수 있도록 pointer를 사용합니다.
+	CommitCount *int `json:"commit_count,omitempty"`
+	// CommitCountApproximate는 CommitCount가 overviewCommitCountCap에서 잘렸을 때 true.
+	CommitCountApproximate bool `json:"commit_count_approximate,omitempty"`
 }
 
 // TreeWithCommitOverviewResponse is the response type for tree with commit overview API

@@ -117,9 +117,22 @@ func cacheKey(kind, repoPath, refHash, path string) string {
 	return fmt.Sprintf("%s|%s|%s|%s", kind, repoPath, refHash, path)
 }
 
+// GetCommitCount은 ref 전체 커밋 수 캐시를 조회합니다 (path 미지정).
 func (c *OverviewCache) GetCommitCount(repoPath, refHash string) (int, bool) {
+	return c.GetCommitCountForPath(repoPath, refHash, "")
+}
+
+// SetCommitCount은 ref 전체 커밋 수를 캐시합니다 (path 미지정).
+func (c *OverviewCache) SetCommitCount(repoPath, refHash string, count int) {
+	c.SetCommitCountForPath(repoPath, refHash, "", count)
+}
+
+// GetCommitCountForPath는 (repoPath, refHash, path) 별 커밋 수 캐시를 조회합니다.
+// path=="" 이면 ref 전체 카운트로 GetCommitCount와 동일 키를 공유합니다 — overview
+// 엔드포인트가 채운 ref-total 캐시를 latest-commit(root)이 그대로 재사용합니다.
+func (c *OverviewCache) GetCommitCountForPath(repoPath, refHash, path string) (int, bool) {
 	m := observability.GetApplicationMetrics()
-	v, ok := c.commitCount.Get(cacheKey("commit_count", repoPath, refHash, ""))
+	v, ok := c.commitCount.Get(cacheKey("commit_count", repoPath, refHash, path))
 	if ok {
 		m.RecordOverviewCacheOp("commit_count", "hit")
 	} else {
@@ -129,8 +142,9 @@ func (c *OverviewCache) GetCommitCount(repoPath, refHash string) (int, bool) {
 	return v, ok
 }
 
-func (c *OverviewCache) SetCommitCount(repoPath, refHash string, count int) {
-	c.commitCount.Set(cacheKey("commit_count", repoPath, refHash, ""), count)
+// SetCommitCountForPath는 (repoPath, refHash, path) 별 커밋 수를 캐시합니다.
+func (c *OverviewCache) SetCommitCountForPath(repoPath, refHash, path string, count int) {
+	c.commitCount.Set(cacheKey("commit_count", repoPath, refHash, path), count)
 	m := observability.GetApplicationMetrics()
 	m.RecordOverviewCacheOp("commit_count", "set")
 	m.SetOverviewCacheEntries("commit_count", c.commitCount.Len())

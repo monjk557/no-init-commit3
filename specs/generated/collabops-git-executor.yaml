@@ -2998,6 +2998,11 @@ components:
           type: string
         commit:
           $ref: '#/components/schemas/GitCommit'
+        commit_count:
+          type: integer
+          nullable: true
+        commit_count_approximate:
+          type: boolean
       required:
         - name
         - owner
