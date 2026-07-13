@@ -451,12 +451,12 @@ func (h *RepositoryOverviewHandler) HandleGetTreeOverview(c *gin.Context) (TreeO
 }
 
 // HandleGetBlobOverview는 GET /overview/blob 요청을 처리합니다.
-func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobOverviewResponse, error) {
+func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context, req BlobOverviewRequest) (BlobOverviewResponse, error) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	path := c.Query("path")
-	ref := c.Query("ref")
+	path := req.Path
+	ref := req.Ref
 
 	if path == "" {
 		return BlobOverviewResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Missing required parameter: path")
@@ -502,7 +502,7 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context) (BlobO
 	latestCommit, _ := NativeGetLatestCommitForPath(ctx, repoCtx.repoPath, repoCtx.ref, path)
 
 	var commitsList []GitCommit
-	if c.Query("include_all_commits") == "true" {
+	if req.IncludeAllCommits == "true" {
 		const maxCommitsForList = 1000
 		commitsList, err = NativeGetCommits(ctx, repoCtx.repoPath, repoCtx.ref, maxCommitsForList)
 		if err != nil {

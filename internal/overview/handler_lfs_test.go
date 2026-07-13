@@ -93,7 +93,7 @@ func TestHandleGetBlobOverview_LFSPointer(t *testing.T) {
 	createTestRepoWithLFSPointer(t, tempDir, owner, repo, "asset.bin", "README.md")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/blob", adapt(handler.HandleGetBlobOverview))
+	router.GET("/repos/:owner/:repo/overview/blob", adaptQuery(handler.HandleGetBlobOverview))
 
 	req := httptest.NewRequest(http.MethodGet,
 		"/repos/"+owner+"/"+repo+"/overview/blob?ref=main&path=asset.bin", nil)
@@ -131,7 +131,7 @@ func TestHandleGetBlobOverview_RegularFile_LFSFieldsZero(t *testing.T) {
 	createTestRepoWithLFSPointer(t, tempDir, owner, repo, "asset.bin", "README.md")
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview/blob", adapt(handler.HandleGetBlobOverview))
+	router.GET("/repos/:owner/:repo/overview/blob", adaptQuery(handler.HandleGetBlobOverview))
 
 	req := httptest.NewRequest(http.MethodGet,
 		"/repos/"+owner+"/"+repo+"/overview/blob?ref=main&path=README.md", nil)

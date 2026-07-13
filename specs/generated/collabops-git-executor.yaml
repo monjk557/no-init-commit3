@@ -952,6 +952,18 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Owner'
         - $ref: '#/components/parameters/Repo'
+        - name: ref
+          in: query
+          schema:
+            type: string
+        - name: path
+          in: query
+          schema:
+            type: string
+        - name: include_all_commits
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Success
@@ -1373,6 +1385,8 @@ components:
       required:
         - error
         - success
+    BlobOverviewRequest:
+      type: object
     BlobOverviewResponse:
       type: object
       properties:

@@ -479,7 +479,7 @@ func Test_OverviewEndpoints_With500Commits_Return200(t *testing.T) {
 	router := gin.New()
 	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
 	router.GET("/repos/:owner/:repo/overview/tree", adapt(handler.HandleGetTreeOverview))
-	router.GET("/repos/:owner/:repo/overview/blob", adapt(handler.HandleGetBlobOverview))
+	router.GET("/repos/:owner/:repo/overview/blob", adaptQuery(handler.HandleGetBlobOverview))
 
 	t.Run("overview", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview?ref=main", nil)

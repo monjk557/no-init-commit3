@@ -24,6 +24,18 @@ type LatestCommitOverviewRequest struct {
 	Path string `form:"path"`
 }
 
+// BlobOverviewRequest 는 GET /overview/blob 의 query parameter 를
+// 나타낸다 — ref / path / include_all_commits 를 in: query 로 노출
+// (Issue-5761, Issue-2317 후속 누락분). path 는 handler 본문에서 필수
+// 검증(빈 문자열이면 400)하므로 여기서는 binding:"required" 를 걸지
+// 않는다 — 걸면 gin 기본 validator 에러 메시지가 기존 커스텀 메시지
+// ("Missing required parameter: path") 를 대체해 runtime 응답이 바뀐다.
+type BlobOverviewRequest struct {
+	Ref               string `form:"ref"`
+	Path              string `form:"path"`
+	IncludeAllCommits string `form:"include_all_commits"`
+}
+
 // OverviewResponse is the response type for repository overview API.
 // latest_commits and language_distribution were dropped — the orchestrator
 // sources those from DRF. remotes was dropped — not meaningful for

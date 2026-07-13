@@ -21,7 +21,7 @@ func RegisterRoutes(g gin.IRouter, h *RepositoryOverviewHandler) {
 	var (
 		overviewMain   func(*gin.Context) (RepositoryOverviewResponse, error)
 		treeOverview   func(*gin.Context) (TreeOverviewResponse, error)
-		blobOverview   func(*gin.Context) (BlobOverviewResponse, error)
+		blobOverview   func(*gin.Context, BlobOverviewRequest) (BlobOverviewResponse, error)
 		treeWithCommit func(*gin.Context, TreeWithCommitOverviewRequest) (TreeWithCommitOverviewResponse, error)
 		latestCommit   func(*gin.Context, LatestCommitOverviewRequest) (LatestCommitOverviewResponse, error)
 		batchCommits   func(*gin.Context) (LatestCommitsBatchResponse, error)
@@ -45,7 +45,10 @@ func RegisterRoutes(g gin.IRouter, h *RepositoryOverviewHandler) {
 		typed.WithSummary("HandleGetTreeOverview"),
 	)
 
-	typed.RegisterGet(g, "/overview/blob", tag,
+	// GET /overview/blob?ref=&path=&include_all_commits= — query params 를
+	// spec 에 노출하기 위해 RegisterGetWithQuery 사용 (Issue-5761, Issue-2317
+	// 후속 누락분).
+	typed.RegisterGetWithQuery(g, "/overview/blob", tag,
 		blobOverview,
 		typed.WithSummary("HandleGetBlobOverview"),
 	)
