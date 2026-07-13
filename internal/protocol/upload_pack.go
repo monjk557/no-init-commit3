@@ -149,6 +149,15 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 	w.Header().Set("Cache-Control", "no-cache")
 
+	// Resolve the protocol version once for this POST. If the Git-Protocol
+	// header was stripped in transit but the body is a v2 request, this
+	// recovers version=2 so the response matches what info/refs advertised
+	// (otherwise the client dies with `expected 'acknowledgments'`).
+	proto := resolveGitProtocol(r, bodyBytes)
+	if r.Header.Get("Git-Protocol") == "" && proto == gitProtocolV2 {
+		fmt.Printf("[upload-pack] Git-Protocol header missing on POST; recovered version=2 from request body (proxy header desync)\n")
+	}
+
 	// Replace the http.Server's fixed WriteTimeout with a per-stream
 	// idle deadline. pack-objects can stream for many minutes on cold
 	// caches or large histories; an absolute deadline mid-pack
@@ -165,7 +174,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	// return means nothing was written to w yet, so we fall through to the
 	// direct path below (best-effort — never worse than no cache).
 	if h.cache != nil && h.cache.Enabled() {
-		if h.serveFromCache(r, owner, repo, repoPath, bodyBytes, w, sd) {
+		if h.serveFromCache(r, owner, repo, repoPath, bodyBytes, proto, w, sd) {
 			return
 		}
 	}
@@ -191,7 +200,7 @@ func (h *UploadPackHandler) HandleUploadPack(w http.ResponseWriter, r *http.Requ
 	// packEnv bounds pack-objects memory so concurrent clones cannot OOM the
 	// pod (Issue-5071). Applied here (the pack-generating call), not on the
 	// advertise-refs path which does no pack generation.
-	cmd.Env = append(gitProtocolEnv(r), h.packEnv...)
+	cmd.Env = append(protoEnv(proto), h.packEnv...)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -238,6 +247,7 @@ func (h *UploadPackHandler) serveFromCache(
 	r *http.Request,
 	owner, repo, repoPath string,
 	bodyBytes []byte,
+	proto string,
 	w http.ResponseWriter,
 	sd *StreamDeadliner,
 ) bool {
@@ -247,7 +257,7 @@ func (h *UploadPackHandler) serveFromCache(
 		cmd := exec.CommandContext(r.Context(), "git", "upload-pack", "--stateless-rpc", repoPath)
 		cmd.Stdin = bytes.NewReader(bodyBytes)
 		cmd.Stdout = cw
-		cmd.Env = append(gitProtocolEnv(r), h.packEnv...)
+		cmd.Env = append(protoEnv(proto), h.packEnv...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if runErr := cmd.Run(); runErr != nil {
@@ -301,13 +311,89 @@ func decompressRequestBody(body io.ReadCloser) ([]byte, error) {
 	return data, nil
 }
 
-// gitProtocolEnv returns os environment with GIT_PROTOCOL set from the request header.
+// gitProtocolV2 is the GIT_PROTOCOL value that makes git speak protocol v2.
+const gitProtocolV2 = "version=2"
+
+// gitProtocolEnv returns the os environment with GIT_PROTOCOL set from the
+// request header. Used on the info/refs GET path, which carries no body to
+// derive the version from.
 func gitProtocolEnv(r *http.Request) []string {
+	return protoEnv(r.Header.Get("Git-Protocol"))
+}
+
+// gitProtocolEnvForBody returns the os environment with GIT_PROTOCOL resolved
+// for a git-upload-pack POST. It prefers the Git-Protocol request header but
+// falls back to sniffing the (decompressed) request body when the header is
+// absent — see resolveGitProtocol.
+func gitProtocolEnvForBody(r *http.Request, body []byte) []string {
+	return protoEnv(resolveGitProtocol(r, body))
+}
+
+func protoEnv(proto string) []string {
 	env := os.Environ()
-	if proto := r.Header.Get("Git-Protocol"); proto != "" {
+	if proto != "" {
 		env = append(env, "GIT_PROTOCOL="+proto)
 	}
 	return env
+}
+
+// resolveGitProtocol determines the protocol version git upload-pack should
+// speak for a fetch POST.
+//
+// Smart HTTP fetch is a two-phase exchange: the client first GETs
+// /info/refs?service=git-upload-pack (capability advertisement) and then POSTs
+// to /git-upload-pack (negotiation + packfile). The version is carried on the
+// non-standard Git-Protocol request header on BOTH requests. A fronting
+// reverse proxy / load balancer can intermittently drop that header on the
+// POST while it survived on the GET; git upload-pack then falls back to
+// protocol v0 and emits a v0 response, but the client — which saw a v2
+// advertisement at info/refs — parses the POST response with the v2 state
+// machine and dies with `fatal: expected 'acknowledgments'` (the
+// acknowledgments section exists only in v2).
+//
+// The request body is the authoritative record of what the client is actually
+// speaking: a v2 fetch request begins with a `command=fetch` (or
+// `command=ls-refs`) pkt-line, which a v0 request never contains. So when the
+// header is missing we recover the version from the body, guaranteeing the
+// POST response version always matches what info/refs advertised regardless of
+// header propagation. The header remains authoritative when present, so
+// correctly-proxied requests are unaffected.
+func resolveGitProtocol(r *http.Request, body []byte) string {
+	if proto := r.Header.Get("Git-Protocol"); proto != "" {
+		return proto
+	}
+	if isProtocolV2Body(body) {
+		return gitProtocolV2
+	}
+	return ""
+}
+
+// isProtocolV2Body reports whether a git-upload-pack request body is a
+// protocol v2 command request, detected by a leading `command=` pkt-line.
+func isProtocolV2Body(body []byte) bool {
+	line, ok := firstPktLineContent(body)
+	if !ok {
+		return false
+	}
+	return bytes.HasPrefix(line, []byte("command="))
+}
+
+// firstPktLineContent returns the payload of the first pkt-line in body, with
+// the trailing LF trimmed. It returns ok=false for empty input, a malformed
+// length prefix, or special pkt-lines (flush/delim/response-end, length < 4).
+func firstPktLineContent(body []byte) ([]byte, bool) {
+	if len(body) < 4 {
+		return nil, false
+	}
+	n, err := strconv.ParseUint(string(body[:4]), 16, 16)
+	if err != nil {
+		return nil, false
+	}
+	// 0000 flush, 0001 delim, 0002 response-end carry no payload.
+	if n < 4 || int(n) > len(body) {
+		return nil, false
+	}
+	return bytes.TrimRight(body[4:n], "\n"), true
 }
 
 // ---------------------------------------------------------------------------

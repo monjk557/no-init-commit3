@@ -47,7 +47,7 @@ func TestServeFromCache_HitReusesSingleGeneration(t *testing.T) {
 			map[string]string{"owner": "o", "repo": "r"})
 		rec := httptest.NewRecorder()
 		sd := NewStreamDeadliner(rec, 0)
-		ok := h.serveFromCache(req, "o", "r", bare, body, rec, sd)
+		ok := h.serveFromCache(req, "o", "r", bare, body, resolveGitProtocol(req, body), rec, sd)
 		require.True(t, ok, "serveFromCache should fully handle the request")
 		return append([]byte(nil), rec.Body.Bytes()...)
 	}
@@ -76,7 +76,7 @@ func TestServeFromCache_GenerationErrorFallsBack(t *testing.T) {
 
 	// Non-existent repo + garbage body → git upload-pack fails → generation error.
 	badRepo := filepath.Join(t.TempDir(), "missing.git")
-	ok := h.serveFromCache(req, "o", "r", badRepo, []byte("garbage"), rec, sd)
+	ok := h.serveFromCache(req, "o", "r", badRepo, []byte("garbage"), "", rec, sd)
 
 	require.False(t, ok, "generation failure must report not-served (fall back)")
 	require.Zero(t, rec.Body.Len(), "no bytes may be written to the client on fallback")
