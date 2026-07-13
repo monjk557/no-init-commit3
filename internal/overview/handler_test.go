@@ -436,7 +436,7 @@ func TestHandleGetTreeOverview_LatestCommit_ForSpecificPath(t *testing.T) {
 // =============================================================================
 
 func overviewRoute(router *gin.Engine, h *RepositoryOverviewHandler) {
-	router.GET("/repos/:owner/:repo/overview", adapt(h.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(h.HandleGetRepositoryOverview))
 }
 
 func Test_Overview_ValidRepo_ReturnsOverview(t *testing.T) {
@@ -477,7 +477,7 @@ func Test_OverviewEndpoints_With500Commits_Return200(t *testing.T) {
 	createTestRepositoryWith500CommitsAtPath(t, filepath.Join(tempDir, owner, repo+".git"))
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(handler.HandleGetRepositoryOverview))
 	router.GET("/repos/:owner/:repo/overview/tree", adapt(handler.HandleGetTreeOverview))
 	router.GET("/repos/:owner/:repo/overview/blob", adaptQuery(handler.HandleGetBlobOverview))
 
@@ -1442,7 +1442,7 @@ func Test_Overview_Parallel_ReturnsAllFields(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(handler.HandleGetRepositoryOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
 	w := httptest.NewRecorder()
@@ -1475,7 +1475,7 @@ func Test_Overview_CommitCountApproximate_FlagExposedInResponse(t *testing.T) {
 	createTestRepositoryForHandler(t, tempDir, owner, repo)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(handler.HandleGetRepositoryOverview))
 
 	req := httptest.NewRequest("GET", "/repos/"+owner+"/"+repo+"/overview", nil)
 	w := httptest.NewRecorder()
@@ -1846,7 +1846,7 @@ func Test_OverviewEndpoints_TreesBeforeBlobs(t *testing.T) {
 	createTestRepoWithMixedTreeBlob(t, repoPath)
 
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(handler.HandleGetRepositoryOverview))
 	router.GET("/repos/:owner/:repo/overview/tree", adapt(handler.HandleGetTreeOverview))
 
 	t.Run("overview_tree_field", func(t *testing.T) {

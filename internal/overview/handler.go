@@ -294,14 +294,14 @@ func isObjectNotFoundForPack(res overviewResult) bool {
 // pack 미반영 시 object not found 가 나올 수 있으므로 캐시 무효화 후 한 번
 // 재시도. validateRepositoryNative 가 RLock 획득을 책임지고, 실패 case 는
 // *typed.HTTPError 로 즉시 반환.
-func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context) (RepositoryOverviewResponse, error) {
+func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context, req RepositoryOverviewRequest) (RepositoryOverviewResponse, error) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), overviewTimeout)
 	defer cancel()
 
 	owner := c.Param("owner")
 	repo := c.Param("repo")
-	ref := c.Query("ref")
-	path := c.Query("path")
+	ref := req.Ref
+	path := req.Path
 
 	var repoCtx *repositoryContext
 	var res overviewResult

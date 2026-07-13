@@ -203,7 +203,7 @@ func TestOverviewAPI_Performance_LargeRepository(t *testing.T) {
 
 	// Setup router
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(handler.HandleGetRepositoryOverview))
 
 	// Use a fixed ref (commit SHA) for perf comparisons; HEAD is allowed in prod but moves over time.
 	fixedRef := commitHash.String()
@@ -629,7 +629,7 @@ func TestOverviewAPI_Performance_CommitCounting(t *testing.T) {
 
 	// Setup router
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(handler.HandleGetRepositoryOverview))
 
 	// Test commit counting performance
 	req := httptest.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/overview", owner, repo), nil)
@@ -669,7 +669,7 @@ func BenchmarkOverviewAPI(b *testing.B) {
 
 	// Setup router
 	router := gin.New()
-	router.GET("/repos/:owner/:repo/overview", adapt(handler.HandleGetRepositoryOverview))
+	router.GET("/repos/:owner/:repo/overview", adaptQuery(handler.HandleGetRepositoryOverview))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

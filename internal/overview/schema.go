@@ -6,6 +6,13 @@ import (
 	"github.com/collabops/git-executor/internal/repositories"
 )
 
+// RepositoryOverviewRequest 는 GET /overview 의 query parameter 를 나타낸다 —
+// ref / path 를 in: query 로 노출 (Issue-5773).
+type RepositoryOverviewRequest struct {
+	Ref  string `form:"ref"`
+	Path string `form:"path"`
+}
+
 // TreeWithCommitOverviewRequest 는 GET /overview/tree/commits 의 query
 // parameter 를 나타낸다.
 //

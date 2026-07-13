@@ -19,7 +19,7 @@ const tag = "Overview"
 // typed.NewHTTPError 처리하므로 routes-level ErrorMapper 불필요.
 func RegisterRoutes(g gin.IRouter, h *RepositoryOverviewHandler) {
 	var (
-		overviewMain   func(*gin.Context) (RepositoryOverviewResponse, error)
+		overviewMain   func(*gin.Context, RepositoryOverviewRequest) (RepositoryOverviewResponse, error)
 		treeOverview   func(*gin.Context) (TreeOverviewResponse, error)
 		blobOverview   func(*gin.Context, BlobOverviewRequest) (BlobOverviewResponse, error)
 		treeWithCommit func(*gin.Context, TreeWithCommitOverviewRequest) (TreeWithCommitOverviewResponse, error)
@@ -35,7 +35,9 @@ func RegisterRoutes(g gin.IRouter, h *RepositoryOverviewHandler) {
 		batchCommits = h.HandlePostLatestCommitsBatch
 	}
 
-	typed.RegisterGet(g, "/overview", tag,
+	// GET /overview?ref=&path= — query params 를 spec 에 노출하기 위해
+	// RegisterGetWithQuery 사용 (Issue-5773, Issue-5761/Issue-2317 후속 누락분).
+	typed.RegisterGetWithQuery(g, "/overview", tag,
 		overviewMain,
 		typed.WithSummary("HandleGetRepositoryOverview"),
 	)
