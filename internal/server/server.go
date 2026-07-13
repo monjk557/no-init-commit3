@@ -25,6 +25,7 @@ import (
 	"github.com/collabops/git-executor/internal/langstats"
 	"github.com/collabops/git-executor/internal/lfs/gc"
 	"github.com/collabops/git-executor/internal/logging"
+	"github.com/collabops/git-executor/internal/maintenance"
 	"github.com/collabops/git-executor/internal/merge"
 	"github.com/collabops/git-executor/internal/middleware"
 	"github.com/collabops/git-executor/internal/observability"
@@ -366,6 +367,17 @@ func (s *Server) setupRestAPIRoutes(router *gin.RouterGroup) {
 		return
 	}
 	fork.RegisterRoutes(ownerRepoGroup, forkHandler)
+
+	// On-demand maintenance endpoint — forces a full repack + bitmap +
+	// commit-graph on one repo (Doc-743 §6.4). Called after a large initial
+	// ingest so the first clone doesn't hit a stale/absent bitmap and 502
+	// (Issue-5273). Independent of the periodic scheduler started in main.go.
+	maintenanceHandler, err := maintenance.NewHandler(s.config)
+	if err != nil {
+		s.logger.Error("Failed to create maintenance handler", zap.Error(err))
+		return
+	}
+	maintenance.RegisterRoutes(ownerRepoGroup, maintenanceHandler)
 
 	// LFS GC reachability scan — orchestrator 의 GC cron 이 호출하는 internal endpoint.
 	// LFS feature flag 와 무관하게 항상 등록 (orchestrator 가 LFS 사용 전이라도 host

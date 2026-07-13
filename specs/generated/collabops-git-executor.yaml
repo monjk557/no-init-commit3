@@ -808,6 +808,24 @@ paths:
                 $ref: '#/components/schemas/LanguageStatsResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/maintenance:
+    post:
+      summary: HandleMaintainRepo
+      operationId: handlemaintainrepo
+      tags:
+        - Maintenance
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintainRepoResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/merges:
     post:
       summary: HandleMerge

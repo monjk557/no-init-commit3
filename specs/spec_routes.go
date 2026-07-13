@@ -19,6 +19,7 @@ import (
 	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/fork"
 	"github.com/collabops/git-executor/internal/langstats"
+	"github.com/collabops/git-executor/internal/maintenance"
 	"github.com/collabops/git-executor/internal/merge"
 	"github.com/collabops/git-executor/internal/overview"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -54,6 +55,7 @@ func setupSpecRoutes(reg *typed.Registry) {
 	branches.RegisterRoutes(apiGroup, nil)
 	diffs.RegisterRoutes(apiGroup, nil)
 	blob.RegisterRoutes(apiGroup, nil)
+	maintenance.RegisterRoutes(apiGroup, nil)
 
 	// 아직 legacy switch 경로:
 	// lfs
