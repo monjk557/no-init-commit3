@@ -139,6 +139,14 @@ vet: ## go vet 정적 검사
 guard-errcodes: ## errcode ratchet (bare NewHTTPError / HTTP 422 금지)
 	@bash scripts/check-error-codes.sh
 
+# [GUARD] make guard-specs
+# Description: Issue-5806 guard — fail if the committed OpenAPI spec has a
+# dangling $ref (schema referenced but not defined in components.schemas). Such a
+# spec breaks downstream DTO codegen (orchestrator); catch it here, not there.
+.PHONY: guard-specs
+guard-specs: ## OpenAPI dangling $ref 가드 (downstream codegen 보호)
+	@bash scripts/check-openapi-refs.sh
+
 # 하위호환: 기존 `make format` 호출은 표준 `fmt` 로 위임
 .PHONY: format
 format: fmt

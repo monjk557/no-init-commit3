@@ -64,6 +64,17 @@ jobs:
           cd /workspace/source
           make guard-errcodes
 
+      # Issue-5806 guard: fail if the committed OpenAPI spec has a dangling $ref
+      # (schema referenced but not defined in components.schemas). Such a spec
+      # breaks downstream DTO codegen (orchestrator) — catch it in git-executor
+      # CI, not after it ships.
+      - name: OpenAPI ref guard
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make guard-specs
+
       # - name: Lint
       #   image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
       #   run: |

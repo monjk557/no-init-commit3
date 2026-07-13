@@ -3144,6 +3144,43 @@ components:
         - displayNoNewLineWarning
         - text
         - type
+    MaintainRepoResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        owner:
+          type: string
+        repo:
+          type: string
+        duration_ms:
+          type: integer
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/MaintainTaskResult'
+          nullable: true
+      required:
+        - duration_ms
+        - owner
+        - repo
+        - success
+        - tasks
+    MaintainTaskResult:
+      type: object
+      properties:
+        task:
+          type: string
+        success:
+          type: boolean
+        duration_ms:
+          type: integer
+        error:
+          type: string
+      required:
+        - duration_ms
+        - success
+        - task
     MergeAnalysisRequest:
       type: object
       properties:

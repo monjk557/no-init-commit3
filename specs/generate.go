@@ -286,7 +286,71 @@ func runGeneration(projectRoot string, registry *typed.Registry, log *os.File) (
 	if err != nil {
 		return "", fmt.Errorf("Error generating OpenAPI spec: %w", err)
 	}
+
+	// Self-validate before returning: a $ref to an undefined component schema
+	// passes YAML parsing but breaks downstream OpenAPI codegen (orchestrator DTO
+	// generation). Fail here — the earliest point — instead of after deploy.
+	if err := validateSchemaRefs(spec); err != nil {
+		return "", err
+	}
 	return spec, nil
+}
+
+// validateSchemaRefs fails generation when the spec references a component schema
+// under #/components/schemas/ that is never defined in components.schemas. The
+// usual root cause is a new typed domain whose schema.go was omitted from
+// schemaFilePaths(): its route registers and emits a $ref, but the schema type is
+// never parsed into the spec — a dangling ref that silently ships a broken spec.
+func validateSchemaRefs(spec string) error {
+	defined := definedSchemaNames(spec)
+
+	refRe := regexp.MustCompile(`#/components/schemas/([A-Za-z0-9_]+)`)
+	missing := map[string]struct{}{}
+	for _, m := range refRe.FindAllStringSubmatch(spec, -1) {
+		if _, ok := defined[m[1]]; !ok {
+			missing[m[1]] = struct{}{}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(missing))
+	for n := range missing {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Errorf("dangling $ref: schema(s) referenced but not defined in "+
+		"components.schemas: %s\n  → add the owning domain's schema.go to "+
+		"schemaFilePaths() in specs/generate.go", strings.Join(names, ", "))
+}
+
+// definedSchemaNames returns the set of schema names defined under
+// components.schemas. It scans line-by-line: the block starts at the 2-space
+// "schemas:" key and ends at the next 2-space sibling key (e.g. "responses:");
+// top-level schema names are the 4-space-indented keys inside it.
+func definedSchemaNames(spec string) map[string]struct{} {
+	defined := map[string]struct{}{}
+	nameRe := regexp.MustCompile(`^    ([A-Za-z0-9_]+):`)
+	inSchemas := false
+	for _, line := range strings.Split(spec, "\n") {
+		if !inSchemas {
+			if line == "  schemas:" {
+				inSchemas = true
+			}
+			continue
+		}
+		// A 2-space-indented key (indent exactly 2) is the next sibling section,
+		// ending the schemas block.
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+			strings.TrimSpace(line) != "" {
+			break
+		}
+		if m := nameRe.FindStringSubmatch(line); m != nil {
+			defined[m[1]] = struct{}{}
+		}
+	}
+	return defined
 }
 
 func findProjectRoot() string {
@@ -550,6 +614,7 @@ func schemaFilePaths() []string {
 		"internal/overview/schema.go",
 		"internal/context/schema.go",
 		"internal/langstats/schema.go",
+		"internal/maintenance/schema.go",
 	}
 }
 

@@ -504,3 +504,71 @@ type Outer struct {
 		t.Errorf("warning should mention containing schema %q; got %q", "Outer", buf.String())
 	}
 }
+
+// --- OpenAPI $ref self-validation (Issue-5806) -------------------------------
+
+// sampleSpec mirrors the generated yaml's components.schemas shape closely
+// enough to exercise the line-based block scanner: a 2-space "schemas:" key,
+// 4-space schema names, deeper-indented properties, and a sibling "responses:"
+// section that ends the block.
+const sampleSpec = `paths:
+  /x:
+    get:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Defined'
+components:
+  parameters:
+    Owner:
+      name: owner
+  schemas:
+    Defined:
+      type: object
+      properties:
+        nested:
+          $ref: '#/components/schemas/AlsoDefined'
+    AlsoDefined:
+      type: string
+  responses:
+    BadRequest:
+      description: bad
+`
+
+func TestValidateSchemaRefs_AllDefined(t *testing.T) {
+	if err := validateSchemaRefs(sampleSpec); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateSchemaRefs_Dangling(t *testing.T) {
+	broken := strings.Replace(sampleSpec,
+		"$ref: '#/components/schemas/Defined'",
+		"$ref: '#/components/schemas/MissingResp'", 1)
+	err := validateSchemaRefs(broken)
+	if err == nil {
+		t.Fatal("expected dangling-ref error, got nil")
+	}
+	if !strings.Contains(err.Error(), "MissingResp") {
+		t.Errorf("error should name the missing schema; got: %v", err)
+	}
+}
+
+func TestDefinedSchemaNames_ScopedToSchemasBlock(t *testing.T) {
+	got := definedSchemaNames(sampleSpec)
+	if _, ok := got["Defined"]; !ok {
+		t.Error("Defined should be recognized as a schema")
+	}
+	if _, ok := got["AlsoDefined"]; !ok {
+		t.Error("AlsoDefined should be recognized as a schema")
+	}
+	// Names outside components.schemas (parameters, responses) must not leak in.
+	if _, ok := got["Owner"]; ok {
+		t.Error("Owner is a parameter, not a schema — must not be collected")
+	}
+	if _, ok := got["BadRequest"]; ok {
+		t.Error("BadRequest is a response, not a schema — must not be collected")
+	}
+}
