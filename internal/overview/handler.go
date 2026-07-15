@@ -202,23 +202,37 @@ func (h *RepositoryOverviewHandler) runOverviewTasksNative(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if refHash != "" {
-			if cached, ok := h.overviewCache.GetCommitCount(repoPath, refHash); ok {
-				mu.Lock()
-				res.commitsCount = cached
-				mu.Unlock()
-				return
-			}
+		// An empty repository (unborn HEAD, zero commits) has no resolvable
+		// ref, so refHash is empty. Running `git rev-list --count` on it fatals
+		// with exit 128, which previously surfaced as a noisy Warn plus a bogus
+		// commits_count=1 fallback. The caller short-circuits on refHash=="" and
+		// returns IsEmpty regardless, so the count is discarded anyway — skip it
+		// here rather than exec a doomed rev-list. Mirrors the empty-repo guard
+		// in HandleGetLatestCommitOverview (Issue-5560).
+		if refHash == "" {
+			return
+		}
+		if cached, ok := h.overviewCache.GetCommitCount(repoPath, refHash); ok {
+			mu.Lock()
+			res.commitsCount = cached
+			mu.Unlock()
+			return
 		}
 		count, approx, err := NativeCountCommits(ctx, repoPath, ref)
 		mu.Lock()
 		if err != nil {
-			h.logger.Warn("Native count commits failed, using fallback", zap.Error(err))
+			// refHash resolved but the count still failed → a genuine problem
+			// (corrupt/missing objects, timeout, maintenance dead-zone), not an
+			// empty repo. Keep the Warn, now with context to diagnose which repo.
+			h.logger.Warn("Native count commits failed, using fallback",
+				zap.String("repo_path", repoPath),
+				zap.String("ref", ref),
+				zap.Error(err))
 			res.commitsCount = 1
 		} else {
 			res.commitsCount = count
 			res.commitsApproximate = approx
-			if refHash != "" && !approx {
+			if !approx {
 				h.overviewCache.SetCommitCount(repoPath, refHash, count)
 			}
 		}

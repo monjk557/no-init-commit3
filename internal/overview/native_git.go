@@ -426,9 +426,14 @@ func nativeCountCommitsPathspec(ctx context.Context, repoPath, ref, path string)
 	}
 
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
-		return 0, false, fmt.Errorf("git rev-list --count: %w", err)
+		// Include stderr so genuine failures (bad revision, corrupt object,
+		// maintenance dead-zone) are distinguishable from a bare exit code.
+		return 0, false, fmt.Errorf("git rev-list --count: %s: %w",
+			strings.TrimSpace(stderr.String()), err)
 	}
 
 	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
