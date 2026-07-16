@@ -49,6 +49,12 @@ type PushTarget struct {
 	Branch        string // short branch name, e.g. "main" (parsed from the push)
 	UserID        string // acting principal (X-User-ID, forwarded by the gateway)
 	DecisionToken string // orchestrator decision JWT forwarded from the inbound request
+
+	// Context is the ruleset evaluation context.* payload (ref / commit / push
+	// facts, see BuildPushFacts). When nil the request carries only the branch
+	// name — the pre-index (Point-A) callers that cannot read pushed objects. The
+	// post-index (Point-B) caller populates it so commit/ref/file rules evaluate.
+	Context map[string]any
 }
 
 // validateRequest is the JSON body for POST .../rules/validate. Shape matches
@@ -96,14 +102,17 @@ func (c *Client) ValidatePush(ctx context.Context, t PushTarget) error {
 	}
 
 	url := fmt.Sprintf("%s/api/v2/repositories/%s/rules/validate", c.baseURL, t.RepositoryID)
+	// Start from the computed facts (nil for pre-index callers) and always stamp
+	// action + branch name so branch_name_pattern works regardless of caller.
+	pushContext := map[string]any{"action": "push", "branch": map[string]string{"name": t.Branch}}
+	for k, v := range t.Context {
+		pushContext[k] = v
+	}
 	body := validateRequest{
 		Action:      "push",
 		TargetType:  "branch",
 		TargetValue: t.Branch,
-		Context: map[string]any{
-			"action": "push",
-			"branch": map[string]string{"name": t.Branch},
-		},
+		Context:     pushContext,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

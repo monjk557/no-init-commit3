@@ -83,44 +83,53 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 	return h, nil
 }
 
-// validateRefUpdates enforces repository/ruleset rules on each branch ref update
-// before the push is applied — the executor is the single choke point for every
-// push regardless of transport (ssh/http). Returns a *ruleguard.Denied (reject
-// the push) on a rule violation. Transport/API errors are logged and treated as
-// allow (fail-open) so a validation-service outage never blocks pushes during
-// dual-run — the ssh/http gateways still enforce until cutover.
-//
-// Context comes from headers the gateways set: X-USER-ID (principal),
-// X-Workspace-Slug, X-Repository-ID, and X-Decision-JWT (the orchestrator
-// decision token, forwarded to the BFF). Missing repository id / decision token
-// makes the client a no-op (degrade open).
-func (h *ReceivePackHandler) validateRefUpdates(ctx context.Context, r *http.Request, req *ReceivePackRequest) error {
-	if h.ruleClient == nil || req == nil {
-		return nil
-	}
-	target := ruleguard.PushTarget{
+// pushAuthzFromRequest builds the ruleset-validation identity (everything but the
+// per-ref branch + facts) from the headers the gateways set: X-USER-ID
+// (principal), X-Workspace-Slug, X-Repository-ID, and X-Decision-JWT (the
+// orchestrator decision token forwarded to the BFF). A missing repository id /
+// decision token makes ValidatePush a no-op (degrade open).
+func pushAuthzFromRequest(r *http.Request) ruleguard.PushTarget {
+	return ruleguard.PushTarget{
 		RepositoryID:  r.Header.Get("X-Repository-ID"),
 		WorkspaceSlug: r.Header.Get("X-Workspace-Slug"),
 		UserID:        r.Header.Get("X-USER-ID"),
 		DecisionToken: r.Header.Get("X-Decision-JWT"),
 	}
-	for _, cmd := range req.Commands {
-		branch, ok := strings.CutPrefix(cmd.RefName, "refs/heads/")
-		if !ok {
-			continue // only branch updates carry branch rules
-		}
-		target.Branch = branch
-		err := h.ruleClient.ValidatePush(ctx, target)
-		if err == nil {
-			continue
-		}
-		var denied *ruleguard.Denied
-		if errors.As(err, &denied) {
-			return denied // rule violation → reject the push
-		}
-		// Transport/API error: fail-open during dual-run (gateways enforce).
-		fmt.Printf("[receive-pack] rule validation error for %s (allowing — gateways enforce): %v\n", cmd.RefName, err)
+}
+
+// validatePushFacts enforces repository/ruleset git-factors on ONE branch ref
+// update, AFTER the packfile has been indexed (pushed objects are in the object
+// store) and BEFORE the ref is updated — native git pre-receive semantics. This
+// is the only point where commit/ref/file facts (linear history, force-push,
+// changed paths, blob size) can be read from the pushed commits.
+//
+// Returns a *ruleguard.Denied to reject this ref (the caller emits `ng <ref>`).
+// Non-branch refs and transport/API errors return nil (allow) — the latter is
+// fail-open during dual-run so a validation-service outage never blocks pushes.
+// The executor is the single choke point regardless of transport.
+func (h *ReceivePackHandler) validatePushFacts(ctx context.Context, repoPath string, cmd RefUpdateCommand, authz ruleguard.PushTarget) *ruleguard.Denied {
+	if h.ruleClient == nil {
+		return nil
 	}
+	branch, ok := strings.CutPrefix(cmd.RefName, "refs/heads/")
+	if !ok {
+		return nil // P1: branch rules only (tag/push targets are a later phase)
+	}
+
+	target := authz
+	target.Branch = branch
+	target.Context = ruleguard.BuildPushFacts(ctx, repoPath, cmd.OldHash, cmd.NewHash, branch)
+
+	err := h.ruleClient.ValidatePush(ctx, target)
+	if err == nil {
+		return nil
+	}
+	var denied *ruleguard.Denied
+	if errors.As(err, &denied) {
+		return denied // rule violation → reject this ref
+	}
+	// Transport/API error: fail-open during dual-run (gateways enforce).
+	fmt.Printf("[receive-pack] rule validation error for %s (allowing — gateways enforce): %v\n", cmd.RefName, err)
 	return nil
 }
 
@@ -227,20 +236,19 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	authz := pushAuthzFromRequest(r)
+
 	// v1 fallback: first line is not command=
 	if !strings.HasPrefix(cmds[0], "command=") {
 		receiveReq := h.parseV1CommandsFromSection(cmds)
-		if err := h.validateRefUpdates(ctx, r, receiveReq); err != nil {
-			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-			_ = pktWriter.Flush()
-			return
-		}
+		// Ruleset git-factors are enforced post-index (Point B) inside
+		// processReceivePackRequest — the pushed objects aren't in the store yet.
 		// After readSection consumed the flush, the remaining r.Body IS the packfile.
 		if h.hasPackfileCommands(receiveReq.Commands) {
 			receiveReq.PackfileReader = r.Body
 		}
 
-		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, pktWriter); err != nil {
+		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, pktWriter); err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			_ = pktWriter.Flush()
 			return
@@ -282,17 +290,14 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	allCmds := append(cmds, pushOpts...)
 
 	receiveReq := h.parsePushCommands(allCmds)
-	if err := h.validateRefUpdates(ctx, r, receiveReq); err != nil {
-		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
-		_ = pktWriter.Flush()
-		return
-	}
+	// Ruleset git-factors are enforced post-index (Point B) inside
+	// processReceivePackRequest, once the pushed objects are in the store.
 	// After reading all command sections, remaining r.Body IS the packfile.
 	if h.hasPackfileCommands(receiveReq.Commands) {
 		receiveReq.PackfileReader = r.Body
 	}
 
-	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, pktWriter)
+	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, pktWriter)
 	if err != nil {
 		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
@@ -422,7 +427,7 @@ func ParseReceiveCommands(r io.Reader) (cmds []RefUpdateCommand, rawConsumed []b
 	return req.Commands, buf.Bytes(), nil
 }
 
-func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, pktWriter *pktLineWriter) error {
+func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, authz ruleguard.PushTarget, pktWriter *pktLineWriter) error {
 	if pktWriter == nil {
 		pktWriter = newPktLineWriter(w)
 	}
@@ -456,8 +461,16 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 	// api-service verify endpoint 가 책임진다. push 시점에는 pointer blob 자체만
 	// git object 로 저장되고, 실제 byte 부재는 fetch / pull 시점에 드러난다.
 
-	// Process ref updates
+	// Process ref updates. Ruleset git-factors are enforced here (Point B): the
+	// packfile is indexed so pushed objects are readable, but refs are not yet
+	// moved — a denial rejects the ref (`ng`) and leaves the objects dangling.
 	for _, cmd := range req.Commands {
+		if denied := h.validatePushFacts(ctx, repoPath, cmd, authz); denied != nil {
+			if err := pktWriter.WriteLine(fmt.Sprintf("ng %s %s", cmd.RefName, denied.Reason)); err != nil {
+				return fmt.Errorf("failed to write ref denial status: %w", err)
+			}
+			continue
+		}
 		err := h.processRefUpdate(ctx, repoPath, cmd, owner, repoName, userID)
 		if err != nil {
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
