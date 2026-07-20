@@ -108,6 +108,12 @@ func (c *Client) ValidatePush(ctx context.Context, t PushTarget) error {
 	for k, v := range t.Context {
 		pushContext[k] = v
 	}
+	// RulesetBypass 매칭용 actor — push 주체(X-User-ID). api-service 가 이 id 로
+	// repo_role/workspace_role/team_ids 를 enrich 후 actor_can_bypass 매칭 →
+	// push-scope rule 의 우회 목록이 실제 동작한다 (USER 는 id 만으로 매칭).
+	if t.UserID != "" {
+		pushContext["actor"] = map[string]any{"id": t.UserID}
+	}
 	body := validateRequest{
 		Action:      "push",
 		TargetType:  "branch",
