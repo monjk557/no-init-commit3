@@ -46,7 +46,8 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 type PushTarget struct {
 	RepositoryID  string // resolved numeric repository id (from the gateway)
 	WorkspaceSlug string // workspace slug (from the gateway), for X-Workspace-Slug
-	Branch        string // short branch name, e.g. "main" (parsed from the push)
+	TargetType    string // "branch" (default) or "tag" — which ref-kind ruleset applies
+	Branch        string // short ref name, e.g. "main" or "v1.0" (parsed from the push)
 	UserID        string // acting principal (X-User-ID, forwarded by the gateway)
 	DecisionToken string // orchestrator decision JWT forwarded from the inbound request
 
@@ -102,9 +103,14 @@ func (c *Client) ValidatePush(ctx context.Context, t PushTarget) error {
 	}
 
 	url := fmt.Sprintf("%s/api/v2/repositories/%s/rules/validate", c.baseURL, t.RepositoryID)
-	// Start from the computed facts (nil for pre-index callers) and always stamp
-	// action + branch name so branch_name_pattern works regardless of caller.
-	pushContext := map[string]any{"action": "push", "branch": map[string]string{"name": t.Branch}}
+	// target_type defaults to branch; tag pushes evaluate tag-target rulesets.
+	targetType := t.TargetType
+	if targetType == "" {
+		targetType = "branch"
+	}
+	// Stamp action + the ref name under its type key (branch.name / tag.name) so
+	// branch_name_pattern / tag_name_pattern get facts regardless of caller.
+	pushContext := map[string]any{"action": "push", targetType: map[string]string{"name": t.Branch}}
 	for k, v := range t.Context {
 		pushContext[k] = v
 	}
@@ -116,7 +122,7 @@ func (c *Client) ValidatePush(ctx context.Context, t PushTarget) error {
 	}
 	body := validateRequest{
 		Action:      "push",
-		TargetType:  "branch",
+		TargetType:  targetType,
 		TargetValue: t.Branch,
 		Context:     pushContext,
 	}

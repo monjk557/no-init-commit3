@@ -3,7 +3,7 @@
 Git protocol server and REST API engine for the CollabOps platform.
 Handles Git push/pull/fetch operations and provides repository management APIs.
 
-## Architecture
+## Architecture 
 
 Feature-based package structure under `internal/`:
 

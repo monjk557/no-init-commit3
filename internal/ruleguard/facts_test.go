@@ -216,6 +216,39 @@ func TestBuildPushFacts_CommitMetadata(t *testing.T) {
 	}
 }
 
+// TestBuildPushFacts_AnnotatedTag guards the tag-push enforcement path: a tag
+// ref update carries the annotated tag *object* SHA (distinct from the commit),
+// yet BuildPushFacts must still surface the target commit's message/author facts
+// so message_pattern / author_email rules evaluate for tags. This works because
+// every git plumbing call here (cat-file commit, rev-list, merge-base) auto-peels
+// a tag object to its commit — this test locks that reliance against regression.
+func TestBuildPushFacts_AnnotatedTag(t *testing.T) {
+	repo, _ := initRepo(t)
+	writeFile(t, repo, "y.txt", "y\n")
+	gitInRepo(t, repo, "add", "y.txt")
+	gitInRepo(t, repo, "commit", "-q", "-m", "feat: taggable commit")
+	commit := gitInRepo(t, repo, "rev-parse", "HEAD")
+	gitInRepo(t, repo, "tag", "-a", "v1.0.0", "-m", "release v1.0.0")
+	tagObject := gitInRepo(t, repo, "rev-parse", "v1.0.0")
+	if tagObject == commit {
+		t.Fatalf("annotated tag object must differ from commit (got %s)", tagObject)
+	}
+
+	// Tag creation: old = zero, new = the tag object SHA (what a push sends).
+	facts := BuildPushFacts(context.Background(), repo, zeroOID, tagObject, "v1.0.0")
+
+	if !refMap(facts)["is_creation"].(bool) {
+		t.Errorf("tag creation: ref.is_creation should be true, got %v", refMap(facts))
+	}
+	c := commitMap(facts)
+	if msg, _ := c["message"].(string); !strings.Contains(msg, "feat: taggable commit") {
+		t.Errorf("annotated tag: commit.message not peeled through, got %q", msg)
+	}
+	if author, _ := c["author"].(map[string]any); author["email"] != "tester@example.com" {
+		t.Errorf("annotated tag: commit.author.email wrong: %v", c["author"])
+	}
+}
+
 func TestBuildPushFacts_Deletion(t *testing.T) {
 	repo, first := initRepo(t)
 

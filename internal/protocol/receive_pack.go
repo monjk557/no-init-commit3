@@ -97,28 +97,40 @@ func pushAuthzFromRequest(r *http.Request) ruleguard.PushTarget {
 	}
 }
 
-// validatePushFacts enforces repository/ruleset git-factors on ONE branch ref
-// update, AFTER the packfile has been indexed (pushed objects are in the object
-// store) and BEFORE the ref is updated — native git pre-receive semantics. This
-// is the only point where commit/ref/file facts (linear history, force-push,
-// changed paths, blob size) can be read from the pushed commits.
+// validatePushFacts enforces repository/ruleset git-factors on ONE branch or tag
+// ref update, AFTER the packfile has been indexed (pushed objects are in the
+// object store) and BEFORE the ref is updated — native git pre-receive
+// semantics. This is the only point where commit/ref/file facts (linear history,
+// force-push, changed paths, blob size) can be read from the pushed commits.
 //
 // Returns a *ruleguard.Denied to reject this ref (the caller emits `ng <ref>`).
-// Non-branch refs and transport/API errors return nil (allow) — the latter is
-// fail-open during dual-run so a validation-service outage never blocks pushes.
-// The executor is the single choke point regardless of transport.
+// Refs that are neither a branch nor a tag, and transport/API errors, return nil
+// (allow) — the latter is fail-open during dual-run so a validation-service
+// outage never blocks pushes. The executor is the single choke point regardless
+// of transport.
 func (h *ReceivePackHandler) validatePushFacts(ctx context.Context, repoPath string, cmd RefUpdateCommand, authz ruleguard.PushTarget) *ruleguard.Denied {
 	if h.ruleClient == nil {
 		return nil
 	}
-	branch, ok := strings.CutPrefix(cmd.RefName, "refs/heads/")
-	if !ok {
-		return nil // P1: branch rules only (tag/push targets are a later phase)
+	// branch + tag ref 를 각각 해당 target_type 으로 검증한다. 그 외 ref
+	// (refs/notes 등)은 ruleset 대상이 아니므로 통과.
+	var refName, targetType string
+	if b, ok := strings.CutPrefix(cmd.RefName, "refs/heads/"); ok {
+		refName, targetType = b, "branch"
+	} else if t, ok := strings.CutPrefix(cmd.RefName, "refs/tags/"); ok {
+		refName, targetType = t, "tag"
+	} else {
+		return nil
 	}
 
+	// An annotated tag's OID is a tag object, not a commit, but every git plumbing
+	// call BuildPushFacts uses (cat-file commit, rev-list, merge-base) auto-peels
+	// a tag object to its target commit when the SHA is passed directly — so the
+	// tag/newHash needs no explicit peel here for commit/ref/file facts.
 	target := authz
-	target.Branch = branch
-	target.Context = ruleguard.BuildPushFacts(ctx, repoPath, cmd.OldHash, cmd.NewHash, branch)
+	target.TargetType = targetType
+	target.Branch = refName
+	target.Context = ruleguard.BuildPushFacts(ctx, repoPath, cmd.OldHash, cmd.NewHash, refName)
 
 	err := h.ruleClient.ValidatePush(ctx, target)
 	if err == nil {
