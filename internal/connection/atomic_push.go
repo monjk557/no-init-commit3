@@ -21,15 +21,6 @@ type AtomicPushHandler struct {
 	startTime   time.Time
 }
 
-// HookCoordinator manages Git hooks during push operations
-type HookCoordinator struct {
-	preReceiveHooks  []string
-	updateHooks      []string
-	postReceiveHooks []string
-	hookTimeout      time.Duration
-	logger           *zap.Logger
-}
-
 // NewAtomicPushHandler creates a new atomic push handler using native git.
 func NewAtomicPushHandler(repoPath string, operationID string, logger *zap.Logger) *AtomicPushHandler {
 	return &AtomicPushHandler{
@@ -37,15 +28,6 @@ func NewAtomicPushHandler(repoPath string, operationID string, logger *zap.Logge
 		logger:      logger,
 		operationID: operationID,
 		startTime:   time.Now(),
-	}
-}
-
-// NewHookCoordinator creates a new hook coordinator
-func NewHookCoordinator(logger *zap.Logger) *HookCoordinator {
-	configManager := NewConfigManager()
-	return &HookCoordinator{
-		hookTimeout: configManager.Timeouts.OperationIdle,
-		logger:      logger,
 	}
 }
 
@@ -118,12 +100,11 @@ func parseRefUpdate(refUpdate string) (oldHash, newHash, refName string, err err
 		return "", "", "", NewValidationError("refUpdate", refUpdate, "EMPTY", "empty ref update")
 	}
 
-	refUpdate = string([]byte(refUpdate))
-	parts := make([]string, 0)
-
+	// Capabilities follow a NUL byte on the first ref update line; only the
+	// "<old> <new> <ref>" prefix is parsed.
+	var parts []string
 	if nullIndex := findNull(refUpdate); nullIndex >= 0 {
-		refAndHashes := refUpdate[:nullIndex]
-		parts = splitFields(refAndHashes)
+		parts = splitFields(refUpdate[:nullIndex])
 	} else {
 		parts = splitFields(refUpdate)
 	}

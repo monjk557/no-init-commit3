@@ -132,26 +132,19 @@ func (p *SmartPagination) DeterminePageSize(ctx context.Context, repoID, path st
 	return basePageSize
 }
 
+// defaultDirectorySizeEstimate는 실제 추정기가 붙기 전까지 사용하는
+// 중형 저장소 가정값이다.
+const defaultDirectorySizeEstimate = 50
+
 // estimateDirectorySize는 디렉토리의 대략적인 파일 수를 빠르게 추정합니다.
+//
+// 현재는 상수를 돌려주는 스텁이다. 원래 있던 "캐시 조회 시뮬레이션" 분기는
+// 본문이 전부 주석이라 아무 일도 하지 않으면서 캐시가 동작하는 것처럼 보였고
+// (staticcheck SA9003), 동일한 TODO 블록이 두 번 중복돼 있었다. 오독을 막기
+// 위해 스텁임을 명시하고 분기를 제거한다. 실제 추정(캐시 조회 → git ls-tree
+// 카운트 → 이전 조회 결과 보정)은 별도 트랙에서 구현한다.
 func (p *SmartPagination) estimateDirectorySize(ctx context.Context, repoID, path string) int {
-	// TODO: 실제 구현에서는 다음 방법들을 활용:
-	// 1. 캐시된 값 조회
-	// 2. Git ls-tree를 통한 빠른 카운트
-	// 3. 이전 조회 결과 기반 추정
-
-	// TODO: 실제 구현에서는 다음 방법들을 활용:
-	// 1. 캐시된 값 조회
-	// 2. Git ls-tree를 통한 빠른 카운트
-	// 3. 이전 조회 결과 기반 추정
-
-	// 간단한 캐시 조회 시뮬레이션
-	if p.monitor.responseTimeCache != nil {
-		// cacheKey := fmt.Sprintf("dirsize:%s:%s", repoID, path)
-		// 실제로는 더 정교한 캐시 로직 필요
-	}
-
-	// 기본값: 중형 저장소로 가정
-	return 50
+	return defaultDirectorySizeEstimate
 }
 
 // ApplyPagination은 전체 파일 목록에 페이지네이션을 적용합니다.

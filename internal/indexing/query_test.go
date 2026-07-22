@@ -2,6 +2,7 @@ package indexing
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -221,6 +222,46 @@ func TestGetFileHistory(t *testing.T) {
 		hist, err = q.GetFileHistory(ctx, "repo-1", "main.go", 9999)
 		require.NoError(t, err)
 		assert.Len(t, hist, 1)
+	})
+}
+
+// GetFileHistory 는 정규화한 limit 을 쿼리까지 내려보내야 한다 (Issue-6360 —
+// 기존에는 limit 을 보정만 하고 버려서 ineffassign 으로 잡혔다). 프로덕션 인덱스는
+// (repo_id, file_path) 가 unique 가 아니므로 경로당 다중 행이 가능하다 — unique
+// 제약을 걸지 않은 DB 로 그 상황을 재현한다.
+func TestGetFileHistory_LimitReachesQuery(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.CommitPathIndex{}))
+
+	bt := baseTime()
+	for i := 0; i < 3; i++ {
+		seedIndex(t, db, models.CommitPathIndex{
+			RepoID:        "repo-1",
+			FilePath:      "main.go",
+			LastCommitSHA: fmt.Sprintf("sha-%d", i),
+			CommitTime:    bt.Add(time.Duration(i) * time.Hour),
+			ChangeType:    "modified",
+		})
+	}
+
+	q := NewQueryService(db, nil)
+	ctx := context.Background()
+
+	t.Run("limit caps rows and orders newest first", func(t *testing.T) {
+		hist, err := q.GetFileHistory(ctx, "repo-1", "main.go", 2)
+		require.NoError(t, err)
+		require.Len(t, hist, 2)
+		assert.Equal(t, "sha-2", hist[0].SHA)
+		assert.Equal(t, "sha-1", hist[1].SHA)
+	})
+
+	t.Run("invalid limit falls back to default 20", func(t *testing.T) {
+		hist, err := q.GetFileHistory(ctx, "repo-1", "main.go", 0)
+		require.NoError(t, err)
+		assert.Len(t, hist, 3)
 	})
 }
 

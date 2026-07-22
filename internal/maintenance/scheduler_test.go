@@ -80,6 +80,30 @@ func TestScheduler_StartStop(t *testing.T) {
 	assert.GreaterOrEqual(t, stats["total_runs"].(int64), int64(1))
 }
 
+// stop 신호가 이미 떨어진 상태의 scan 은 저장소를 하나도 fan-out 하지 않아야 한다.
+// 기존 코드는 select 안의 bare break 가 select 만 탈출해 stop 이후에도 전체
+// 저장소를 계속 dispatch 했다 (Issue-6360 / staticcheck SA4011).
+func TestScheduler_RunScan_StopAbortsDispatch(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.git", "b.git", "c.git"} {
+		repoPath := filepath.Join(dir, "owner", name)
+		out, err := exec.Command("git", "init", "--bare", repoPath).CombinedOutput()
+		require.NoError(t, err, "git init failed: %s", string(out))
+	}
+
+	logger := newTestLogger(t)
+	cfg := DefaultMaintenanceConfig()
+	scheduler := NewScheduler(cfg, dir, logger)
+
+	// 시작 전에 stop — runScan 진입 시점부터 stopChan 이 닫혀 있다.
+	scheduler.Stop()
+	scheduler.runScan(cfg.MaxConcurrentJobs)
+
+	stats := scheduler.Stats()
+	assert.Equal(t, int64(0), stats["total_repos_dispatched"].(int64),
+		"stop 이후에는 저장소를 dispatch 하지 않아야 한다")
+}
+
 func TestScheduler_Disabled(t *testing.T) {
 	dir := t.TempDir()
 	logger := newTestLogger(t)

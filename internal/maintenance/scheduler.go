@@ -30,6 +30,7 @@ type Scheduler struct {
 
 	// Metrics
 	totalRuns            atomic.Int64
+	totalReposDispatched atomic.Int64
 	totalReposMaintained atomic.Int64
 	totalErrors          atomic.Int64
 	lastRunAt            atomic.Value // time.Time
@@ -86,6 +87,7 @@ func (s *Scheduler) Stats() map[string]interface{} {
 
 	return map[string]interface{}{
 		"total_runs":             s.totalRuns.Load(),
+		"total_repos_dispatched": s.totalReposDispatched.Load(),
 		"total_repos_maintained": s.totalReposMaintained.Load(),
 		"total_errors":           s.totalErrors.Load(),
 		"last_run_at":            lastRun,
@@ -185,15 +187,22 @@ func (s *Scheduler) runScan(maxJobs int) {
 		}
 	}()
 
+	// dispatch labels the fan-out loop so the stop signal can abort dispatching
+	// entirely. A bare `break` inside the select only leaves the select and lets
+	// the scan keep queueing repositories after Stop() (Issue-6360).
+dispatch:
 	for _, repoPath := range repos {
 		// Check if we should stop.
 		select {
 		case <-s.stopChan:
-			break
+			s.logger.Info("maintenance scan aborted by stop signal",
+				zap.String("next_repo", repoPath))
+			break dispatch
 		default:
 		}
 
 		scanWg.Add(1)
+		s.totalReposDispatched.Add(1)
 		sem <- struct{}{} // Acquire semaphore slot
 
 		go func(rp string) {

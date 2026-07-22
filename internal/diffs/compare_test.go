@@ -70,10 +70,16 @@ func TestDiffContentSignature_DifferentStatusDiffers(t *testing.T) {
 }
 
 func TestDiffContentSignature_NilIsStable(t *testing.T) {
-	if diffContentSignature(nil) != diffContentSignature(nil) {
-		t.Fatalf("nil signature 는 안정적이어야 함")
+	// nil 은 sentinel 로 빈 문자열을 돌려준다 — 해시된 값이 아니어야 하고,
+	// "파일이 없는 diff" 와도 구분돼야 한다. (기존 테스트는 f(nil) != f(nil) 이라는
+	// 항등 비교라 아무것도 검증하지 못했다 — staticcheck SA4000)
+	if got := diffContentSignature(nil); got != "" {
+		t.Fatalf("nil signature 는 빈 문자열이어야 함: got %q", got)
 	}
 	empty := &DiffResponse{Files: nil}
+	if diffContentSignature(empty) == diffContentSignature(nil) {
+		t.Fatalf("nil 과 빈 diff 는 구분돼야 함")
+	}
 	if diffContentSignature(empty) == diffContentSignature(&DiffResponse{Files: []FileDiff{fileDiff("a", "added", line(LineChangeTypeAdd, "x"))}}) {
 		t.Fatalf("빈 diff 와 비어있지 않은 diff 는 달라야 함")
 	}

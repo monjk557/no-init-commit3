@@ -586,16 +586,8 @@ func TestConnectionMetadata_GetTenantID_Empty(t *testing.T) {
 }
 
 // ==============================
-// atomic_push.go — NewHookCoordinator / parseRefUpdate 엣지
+// atomic_push.go — parseRefUpdate 엣지
 // ==============================
-
-func TestNewHookCoordinator(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	hc := NewHookCoordinator(logger)
-	require.NotNil(t, hc)
-	// hookTimeout 은 config 의 OperationIdle 에서 온다.
-	assert.Greater(t, hc.hookTimeout, time.Duration(0))
-}
 
 func TestParseRefUpdate_Edges(t *testing.T) {
 	// 빈 입력 → EMPTY 검증 에러.

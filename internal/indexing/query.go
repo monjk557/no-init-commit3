@@ -269,29 +269,32 @@ func (q *QueryService) GetFileHistory(ctx context.Context, repoID, filePath stri
 	queryCtx, cancel := context.WithTimeout(ctx, q.config.QueryTimeout)
 	defer cancel()
 
-	// For file history, we need to query all commits that touched this file
-	// This would require extending the index to store multiple commits per file
-	// For now, just return the latest commit
-	var index models.CommitPathIndex
+	// 인덱스는 현재 (repo_id, file_path) 당 최신 커밋만 보관하므로 실질 결과는
+	// 1건이지만, limit 을 쿼리까지 내려보내 정규화한 값이 실제로 반영되게 한다
+	// (기존에는 limit 을 보정만 하고 버려 ineffassign 으로 잡혔다). 인덱스가
+	// 경로별 다중 커밋을 담게 확장되면 이 경로가 그대로 동작한다.
+	var indices []models.CommitPathIndex
 	err := q.db.WithContext(queryCtx).
 		Where("repo_id = ? AND file_path = ?", repoID, filePath).
-		First(&index).Error
+		Order("commit_time DESC").
+		Limit(limit).
+		Find(&indices).Error
 
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return []CommitInfo{}, nil
-		}
 		return nil, fmt.Errorf("failed to query file history: %w", err)
 	}
 
-	return []CommitInfo{
-		{
+	history := make([]CommitInfo, len(indices))
+	for i, index := range indices {
+		history[i] = CommitInfo{
 			SHA:        index.LastCommitSHA,
 			Time:       index.CommitTime,
 			ChangeType: index.ChangeType,
 			FileSize:   index.FileSize,
-		},
-	}, nil
+		}
+	}
+
+	return history, nil
 }
 
 // GetLargestFiles returns the largest files in a repository

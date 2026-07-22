@@ -94,11 +94,19 @@ func TestGetRepoRWLock_DifferentPathDifferentLock(t *testing.T) {
 func TestGetRepoRWLock_Usable(t *testing.T) {
 	t.Parallel()
 	l := GetRepoRWLock("/tmp/lock-test-usable.git")
-	// 실제로 lock/unlock 이 동작해야 함
+	// 실제로 lock/unlock 이 동작해야 함 — 임계영역 안에서 상태를 바꿔
+	// 배타/공유 획득이 모두 관측 가능하도록 한다 (빈 임계영역은 staticcheck
+	// SA2001 이 지적하듯 컴파일러가 지워도 무방한 코드라 아무것도 보장하지 않음).
+	guarded := 0
 	l.Lock()
+	guarded++
 	l.Unlock()
+
 	l.RLock()
+	observed := guarded
 	l.RUnlock()
+
+	assert.Equal(t, 1, observed, "write lock 안의 변경이 read lock 에서 보여야 한다")
 }
 
 func TestGetRepoRWLock_ConcurrentGet(t *testing.T) {

@@ -1412,10 +1412,7 @@ func (s *RepositoryOverviewService) Close() error {
 		}
 	}
 
-	// Close smart pagination (if it has cleanup)
-	if s.smartPagination != nil {
-		// SmartPagination doesn't have a close method, so nothing to do
-	}
+	// SmartPagination holds no resources — nothing to close.
 
 	if len(errors) > 0 {
 		return fmt.Errorf("service shutdown errors: %v", errors)
