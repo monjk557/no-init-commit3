@@ -256,35 +256,35 @@ func main() {
 // 마이그레이션되면 registry 가 우선, legacy 가 잔여 path 의 fallback.
 func runGeneration(projectRoot string, registry *typed.Registry, log *os.File) (string, error) {
 	if registry != nil {
-		fmt.Fprintln(log, "📚 Populating registry from domain RegisterRoutes...")
+		_, _ = fmt.Fprintln(log, "📚 Populating registry from domain RegisterRoutes...")
 		setupSpecRoutes(registry)
-		fmt.Fprintf(log, "   Registry endpoints: %d\n", len(registry.Snapshot()))
+		_, _ = fmt.Fprintf(log, "   Registry endpoints: %d\n", len(registry.Snapshot()))
 	}
 
-	fmt.Fprintln(log, "🔍 Parsing server.go for routes...")
+	_, _ = fmt.Fprintln(log, "🔍 Parsing server.go for routes...")
 	routes, err := parseServerRoutes(filepath.Join(projectRoot, "internal/server/server.go"))
 	if err != nil {
-		return "", fmt.Errorf("Error parsing server.go: %w", err)
+		return "", fmt.Errorf("error parsing server.go: %w", err)
 	}
-	fmt.Fprintf(log, "   Found %d routes\n", len(routes))
+	_, _ = fmt.Fprintf(log, "   Found %d routes\n", len(routes))
 
-	fmt.Fprintln(log, "🔍 Parsing schema files from all packages...")
+	_, _ = fmt.Fprintln(log, "🔍 Parsing schema files from all packages...")
 	schemas, resolver, err := parseAllSchemas(projectRoot, log)
 	if err != nil {
-		return "", fmt.Errorf("Error parsing schemas: %w", err)
+		return "", fmt.Errorf("error parsing schemas: %w", err)
 	}
-	fmt.Fprintf(log, "   Found %d schema types\n", len(schemas))
+	_, _ = fmt.Fprintf(log, "   Found %d schema types\n", len(schemas))
 
 	stringEnums, err := parseAllStringEnums(projectRoot)
 	if err != nil {
-		return "", fmt.Errorf("Error parsing typed-string enums: %w", err)
+		return "", fmt.Errorf("error parsing typed-string enums: %w", err)
 	}
-	fmt.Fprintf(log, "   Found %d typed-string enum aliases\n", len(stringEnums))
+	_, _ = fmt.Fprintf(log, "   Found %d typed-string enum aliases\n", len(stringEnums))
 
-	fmt.Fprintln(log, "📝 Generating OpenAPI spec...")
+	_, _ = fmt.Fprintln(log, "📝 Generating OpenAPI spec...")
 	spec, err := generateOpenAPISpec(routes, schemas, stringEnums, resolver, projectRoot, registry)
 	if err != nil {
-		return "", fmt.Errorf("Error generating OpenAPI spec: %w", err)
+		return "", fmt.Errorf("error generating OpenAPI spec: %w", err)
 	}
 
 	// Self-validate before returning: a $ref to an undefined component schema
@@ -800,7 +800,7 @@ func flattenEmbeddings(schemas map[string]SchemaInfo, resolver typeResolver, log
 					if e.PkgQual != "" {
 						qual = e.PkgQual + "." + e.TypeName
 					}
-					fmt.Fprintf(log, "⚠️  flattenEmbeddings: %q embeds %q which is not in the schema set; embedded fields will be missing from spec\n",
+					_, _ = fmt.Fprintf(log, "⚠️  flattenEmbeddings: %q embeds %q which is not in the schema set; embedded fields will be missing from spec\n",
 						name, qual)
 				}
 				continue
@@ -1243,7 +1243,7 @@ func renderPathOperations(ops []pathOperation) string {
 
 	var buf strings.Builder
 	for _, specPath := range pathOrder {
-		buf.WriteString(fmt.Sprintf("  %s:\n", specPath))
+		_, _ = fmt.Fprintf(&buf, "  %s:\n", specPath)
 		for _, op := range pathMap[specPath] {
 			renderSingleOperation(&buf, op)
 		}
@@ -1256,31 +1256,31 @@ func renderPathOperations(ops []pathOperation) string {
 // byte-equivalent.
 func renderSingleOperation(buf *strings.Builder, op pathOperation) {
 	method := strings.ToLower(op.method)
-	buf.WriteString(fmt.Sprintf("    %s:\n", method))
-	buf.WriteString(fmt.Sprintf("      summary: %s\n", op.summary))
-	buf.WriteString(fmt.Sprintf("      operationId: %s\n", op.operationID))
+	_, _ = fmt.Fprintf(buf, "    %s:\n", method)
+	_, _ = fmt.Fprintf(buf, "      summary: %s\n", op.summary)
+	_, _ = fmt.Fprintf(buf, "      operationId: %s\n", op.operationID)
 	buf.WriteString("      tags:\n")
-	buf.WriteString(fmt.Sprintf("        - %s\n", op.tag))
+	_, _ = fmt.Fprintf(buf, "        - %s\n", op.tag)
 	buf.WriteString("      parameters:\n")
 	buf.WriteString("        - $ref: '#/components/parameters/Owner'\n")
 	buf.WriteString("        - $ref: '#/components/parameters/Repo'\n")
 	for _, p := range op.pathParams {
-		buf.WriteString(fmt.Sprintf("        - name: %s\n", p))
+		_, _ = fmt.Fprintf(buf, "        - name: %s\n", p)
 		buf.WriteString("          in: path\n")
 		buf.WriteString("          required: true\n")
 		buf.WriteString("          schema:\n")
 		buf.WriteString("            type: string\n")
 	}
 	for _, q := range op.queryParams {
-		buf.WriteString(fmt.Sprintf("        - name: %s\n", q.name))
+		_, _ = fmt.Fprintf(buf, "        - name: %s\n", q.name)
 		buf.WriteString("          in: query\n")
 		if q.required {
 			buf.WriteString("          required: true\n")
 		}
 		buf.WriteString("          schema:\n")
-		buf.WriteString(fmt.Sprintf("            type: %s\n", q.openAPI.typ))
+		_, _ = fmt.Fprintf(buf, "            type: %s\n", q.openAPI.typ)
 		if q.openAPI.format != "" {
-			buf.WriteString(fmt.Sprintf("            format: %s\n", q.openAPI.format))
+			_, _ = fmt.Fprintf(buf, "            format: %s\n", q.openAPI.format)
 		}
 	}
 	if op.requestRef != "" {
@@ -1289,7 +1289,7 @@ func renderSingleOperation(buf *strings.Builder, op pathOperation) {
 		buf.WriteString("        content:\n")
 		buf.WriteString("          application/json:\n")
 		buf.WriteString("            schema:\n")
-		buf.WriteString(fmt.Sprintf("              $ref: '#/components/schemas/%s'\n", openAPISchemaName(op.requestRef)))
+		_, _ = fmt.Fprintf(buf, "              $ref: '#/components/schemas/%s'\n", openAPISchemaName(op.requestRef))
 	}
 	buf.WriteString("      responses:\n")
 	buf.WriteString("        '200':\n")
@@ -1299,13 +1299,13 @@ func renderSingleOperation(buf *strings.Builder, op pathOperation) {
 		buf.WriteString("          content:\n")
 		buf.WriteString("            application/json:\n")
 		buf.WriteString("              schema:\n")
-		buf.WriteString(fmt.Sprintf("                $ref: '#/components/schemas/%s'\n", openAPISchemaName(op.responseRef)))
+		_, _ = fmt.Fprintf(buf, "                $ref: '#/components/schemas/%s'\n", openAPISchemaName(op.responseRef))
 	case op.rawResponseContentType != "":
 		// RegisterRaw endpoint — schema 없는 binary/text content. orchestrator
 		// auto-gen 클라이언트는 이 content-type 만 보고 raw bytes/text reader
 		// 를 emit 한다.
 		buf.WriteString("          content:\n")
-		buf.WriteString(fmt.Sprintf("            %s:\n", op.rawResponseContentType))
+		_, _ = fmt.Fprintf(buf, "            %s:\n", op.rawResponseContentType)
 		buf.WriteString("              schema:\n")
 		buf.WriteString("                type: string\n")
 		buf.WriteString("                format: binary\n")
@@ -1364,7 +1364,7 @@ func reflectTypeToQuerySchema(t reflect.Type) queryParamSchema {
 	if t == nil {
 		return queryParamSchema{typ: "string"}
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -1481,9 +1481,9 @@ func isNamedEnum(name string) bool {
 //	  enum: [A, B, C]
 func renderEnumSchemaYAML(ei StringEnumInfo, schemaNameFn func(string) string) string {
 	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("    %s:\n", schemaNameFn(ei.Name)))
+	_, _ = fmt.Fprintf(&buf, "    %s:\n", schemaNameFn(ei.Name))
 	buf.WriteString("      type: string\n")
-	buf.WriteString(fmt.Sprintf("      enum: [%s]\n", strings.Join(ei.Values, ", ")))
+	_, _ = fmt.Fprintf(&buf, "      enum: [%s]\n", strings.Join(ei.Values, ", "))
 	return buf.String()
 }
 
@@ -1517,7 +1517,7 @@ func mapGoTypeToOpenAPI(goType string) string {
 
 func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, stringEnums map[string]StringEnumInfo, schemaNameFn func(string) string, resolver typeResolver) string {
 	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("    %s:\n", schemaNameFn(schema.Name)))
+	_, _ = fmt.Fprintf(&buf, "    %s:\n", schemaNameFn(schema.Name))
 	buf.WriteString("      type: object\n")
 
 	// Only include fields with explicit json tags to avoid accidentally generating incorrect schemas
@@ -1537,7 +1537,7 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, str
 	buf.WriteString("      properties:\n")
 	for _, field := range taggedFields {
 		fieldName := field.JSONTag
-		buf.WriteString(fmt.Sprintf("        %s:\n", fieldName))
+		_, _ = fmt.Fprintf(&buf, "        %s:\n", fieldName)
 		propLines := renderOpenAPIPropertyYAML(field.Type, schema.Package, knownSchemas, stringEnums, schemaNameFn, resolver)
 		for _, l := range propLines {
 			buf.WriteString("          " + l + "\n")
@@ -1566,7 +1566,7 @@ func renderSchemaYAML(schema SchemaInfo, knownSchemas map[string]SchemaInfo, str
 		sort.Strings(required)
 		buf.WriteString("      required:\n")
 		for _, r := range required {
-			buf.WriteString(fmt.Sprintf("        - %s\n", r))
+			_, _ = fmt.Fprintf(&buf, "        - %s\n", r)
 		}
 	}
 

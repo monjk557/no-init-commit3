@@ -75,7 +75,7 @@ func TestRunGeneration_ByteEquivalentToBaseline(t *testing.T) {
 		if len(wantLines) < minLen {
 			minLen = len(wantLines)
 		}
-		var firstDiff int = -1
+		firstDiff := -1
 		for i := 0; i < minLen; i++ {
 			if gotLines[i] != wantLines[i] {
 				firstDiff = i
@@ -380,7 +380,7 @@ func TestRenderSchemaYAML_NullableForNilableJSONFields(t *testing.T) {
 	lines := strings.Split(out, "\n")
 	for _, tc := range cases {
 		key := fieldIndent + tc.field + ":"
-		var start, end int = -1, len(lines)
+		start, end := -1, len(lines)
 		for i, l := range lines {
 			if l == key {
 				start = i

@@ -33,8 +33,8 @@ func TestNewRepositoryCache(t *testing.T) {
 			require.NotNil(t, c)
 			t.Cleanup(func() { _ = c.Close() })
 
-			// Returned value satisfies the interface and is usable.
-			var _ RepositoryCache = c
+			// 생성자 반환 타입이 이미 RepositoryCache 라 별도 인터페이스 단언은
+			// 무의미하다 — 실제로 쓸 수 있는지만 확인한다.
 			m := c.GetMetrics()
 			assert.Equal(t, int64(0), m.Hits)
 		})
@@ -59,5 +59,6 @@ func TestNewDefaultRepositoryCache(t *testing.T) {
 	require.NotNil(t, c)
 	t.Cleanup(func() { _ = c.Close() })
 
-	var _ RepositoryCache = c
+	m := c.GetMetrics()
+	assert.Equal(t, int64(0), m.Hits)
 }

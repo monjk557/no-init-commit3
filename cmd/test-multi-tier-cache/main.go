@@ -147,16 +147,16 @@ func testSingleTierCache(l1Cache *MockL1Cache, repositories []string) float64 {
 
 	// Simulate repository access pattern
 	totalRequests := 1000
-	rand.Seed(time.Now().UnixNano())
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	for i := 0; i < totalRequests; i++ {
-		repoIndex := rand.Intn(len(repositories))
+		repoIndex := rng.Intn(len(repositories))
 		repo := repositories[repoIndex]
 
 		// Try to get from cache
 		if _, exists := l1Cache.GetRepository(repo); !exists {
 			// Cache miss - simulate loading and storing
-			l1Cache.SetRepository(repo, &MockRepo{path: repo})
+			_ = l1Cache.SetRepository(repo, &MockRepo{path: repo})
 		}
 	}
 
@@ -207,15 +207,15 @@ func testMultiTierCache(l1Cache *MockL1Cache, l2Cache *MockL2Cache, repositories
 		if _, err := l2Cache.Get(context.Background(), "gitcache:repo:"+repo); err == nil {
 			l2Hits++
 			// Promote to L1
-			l1Cache.SetRepository(repo, &MockRepo{path: repo})
+			_ = l1Cache.SetRepository(repo, &MockRepo{path: repo})
 			continue
 		}
 
 		// Complete miss - load and store in both tiers
 		totalMisses++
 		mockRepo := &MockRepo{path: repo}
-		l1Cache.SetRepository(repo, mockRepo)
-		l2Cache.Set(context.Background(), "gitcache:repo:"+repo, []byte("mock data"), time.Hour)
+		_ = l1Cache.SetRepository(repo, mockRepo)
+		_ = l2Cache.Set(context.Background(), "gitcache:repo:"+repo, []byte("mock data"), time.Hour)
 
 		// Trigger predictive prefetching for related repositories
 		if i%10 == 0 { // Every 10th access triggers prefetch
@@ -293,8 +293,8 @@ func simulatePredictivePrefetch(currentRepo string, repositories []string, l1Cac
 		if _, exists := l1Cache.GetRepository(relatedRepo); !exists {
 			// Simulate prefetch: load into both L1 and L2
 			mockRepo := &MockRepo{path: relatedRepo}
-			l1Cache.SetRepository(relatedRepo, mockRepo)
-			l2Cache.Set(context.Background(), "gitcache:repo:"+relatedRepo, []byte("prefetched data"), time.Hour)
+			_ = l1Cache.SetRepository(relatedRepo, mockRepo)
+			_ = l2Cache.Set(context.Background(), "gitcache:repo:"+relatedRepo, []byte("prefetched data"), time.Hour)
 			prefetchCount++
 		}
 	}

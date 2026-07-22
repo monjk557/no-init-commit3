@@ -518,10 +518,7 @@ func (s *CommitsService) ExecuteMultiFileCommit(ctx context.Context, repoPath st
 	}
 
 	// Check for validate-only / dry-run mode
-	validateOnly := false
-	if req.Options != nil && (req.Options.ValidateOnly || req.Options.DryRun) {
-		validateOnly = true
-	}
+	validateOnly := req.Options != nil && (req.Options.ValidateOnly || req.Options.DryRun)
 
 	if validateOnly {
 		s.logger.Info("commit: dry-run complete",

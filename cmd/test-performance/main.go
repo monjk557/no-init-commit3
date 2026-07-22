@@ -53,45 +53,45 @@ func main() {
 
 	// Test 1: Baseline (no optimizations)
 	fmt.Printf("📊 Test 1: Baseline (no optimizations)\n")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
 	runPerformanceTest(repo, repoPath, logger, "baseline")
 
 	fmt.Printf("\n")
 
 	// Test 2: With commit-graph optimization only
 	fmt.Printf("⚡ Test 2: With commit-graph optimization\n")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
 	runPerformanceTest(repo, repoPath, logger, "commit-graph")
 
 	fmt.Printf("\n")
 
 	// Test 3: With object cache optimization only
 	fmt.Printf("💾 Test 3: With object cache optimization\n")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
 	runPerformanceTest(repo, repoPath, logger, "object-cache")
 
 	fmt.Printf("\n")
 
 	// Test 4: With FD pool optimization only
 	fmt.Printf("📁 Test 4: With file descriptor pool optimization\n")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
 	runPerformanceTest(repo, repoPath, logger, "fd-pool")
 
 	fmt.Printf("\n")
 
 	// Test 5: With ALL optimizations (maximum power!)
 	fmt.Printf("🚀 Test 5: With ALL optimizations (commit-graph + object cache + FD pool)\n")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
 	runPerformanceTest(repo, repoPath, logger, "all")
 
 	fmt.Printf("\n🎯 Performance test completed!\n")

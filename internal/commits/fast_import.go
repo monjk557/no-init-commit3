@@ -63,13 +63,13 @@ func ExecuteFastImportCommit(ctx context.Context, req *FastImportCommitRequest) 
 
 	// Write the fast-import stream
 	if err := writeFastImportStream(stdin, req); err != nil {
-		stdin.Close()
-		cmd.Wait()
+		_ = stdin.Close()
+		_ = cmd.Wait()
 		return nil, fmt.Errorf("fast-import stream: %w", err)
 	}
 
 	if err := stdin.Close(); err != nil {
-		cmd.Wait()
+		_ = cmd.Wait()
 		return nil, fmt.Errorf("fast-import stdin close: %w", err)
 	}
 

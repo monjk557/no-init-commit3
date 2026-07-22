@@ -211,7 +211,7 @@ func classifyOneAnchor(byOldPath map[string]*FileDiff, a AnchorRequest) AnchorRe
 			continue
 		}
 		hunkEnd := hunkStart + h.CountOld - 1
-		if !(hunkEnd < a.StartLine || hunkStart > a.EndLine) {
+		if hunkEnd >= a.StartLine && hunkStart <= a.EndLine {
 			return AnchorResult{ID: a.ID, Status: AnchorStatusStale, NewPath: newPath}
 		}
 	}

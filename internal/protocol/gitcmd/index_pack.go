@@ -49,12 +49,17 @@ func IndexPackFromReader(ctx context.Context, repoPath string, r io.Reader, tran
 		return nil, fmt.Errorf("create local temp pack file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	n, err := CopyPackfileFromStream(r, tmpFile)
-	tmpFile.Close()
+	// 쓰기 경로의 Close 실패는 flush 실패(디스크 full 등)를 의미하므로 삼키지
+	// 않는다 — 잘린 pack 을 index-pack 에 넘기면 원인을 알기 어려운 실패가 된다.
+	closeErr := tmpFile.Close()
 	if err != nil {
 		return nil, fmt.Errorf("save packfile (%d bytes written): %w", n, err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close temp pack file (%d bytes written): %w", n, closeErr)
 	}
 	if n == 0 {
 		return nil, fmt.Errorf("empty packfile received")
@@ -68,7 +73,7 @@ func IndexPackFromReader(ctx context.Context, repoPath string, r io.Reader, tran
 	if err != nil {
 		return nil, fmt.Errorf("reopen temp pack file: %w", err)
 	}
-	defer packInput.Close()
+	defer func() { _ = packInput.Close() }()
 
 	args := []string{"-c", "core.fsync=none", "index-pack", "--stdin", "--fix-thin"}
 	cmd := exec.CommandContext(ctx, "git", args...)

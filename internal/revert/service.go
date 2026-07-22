@@ -31,8 +31,6 @@ func (e *BranchExistsError) Error() string {
 // to avoid diminishing returns and command-line length issues.
 const maxSparseCheckoutFiles = 5000
 
-const defaultGitTimeout = 30 * time.Second
-
 // runGit executes a git command against a bare repo and returns stdout.
 func runGit(ctx context.Context, repoPath string, args ...string) ([]byte, error) {
 	fullArgs := append([]string{"--git-dir", repoPath}, args...)
@@ -130,7 +128,9 @@ func parseSignature(raw string) (name, email string, when time.Time) {
 	fields := strings.Fields(rest)
 	if len(fields) >= 1 {
 		var ts int64
-		fmt.Sscanf(fields[0], "%d", &ts)
+		if _, err := fmt.Sscanf(fields[0], "%d", &ts); err != nil {
+			ts = 0 // 파싱 실패 시 0 fallback (기존 동작 유지)
+		}
 		when = time.Unix(ts, 0)
 	}
 	return
@@ -268,7 +268,7 @@ func revParse(ctx context.Context, repoPath, ref string) (string, error) {
 func revertViaWorktree(ctx context.Context, repoPath, commitHash, targetRef string, parentNumber int) (string, bool, error) {
 	// Prune stale worktree entries left by previous crashes / OOM kills.
 	pruneCmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "worktree", "prune")
-	pruneCmd.Run() // best-effort
+	_ = pruneCmd.Run() // best-effort
 
 	// Determine which files the commit touches so we can use sparse-checkout.
 	affectedFiles := getAffectedFiles(ctx, repoPath, commitHash, parentNumber)
@@ -284,12 +284,12 @@ func revertViaWorktree(ctx context.Context, repoPath, commitHash, targetRef stri
 		defer cancel()
 		rmCmd := exec.CommandContext(cleanupCtx, "git", "--git-dir", repoPath,
 			"worktree", "remove", "--force", wtDir)
-		rmCmd.Run() // best-effort
-		os.RemoveAll(wtDir)
+		_ = rmCmd.Run() // best-effort
+		_ = os.RemoveAll(wtDir)
 	}()
 
 	// Remove the temp dir so git worktree add can create it
-	os.RemoveAll(wtDir)
+	_ = os.RemoveAll(wtDir)
 
 	if useSparse {
 		err = createSparseWorktree(ctx, repoPath, wtDir, targetRef, affectedFiles)
@@ -418,21 +418,33 @@ func resolveSparsePath(ctx context.Context, wtDir string) (string, error) {
 
 // writeSparsePatterns writes no-cone sparse-checkout patterns to the given file.
 // Each file path is prefixed with "/" so it matches from the repo root.
-func writeSparsePatterns(path string, files []string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("failed to create sparse-checkout dir: %w", err)
+func writeSparsePatterns(path string, files []string) (err error) {
+	if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+		return fmt.Errorf("failed to create sparse-checkout dir: %w", mkErr)
 	}
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("failed to create sparse-checkout file: %w", err)
 	}
-	defer f.Close()
+	// 패턴 파일이 잘리면 worktree 가 잘못된 파일 집합으로 체크아웃되므로
+	// write / close 실패를 삼키지 않고 호출자에게 올린다.
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("failed to close sparse-checkout file: %w", cerr)
+		}
+	}()
 
+	w := bufio.NewWriter(f)
 	for _, p := range files {
 		if !strings.HasPrefix(p, "/") {
 			p = "/" + p
 		}
-		fmt.Fprintln(f, p)
+		if _, werr := fmt.Fprintln(w, p); werr != nil {
+			return fmt.Errorf("failed to write sparse-checkout pattern: %w", werr)
+		}
+	}
+	if ferr := w.Flush(); ferr != nil {
+		return fmt.Errorf("failed to flush sparse-checkout file: %w", ferr)
 	}
 	return nil
 }

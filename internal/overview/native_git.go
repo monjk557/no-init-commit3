@@ -620,7 +620,9 @@ func parseLsTreeLine(line, basePath string) (GitTreeEntryWithCommit, error) {
 
 	if entryType == "blob" && sizeStr != "-" {
 		var size int64
-		fmt.Sscanf(sizeStr, "%d", &size)
+		if _, err := fmt.Sscanf(sizeStr, "%d", &size); err != nil {
+			size = 0 // 파싱 실패 시 0 fallback (기존 동작 유지)
+		}
 		entry.Size = &size
 	}
 

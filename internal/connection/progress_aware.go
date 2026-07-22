@@ -347,7 +347,7 @@ func (pac *ProgressAwareConnection) monitorProgress() {
 					zap.Duration("since_last_progress", since),
 					zap.Duration("stall_threshold_used", threshold),
 					zap.Bool("pack_objects_phase", isPack))
-				pac.Close()
+				_ = pac.Close()
 				return
 			}
 
@@ -357,7 +357,7 @@ func (pac *ProgressAwareConnection) monitorProgress() {
 					zap.String("owner", pac.owner),
 					zap.String("repo", pac.repo),
 					zap.Duration("duration", time.Since(operationStartTime)))
-				pac.Close()
+				_ = pac.Close()
 				return
 			}
 
@@ -417,7 +417,7 @@ func (pac *ProgressAwareConnection) Close() error {
 		close(pac.stopChan)
 		pac.cancel()
 		if pac.conn != nil {
-			pac.conn.Close()
+			_ = pac.conn.Close()
 		}
 	})
 	return nil

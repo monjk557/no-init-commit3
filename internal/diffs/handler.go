@@ -623,14 +623,7 @@ func (h *DiffHandler) HandleDiffFileSearch(c *gin.Context) (DiffFileSearchRespon
 		pathMatch := strings.Contains(strings.ToLower(meta.Path), queryLower)
 		oldPathMatch := meta.OldPath != "" && strings.Contains(strings.ToLower(meta.OldPath), queryLower)
 		if pathMatch || oldPathMatch {
-			results = append(results, DiffFileSearchResult{
-				Path:      meta.Path,
-				OldPath:   meta.OldPath,
-				Status:    meta.Status,
-				Additions: meta.Additions,
-				Deletions: meta.Deletions,
-				IsBinary:  meta.IsBinary,
-			})
+			results = append(results, DiffFileSearchResult(meta))
 		}
 	}
 

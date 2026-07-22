@@ -89,10 +89,12 @@ func parseIdentity(s string) (name, email string, t time.Time) {
 	if len(fields) >= 2 {
 		// Parse as "unix_timestamp timezone"
 		t, _ = time.Parse("2006-01-02T15:04:05Z07:00",
-			fmt.Sprintf("1970-01-01T00:00:00+00:00")) // fallback
+			"1970-01-01T00:00:00+00:00") // fallback
 		if ts, err := fmt.Sscanf(fields[0], "%d", new(int64)); err == nil && ts == 1 {
 			var unix int64
-			fmt.Sscanf(fields[0], "%d", &unix)
+			if _, err := fmt.Sscanf(fields[0], "%d", &unix); err != nil {
+				unix = 0 // 파싱 실패 시 0 fallback (기존 동작 유지)
+			}
 			loc := time.UTC
 			if len(fields) >= 2 {
 				if l, err := time.Parse("-0700", fields[1]); err == nil {

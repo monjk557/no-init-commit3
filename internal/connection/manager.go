@@ -79,7 +79,7 @@ func NewConnectionManager(conn net.Conn, config *ConnectionManagerConfig) (Conne
 			// Cleanup when connection closes
 			cancel()
 			if ioWrapper != nil {
-				ioWrapper.Close()
+				_ = ioWrapper.Close()
 			}
 		},
 	})

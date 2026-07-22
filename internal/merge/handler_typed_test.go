@@ -33,14 +33,6 @@ func invokeTyped[Resp any](c *gin.Context, fn func(*gin.Context) (Resp, error)) 
 	c.JSON(http.StatusOK, resp)
 }
 
-// adapt 는 typed handler 를 gin.HandlerFunc 로 변환한다 — 테스트에서
-// router.METHOD(path, adapt(handler.HandleX)) 형태로 사용.
-func adapt[Resp any](fn func(*gin.Context) (Resp, error)) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		invokeTyped(c, fn)
-	}
-}
-
 // adaptQuery 는 RegisterGetWithQuery 시그니처 (Req struct 를 받는 typed
 // handler) 를 gin.HandlerFunc 로 변환한다. wrapper 의 c.ShouldBindQuery
 // 단계를 mirror 하여 테스트가 router.X(path, adaptQuery(h.HandleY)) 패턴을

@@ -206,17 +206,17 @@ func modifyLines(lines []string, changeCount int) []string {
 		return lines
 	}
 
-	rand.Seed(time.Now().UnixNano())
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	modified := make([]string, len(lines))
 	copy(modified, lines)
 
 	changesMade := 0
 	for i := 0; i < len(modified) && changesMade < changeCount; i++ {
-		if rand.Float32() < 0.2 { // 20% chance to modify each line
+		if rng.Float32() < 0.2 { // 20% chance to modify each line
 			original := modified[i]
 
 			// Different types of modifications
-			switch rand.Intn(4) {
+			switch rng.Intn(4) {
 			case 0: // Add suffix
 				modified[i] = original + " // Modified"
 			case 1: // Replace keyword

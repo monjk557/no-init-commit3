@@ -134,7 +134,7 @@ func candidateBlobs(ctx context.Context, repoPath string) ([]blobCandidate, int,
 
 	// rev-list stdout → SHA 첫 column 만 추출 → cat-file stdin
 	go func() {
-		defer catFileStdin.Close()
+		defer func() { _ = catFileStdin.Close() }()
 		scanner := bufio.NewScanner(revListOut)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -229,7 +229,7 @@ func extractLFSOIDs(
 
 	// goroutine 으로 stdin write — stdout read 와 데드락 회피
 	go func() {
-		defer stdin.Close()
+		defer func() { _ = stdin.Close() }()
 		for _, c := range candidates {
 			_, _ = fmt.Fprintln(stdin, c.OID)
 		}

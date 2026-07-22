@@ -2,7 +2,6 @@ package connection
 
 import (
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -12,7 +11,6 @@ type connectionLifecycle struct {
 	conn     net.Conn
 	closed   int32
 	lastUsed int64 // Unix timestamp
-	mu       sync.RWMutex
 
 	// Lifecycle callbacks
 	onClose func()

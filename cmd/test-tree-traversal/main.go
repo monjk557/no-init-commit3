@@ -51,18 +51,18 @@ func main() {
 
 	// Test 1: Without parallel tree traversal
 	fmt.Printf("📊 Test 1: Sequential tree processing (baseline)\n")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "false")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "false")
 	runLanguageDetectionTest(repo, repoPath, logger, "baseline")
 
 	fmt.Printf("\n")
 
 	// Test 2: With parallel tree traversal (via all optimizations)
 	fmt.Printf("⚡ Test 2: Parallel tree processing (optimized)\n")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
-	os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_COMMIT_GRAPH_OPTIMIZATION", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_OBJECT_CACHE", "true")
+	_ = os.Setenv("COLLABOPS_PERFORMANCE_FEATURES_ENABLE_FD_POOL", "true")
 	runLanguageDetectionTest(repo, repoPath, logger, "optimized")
 
 	fmt.Printf("\n🎯 Tree traversal test completed!\n")

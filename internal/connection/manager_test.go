@@ -195,7 +195,7 @@ func TestConnectionManager_ErrorHandling(t *testing.T) {
 	}
 
 	// Write to buffer (may succeed due to buffering)
-	_, err = manager.Write([]byte("test"))
+	_, _ = manager.Write([]byte("test"))
 
 	// Flush should definitely fail on closed connection
 	err = manager.Flush()

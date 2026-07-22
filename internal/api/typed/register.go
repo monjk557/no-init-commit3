@@ -232,7 +232,7 @@ func extractQueryParams(t reflect.Type) []ParamSpec {
 	if t == nil {
 		return nil
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {

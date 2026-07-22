@@ -81,8 +81,6 @@ type DiffEntry struct {
 // Low-level helpers
 // ---------------------------------------------------------------------------
 
-const defaultGitTimeout = 30 * time.Second
-
 // runGit executes a git command and returns stdout. stderr is captured for
 // error messages.
 func runGit(ctx context.Context, repoPath string, args ...string) ([]byte, error) {
@@ -765,11 +763,11 @@ func NewBatchCatFile(ctx context.Context, repoPath string) (*BatchCatFile, error
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		stdin.Close()
+		_ = stdin.Close()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		stdin.Close()
+		_ = stdin.Close()
 		return nil, fmt.Errorf("start cat-file: %w", err)
 	}
 	return &BatchCatFile{
@@ -832,7 +830,7 @@ func (b *BatchCatFile) ReadBlob(hash string, maxBytes int) ([]byte, error) {
 
 // Close terminates the cat-file process.
 func (b *BatchCatFile) Close() error {
-	b.stdin.Close()
+	_ = b.stdin.Close()
 	return b.cmd.Wait()
 }
 

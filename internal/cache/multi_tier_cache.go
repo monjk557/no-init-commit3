@@ -146,7 +146,7 @@ func NewMultiTierCache[T any](config *MultiTierConfig, logger *zap.Logger) (*Mul
 		var err error
 		l2Cache, err = NewRedisCache[T](l2Config, logger)
 		if err != nil {
-			l1Cache.Close()
+			_ = l1Cache.Close()
 			return nil, fmt.Errorf("failed to initialize L2 Redis cache: %w", err)
 		}
 	}

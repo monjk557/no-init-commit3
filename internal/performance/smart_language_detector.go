@@ -246,7 +246,7 @@ func (sld *SmartLanguageDetector) detectBySampling(file *object.File) SmartLangu
 	if err != nil {
 		return SmartLanguageResult{Skipped: true, SkipReason: "read_error"}
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// OPTIMIZATION: Only read sample size, not entire file
 	sampleBuffer := make([]byte, sld.sampleSize)

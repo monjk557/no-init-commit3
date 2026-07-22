@@ -302,7 +302,7 @@ func decompressRequestBody(body io.ReadCloser) ([]byte, error) {
 			return nil, fmt.Errorf("gzip: %w", err)
 		}
 		data, err = io.ReadAll(gr)
-		gr.Close()
+		_ = gr.Close()
 		if err != nil {
 			return nil, fmt.Errorf("gzip: %w", err)
 		}

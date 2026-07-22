@@ -125,16 +125,16 @@ func originalSidebandWrite(w io.Writer, data []byte, channel byte) {
 
 		// BOTTLENECK: String formatting
 		lengthHex := fmt.Sprintf("%04x", length)
-		w.Write([]byte(lengthHex))
-		w.Write([]byte{channel})
-		w.Write(chunk)
+		_, _ = w.Write([]byte(lengthHex))
+		_, _ = w.Write([]byte{channel})
+		_, _ = w.Write(chunk)
 	}
 }
 
 // optimizedSidebandWrite uses the optimized binary approach
 func optimizedSidebandWrite(w io.Writer, data []byte, channel byte) {
 	writer := performance.NewOptimizedSidebandWriter(w, channel)
-	writer.Write(data)
+	_, _ = writer.Write(data)
 }
 
 // originalPacketLineWrite simulates the old fmt.Sprintf approach
@@ -146,13 +146,13 @@ func originalPacketLineWrite(w io.Writer, data string) {
 
 	// BOTTLENECK: String formatting
 	line := fmt.Sprintf("%04x%s", length, data)
-	w.Write([]byte(line))
+	_, _ = w.Write([]byte(line))
 }
 
 // optimizedPacketLineWrite uses the optimized binary approach
 func optimizedPacketLineWrite(w io.Writer, data string) {
 	writer := performance.NewOptimizedPktLineWriter(w)
-	writer.WriteLine(data)
+	_ = writer.WriteLine(data)
 }
 
 func init() {

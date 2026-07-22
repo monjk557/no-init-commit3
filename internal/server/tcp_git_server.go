@@ -163,7 +163,7 @@ func (s *DuplexTCPServer) Stop() error {
 	// Close all active connections
 	s.mu.Lock()
 	for conn, progressConn := range s.connections {
-		progressConn.Close()
+		_ = progressConn.Close()
 		delete(s.connections, conn)
 	}
 	s.mu.Unlock()
@@ -178,7 +178,7 @@ func (s *DuplexTCPServer) handleConnection(conn net.Conn) {
 
 	// Create progress-aware connection wrapper
 	progressConn := connection.NewProgressAwareConnection(conn, s.timeoutPolicy, s.logger.Logger)
-	defer progressConn.Close()
+	defer func() { _ = progressConn.Close() }()
 
 	// Start with handshake phase
 	if err := progressConn.SetPhase(connection.PhaseHandshake); err != nil {
@@ -681,11 +681,9 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	_, _, userID, _ := conn.GetConnectionInfo()
 	s.publishRefChangeEvents(postPushCtx, repoPath, owner, repo, userID, refsBefore, refsAfter)
 
-	// Asynchronous git gc --auto: packs loose objects when threshold is exceeded
-	// (default: >6700 loose objects or >50 packs). Runs in background to avoid
-	// blocking the push response. Without this, repos accumulate loose objects
-	// and eventually pack-objects fails with exit status 128 during fetch.
-	// go s.runAutoGC(repoPath, tenantID)
+	// loose object / pack 누적 정리는 internal/maintenance 스케줄러가 임계값 기반
+	// 주기 스캔으로 담당한다 — push 경로에서 git gc --auto 를 띄우지 않는다.
+	// (여기 있던 비활성 runAutoGC 호출과 메서드는 Issue-6364 에서 제거)
 
 	return nil
 }
@@ -865,33 +863,6 @@ func (s *DuplexTCPServer) publishRefChangeEvents(
 	}
 }
 
-// runAutoGC runs `git gc --auto` on the repository in the background.
-// Only performs actual GC when git's internal thresholds are exceeded
-// (>6700 loose objects or >50 packs), otherwise returns immediately.
-func (s *DuplexTCPServer) runAutoGC(repoPath, tenantID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "git", "gc", "--auto")
-	cmd.Dir = repoPath
-
-	start := time.Now()
-	if err := cmd.Run(); err != nil {
-		s.logger.Warn("git gc --auto failed",
-			zap.String("repo", tenantID),
-			zap.String("repo_path", repoPath),
-			zap.Error(err))
-		return
-	}
-
-	duration := time.Since(start)
-	if duration > 1*time.Second {
-		s.logger.Info("git gc --auto completed",
-			zap.String("repo", tenantID),
-			zap.Duration("duration", duration))
-	}
-}
-
 // handleLFSAuthenticate는 SSH 경유 LFS 인증 요청을 처리합니다.
 // Git LFS 클라이언트가 SSH push/pull 시 `git-lfs-authenticate <repo> upload/download`를 호출하면
 // LFS Batch API의 URL과 인증 정보를 JSON으로 반환합니다.
@@ -1011,7 +982,7 @@ func (s *DuplexTCPServer) cleanupConnections() {
 			if !progressConn.IsAlive() {
 				s.logger.Debug("Cleaning up unhealthy connection",
 					zap.String("remote_addr", conn.RemoteAddr().String()))
-				progressConn.Close()
+				_ = progressConn.Close()
 				delete(s.connections, conn)
 			}
 		}

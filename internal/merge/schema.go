@@ -78,25 +78,6 @@ type MergeResult struct {
 	ConflictAnalysis *MergeAnalysisResult
 }
 
-// mergeFileEntry represents a file's state in base, source, and target
-type mergeFileEntry struct {
-	path       string
-	baseHash   string
-	baseMode   string
-	sourceHash string
-	sourceMode string
-	targetHash string
-	targetMode string
-}
-
-// mergeTreeEntry represents a tree entry's state in base, source, and target
-type mergeTreeEntry struct {
-	name        string
-	baseEntry   *NativeTreeEntry
-	sourceEntry *NativeTreeEntry
-	targetEntry *NativeTreeEntry
-}
-
 // ConflictType은 Merge 충돌의 유형을 나타냅니다.
 type ConflictType string
 

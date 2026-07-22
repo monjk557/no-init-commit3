@@ -642,7 +642,7 @@ func Test_validateBasicPath_Variants(t *testing.T) {
 
 // =============================================================================
 // handler.go — HandleComparisonSummary / HandleGetCommitDetail (0% → covered)
-// adaptQuery + invokeTyped 헬퍼로 typed handler 호출.
+// invokeTyped 헬퍼로 typed handler 호출.
 // =============================================================================
 
 func Test_HandleComparisonSummary_Success(t *testing.T) {

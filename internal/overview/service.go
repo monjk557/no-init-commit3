@@ -855,7 +855,7 @@ func (s *RepositoryOverviewService) loadGitmodulesFromTree(gitRepo *gogit.Reposi
 	if err != nil {
 		return nil
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	content, err := io.ReadAll(reader)
 	if err != nil {
 		return nil

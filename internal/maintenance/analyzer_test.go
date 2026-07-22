@@ -2,11 +2,9 @@ package maintenance
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,18 +24,6 @@ func createTestBareRepo(t *testing.T) string {
 	require.NoError(t, err, "git init failed: %s", string(out))
 
 	return repoPath
-}
-
-// addLooseObjects creates loose objects in a test repo by writing blobs.
-func addLooseObjects(t *testing.T, repoPath string, count int) {
-	t.Helper()
-
-	for i := 0; i < count; i++ {
-		cmd := exec.Command("git", "--git-dir", repoPath, "hash-object", "-w", "--stdin")
-		cmd.Stdin = strings.NewReader(fmt.Sprintf("test content %d %d", i, time.Now().UnixNano()))
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "hash-object failed: %s", string(out))
-	}
 }
 
 func TestAnalyzer_AnalyzeRepository(t *testing.T) {
@@ -252,9 +238,7 @@ func TestAnalyzer_Plan_TaskOrdering(t *testing.T) {
 
 	// Verify task ordering: pack-refs → repack → commit-graph → midx
 	taskOrder := make([]MaintenanceTask, 0, len(plan.Tasks))
-	for _, task := range plan.Tasks {
-		taskOrder = append(taskOrder, task)
-	}
+	taskOrder = append(taskOrder, plan.Tasks...)
 
 	packRefsIdx := indexOf(taskOrder, TaskPackRefs)
 	repackIdx := indexOf(taskOrder, TaskGeometricRepack)

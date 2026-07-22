@@ -250,13 +250,9 @@ func (cd *ConflictDetector) buildFileConflict(ctx context.Context, repoPath, pat
 	// Determine file existence and build versions
 	sourceExists := sourceDiff != nil && sourceDiff.Status != "D"
 	targetExists := targetDiff != nil && targetDiff.Status != "D"
-	baseExists := true // if we have diffs from base, base existed for modified/deleted files
-	if sourceDiff != nil && sourceDiff.Status == "A" {
-		baseExists = false
-	}
-	if targetDiff != nil && targetDiff.Status == "A" {
-		baseExists = false
-	}
+	// if we have diffs from base, base existed for modified/deleted files
+	baseExists := (sourceDiff == nil || sourceDiff.Status != "A") &&
+		(targetDiff == nil || targetDiff.Status != "A")
 
 	conflict.OurVersion = buildFileVersionFromDiff(sourceDiff, true)
 	conflict.TheirVersion = buildFileVersionFromDiff(targetDiff, false)

@@ -257,7 +257,6 @@ func TestProgressAwareTimeout_StallDetection(t *testing.T) {
 
 	buffer := make([]byte, 512)
 	totalRead := 0
-	stallDetected := false
 	startTime := time.Now()
 
 	// Read until stall is detected or timeout
@@ -288,8 +287,7 @@ func TestProgressAwareTimeout_StallDetection(t *testing.T) {
 
 			// Check if stall was detected
 			tracker := conn.GetProgressTracker()
-			if tracker.IsStalled() && !stallDetected {
-				stallDetected = true
+			if tracker.IsStalled() {
 				stallTime := time.Since(startTime)
 				t.Logf("✅ Stall detected after %v, read %d bytes", stallTime, totalRead)
 
@@ -469,16 +467,4 @@ func BenchmarkProgressAwareConnection_ReadThroughput(b *testing.B) {
 			b.Fatalf("Expected %d bytes, read %d", len(data), totalRead)
 		}
 	}
-}
-
-// Helper function to create test data with specific patterns
-func createTestData(size int, pattern string) []byte {
-	data := make([]byte, size)
-	patternBytes := []byte(pattern)
-
-	for i := range data {
-		data[i] = patternBytes[i%len(patternBytes)]
-	}
-
-	return data
 }

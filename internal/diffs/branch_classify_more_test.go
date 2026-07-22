@@ -80,7 +80,7 @@ func TestHandleBranchDiff_PaginationOverride(t *testing.T) {
 	require.NotNil(t, resp.Pagination)
 	assert.Equal(t, 1, resp.Pagination.PageSize)
 	require.NotNil(t, resp.DiffResponse)
-	assert.LessOrEqual(t, len(resp.DiffResponse.Files), 1, "page_size=1 이면 한 파일만")
+	assert.LessOrEqual(t, len(resp.Files), 1, "page_size=1 이면 한 파일만")
 }
 
 func TestHandleBranchDiff_MissingBaseHeadParams(t *testing.T) {
