@@ -40,11 +40,7 @@ func NewRevertHandler(cfg *config.Config) (*RevertHandler, error) {
 
 	var eventsClient events.RedisStreamClient
 	if cfg.Events.Enabled {
-		eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
-		if err != nil {
-			logger.Warn("Failed to initialize Redis events client, continuing without events",
-				zap.Error(err))
-		}
+		eventsClient = events.NewLazyRedisStreamClient(cfg.Events, logger.Logger)
 	}
 
 	return &RevertHandler{
@@ -156,6 +152,12 @@ func (h *RevertHandler) publishRevertEvent(_ context.Context, repoPath string, r
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = h.eventsClient.AddCommitEventToStream(ctx, event)
+		if pubErr := h.eventsClient.AddCommitEventToStream(ctx, event); pubErr != nil {
+			h.logger.Error("Failed to publish revert commit event",
+				zap.String("repo_path", relativePath),
+				zap.String("commit", event.CommitHash),
+				zap.String("ref", refName),
+				zap.Error(pubErr))
+		}
 	}()
 }

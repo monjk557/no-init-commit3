@@ -74,11 +74,7 @@ func NewDuplexTCPServer(config *config.Config, cc *connection.ConcurrencyControl
 	// Initialize events client if enabled
 	var eventsClient events.RedisStreamClient
 	if config.Events.Enabled {
-		eventsClient, err = events.NewRedisStreamClientFromConfig(config.Events, logger.Logger)
-		if err != nil {
-			logger.Warn("Failed to initialize Redis events client, continuing without events",
-				zap.Error(err))
-		}
+		eventsClient = events.NewLazyRedisStreamClient(config.Events, logger.Logger)
 	}
 
 	// Initialize metrics collector

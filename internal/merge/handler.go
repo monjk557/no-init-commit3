@@ -59,11 +59,7 @@ func NewMergeOperationsHandler(cfg *config.Config) (*MergeOperationsHandler, err
 
 	var eventsClient events.RedisStreamClient
 	if cfg.Events.Enabled {
-		eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
-		if err != nil {
-			logger.Warn("Failed to initialize Redis events client, continuing without events",
-				zap.Error(err))
-		}
+		eventsClient = events.NewLazyRedisStreamClient(cfg.Events, logger.Logger)
 	}
 
 	return &MergeOperationsHandler{
@@ -601,7 +597,14 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(_ context.Context, repo
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = h.eventsClient.AddCommitEventToStream(ctx, event)
+		if err := h.eventsClient.AddCommitEventToStream(ctx, event); err != nil {
+			// 발행 실패는 파이프라인 미실행으로 이어진다 — 반드시 남긴다 (Issue-6414).
+			h.logger.Error("Failed to publish merge commit event",
+				zap.String("repo_path", relativePath),
+				zap.String("commit", commit.Hash),
+				zap.String("ref", refName),
+				zap.Error(err))
+		}
 	}()
 }
 

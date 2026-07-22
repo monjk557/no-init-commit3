@@ -19,7 +19,6 @@ import (
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/collabops/git-executor/internal/ruleguard"
-	"go.uber.org/zap"
 )
 
 // ReceivePackRequest represents a parsed receive-pack request from the client
@@ -64,11 +63,7 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 	if cfg.Events.Enabled {
 		logger, err := logging.NewLogger(cfg.Logging)
 		if err == nil {
-			eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
-			if err != nil {
-				logger.Warn("Failed to initialize Redis events client, continuing without events",
-					zap.Error(err))
-			}
+			eventsClient = events.NewLazyRedisStreamClient(cfg.Events, logger.Logger)
 		}
 	}
 

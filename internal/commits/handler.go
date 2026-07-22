@@ -12,7 +12,6 @@ import (
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 // CommitsHandler는 Git 커밋 로그 REST API 엔드포인트를 처리합니다.
@@ -46,11 +45,7 @@ func NewCommitsHandler(cfg *config.Config) (*CommitsHandler, error) {
 
 	var eventsClient events.RedisStreamClient
 	if cfg.Events.Enabled {
-		eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
-		if err != nil {
-			logger.Warn("Failed to initialize Redis events client, continuing without events",
-				zap.Error(err))
-		}
+		eventsClient = events.NewLazyRedisStreamClient(cfg.Events, logger.Logger)
 	}
 
 	service := NewCommitsService(logger, transactionManager, eventsClient)

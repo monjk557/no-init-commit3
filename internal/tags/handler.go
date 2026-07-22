@@ -13,7 +13,6 @@ import (
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 // userIDHeader carries the acting user, forwarded by the gateway/orchestrator.
@@ -41,12 +40,7 @@ func NewTagsHandler(cfg *config.Config) (*TagsHandler, error) {
 		if lerr != nil {
 			return nil, fmt.Errorf("failed to create logger: %w", lerr)
 		}
-		eventsClient, err = events.NewRedisStreamClientFromConfig(cfg.Events, logger.Logger)
-		if err != nil {
-			logger.Warn("Failed to initialize Redis events client for tags, continuing without events",
-				zap.Error(err))
-			eventsClient = nil
-		}
+		eventsClient = events.NewLazyRedisStreamClient(cfg.Events, logger.Logger)
 	}
 
 	return &TagsHandler{pathConfig: pathConfig, eventsClient: eventsClient}, nil

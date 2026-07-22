@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,13 +68,18 @@ func TestNewTagsHandler_EventsEnabled_RedisUnconfigured_DegradesToNoop(t *testin
 	cfg.Logging = config.LoggingConfig{
 		Level: "error", Format: "text", Output: "stdout", Development: true,
 	}
-	// Events.Enabled 이지만 NodeAddress / RedisURL 미설정 →
-	// NewRedisStreamClientFromConfig 가 즉시 에러(연결 시도 없음) → Warn 후
-	// eventsClient=nil 로 degrade 하고 handler 는 정상 반환되어야 한다.
+	// Events.Enabled 이지만 NodeAddress / RedisURL 미설정 → lazy 클라이언트가
+	// 붙어 있고, 실제 발행 시점에 에러로 degrade 한다 (Issue-6414: 생성 시점
+	// 연결 실패로 eventsClient 를 영구 nil 로 두지 않는다).
 	cfg.Events = config.EventsConfig{Enabled: true}
 
 	h, err := NewTagsHandler(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	assert.Nil(t, h.eventsClient, "unreachable Redis config should degrade to nil events client")
+	require.NotNil(t, h.eventsClient, "events client must stay wired so it can reconnect later")
+	assert.Error(t,
+		h.eventsClient.AddCommitEventToStream(context.Background(), &events.CommitEvent{
+			RepoPath: "ws/repo.git", EventType: events.EventTypeTagPush, CommitHash: "abc", RefName: "refs/tags/v1",
+		}),
+		"unreachable Redis should surface a publish error, not panic")
 }

@@ -108,9 +108,13 @@ func Test_NewBranchOperationsHandler_EventsEnabled_NoAddress_WarnsAndContinues(t
 
 	h, err := NewBranchOperationsHandler(cfg)
 
-	// 이벤트 클라이언트 초기화 실패는 치명적이지 않다 — 핸들러는 생성되고
-	// eventsClient 는 nil 로 남는다.
+	// 이벤트 클라이언트 연결 실패는 치명적이지 않다 — 핸들러는 생성되고,
+	// 클라이언트는 lazy 로 남아 발행 시점에 에러로 degrade 한다 (Issue-6414:
+	// 생성 시점 연결 실패로 eventsClient 를 영구 nil 로 두지 않는다).
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Nil(t, h.eventsClient)
+	require.NotNil(t, h.eventsClient)
+	require.Error(t, h.eventsClient.AddCommitEventToStream(context.Background(), &events.CommitEvent{
+		RepoPath: "ws/repo.git", EventType: events.EventTypeBranchDelete, CommitHash: "abc", RefName: "refs/heads/x",
+	}))
 }
