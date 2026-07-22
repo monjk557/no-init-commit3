@@ -490,11 +490,13 @@ func (h *DiffHandler) HandleExpandContext(c *gin.Context, req ExpandContextReque
 	}
 
 	ref := rr.HeadHash
+	readNewSide := true
 	if side := c.Query("side"); side == "old" {
 		ref = rr.EffectiveBase
+		readNewSide = false
 	}
 
-	response, err := nativeExpandContextLines(ctx, repoPath, ref, filePath, fromOld, toOld, fromNew)
+	response, err := nativeExpandContextLines(ctx, repoPath, ref, filePath, fromOld, toOld, fromNew, readNewSide)
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "not found") {

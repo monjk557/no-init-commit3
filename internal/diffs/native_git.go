@@ -1006,7 +1006,12 @@ func parseFileStatus(line string) FileDiffStatus {
 
 // nativeExpandContextLines는 blob에서 특정 라인 범위만 읽어 CONTEXT LineChange로 반환합니다.
 // git diff를 실행하지 않고 blob 단일 읽기만 수행하므로 매우 경량입니다.
-func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, fromOld, toOld, fromNew int) (*ExpandContextResponse, error) {
+//
+// readNewSide는 ref가 어느 side의 스냅샷인지를 알려줍니다 (head blob이면 true).
+// blob은 한쪽 side의 파일이므로 반드시 그 side의 라인 번호로 슬라이스해야 합니다 —
+// head blob을 old 라인 번호로 자르면 hunk 앞쪽 순증감(fromNew-fromOld)만큼
+// 어긋난 구간이 반환됩니다 (Issue-6404).
+func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, fromOld, toOld, fromNew int, readNewSide bool) (*ExpandContextResponse, error) {
 	// blob 내용 읽기 (git show ref:path)
 	refHash, err := nativeResolveRef(ctx, repoPath, ref)
 	if err != nil {
@@ -1025,10 +1030,22 @@ func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, f
 	if fromOld < 1 {
 		fromOld = 1
 	}
-	if toOld > totalLines {
-		toOld = totalLines
+	if fromNew < 1 {
+		fromNew = 1
 	}
-	if fromOld > toOld {
+
+	// blob에서 실제로 읽을 시작 라인은 ref의 side를 따른다. 라벨(Left/Right)은
+	// 요청된 fromOld/fromNew를 그대로 유지 — gap 구간은 양쪽 내용이 동일하고
+	// 두 번호의 차이만 일정하다.
+	readFrom := fromOld
+	if readNewSide {
+		readFrom = fromNew
+	}
+	count := toOld - fromOld + 1
+	if readFrom+count-1 > totalLines {
+		count = totalLines - readFrom + 1
+	}
+	if count < 1 {
 		return &ExpandContextResponse{
 			Success:  true,
 			Lines:    []LineChange{},
@@ -1040,10 +1057,10 @@ func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, f
 	}
 
 	// LineChange 생성 (0-based 인덱스 변환)
-	result := make([]LineChange, 0, toOld-fromOld+1)
+	result := make([]LineChange, 0, count)
 	oldLine := fromOld
 	newLine := fromNew
-	for i := fromOld - 1; i < toOld; i++ {
+	for i := readFrom - 1; i < readFrom-1+count; i++ {
 		// Text는 마커 접두사 없이 순수 라인 내용만 — Type=CONTEXT로 구분.
 		result = append(result, LineChange{
 			Type:           LineChangeTypeContext,

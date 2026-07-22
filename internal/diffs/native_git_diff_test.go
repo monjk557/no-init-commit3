@@ -145,7 +145,7 @@ func TestNativeExpandContextLines_ReturnsRequestedRange(t *testing.T) {
 	ctx := context.Background()
 
 	// secondSHA 의 existing.txt 는 "First line\nSecond line\n" (2줄).
-	resp, err := nativeExpandContextLines(ctx, repoPath, secondSHA, "existing.txt", 1, 2, 1)
+	resp, err := nativeExpandContextLines(ctx, repoPath, secondSHA, "existing.txt", 1, 2, 1, true)
 	require.NoError(t, err)
 	require.True(t, resp.Success)
 	assert.Equal(t, "existing.txt", resp.Path)
@@ -163,7 +163,7 @@ func TestNativeExpandContextLines_ClampsToFileLength(t *testing.T) {
 	ctx := context.Background()
 
 	// toOld=100 은 파일 길이(2)로 클램핑.
-	resp, err := nativeExpandContextLines(ctx, repoPath, secondSHA, "existing.txt", 1, 100, 1)
+	resp, err := nativeExpandContextLines(ctx, repoPath, secondSHA, "existing.txt", 1, 100, 1, true)
 	require.NoError(t, err)
 	assert.Equal(t, 2, resp.Count)
 }
@@ -173,7 +173,7 @@ func TestNativeExpandContextLines_EmptyWhenFromGreaterThanTo(t *testing.T) {
 	ctx := context.Background()
 
 	// fromOld(5) > 클램핑된 toOld(2) → 빈 결과.
-	resp, err := nativeExpandContextLines(ctx, repoPath, secondSHA, "existing.txt", 5, 100, 5)
+	resp, err := nativeExpandContextLines(ctx, repoPath, secondSHA, "existing.txt", 5, 100, 5, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, resp.Count)
 	assert.Empty(t, resp.Lines)
@@ -181,13 +181,13 @@ func TestNativeExpandContextLines_EmptyWhenFromGreaterThanTo(t *testing.T) {
 
 func TestNativeExpandContextLines_BadRef(t *testing.T) {
 	repoPath, _, _ := twoCommitRepo(t)
-	_, err := nativeExpandContextLines(context.Background(), repoPath, "no-such-ref", "existing.txt", 1, 2, 1)
+	_, err := nativeExpandContextLines(context.Background(), repoPath, "no-such-ref", "existing.txt", 1, 2, 1, true)
 	require.Error(t, err)
 }
 
 func TestNativeExpandContextLines_FileNotFound(t *testing.T) {
 	repoPath, _, secondSHA := twoCommitRepo(t)
-	_, err := nativeExpandContextLines(context.Background(), repoPath, secondSHA, "missing.txt", 1, 2, 1)
+	_, err := nativeExpandContextLines(context.Background(), repoPath, secondSHA, "missing.txt", 1, 2, 1, true)
 	require.Error(t, err)
 }
 
@@ -238,4 +238,45 @@ func TestService_GeneratePatch_ProducesUnifiedDiff(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, patch, "existing.txt")
 	assert.Contains(t, patch, "+Second line")
+}
+
+// TestNativeExpandContextLines_HeadBlobSlicedByNewSide 는 Issue-6404 회귀 박제:
+// hunk 앞쪽에서 순증한 라인 때문에 old/new 번호가 어긋난 파일에서 head blob 을
+// old 번호로 자르면 엉뚱한 구간이 나온다. 반드시 new 번호로 잘라야 한다.
+func TestNativeExpandContextLines_HeadBlobSlicedByNewSide(t *testing.T) {
+	tempDir := t.TempDir()
+	repoPath := filepath.Join(tempDir, "owner", "repo.git")
+	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
+
+	repo, err := gogit.PlainInit(repoPath, true)
+	require.NoError(t, err)
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// base: 3 줄. head: 앞에 2 줄이 추가되어 old N == new N+2.
+	b1 := makeBlob(t, repo, []byte("old1\nold2\nold3\n"))
+	t1 := makeTree(t, repo, []object.TreeEntry{{Name: "f.txt", Mode: 0100644, Hash: b1}})
+	c1 := makeCommit(t, repo, "base", t1, nil, now)
+
+	b2 := makeBlob(t, repo, []byte("added1\nadded2\nold1\nold2\nold3\n"))
+	t2 := makeTree(t, repo, []object.TreeEntry{{Name: "f.txt", Mode: 0100644, Hash: b2}})
+	c2 := makeCommit(t, repo, "head", t2, []plumbing.Hash{c1}, now)
+
+	// old 2..3 == new 4..5 구간을 head blob 에서 펼친다.
+	resp, err := nativeExpandContextLines(context.Background(), repoPath,
+		c2.String(), "f.txt", 2, 3, 4, true)
+	require.NoError(t, err)
+	require.Len(t, resp.Lines, 2)
+	assert.Equal(t, "old2", resp.Lines[0].Text)
+	assert.Equal(t, "old3", resp.Lines[1].Text)
+	// 라벨은 요청한 old/new 번호를 그대로 유지.
+	assert.Equal(t, 2, *resp.Lines[0].Left)
+	assert.Equal(t, 4, *resp.Lines[0].Right)
+
+	// side=old (base blob) 는 old 번호로 잘라야 같은 구간이 나온다.
+	oldResp, err := nativeExpandContextLines(context.Background(), repoPath,
+		c1.String(), "f.txt", 2, 3, 4, false)
+	require.NoError(t, err)
+	require.Len(t, oldResp.Lines, 2)
+	assert.Equal(t, "old2", oldResp.Lines[0].Text)
+	assert.Equal(t, "old3", oldResp.Lines[1].Text)
 }
