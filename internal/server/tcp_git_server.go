@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/connection"
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/hooks"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/middleware"
 	"github.com/collabops/git-executor/internal/performance"
@@ -40,6 +43,10 @@ type DuplexTCPServer struct {
 	mu                    sync.RWMutex
 	logger                *logging.Logger
 	ruleClient            *ruleguard.Client
+	// hooksDir holds a shared core.hooksPath containing a "pre-receive" symlink to
+	// this executable. Empty when hook setup failed → SSH push validation degrades
+	// to Point-A only (fail-open). See docs/design/ssh-push-rule-enforcement.md.
+	hooksDir string
 }
 
 // Legacy DuplexConnection type alias for compatibility during migration
@@ -98,6 +105,16 @@ func NewDuplexTCPServer(config *config.Config, cc *connection.ConcurrencyControl
 		metrics:               metrics,
 		logger:                logger,
 		ruleClient:            ruleguard.NewClient(config.Orchestrator.BaseURL, config.Orchestrator.Timeout),
+	}
+
+	// Install the shared pre-receive hook dir (SSH push Point-B enforcement). On
+	// failure, hooksDir stays empty and SSH pushes degrade to Point-A only —
+	// fail-open, never blocking pushes on hook-setup trouble.
+	if dir, herr := hooks.EnsureHooksDir(filepath.Join(os.TempDir(), "collabops-git-hooks")); herr != nil {
+		logger.Warn("pre-receive hook setup failed; SSH push validation degrades to Point-A",
+			zap.Error(herr))
+	} else {
+		server.hooksDir = dir
 	}
 
 	logger.Info("Progress-aware Git executor server initialized",
@@ -551,6 +568,34 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 	return nil
 }
 
+// newReceivePackCmd builds the native `git receive-pack` command. When the shared
+// pre-receive hook is installed and this push carries the context needed to
+// validate (orchestrator configured, decision token + repo id present), it wires
+// the hook via `-c core.hooksPath` + GITEXEC_HOOK_* env so commit/file-fact rules
+// are enforced over SSH (Point-B parity). Otherwise it spawns plain receive-pack
+// — degrade-open, Point-A (branch-name) validation only.
+func (s *DuplexTCPServer) newReceivePackCmd(ctx context.Context, conn *connection.ProgressAwareConnection, repoPath string) *exec.Cmd {
+	repositoryID, workspaceSlug, decisionToken := conn.GetPushContext()
+	_, _, userID, _ := conn.GetConnectionInfo()
+
+	if s.hooksDir == "" || s.config.Orchestrator.BaseURL == "" || decisionToken == "" || repositoryID == "" {
+		return exec.CommandContext(ctx, "git", "receive-pack", repoPath)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath="+s.hooksDir, "receive-pack", repoPath)
+	// Inherit git's env (incl. the quarantine object dir it sets for the hook) and
+	// append the push context the hook needs to call /rules/validate.
+	cmd.Env = append(os.Environ(),
+		hooks.EnvRepoPath+"="+repoPath,
+		hooks.EnvRepoID+"="+repositoryID,
+		hooks.EnvWorkspaceSlug+"="+workspaceSlug,
+		hooks.EnvDecisionToken+"="+decisionToken,
+		hooks.EnvUserID+"="+userID,
+		hooks.EnvOrchestrator+"="+s.config.Orchestrator.BaseURL,
+	)
+	return cmd
+}
+
 // handleReceivePack delegates push to native git receive-pack.
 // After the process completes, a ref snapshot diff detects which refs changed
 // and publishes events + invalidates cache accordingly.
@@ -623,9 +668,11 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	// which can stall the wire for large pushes; use the lenient threshold.
 	conn.GetProgressTracker().SetPackObjectsPhase(true)
 
-	// Spawn native git receive-pack — tied to connection context
+	// Spawn native git receive-pack — tied to connection context. When enabled,
+	// this wires the pre-receive hook so commit/file-fact rules are enforced over
+	// SSH (Point-B parity with HTTP); otherwise plain receive-pack (Point-A only).
 	var stderrBuf bytes.Buffer
-	cmd := exec.CommandContext(ctx, "git", "receive-pack", repoPath)
+	cmd := s.newReceivePackCmd(ctx, conn, repoPath)
 	// Meter the rule-validated stream (gitStdin re-splices the command section
 	// consumed during validation ahead of the packfile — see validatePushSection)
 	// so transfer metrics still count the full wire git actually reads.

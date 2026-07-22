@@ -11,6 +11,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/connection"
+	"github.com/collabops/git-executor/internal/hooks"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/maintenance"
 	"github.com/collabops/git-executor/internal/server"
@@ -18,6 +19,13 @@ import (
 )
 
 func main() {
+	// pre-receive hook mode: when git invokes this binary as the pre-receive
+	// hook (argv[0] basename), do ONLY the hook and exit — no config/logger/server
+	// load. Context arrives via GITEXEC_HOOK_* env set by the receive-pack spawn.
+	if hooks.IsPreReceiveInvocation() {
+		os.Exit(hooks.RunPreReceive())
+	}
+
 	// CLI 플래그 파싱 - 헬스체크 옵션을 처리
 	var (
 		healthCheck = flag.Bool("health-check", false, "Perform health check and exit")
