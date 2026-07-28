@@ -20,7 +20,6 @@ package hooks
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -169,10 +168,11 @@ func parseRefLine(line string) (oldHash, newHash, ref string, ok bool) {
 	return fields[0], fields[1], fields[2], true
 }
 
-// validateRef mirrors receive_pack.go validatePushFacts for ONE ref: map the ref
-// to its target_type, build facts, and call /rules/validate. Returns a *Denied
-// only on an explicit rule violation; non-branch/tag refs and transport/timeout
-// errors return nil (allow — fail-open).
+// validateRef validates ONE ref for the SSH pre-receive hook by delegating to
+// ruleguard.ValidatePushRef — the single rule-factor check shared with the HTTP
+// receive-pack path (receive_pack.go validatePushFacts). Returns a *Denied only
+// on an explicit rule violation; non-branch/tag refs and transport/timeout
+// errors return nil (allow — fail-open, logged to the hook's stderr).
 func validateRef(
 	repoPath string,
 	client *ruleguard.Client,
@@ -180,34 +180,14 @@ func validateRef(
 	oldHash, newHash, ref string,
 	stderrW io.Writer,
 ) *ruleguard.Denied {
-	var name, targetType string
-	if b, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
-		name, targetType = b, "branch"
-	} else if t, ok := strings.CutPrefix(ref, "refs/tags/"); ok {
-		name, targetType = t, "tag"
-	} else {
-		return nil // refs/notes etc. — not a ruleset target.
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), validateTimeout)
 	defer cancel()
 
-	target := base
-	target.TargetType = targetType
-	target.Branch = name
-	// Annotated tags auto-peel in git plumbing, so the raw hash is fine (matches
-	// the HTTP Point-B path).
-	target.Context = ruleguard.BuildPushFacts(ctx, repoPath, oldHash, newHash, name)
-
-	err := client.ValidatePush(ctx, target)
-	if err == nil {
+	denied, err := ruleguard.ValidatePushRef(ctx, client, base, repoPath, oldHash, newHash, ref)
+	if err != nil {
+		// Transport / API / timeout error → fail-open.
+		fmt.Fprintf(stderrW, "GITEXEC-HOOK: validation error for %s (allowing): %v\n", ref, err)
 		return nil
 	}
-	var d *ruleguard.Denied
-	if errors.As(err, &d) {
-		return d
-	}
-	// Transport / API / timeout error → fail-open.
-	fmt.Fprintf(stderrW, "GITEXEC-HOOK: validation error for %s (allowing): %v\n", ref, err)
-	return nil
+	return denied
 }

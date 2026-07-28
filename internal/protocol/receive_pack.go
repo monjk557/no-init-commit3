@@ -5,7 +5,6 @@ package protocol
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,40 +103,13 @@ func pushAuthzFromRequest(r *http.Request) ruleguard.PushTarget {
 // outage never blocks pushes. The executor is the single choke point regardless
 // of transport.
 func (h *ReceivePackHandler) validatePushFacts(ctx context.Context, repoPath string, cmd RefUpdateCommand, authz ruleguard.PushTarget) *ruleguard.Denied {
-	if h.ruleClient == nil {
+	denied, err := ruleguard.ValidatePushRef(ctx, h.ruleClient, authz, repoPath, cmd.OldHash, cmd.NewHash, cmd.RefName)
+	if err != nil {
+		// Transport/API error: fail-open during dual-run (gateways enforce).
+		fmt.Printf("[receive-pack] rule validation error for %s (allowing — gateways enforce): %v\n", cmd.RefName, err)
 		return nil
 	}
-	// branch + tag ref 를 각각 해당 target_type 으로 검증한다. 그 외 ref
-	// (refs/notes 등)은 ruleset 대상이 아니므로 통과.
-	var refName, targetType string
-	if b, ok := strings.CutPrefix(cmd.RefName, "refs/heads/"); ok {
-		refName, targetType = b, "branch"
-	} else if t, ok := strings.CutPrefix(cmd.RefName, "refs/tags/"); ok {
-		refName, targetType = t, "tag"
-	} else {
-		return nil
-	}
-
-	// An annotated tag's OID is a tag object, not a commit, but every git plumbing
-	// call BuildPushFacts uses (cat-file commit, rev-list, merge-base) auto-peels
-	// a tag object to its target commit when the SHA is passed directly — so the
-	// tag/newHash needs no explicit peel here for commit/ref/file facts.
-	target := authz
-	target.TargetType = targetType
-	target.Branch = refName
-	target.Context = ruleguard.BuildPushFacts(ctx, repoPath, cmd.OldHash, cmd.NewHash, refName)
-
-	err := h.ruleClient.ValidatePush(ctx, target)
-	if err == nil {
-		return nil
-	}
-	var denied *ruleguard.Denied
-	if errors.As(err, &denied) {
-		return denied // rule violation → reject this ref
-	}
-	// Transport/API error: fail-open during dual-run (gateways enforce).
-	fmt.Printf("[receive-pack] rule validation error for %s (allowing — gateways enforce): %v\n", cmd.RefName, err)
-	return nil
+	return denied
 }
 
 // HandleInfoRefs handles Smart HTTP discovery for receive-pack (push).

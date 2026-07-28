@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -169,6 +170,56 @@ func (c *Client) ValidatePush(ctx context.Context, t PushTarget) error {
 	default:
 		return fmt.Errorf("ruleguard validate: status %d, body: %s", resp.StatusCode, truncate(respBody, 200))
 	}
+}
+
+// ValidatePushRef enforces repository/ruleset git-factors on ONE ref update:
+// it maps the ref to its target_type, builds push facts from the pushed objects
+// (BuildPushFacts), and calls the orchestrator. This is the single rule-factor
+// validation used by every push entry point (SSH pre-receive hook + HTTP
+// receive-pack handler) so the check is implemented once, not per-transport.
+//
+// Returns:
+//   - (*Denied, nil)  — rule violation; caller rejects the ref.
+//   - (nil, nil)      — allowed, OR ref is not a branch/tag (not a ruleset target),
+//     OR client is nil.
+//   - (nil, err)      — transport/API/timeout error. Callers fail-open (allow) and
+//     log in their own style; validation-service outage never blocks a push.
+//
+// Annotated tags auto-peel in git plumbing (cat-file/rev-list/merge-base), so the
+// raw newHash needs no explicit peel for commit/ref/file facts.
+func ValidatePushRef(
+	ctx context.Context,
+	client *Client,
+	base PushTarget,
+	repoPath, oldHash, newHash, ref string,
+) (*Denied, error) {
+	if client == nil {
+		return nil, nil
+	}
+
+	var name, targetType string
+	if b, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		name, targetType = b, "branch"
+	} else if t, ok := strings.CutPrefix(ref, "refs/tags/"); ok {
+		name, targetType = t, "tag"
+	} else {
+		return nil, nil // refs/notes etc. — not a ruleset target.
+	}
+
+	target := base
+	target.TargetType = targetType
+	target.Branch = name
+	target.Context = BuildPushFacts(ctx, repoPath, oldHash, newHash, name)
+
+	err := client.ValidatePush(ctx, target)
+	if err == nil {
+		return nil, nil
+	}
+	var d *Denied
+	if errors.As(err, &d) {
+		return d, nil
+	}
+	return nil, err // transport/API error — caller logs + fail-open.
 }
 
 func reasonFromBody(body []byte, branch string) string {
