@@ -236,6 +236,11 @@ type ProgressAwareConnection struct {
 	repositoryID  string
 	workspaceSlug string
 	decisionToken string
+	// rule bundle (Phase-1 local eval, §5.1) — carried on the same handshake as the
+	// push context, but kept in separate fields so SetPushContext's signature (and
+	// its callers/tests) stays unchanged.
+	ruleBundle         string
+	ruleBundleOverflow bool
 
 	// Lifecycle management
 	ctx      context.Context
@@ -463,6 +468,21 @@ func (pac *ProgressAwareConnection) SetPushContext(repositoryID, workspaceSlug, 
 // GetPushContext returns the rule-validation context for this connection.
 func (pac *ProgressAwareConnection) GetPushContext() (repositoryID, workspaceSlug, decisionToken string) {
 	return pac.repositoryID, pac.workspaceSlug, pac.decisionToken
+}
+
+// SetRuleBundle stores the encoded rule bundle (base64(gzip(json))) and overflow
+// flag parsed from the ssh handshake tokens `rule-bundle=` / `rule-bundle-overflow=1`
+// (git-ssh gateway, task 4). Mutually exclusive at the source: overflow=true means
+// the gateway dropped an over-ceiling bundle, so `bundle` is empty.
+func (pac *ProgressAwareConnection) SetRuleBundle(bundle string, overflow bool) {
+	pac.ruleBundle = bundle
+	pac.ruleBundleOverflow = overflow
+}
+
+// GetRuleBundle returns the encoded rule bundle and overflow flag for this
+// connection (empty / false when the gateway sent neither token).
+func (pac *ProgressAwareConnection) GetRuleBundle() (bundle string, overflow bool) {
+	return pac.ruleBundle, pac.ruleBundleOverflow
 }
 
 // GetProgressTracker returns the progress tracker for direct manipulation

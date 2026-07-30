@@ -286,6 +286,8 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *connection.ProgressAwareConnec
 	// Parse optional key=value tokens (e.g., host=..., user-id=..., and the push
 	// rule-validation context: repository-id / workspace-slug / decision-token).
 	var pcRepositoryID, pcWorkspaceSlug, pcDecisionToken string
+	var pcRuleBundle string
+	var pcRuleBundleOverflow bool
 	for _, raw := range parts0[1:] {
 		tok := strings.TrimSpace(string(raw))
 		if tok == "" {
@@ -310,10 +312,19 @@ func (s *DuplexTCPServer) handleGitProtocol(conn *connection.ProgressAwareConnec
 			pcWorkspaceSlug = v
 		case "decision-token", "decision_token":
 			pcDecisionToken = v
+		case "rule-bundle", "rule_bundle":
+			// encoded bundle (base64(gzip(json))) from git-ssh gateway (task 4).
+			pcRuleBundle = v
+		case "rule-bundle-overflow", "rule_bundle_overflow":
+			// gateway dropped an over-ceiling bundle → executor falls back to remote.
+			pcRuleBundleOverflow = v == "1"
 		}
 	}
 	if pcRepositoryID != "" || pcWorkspaceSlug != "" || pcDecisionToken != "" {
 		conn.SetPushContext(pcRepositoryID, pcWorkspaceSlug, pcDecisionToken)
+	}
+	if pcRuleBundle != "" || pcRuleBundleOverflow {
+		conn.SetRuleBundle(pcRuleBundle, pcRuleBundleOverflow)
 	}
 
 	// 첫 토큰: "<service> /owner/repo.git"
@@ -589,6 +600,14 @@ func (s *DuplexTCPServer) newReceivePackCmd(ctx context.Context, conn *connectio
 		hooks.EnvUserID+"="+userID,
 		hooks.EnvOrchestrator+"="+s.config.Orchestrator.BaseURL,
 	)
+	// Phase-1 shadow rule bundle (§10): forwarded from the git-ssh handshake token
+	// so the hook can evaluate locally and compare against the remote verdict. Only
+	// set when present — absence → hook logs BundleAbsent + stays remote-authoritative.
+	if bundle, overflow := conn.GetRuleBundle(); overflow {
+		cmd.Env = append(cmd.Env, hooks.EnvRuleBundleOverflow+"=1")
+	} else if bundle != "" {
+		cmd.Env = append(cmd.Env, hooks.EnvRuleBundle+"="+bundle)
+	}
 	return cmd
 }
 

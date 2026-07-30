@@ -1,0 +1,79 @@
+{
+  "_doc": {
+    "purpose": "Golden truth-table for the rule AST interpreter (EvaluateExpression / engine.py evaluate_expression). expected_* = SPEC, not a snapshot.",
+    "drift": "This file is the cross-language contract of design §7.1. api-service SHOULD adopt the SAME file (drive its engine.py test from it) so a divergence between the Python and Go interpreters fails CI on BOTH sides. Until then it lives here and must be kept in sync by hand when engine.py changes.",
+    "schema": {
+      "id": "unique string",
+      "ast": "rule expression AST (object, or bare list = all)",
+      "facts": "flat dotted-key facts consumed by the interpreter",
+      "expected_matched": "bool — deny condition matched",
+      "expected_missing": "sorted list of fact paths referenced but absent (default [])"
+    }
+  },
+  "cases": [
+    { "id": "empty_ast", "ast": {}, "facts": {}, "expected_matched": false },
+    { "id": "bare_list_all_true", "ast": [ {"op":"==","left":"action","right":"push"}, {"op":"==","left":"branch.name","right":"main"} ], "facts": {"action":"push","branch.name":"main"}, "expected_matched": true },
+    { "id": "bare_list_all_false", "ast": [ {"op":"==","left":"action","right":"push"}, {"op":"==","left":"branch.name","right":"main"} ], "facts": {"action":"push","branch.name":"dev"}, "expected_matched": false },
+
+    { "id": "eq_true", "ast": {"op":"==","left":"action","right":"push"}, "facts": {"action":"push"}, "expected_matched": true },
+    { "id": "eq_false", "ast": {"op":"==","left":"action","right":"push"}, "facts": {"action":"pull"}, "expected_matched": false },
+    { "id": "eq_bool_true", "ast": {"op":"==","left":"commit.is_force_push","right":true}, "facts": {"commit.is_force_push":true}, "expected_matched": true },
+    { "id": "eq_bool_false_deny_when_not_force", "ast": {"op":"==","left":"ref.is_creation","right":true}, "facts": {"ref.is_creation":false}, "expected_matched": false },
+    { "id": "neq_true", "ast": {"op":"!=","left":"branch.name","right":"main"}, "facts": {"branch.name":"dev"}, "expected_matched": true },
+    { "id": "neq_false", "ast": {"op":"!=","left":"branch.name","right":"main"}, "facts": {"branch.name":"main"}, "expected_matched": false },
+
+    { "id": "gt_true_filesize", "ast": {"op":">","left":"push.max_file_size_mb","right":5}, "facts": {"push.max_file_size_mb":10.5}, "expected_matched": true },
+    { "id": "gt_false_filesize", "ast": {"op":">","left":"push.max_file_size_mb","right":5}, "facts": {"push.max_file_size_mb":3}, "expected_matched": false },
+    { "id": "gte_true", "ast": {"op":">=","left":"push.max_file_size_mb","right":5}, "facts": {"push.max_file_size_mb":5}, "expected_matched": true },
+    { "id": "lt_role_below_min_deny", "ast": {"op":"<","left":"actor.repo_role_rank","right":2}, "facts": {"actor.repo_role_rank":1}, "expected_matched": true },
+    { "id": "lt_role_at_min_allow", "ast": {"op":"<","left":"actor.repo_role_rank","right":2}, "facts": {"actor.repo_role_rank":2}, "expected_matched": false },
+    { "id": "lt_role_zero_unknown_deny", "ast": {"op":"<","left":"actor.workspace_role_rank","right":1}, "facts": {"actor.workspace_role_rank":0}, "expected_matched": true },
+    { "id": "lte_true", "ast": {"op":"<=","left":"change_request.linked_issue_count","right":0}, "facts": {"change_request.linked_issue_count":0}, "expected_matched": true },
+    { "id": "cmp_type_mismatch_safe_false", "ast": {"op":">","left":"branch.name","right":5}, "facts": {"branch.name":"main"}, "expected_matched": false },
+
+    { "id": "in_true", "ast": {"op":"in","left":"branch.name","right":["main","release"]}, "facts": {"branch.name":"main"}, "expected_matched": true },
+    { "id": "in_false", "ast": {"op":"in","left":"branch.name","right":["main","release"]}, "facts": {"branch.name":"dev"}, "expected_matched": false },
+    { "id": "in_right_null_false", "ast": {"op":"in","left":"branch.name","right":null}, "facts": {"branch.name":"main"}, "expected_matched": false },
+    { "id": "not_in_true", "ast": {"op":"not_in","left":"branch.name","right":["main"]}, "facts": {"branch.name":"dev"}, "expected_matched": true },
+    { "id": "not_in_false", "ast": {"op":"not_in","left":"branch.name","right":["main"]}, "facts": {"branch.name":"main"}, "expected_matched": false },
+    { "id": "not_in_right_null_true", "ast": {"op":"not_in","left":"branch.name","right":null}, "facts": {"branch.name":"main"}, "expected_matched": true },
+
+    { "id": "contains_string_true", "ast": {"op":"contains","left":"commit.message","right":"WIP"}, "facts": {"commit.message":"WIP: draft"}, "expected_matched": true },
+    { "id": "contains_string_false", "ast": {"op":"contains","left":"commit.message","right":"WIP"}, "facts": {"commit.message":"final"}, "expected_matched": false },
+    { "id": "contains_list_true", "ast": {"op":"contains","left":"push.file_paths","right":"a.txt"}, "facts": {"push.file_paths":["a.txt","b.go"]}, "expected_matched": true },
+    { "id": "contains_list_false", "ast": {"op":"contains","left":"push.file_paths","right":"z.txt"}, "facts": {"push.file_paths":["a.txt","b.go"]}, "expected_matched": false },
+
+    { "id": "starts_with_true", "ast": {"op":"starts_with","left":"branch.name","right":"feature/"}, "facts": {"branch.name":"feature/x"}, "expected_matched": true },
+    { "id": "starts_with_false", "ast": {"op":"starts_with","left":"branch.name","right":"feature/"}, "facts": {"branch.name":"hotfix/x"}, "expected_matched": false },
+    { "id": "ends_with_true", "ast": {"op":"ends_with","left":"commit.author.email","right":"@corp.com"}, "facts": {"commit.author.email":"a@corp.com"}, "expected_matched": true },
+
+    { "id": "glob_star_crosses_slash", "ast": {"op":"glob","left":"branch.name","right":"release*"}, "facts": {"branch.name":"release/1.0"}, "expected_matched": true },
+    { "id": "glob_star_mid", "ast": {"op":"glob","left":"push.file_paths_one","right":"*.env"}, "facts": {"push.file_paths_one":"config/prod.env"}, "expected_matched": true },
+    { "id": "glob_question", "ast": {"op":"glob","left":"tag.name","right":"v?"}, "facts": {"tag.name":"v3"}, "expected_matched": true },
+    { "id": "glob_charclass_true", "ast": {"op":"glob","left":"tag.name","right":"v[0-9]*"}, "facts": {"tag.name":"v2-beta"}, "expected_matched": true },
+    { "id": "glob_charclass_false", "ast": {"op":"glob","left":"tag.name","right":"v[0-9]*"}, "facts": {"tag.name":"vx"}, "expected_matched": false },
+    { "id": "glob_negclass_true", "ast": {"op":"glob","left":"tag.name","right":"[!0-9]*"}, "facts": {"tag.name":"x1"}, "expected_matched": true },
+    { "id": "glob_negclass_false", "ast": {"op":"glob","left":"tag.name","right":"[!0-9]*"}, "facts": {"tag.name":"9x"}, "expected_matched": false },
+    { "id": "glob_non_string_left_false", "ast": {"op":"glob","left":"push.max_file_size_mb","right":"1*"}, "facts": {"push.max_file_size_mb":10}, "expected_matched": false },
+
+    { "id": "matches_unanchored_true", "ast": {"op":"matches","left":"commit.author.email","right":"@evil\\.com"}, "facts": {"commit.author.email":"a@evil.com"}, "expected_matched": true },
+    { "id": "matches_false", "ast": {"op":"matches","left":"commit.author.email","right":"@evil\\.com"}, "facts": {"commit.author.email":"a@corp.com"}, "expected_matched": false },
+    { "id": "matches_bad_pattern_false", "ast": {"op":"matches","left":"commit.message","right":"("}, "facts": {"commit.message":"anything"}, "expected_matched": false },
+    { "id": "deny_unless_matches_missing_msg", "ast": {"not":{"op":"matches","left":"commit.message","right":"^JIRA-"}}, "facts": {"branch.name":"main"}, "expected_matched": true, "expected_missing": ["commit.message"] },
+
+    { "id": "any_matches_true", "ast": {"op":"any_matches","left":"push.file_paths","right":"\\.env$"}, "facts": {"push.file_paths":["a.env","b.txt"]}, "expected_matched": true },
+    { "id": "any_matches_false", "ast": {"op":"any_matches","left":"push.file_paths","right":"\\.env$"}, "facts": {"push.file_paths":["a.txt","b.go"]}, "expected_matched": false },
+    { "id": "any_matches_nonlist_false", "ast": {"op":"any_matches","left":"commit.message","right":"x"}, "facts": {"commit.message":"x"}, "expected_matched": false },
+
+    { "id": "unknown_op_false", "ast": {"op":"regex_fullmatch","left":"branch.name","right":"main"}, "facts": {"branch.name":"main"}, "expected_matched": false },
+    { "id": "left_not_string_false", "ast": {"op":"==","left":5,"right":5}, "facts": {}, "expected_matched": false },
+    { "id": "missing_fact_records_and_false", "ast": {"op":"==","left":"branch.name","right":"main"}, "facts": {"action":"push"}, "expected_matched": false, "expected_missing": ["branch.name"] },
+
+    { "id": "all_true", "ast": {"all":[{"op":"==","left":"action","right":"push"},{"op":"==","left":"branch.name","right":"main"}]}, "facts": {"action":"push","branch.name":"main"}, "expected_matched": true },
+    { "id": "all_short_circuit_missing", "ast": {"all":[{"op":"==","left":"action","right":"pull"},{"op":"==","left":"branch.name","right":"main"}]}, "facts": {"action":"push","branch.name":"main"}, "expected_matched": false },
+    { "id": "any_true", "ast": {"any":[{"op":"==","left":"branch.name","right":"main"},{"op":"==","left":"branch.name","right":"dev"}]}, "facts": {"branch.name":"dev"}, "expected_matched": true },
+    { "id": "any_false_with_missing", "ast": {"any":[{"op":"==","left":"branch.name","right":"main"},{"op":"==","left":"tag.name","right":"v1"}]}, "facts": {"action":"push"}, "expected_matched": false, "expected_missing": ["branch.name","tag.name"] },
+    { "id": "not_true", "ast": {"not":{"op":"==","left":"branch.name","right":"main"}}, "facts": {"branch.name":"dev"}, "expected_matched": true },
+    { "id": "all_non_list_false", "ast": {"all":{"op":"==","left":"action","right":"push"}}, "facts": {"action":"push"}, "expected_matched": false }
+  ]
+}

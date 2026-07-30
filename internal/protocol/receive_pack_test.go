@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -536,4 +538,52 @@ func TestHasPackfileCommands_EmptyList(t *testing.T) {
 	if h.hasPackfileCommands(cmds) {
 		t.Error("expected false for empty command list")
 	}
+}
+
+// encodeTestBundle builds the gateway transport form (JSON → gzip → base64.Std)
+// so the HTTP header path can be exercised end-to-end. Mirrors the git-http
+// EncodeRuleBundle producer (task 5).
+func encodeTestBundle(t *testing.T, raw []byte) string {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(raw); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	require.NoError(t, zw.Close())
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+// TestLoadShadowBundleFromRequest covers the HTTP receiver's rule-bundle header
+// read (task 8): a well-formed X-Rule-Bundle decodes to a usable bundle; absence,
+// overflow, and decode-failure all fall back to nil (remote authoritative) without
+// panicking. The verdict is never sourced from here — Phase-1 shadow only.
+func TestLoadShadowBundleFromRequest(t *testing.T) {
+	okBundle := encodeTestBundle(t, []byte(`{"schema_version":1,"repository_id":7,"rulesets":[]}`))
+
+	t.Run("valid header decodes", func(t *testing.T) {
+		r := httptest.NewRequest("POST", "/x", nil)
+		r.Header.Set("X-Rule-Bundle", okBundle)
+		b := loadShadowBundleFromRequest(r)
+		require.NotNil(t, b)
+		assert.Equal(t, 7, b.RepositoryID)
+	})
+
+	t.Run("absent header → nil", func(t *testing.T) {
+		r := httptest.NewRequest("POST", "/x", nil)
+		assert.Nil(t, loadShadowBundleFromRequest(r))
+	})
+
+	t.Run("overflow signal → nil (even with a payload present)", func(t *testing.T) {
+		r := httptest.NewRequest("POST", "/x", nil)
+		r.Header.Set("X-Rule-Bundle", okBundle)
+		r.Header.Set("X-Rule-Bundle-Overflow", "1")
+		assert.Nil(t, loadShadowBundleFromRequest(r))
+	})
+
+	t.Run("garbage payload → nil", func(t *testing.T) {
+		r := httptest.NewRequest("POST", "/x", nil)
+		r.Header.Set("X-Rule-Bundle", "!!!not-base64!!!")
+		assert.Nil(t, loadShadowBundleFromRequest(r))
+	})
 }

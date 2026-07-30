@@ -1,0 +1,37 @@
+{
+  "_doc": {
+    "purpose": "Golden truth-table for ref applicability (RefMatches / applicability.py ref_matches + _ref_pattern_matches + _translate_ref_pattern). expected = SPEC.",
+    "drift": "Cross-language contract of design §6.5 / §7. api-service SHOULD adopt the SAME file so the GitHub-ruleset glob dialect cannot drift between Python and Go. NOTE this glob is DIFFERENT from engine_cases.json's `glob` op (there '*' crosses '/'; here it does not).",
+    "schema": {
+      "id": "unique string",
+      "target_type": "branch | tag | push",
+      "ref_include": "list (empty = all)",
+      "ref_exclude": "list",
+      "ref_type": "branch | tag (the pushed ref's derived type)",
+      "ref_name": "short ref name",
+      "default_branch": "string or null (~DEFAULT_BRANCH resolution)",
+      "expected": "bool — ruleset applies to this ref"
+    }
+  },
+  "cases": [
+    { "id": "branch_include_match", "target_type":"branch", "ref_include":["main"], "ref_exclude":[], "ref_type":"branch", "ref_name":"main", "default_branch":"main", "expected": true },
+    { "id": "branch_include_miss", "target_type":"branch", "ref_include":["main"], "ref_exclude":[], "ref_type":"branch", "ref_name":"dev", "default_branch":"main", "expected": false },
+    { "id": "empty_include_matches_all", "target_type":"branch", "ref_include":[], "ref_exclude":[], "ref_type":"branch", "ref_name":"anything", "default_branch":null, "expected": true },
+    { "id": "exclude_wins_over_include", "target_type":"branch", "ref_include":["release/*"], "ref_exclude":["release/legacy"], "ref_type":"branch", "ref_name":"release/legacy", "default_branch":null, "expected": false },
+    { "id": "segment_star_one_level", "target_type":"branch", "ref_include":["release/*"], "ref_exclude":[], "ref_type":"branch", "ref_name":"release/1.0", "default_branch":null, "expected": true },
+    { "id": "segment_star_not_cross_slash", "target_type":"branch", "ref_include":["release/*"], "ref_exclude":[], "ref_type":"branch", "ref_name":"release/a/b", "default_branch":null, "expected": false },
+    { "id": "double_star_any_depth", "target_type":"branch", "ref_include":["release/**"], "ref_exclude":[], "ref_type":"branch", "ref_name":"release/a/b", "default_branch":null, "expected": true },
+    { "id": "double_star_slash_zero_depth", "target_type":"branch", "ref_include":["releases/**/*"], "ref_exclude":[], "ref_type":"branch", "ref_name":"releases/x", "default_branch":null, "expected": true },
+    { "id": "question_one_char", "target_type":"tag", "ref_include":["v?"], "ref_exclude":[], "ref_type":"tag", "ref_name":"v3", "default_branch":null, "expected": true },
+    { "id": "charclass_match", "target_type":"tag", "ref_include":["v[0-9]*"], "ref_exclude":[], "ref_type":"tag", "ref_name":"v2", "default_branch":null, "expected": true },
+    { "id": "charclass_miss", "target_type":"tag", "ref_include":["v[0-9]*"], "ref_exclude":[], "ref_type":"tag", "ref_name":"vx", "default_branch":null, "expected": false },
+    { "id": "token_all", "target_type":"branch", "ref_include":["~ALL"], "ref_exclude":[], "ref_type":"branch", "ref_name":"a/b/c", "default_branch":null, "expected": true },
+    { "id": "star_root_alias_crosses_slash", "target_type":"branch", "ref_include":["*"], "ref_exclude":[], "ref_type":"branch", "ref_name":"a/b/c", "default_branch":null, "expected": true },
+    { "id": "default_branch_token_match", "target_type":"branch", "ref_include":["~DEFAULT_BRANCH"], "ref_exclude":[], "ref_type":"branch", "ref_name":"main", "default_branch":"main", "expected": true },
+    { "id": "default_branch_token_miss", "target_type":"branch", "ref_include":["~DEFAULT_BRANCH"], "ref_exclude":[], "ref_type":"branch", "ref_name":"dev", "default_branch":"main", "expected": false },
+    { "id": "default_branch_token_no_default_failsafe", "target_type":"branch", "ref_include":["~DEFAULT_BRANCH"], "ref_exclude":[], "ref_type":"branch", "ref_name":"main", "default_branch":null, "expected": false },
+    { "id": "target_type_mismatch", "target_type":"branch", "ref_include":[], "ref_exclude":[], "ref_type":"tag", "ref_name":"v1", "default_branch":null, "expected": false },
+    { "id": "push_type_matches_push_query", "target_type":"push", "ref_include":["ignored"], "ref_exclude":["ignored2"], "ref_type":"push", "ref_name":"anything", "default_branch":null, "expected": true },
+    { "id": "push_type_not_matched_as_branch", "target_type":"push", "ref_include":[], "ref_exclude":[], "ref_type":"branch", "ref_name":"anything", "default_branch":null, "expected": false }
+  ]
+}

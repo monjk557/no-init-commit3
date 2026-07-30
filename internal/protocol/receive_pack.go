@@ -102,14 +102,47 @@ func pushAuthzFromRequest(r *http.Request) ruleguard.PushTarget {
 // (allow) — the latter is fail-open during dual-run so a validation-service
 // outage never blocks pushes. The executor is the single choke point regardless
 // of transport.
-func (h *ReceivePackHandler) validatePushFacts(ctx context.Context, repoPath string, cmd RefUpdateCommand, authz ruleguard.PushTarget) *ruleguard.Denied {
+func (h *ReceivePackHandler) validatePushFacts(ctx context.Context, repoPath string, cmd RefUpdateCommand, authz ruleguard.PushTarget, shadowBundle *ruleguard.Bundle) *ruleguard.Denied {
 	denied, err := ruleguard.ValidatePushRef(ctx, h.ruleClient, authz, repoPath, cmd.OldHash, cmd.NewHash, cmd.RefName)
 	if err != nil {
 		// Transport/API error: fail-open during dual-run (gateways enforce).
 		fmt.Printf("[receive-pack] rule validation error for %s (allowing — gateways enforce): %v\n", cmd.RefName, err)
 		return nil
 	}
+	// Phase-1 shadow (§10): the remote verdict above stays authoritative. When the
+	// git-http gateway forwarded a bundle (X-Rule-Bundle), also evaluate locally and
+	// log any divergence — server-side only (HTTP report uses `ng <ref> <reason>`
+	// sideband, so client-facing rich feedback is a follow-up; the ng reason still
+	// carries the remote reason). Never changes the verdict in Phase 1.
+	if shadowBundle != nil {
+		out := ruleguard.ShadowCompareRef(ctx, shadowBundle, repoPath, cmd.OldHash, cmd.NewHash, cmd.RefName, denied)
+		if out.Evaluated && out.Mismatch {
+			fmt.Printf("[receive-pack] SHADOW local/remote MISMATCH for %s: remote_allowed=%v local_allowed=%v\n",
+				cmd.RefName, out.RemoteAllowed, out.LocalAllowed)
+		}
+	}
 	return denied
+}
+
+// loadShadowBundleFromRequest reads the git-http gateway's rule-bundle transport
+// (task 5): X-Rule-Bundle (base64(gzip(json))) / X-Rule-Bundle-Overflow. Returns a
+// usable bundle only on BundleOK; every skip reason is logged once (§8) so the
+// fallback-to-remote is never silent. Symmetric to the SSH hook's LoadShadowBundle.
+func loadShadowBundleFromRequest(r *http.Request) *ruleguard.Bundle {
+	src := ruleguard.LoadShadowBundle(r.Header.Get("X-Rule-Bundle"), r.Header.Get("X-Rule-Bundle-Overflow") == "1")
+	switch src.Status {
+	case ruleguard.BundleOK:
+		return src.Bundle
+	case ruleguard.BundleAbsent:
+		// expected until the gateway transport is deployed — no log noise.
+	case ruleguard.BundleOverflow:
+		fmt.Printf("[receive-pack] SHADOW rule bundle overflow — local eval skipped, remote authoritative\n")
+	case ruleguard.BundleUnsupportedSchema:
+		fmt.Printf("[receive-pack] SHADOW unsupported bundle schema_version — local eval skipped, remote authoritative\n")
+	case ruleguard.BundleDecodeError:
+		fmt.Printf("[receive-pack] SHADOW bundle decode failed (%v) — local eval skipped, remote authoritative\n", src.Err)
+	}
+	return nil
 }
 
 // HandleInfoRefs handles Smart HTTP discovery for receive-pack (push).
@@ -216,6 +249,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 	}
 
 	authz := pushAuthzFromRequest(r)
+	shadowBundle := loadShadowBundleFromRequest(r)
 
 	// v1 fallback: first line is not command=
 	if !strings.HasPrefix(cmds[0], "command=") {
@@ -227,7 +261,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 			receiveReq.PackfileReader = r.Body
 		}
 
-		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, pktWriter); err != nil {
+		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, shadowBundle, pktWriter); err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			_ = pktWriter.Flush()
 			return
@@ -276,7 +310,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		receiveReq.PackfileReader = r.Body
 	}
 
-	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, pktWriter)
+	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, shadowBundle, pktWriter)
 	if err != nil {
 		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
@@ -406,7 +440,7 @@ func ParseReceiveCommands(r io.Reader) (cmds []RefUpdateCommand, rawConsumed []b
 	return req.Commands, buf.Bytes(), nil
 }
 
-func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, authz ruleguard.PushTarget, pktWriter *pktLineWriter) error {
+func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, authz ruleguard.PushTarget, shadowBundle *ruleguard.Bundle, pktWriter *pktLineWriter) error {
 	if pktWriter == nil {
 		pktWriter = newPktLineWriter(w)
 	}
@@ -444,7 +478,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 	// packfile is indexed so pushed objects are readable, but refs are not yet
 	// moved — a denial rejects the ref (`ng`) and leaves the objects dangling.
 	for _, cmd := range req.Commands {
-		if denied := h.validatePushFacts(ctx, repoPath, cmd, authz); denied != nil {
+		if denied := h.validatePushFacts(ctx, repoPath, cmd, authz, shadowBundle); denied != nil {
 			if err := pktWriter.WriteLine(fmt.Sprintf("ng %s %s", cmd.RefName, denied.Reason)); err != nil {
 				return fmt.Errorf("failed to write ref denial status: %w", err)
 			}

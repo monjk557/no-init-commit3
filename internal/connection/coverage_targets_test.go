@@ -65,6 +65,30 @@ func TestProgressAwareConnection_PushContext(t *testing.T) {
 	assert.Equal(t, "decision-token-xyz", tok)
 }
 
+// --- progress_aware.go: SetRuleBundle / GetRuleBundle -----------------------
+
+func TestProgressAwareConnection_RuleBundle(t *testing.T) {
+	conn := NewProgressAwareConnection(&MockTCPConn{}, testTimeoutPolicy(), zaptest.NewLogger(t))
+	defer conn.Close()
+
+	// Defaults: no bundle, no overflow.
+	b, overflow := conn.GetRuleBundle()
+	assert.Empty(t, b)
+	assert.False(t, overflow)
+
+	// Normal bundle.
+	conn.SetRuleBundle("b64gz-encoded", false)
+	b, overflow = conn.GetRuleBundle()
+	assert.Equal(t, "b64gz-encoded", b)
+	assert.False(t, overflow)
+
+	// Overflow signal (gateway dropped an over-ceiling bundle).
+	conn.SetRuleBundle("", true)
+	b, overflow = conn.GetRuleBundle()
+	assert.Empty(t, b)
+	assert.True(t, overflow)
+}
+
 // --- io_wrapper.go: NewIOWrapper branches -----------------------------------
 
 func TestNewIOWrapper_ConfigBranches(t *testing.T) {
