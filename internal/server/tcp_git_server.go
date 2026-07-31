@@ -582,33 +582,53 @@ func (s *DuplexTCPServer) handleUploadPack(conn *connection.ProgressAwareConnect
 // are enforced over SSH (Point-B parity). Otherwise it spawns plain receive-pack
 // — degrade-open, Point-A (branch-name) validation only.
 func (s *DuplexTCPServer) newReceivePackCmd(ctx context.Context, conn *connection.ProgressAwareConnection, repoPath string) *exec.Cmd {
-	repositoryID, workspaceSlug, decisionToken := conn.GetPushContext()
+	repositoryID, workspaceSlug, _ := conn.GetPushContext()
 	_, _, userID, _ := conn.GetConnectionInfo()
+	ruleBundle, ruleBundleOverflow := conn.GetRuleBundle()
 
-	if s.hooksDir == "" || s.config.Orchestrator.BaseURL == "" || decisionToken == "" || repositoryID == "" {
+	// The hook evaluates the rule bundle locally — it needs no orchestrator URL and
+	// no decision token (design §10 Phase 3). Wire it whenever a bundle arrived;
+	// without one the hook degrades open and says so, which is strictly better than
+	// not running it at all (a missing hook leaves no trace).
+	if s.hooksDir == "" || ruleBundle == "" {
+		s.logger.Warn("push proceeds WITHOUT ruleset enforcement",
+			zap.String("reason", hookSkipReason(s.hooksDir, ruleBundle, ruleBundleOverflow)),
+			zap.String("repo_path", repoPath),
+			zap.String("user_id", userID),
+		)
 		return exec.CommandContext(ctx, "git", "receive-pack", repoPath)
 	}
 
 	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath="+s.hooksDir, "receive-pack", repoPath)
-	// Inherit git's env (incl. the quarantine object dir it sets for the hook) and
-	// append the push context the hook needs to call /rules/validate.
+	// Inherit git's env (incl. the quarantine object dir git sets for the hook —
+	// BuildPushFacts needs it to see the quarantined objects) and append the push
+	// context. The rule bundle is the evaluation input; repo id / workspace slug /
+	// user id ride along for logging and audit only.
 	cmd.Env = append(os.Environ(),
 		hooks.EnvRepoPath+"="+repoPath,
 		hooks.EnvRepoID+"="+repositoryID,
 		hooks.EnvWorkspaceSlug+"="+workspaceSlug,
-		hooks.EnvDecisionToken+"="+decisionToken,
 		hooks.EnvUserID+"="+userID,
-		hooks.EnvOrchestrator+"="+s.config.Orchestrator.BaseURL,
+		hooks.EnvRuleBundle+"="+ruleBundle,
 	)
-	// Phase-1 shadow rule bundle (§10): forwarded from the git-ssh handshake token
-	// so the hook can evaluate locally and compare against the remote verdict. Only
-	// set when present — absence → hook logs BundleAbsent + stays remote-authoritative.
-	if bundle, overflow := conn.GetRuleBundle(); overflow {
-		cmd.Env = append(cmd.Env, hooks.EnvRuleBundleOverflow+"=1")
-	} else if bundle != "" {
-		cmd.Env = append(cmd.Env, hooks.EnvRuleBundle+"="+bundle)
-	}
 	return cmd
+}
+
+// hookSkipReason names the missing precondition that leaves this push unenforced.
+// Split out so the causes are distinguishable in logs: no hook installed is an
+// executor deployment fault, while a missing bundle points at the gateway (or at
+// an auth response that carried none).
+func hookSkipReason(hooksDir, bundle string, overflow bool) string {
+	switch {
+	case hooksDir == "":
+		return "pre-receive hook not installed (EnsureHooksDir failed at startup)"
+	case overflow:
+		return "rule bundle exceeded the transport ceiling (gateway signalled overflow)"
+	case bundle == "":
+		return "no rule bundle in push context (gateway did not forward one)"
+	default:
+		return ""
+	}
 }
 
 // handleReceivePack delegates push to native git receive-pack.

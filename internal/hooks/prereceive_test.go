@@ -2,13 +2,12 @@ package hooks
 
 import (
 	"bytes"
-	"net/http"
-	"net/http/httptest"
+	"compress/gzip"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/collabops/git-executor/internal/ruleguard"
@@ -105,20 +104,70 @@ func TestEnsureHooksDir_SymlinksToExecutable(t *testing.T) {
 	}
 }
 
-// validateEnv sets the GITEXEC_HOOK_* vars a configured hook needs.
-func validateEnv(t *testing.T, repoPath, orchURL string) {
+// bundleEnv sets the GITEXEC_HOOK_* vars a configured hook needs. The rule bundle
+// is the only evaluation input — no orchestrator URL, no decision token.
+func bundleEnv(t *testing.T, repoPath, encodedBundle string) {
 	t.Helper()
 	t.Setenv(EnvRepoPath, repoPath)
-	t.Setenv(EnvOrchestrator, orchURL)
 	t.Setenv(EnvRepoID, "7")
 	t.Setenv(EnvWorkspaceSlug, "acme")
-	t.Setenv(EnvDecisionToken, "tok")
 	t.Setenv(EnvUserID, "u-1")
+	t.Setenv(EnvRuleBundle, encodedBundle)
+	t.Setenv(EnvRuleBundleOverflow, "")
+}
+
+// encodeHookBundle mirrors the gateway transport: JSON → gzip → base64.
+func encodeHookBundle(t *testing.T, raw string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(raw)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+// denyMainBundle blocks any push to main (require_change_request shape).
+func denyMainBundle(t *testing.T) string {
+	t.Helper()
+	return encodeHookBundle(t, `{
+      "schema_version": 1,
+      "ref_name_sentinel": "${ref_name}",
+      "actor": {"repo_role_rank": 0, "workspace_role_rank": 0},
+      "rulesets": [{
+        "id": 1, "name": "prod", "level": "repository", "enforcement": "active",
+        "target_type": "branch", "ref_include": ["main"], "ref_exclude": [],
+        "bypassed": false,
+        "rules": [{
+          "id": 1, "kind": "require_change_request", "fail_policy": "closed",
+          "granted": false,
+          "expression_ast": {"all": [
+            {"op": "==", "left": "action", "right": "push"},
+            {"op": "==", "left": "branch.name", "right": "${ref_name}"}
+          ]}
+        }]
+      }]
+    }`)
+}
+
+// allowAllBundle carries no rules — nothing can deny.
+func allowAllBundle(t *testing.T) string {
+	t.Helper()
+	return encodeHookBundle(t, `{
+      "schema_version": 1,
+      "ref_name_sentinel": "${ref_name}",
+      "actor": {"repo_role_rank": 0, "workspace_role_rank": 0},
+      "rulesets": []
+    }`)
 }
 
 func TestRunPreReceive_DegradeOpenWhenUnconfigured(t *testing.T) {
-	// No env set → fail-open (exit 0), and stdin is drained.
-	for _, k := range []string{EnvRepoPath, EnvOrchestrator, EnvRepoID, EnvDecisionToken} {
+	// No bundle → fail-open (exit 0), and stdin is drained. The skip reason is
+	// logged by logShadowSkip so the unenforced push is greppable.
+	for _, k := range []string{EnvRepoPath, EnvRepoID, EnvRuleBundle} {
 		t.Setenv(k, "")
 	}
 	var errBuf bytes.Buffer
@@ -128,13 +177,9 @@ func TestRunPreReceive_DegradeOpenWhenUnconfigured(t *testing.T) {
 	}
 }
 
-func TestRunPreReceive_AllowWhenOrchestratorAllows(t *testing.T) {
+func TestRunPreReceive_AllowWhenBundleHasNoMatchingRule(t *testing.T) {
 	repo, commit := newRepoWithCommit(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK) // allowed
-	}))
-	defer srv.Close()
-	validateEnv(t, repo, srv.URL)
+	bundleEnv(t, repo, allowAllBundle(t))
 
 	var errBuf bytes.Buffer
 	code := runPreReceive(strings.NewReader(zeroHash+" "+commit+" refs/heads/main\n"), &errBuf)
@@ -143,14 +188,9 @@ func TestRunPreReceive_AllowWhenOrchestratorAllows(t *testing.T) {
 	}
 }
 
-func TestRunPreReceive_DenyWhenOrchestratorRejects(t *testing.T) {
+func TestRunPreReceive_DenyWhenBundleRuleMatches(t *testing.T) {
 	repo, commit := newRepoWithCommit(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_, _ = w.Write([]byte(`{"allowed":false,"reason":"linear history required"}`))
-	}))
-	defer srv.Close()
-	validateEnv(t, repo, srv.URL)
+	bundleEnv(t, repo, denyMainBundle(t))
 
 	var errBuf bytes.Buffer
 	code := runPreReceive(strings.NewReader(zeroHash+" "+commit+" refs/heads/main\n"), &errBuf)
@@ -162,18 +202,18 @@ func TestRunPreReceive_DenyWhenOrchestratorRejects(t *testing.T) {
 	}
 }
 
-func TestRunPreReceive_FailOpenOnTransportError(t *testing.T) {
+func TestRunPreReceive_FailOpenOnCorruptBundle(t *testing.T) {
 	repo, commit := newRepoWithCommit(t)
-	// Point at a closed server → transport error → fail-open.
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	url := srv.URL
-	srv.Close()
-	validateEnv(t, repo, url)
+	// Undecodable bundle → no evaluation input → fail-open, but logged.
+	bundleEnv(t, repo, "!!!not-base64!!!")
 
 	var errBuf bytes.Buffer
 	code := runPreReceive(strings.NewReader(zeroHash+" "+commit+" refs/heads/main\n"), &errBuf)
 	if code != 0 {
-		t.Fatalf("exit = %d, want 0 (fail-open on transport error)", code)
+		t.Fatalf("exit = %d, want 0 (fail-open on corrupt bundle)", code)
+	}
+	if !strings.Contains(errBuf.String(), "WITHOUT ruleset enforcement") {
+		t.Fatalf("unenforced push must be logged, got: %s", errBuf.String())
 	}
 }
 
@@ -185,26 +225,8 @@ func TestRunPreReceive_PerRefIndependence(t *testing.T) {
 	// second branch → a distinct ref in the same push.
 	gitInRepo(t, repo, "branch", "feature")
 
-	var mu sync.Mutex
-	seen := map[string]int{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(body)
-		mu.Lock()
-		// target_value distinguishes the two refs.
-		if strings.Contains(string(body), `"target_value":"main"`) {
-			seen["main"]++
-			mu.Unlock()
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_, _ = w.Write([]byte(`{"allowed":false,"reason":"blocked"}`))
-			return
-		}
-		seen["feature"]++
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	validateEnv(t, repo, srv.URL)
+	// The bundle blocks main only; feature must still be evaluated and allowed.
+	bundleEnv(t, repo, denyMainBundle(t))
 
 	stdin := zeroHash + " " + commit + " refs/heads/main\n" +
 		zeroHash + " " + commit + " refs/heads/feature\n"
@@ -214,12 +236,14 @@ func TestRunPreReceive_PerRefIndependence(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1 (one ref denied)", code)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	// Both refs must have been validated independently — the allowed ref is NOT
-	// skipped because an earlier ref was denied, and vice-versa.
-	if seen["main"] != 1 || seen["feature"] != 1 {
-		t.Fatalf("each ref must be validated once: seen=%v", seen)
+	out := errBuf.String()
+	// Only the violating ref is rejected — an earlier denial must not short-circuit
+	// the rest, and an allowed ref must not inherit another ref's verdict.
+	if !strings.Contains(out, "refs/heads/main") {
+		t.Fatalf("main should be rejected, got: %s", out)
+	}
+	if strings.Contains(out, "GITEXEC-HOOK-ERR: refs/heads/feature") {
+		t.Fatalf("feature must not be rejected, got: %s", out)
 	}
 }
 

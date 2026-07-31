@@ -123,34 +123,23 @@ func runWithRecover(fn func() int) (code int) {
 
 func runPreReceive(stdin io.Reader, stderrW io.Writer) int {
 	repoPath := os.Getenv(EnvRepoPath)
-	baseURL := os.Getenv(EnvOrchestrator)
-	repoID := os.Getenv(EnvRepoID)
-	decisionToken := os.Getenv(EnvDecisionToken)
 
-	// Degrade-open: without the pieces needed to validate, accept every ref.
-	// Drain stdin first so git never sees a broken pipe on the ref list.
-	if repoPath == "" || baseURL == "" || repoID == "" || decisionToken == "" {
+	// The bundle is the ONLY evaluation input (design §10 Phase 3). Load it once;
+	// a non-OK status is logged here rather than per ref, so an unenforced push is
+	// always visible without flooding the log.
+	src := ruleguard.LoadShadowBundle(os.Getenv(EnvRuleBundle), os.Getenv(EnvRuleBundleOverflow) == "1")
+	logShadowSkip(src, stderrW)
+
+	// Degrade-open: no repo path or no usable bundle → accept every ref. Drain
+	// stdin first so git never sees a broken pipe on the ref list.
+	//
+	// This is fail-open by design (D1) — but never silent: logShadowSkip above
+	// names the reason. A push that ran unenforced must be greppable.
+	if repoPath == "" || src.Status != ruleguard.BundleOK {
 		_, _ = io.Copy(io.Discard, stdin)
 		return 0
 	}
-
-	client := ruleguard.NewClient(baseURL, validateTimeout)
-	base := ruleguard.PushTarget{
-		RepositoryID:  repoID,
-		WorkspaceSlug: os.Getenv(EnvWorkspaceSlug),
-		UserID:        os.Getenv(EnvUserID),
-		DecisionToken: decisionToken,
-	}
-
-	// Phase-1 shadow (design §10): load the local-eval bundle once. Any non-OK
-	// status is logged ONCE here (not per ref) so the fallback-to-remote is never
-	// silent, without flooding the log. shadowBundle is non-nil only when usable.
-	shadowSrc := ruleguard.LoadShadowBundle(os.Getenv(EnvRuleBundle), os.Getenv(EnvRuleBundleOverflow) == "1")
-	logShadowSkip(shadowSrc, stderrW)
-	var shadowBundle *ruleguard.Bundle
-	if shadowSrc.Status == ruleguard.BundleOK {
-		shadowBundle = shadowSrc.Bundle
-	}
+	bundle := src.Bundle
 
 	denied := false
 	scanner := bufio.NewScanner(stdin)
@@ -160,7 +149,7 @@ func runPreReceive(stdin io.Reader, stderrW io.Writer) int {
 		if !ok {
 			continue
 		}
-		if d := validateRef(repoPath, client, base, shadowBundle, oldHash, newHash, ref, stderrW); d != nil {
+		if d := validateRef(repoPath, bundle, oldHash, newHash, ref, stderrW); d != nil {
 			// GitLab-style: surface the reason so the git client shows *why*.
 			fmt.Fprintf(stderrW, "GITEXEC-HOOK-ERR: %s: %s\n", ref, d.Error())
 			denied = true
@@ -186,68 +175,47 @@ func parseRefLine(line string) (oldHash, newHash, ref string, ok bool) {
 	return fields[0], fields[1], fields[2], true
 }
 
-// validateRef validates ONE ref for the SSH pre-receive hook by delegating to
-// ruleguard.ValidatePushRef — the single rule-factor check shared with the HTTP
-// receive-pack path (receive_pack.go validatePushFacts). Returns a *Denied only
-// on an explicit rule violation; non-branch/tag refs and transport/timeout
-// errors return nil (allow — fail-open, logged to the hook's stderr).
+// validateRef validates ONE ref against the bundle. Returns a *Denied only on an
+// explicit blocking violation; non-branch/tag refs (refs/notes etc.) return nil.
 //
-// shadowBundle drives the Phase-1 shadow comparison (design §10): when non-nil,
-// this ref is ALSO evaluated locally and any divergence from the remote (still
-// authoritative) verdict is logged at error level. The remote result is what
-// controls the push — local evaluation never changes it in Phase 1.
+// Evaluation is entirely local — the bundle carries the compiled rule ASTs and the
+// actor facts resolved at auth time, so the hook needs no network. That is the
+// point of the design: the push choke point must not depend on the control plane
+// being reachable (§1a, §10 Phase 3).
 func validateRef(
 	repoPath string,
-	client *ruleguard.Client,
-	base ruleguard.PushTarget,
-	shadowBundle *ruleguard.Bundle,
+	bundle *ruleguard.Bundle,
 	oldHash, newHash, ref string,
 	stderrW io.Writer,
 ) *ruleguard.Denied {
 	ctx, cancel := context.WithTimeout(context.Background(), validateTimeout)
 	defer cancel()
 
-	denied, err := ruleguard.ValidatePushRef(ctx, client, base, repoPath, oldHash, newHash, ref)
-	if err != nil {
-		// Transport / API / timeout error → fail-open (remote path is authoritative
-		// in Phase 1; a shadow comparison against a failed remote is meaningless).
-		fmt.Fprintf(stderrW, "GITEXEC-HOOK: validation error for %s (allowing): %v\n", ref, err)
+	res, evaluated := ruleguard.LocalEvaluateRef(ctx, bundle, repoPath, oldHash, newHash, ref)
+	if !evaluated || res.Allowed {
 		return nil
 	}
 
-	if shadowBundle != nil {
-		out := shadowCompareRef(ctx, shadowBundle, repoPath, oldHash, newHash, ref, denied, stderrW)
-		// Phase 1: verdict stays remote. When remote rejected AND local agrees with
-		// blocking violations, enrich the client-facing reason from those local
-		// violations (ruleset name/level + rule kinds). On a mismatch (local
-		// allowed) there are no violations, so only the remote reason shows.
-		if denied != nil {
-			printRejectionFeedback(stderrW, ref, out.Violations)
-		}
+	// Surface the ruleset identity so the client sees *why* (GitLab-style).
+	printRejectionFeedback(stderrW, ref, res.Violations)
+	return &ruleguard.Denied{
+		Branch: ruleguard.ClassifyRef(ref).Name,
+		Reason: violationsReason(res.Violations),
 	}
-	return denied
 }
 
-// shadowCompareRef runs local evaluation for one ref and logs any disagreement
-// with the remote verdict (Phase 1, log-only). A match is dropped silently
-// (shadow); a mismatch is loud (error) with the ref, both verdicts, and the local
-// ruleset/rule identity so the divergence can be diagnosed. The outcome is
-// returned so the caller can render user-facing feedback from the local
-// violations when the (authoritative) remote path rejected the push.
-func shadowCompareRef(
-	ctx context.Context,
-	bundle *ruleguard.Bundle,
-	repoPath, oldHash, newHash, ref string,
-	remoteDenied *ruleguard.Denied,
-	stderrW io.Writer,
-) ruleguard.ShadowOutcome {
-	out := ruleguard.ShadowCompareRef(ctx, bundle, repoPath, oldHash, newHash, ref, remoteDenied)
-	if out.Evaluated && out.Mismatch {
-		fmt.Fprintf(stderrW,
-			"GITEXEC-SHADOW-ERR: local/remote MISMATCH for %s: remote_allowed=%v local_allowed=%v%s\n",
-			ref, out.RemoteAllowed, out.LocalAllowed, formatViolations(out.Violations))
+// violationsReason renders the blocking violations into the one-line reason git
+// shows next to the rejected ref. Falls back to a generic message when the
+// violation list is empty (shouldn't happen — Allowed=false implies at least one).
+func violationsReason(violations []ruleguard.RuleViolation) string {
+	if len(violations) == 0 {
+		return "rejected by ruleset"
 	}
-	return out
+	kinds := make([]string, 0, len(violations))
+	for _, v := range violations {
+		kinds = append(kinds, v.Kind)
+	}
+	return "rejected by ruleset: " + strings.Join(kinds, ", ")
 }
 
 // printRejectionFeedback renders user-facing ruleset feedback to the hook's
@@ -314,16 +282,22 @@ func formatViolations(vs []ruleguard.RuleViolation) string {
 // hook run (design §8). Silent on BundleOK. Absent is expected until the bundle
 // transport (tasks 3/4/5) is wired, so it is a warn, not an error.
 func logShadowSkip(src ruleguard.BundleSource, stderrW io.Writer) {
-	switch src.Status {
-	case ruleguard.BundleOK:
+	if src.Status == ruleguard.BundleOK {
 		return
-	case ruleguard.BundleAbsent:
-		fmt.Fprintf(stderrW, "GITEXEC-SHADOW-WARN: no rule bundle delivered — local eval skipped, remote authoritative (bundle transport pending, tasks 3/4/5)\n")
-	case ruleguard.BundleOverflow:
-		fmt.Fprintf(stderrW, "GITEXEC-SHADOW-WARN: rule bundle over size ceiling (overflow) — local eval skipped, remote authoritative\n")
-	case ruleguard.BundleUnsupportedSchema:
-		fmt.Fprintf(stderrW, "GITEXEC-SHADOW-WARN: unsupported rule bundle schema_version — local eval skipped, remote authoritative\n")
-	case ruleguard.BundleDecodeError:
-		fmt.Fprintf(stderrW, "GITEXEC-SHADOW-WARN: rule bundle decode failed (%v) — local eval skipped, remote authoritative\n", src.Err)
 	}
+	// No usable bundle → nothing evaluates this push. Name the reason: an
+	// unenforced push that leaves no trace is the failure mode this design exists
+	// to remove (§8).
+	reason := "unknown"
+	switch src.Status {
+	case ruleguard.BundleAbsent:
+		reason = "no rule bundle in push context (gateway did not forward one)"
+	case ruleguard.BundleOverflow:
+		reason = "rule bundle exceeded the transport ceiling (gateway signalled overflow)"
+	case ruleguard.BundleUnsupportedSchema:
+		reason = "unsupported rule bundle schema_version (executor too old for this bundle)"
+	case ruleguard.BundleDecodeError:
+		reason = fmt.Sprintf("rule bundle decode failed: %v", src.Err)
+	}
+	fmt.Fprintf(stderrW, "GITEXEC-HOOK: push proceeds WITHOUT ruleset enforcement: %s\n", reason)
 }

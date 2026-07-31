@@ -41,7 +41,6 @@ type ReceivePackHandler struct {
 	capabilities *ServerCapabilities
 	eventsClient events.RedisStreamClient
 	config       *config.Config
-	ruleClient   *ruleguard.Client
 }
 
 // NewReceivePackHandler creates a new receive-pack handler for the executor.
@@ -72,23 +71,8 @@ func NewReceivePackHandler(cfg *config.Config) (*ReceivePackHandler, error) {
 		capabilities: capabilities,
 		eventsClient: eventsClient,
 		config:       cfg,
-		ruleClient:   ruleguard.NewClient(cfg.Orchestrator.BaseURL, cfg.Orchestrator.Timeout),
 	}
 	return h, nil
-}
-
-// pushAuthzFromRequest builds the ruleset-validation identity (everything but the
-// per-ref branch + facts) from the headers the gateways set: X-USER-ID
-// (principal), X-Workspace-Slug, X-Repository-ID, and X-Decision-JWT (the
-// orchestrator decision token forwarded to the BFF). A missing repository id /
-// decision token makes ValidatePush a no-op (degrade open).
-func pushAuthzFromRequest(r *http.Request) ruleguard.PushTarget {
-	return ruleguard.PushTarget{
-		RepositoryID:  r.Header.Get("X-Repository-ID"),
-		WorkspaceSlug: r.Header.Get("X-Workspace-Slug"),
-		UserID:        r.Header.Get("X-USER-ID"),
-		DecisionToken: r.Header.Get("X-Decision-JWT"),
-	}
 }
 
 // validatePushFacts enforces repository/ruleset git-factors on ONE branch or tag
@@ -97,44 +81,51 @@ func pushAuthzFromRequest(r *http.Request) ruleguard.PushTarget {
 // semantics. This is the only point where commit/ref/file facts (linear history,
 // force-push, changed paths, blob size) can be read from the pushed commits.
 //
-// Returns a *ruleguard.Denied to reject this ref (the caller emits `ng <ref>`).
-// Refs that are neither a branch nor a tag, and transport/API errors, return nil
-// (allow) — the latter is fail-open during dual-run so a validation-service
-// outage never blocks pushes. The executor is the single choke point regardless
-// of transport.
-func (h *ReceivePackHandler) validatePushFacts(ctx context.Context, repoPath string, cmd RefUpdateCommand, authz ruleguard.PushTarget, shadowBundle *ruleguard.Bundle) *ruleguard.Denied {
-	denied, err := ruleguard.ValidatePushRef(ctx, h.ruleClient, authz, repoPath, cmd.OldHash, cmd.NewHash, cmd.RefName)
-	if err != nil {
-		// Transport/API error: fail-open during dual-run (gateways enforce).
-		fmt.Printf("[receive-pack] rule validation error for %s (allowing — gateways enforce): %v\n", cmd.RefName, err)
+// Evaluation is entirely local: the bundle carries compiled rule ASTs and the
+// actor facts resolved at auth time, so this path makes no network call (design
+// §10 Phase 3). Returns a *ruleguard.Denied to reject this ref (the caller emits
+// `ng <ref>`); non-branch/tag refs and a nil bundle return nil (allow — the
+// bundle's absence is logged once by loadRuleBundleFromRequest).
+func (h *ReceivePackHandler) validatePushFacts(ctx context.Context, repoPath string, cmd RefUpdateCommand, bundle *ruleguard.Bundle) *ruleguard.Denied {
+	if bundle == nil {
 		return nil
 	}
-	// Phase-1 shadow (§10): the remote verdict above stays authoritative. When the
-	// git-http gateway forwarded a bundle (X-Rule-Bundle), also evaluate locally and
-	// log any divergence — server-side only (HTTP report uses `ng <ref> <reason>`
-	// sideband, so client-facing rich feedback is a follow-up; the ng reason still
-	// carries the remote reason). Never changes the verdict in Phase 1.
-	if shadowBundle != nil {
-		out := ruleguard.ShadowCompareRef(ctx, shadowBundle, repoPath, cmd.OldHash, cmd.NewHash, cmd.RefName, denied)
-		if out.Evaluated && out.Mismatch {
-			fmt.Printf("[receive-pack] SHADOW local/remote MISMATCH for %s: remote_allowed=%v local_allowed=%v\n",
-				cmd.RefName, out.RemoteAllowed, out.LocalAllowed)
-		}
+	res, evaluated := ruleguard.LocalEvaluateRef(ctx, bundle, repoPath, cmd.OldHash, cmd.NewHash, cmd.RefName)
+	if !evaluated || res.Allowed {
+		return nil
 	}
-	return denied
+	return &ruleguard.Denied{
+		Branch: ruleguard.ClassifyRef(cmd.RefName).Name,
+		Reason: violationsReason(res.Violations),
+	}
 }
 
-// loadShadowBundleFromRequest reads the git-http gateway's rule-bundle transport
-// (task 5): X-Rule-Bundle (base64(gzip(json))) / X-Rule-Bundle-Overflow. Returns a
-// usable bundle only on BundleOK; every skip reason is logged once (§8) so the
-// fallback-to-remote is never silent. Symmetric to the SSH hook's LoadShadowBundle.
-func loadShadowBundleFromRequest(r *http.Request) *ruleguard.Bundle {
+// violationsReason renders blocking violations into the one-line reason carried by
+// the `ng <ref> <reason>` report line.
+func violationsReason(violations []ruleguard.RuleViolation) string {
+	if len(violations) == 0 {
+		return "rejected by ruleset"
+	}
+	kinds := make([]string, 0, len(violations))
+	for _, v := range violations {
+		kinds = append(kinds, v.Kind)
+	}
+	return "rejected by ruleset: " + strings.Join(kinds, ", ")
+}
+
+// loadRuleBundleFromRequest reads the git-http gateway's rule-bundle transport:
+// X-Rule-Bundle (base64(gzip(json))) / X-Rule-Bundle-Overflow. Returns a usable
+// bundle only on BundleOK; every skip reason is logged once (§8) so a push that
+// ran unenforced is always greppable. Symmetric to the SSH hook's LoadShadowBundle.
+func loadRuleBundleFromRequest(r *http.Request) *ruleguard.Bundle {
 	src := ruleguard.LoadShadowBundle(r.Header.Get("X-Rule-Bundle"), r.Header.Get("X-Rule-Bundle-Overflow") == "1")
 	switch src.Status {
 	case ruleguard.BundleOK:
 		return src.Bundle
 	case ruleguard.BundleAbsent:
-		// expected until the gateway transport is deployed — no log noise.
+		// No bundle → this push runs unenforced. Say so: an unenforced push that
+		// leaves no trace is exactly the failure this design set out to remove.
+		fmt.Printf("[receive-pack] push proceeds WITHOUT ruleset enforcement: no rule bundle in request (gateway did not forward one)\n")
 	case ruleguard.BundleOverflow:
 		fmt.Printf("[receive-pack] SHADOW rule bundle overflow — local eval skipped, remote authoritative\n")
 	case ruleguard.BundleUnsupportedSchema:
@@ -248,8 +239,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	authz := pushAuthzFromRequest(r)
-	shadowBundle := loadShadowBundleFromRequest(r)
+	ruleBundle := loadRuleBundleFromRequest(r)
 
 	// v1 fallback: first line is not command=
 	if !strings.HasPrefix(cmds[0], "command=") {
@@ -261,7 +251,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 			receiveReq.PackfileReader = r.Body
 		}
 
-		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, shadowBundle, pktWriter); err != nil {
+		if err := h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, ruleBundle, pktWriter); err != nil {
 			_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 			_ = pktWriter.Flush()
 			return
@@ -310,7 +300,7 @@ func (h *ReceivePackHandler) HandleReceivePack(w http.ResponseWriter, r *http.Re
 		receiveReq.PackfileReader = r.Body
 	}
 
-	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, authz, shadowBundle, pktWriter)
+	err = h.processReceivePackRequest(ctx, repoPath, receiveReq, w, owner, repo, userID, ruleBundle, pktWriter)
 	if err != nil {
 		_ = pktWriter.WriteLine(fmt.Sprintf("ERR %s", err.Error()))
 		return
@@ -440,7 +430,7 @@ func ParseReceiveCommands(r io.Reader) (cmds []RefUpdateCommand, rawConsumed []b
 	return req.Commands, buf.Bytes(), nil
 }
 
-func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, authz ruleguard.PushTarget, shadowBundle *ruleguard.Bundle, pktWriter *pktLineWriter) error {
+func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repoPath string, req *ReceivePackRequest, w http.ResponseWriter, owner, repoName, userID string, ruleBundle *ruleguard.Bundle, pktWriter *pktLineWriter) error {
 	if pktWriter == nil {
 		pktWriter = newPktLineWriter(w)
 	}
@@ -478,7 +468,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 	// packfile is indexed so pushed objects are readable, but refs are not yet
 	// moved — a denial rejects the ref (`ng`) and leaves the objects dangling.
 	for _, cmd := range req.Commands {
-		if denied := h.validatePushFacts(ctx, repoPath, cmd, authz, shadowBundle); denied != nil {
+		if denied := h.validatePushFacts(ctx, repoPath, cmd, ruleBundle); denied != nil {
 			if err := pktWriter.WriteLine(fmt.Sprintf("ng %s %s", cmd.RefName, denied.Reason)); err != nil {
 				return fmt.Errorf("failed to write ref denial status: %w", err)
 			}

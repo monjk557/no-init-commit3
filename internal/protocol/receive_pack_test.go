@@ -564,26 +564,26 @@ func TestLoadShadowBundleFromRequest(t *testing.T) {
 	t.Run("valid header decodes", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/x", nil)
 		r.Header.Set("X-Rule-Bundle", okBundle)
-		b := loadShadowBundleFromRequest(r)
+		b := loadRuleBundleFromRequest(r)
 		require.NotNil(t, b)
 		assert.Equal(t, 7, b.RepositoryID)
 	})
 
 	t.Run("absent header → nil", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/x", nil)
-		assert.Nil(t, loadShadowBundleFromRequest(r))
+		assert.Nil(t, loadRuleBundleFromRequest(r))
 	})
 
 	t.Run("overflow signal → nil (even with a payload present)", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/x", nil)
 		r.Header.Set("X-Rule-Bundle", okBundle)
 		r.Header.Set("X-Rule-Bundle-Overflow", "1")
-		assert.Nil(t, loadShadowBundleFromRequest(r))
+		assert.Nil(t, loadRuleBundleFromRequest(r))
 	})
 
 	t.Run("garbage payload → nil", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/x", nil)
 		r.Header.Set("X-Rule-Bundle", "!!!not-base64!!!")
-		assert.Nil(t, loadShadowBundleFromRequest(r))
+		assert.Nil(t, loadRuleBundleFromRequest(r))
 	})
 }

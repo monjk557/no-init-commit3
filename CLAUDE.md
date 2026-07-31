@@ -352,42 +352,29 @@ func adapt[Resp any](fn func(*gin.Context) (Resp, error)) gin.HandlerFunc {
 
 ## CR 워크플로우 (Code Merge Methodology)
 
-이 레포에 변경사항을 합칠 때는 **항상 아래 8단계를 따른다**. main에 직접 commit/push/merge 금지 — dogfooding을 위해 우리가 만든 `co` CLI로 CR(Change Request)을 띄운다.
+이 레포에 변경사항을 합칠 때는 **항상 아래 5단계를 따른다**. main에 직접 commit/push/merge 금지 — 작업은 worktree + topic 브랜치에서만.
 
-### 1. 이슈 먼저 생성
+**`co` CLI 는 사용하지 않는다.** 이슈 생성 / CR 생성 / bot attribution 모두 CLI 로 하지 않는다. 작업을 끝내면 **채팅으로 브랜치·제목·본문을 보고**하고, CR 은 사람이 직접 띄운다.
 
-**모든 작업은 이슈에서 출발한다.** 워크트리/브랜치를 만들기 전에 작업 단위에 해당하는 이슈를 먼저 만들고, 발급된 이슈 번호로 브랜치 이름을 짓는다.
-
-```bash
-co issue create --type task --priority medium \
-  -t "<작업 제목>" \
-  -b "<배경/변경 내용>"
-# → ✔ Created Issue-<key>: ...
-```
-
-- 작은 작업이라도 추적성을 위해 이슈를 만든다 (single-line typo 수정도 예외 없음).
-- 이슈 본문에 "왜" + "무엇을" 간단히 적어 둔다 — 나중에 CR description 에 그대로 옮겨도 됨.
-- 이미 존재하는 이슈를 처리하는 작업이면 새로 만들지 말고 그 키를 그대로 쓴다.
-- `--type` / `--priority` 미지정 시 CLI 가 인터랙티브 prompt 로 빠지므로 비대화 환경(에이전트 / 스크립트)에서는 반드시 두 플래그를 명시한다.
-
-### 2. 최신 main 에서 워크트리 + 브랜치 동시 생성
+### 1. 최신 main 에서 워크트리 + 브랜치 동시 생성
 
 작업은 항상 격리된 worktree 에서 — 메인 워킹 디렉터리는 그대로 두고 `.claude/worktrees/<name>` 하위에서 진행한다.
 
 ```bash
 git fetch origin main
-git worktree add -b <type>/<issue-key>-<slug> \
-  .claude/worktrees/<issue-key>-<slug> origin/main
-cd .claude/worktrees/<issue-key>-<slug>
+git worktree add -b <type>/<slug> \
+  .claude/worktrees/<slug> origin/main
+cd .claude/worktrees/<slug>
 ```
 
 - `worktree add -b`로 새 브랜치를 같이 만들어 main에 커밋이 유입되지 않게 한다.
-- 브랜치 네이밍: `<type>/<issue-key>-<slug>` 형태, 항상 1단계 이슈 번호를 포함.
+- 브랜치 네이밍: `<type>/<slug>`.
   - 타입: `feat | fix | refactor | docs | test | chore | perf | ci`
   - slug: 짧은 케밥-케이스 요약 (3~5단어)
-  - 예: `feat/2079-http-clone-resume`, `fix/1843-merge-lock-release`, `docs/2221-cr-workflow-claude-md`
+  - 예: `feat/http-clone-resume`, `fix/merge-lock-release`, `docs/cr-workflow-claude-md`
+  - 사용자가 이슈 번호를 준 경우에만 앞에 붙인다: `fix/6414-lazy-redis-events-client`. 이슈를 새로 만들지는 않는다.
 
-### 3. 작업 + 커밋
+### 2. 작업 + 커밋
 
 작업 후 **반드시** 다음 quality gate 를 모두 통과시킨 뒤 커밋한다 ("Code Quality Standards" 섹션과 동일):
 
@@ -412,13 +399,13 @@ make specs                # ✅ 핸들러/스키마/라우트 변경 시 OpenAPI
 
 **커밋은 항상 새로 쌓는다 — `git commit --amend` 금지.** 수정이 필요하면 새 커밋을 추가한다. main에 직접 커밋도 금지.
 
-### 4. 브랜치를 remote 에 push
+### 3. 브랜치를 remote 에 push
 
 **main 과 upstream tracking 은 건드리지 않고, topic 브랜치만 push 한다.**
 
 ```bash
-git branch --unset-upstream                       # worktree add 가 자동으로 박은 origin/main tracking 제거
-git push origin <type>/<issue-key>-<slug>         # -u 없이, 현재 브랜치만
+git branch --unset-upstream          # worktree add 가 자동으로 박은 origin/main tracking 제거
+git push origin <type>/<slug>        # -u 없이, 현재 브랜치만
 ```
 
 - `git worktree add -b <topic> <path> origin/main` 은 새 브랜치를 만들면서 자동으로 `origin/main` 으로 tracking 을 박는다 → push 직전에 반드시 `git branch --unset-upstream` 으로 해제.
@@ -427,30 +414,20 @@ git push origin <type>/<issue-key>-<slug>         # -u 없이, 현재 브랜치�
 - main 을 직접 push 하지 않는다 (CR 머지로만 main 업데이트).
 - 이미 push 된 브랜치를 rebase 후 다시 올릴 때만 `--force-with-lease` 허용 (`--force` 금지). 다른 사람 커밋 덮어쓰기 방지.
 
-### 5. `co` CLI 로 CR 생성
+### 4. 채팅으로 작업 완료 보고 (CR 은 사람이 직접 띄운다)
 
-PR 이 아니라 **CR (Change Request)** — `co` CLI 로 dogfooding:
+**`co cr create` 를 실행하지 않는다.** 변경요청에 필요한 작업을 모두 끝냈으면 채팅에 아래 형식으로 출력하고 끝낸다 — 사람이 그대로 복사해 CR 을 만든다.
 
-```bash
-co cr create -t "<제목>" -B main
-# 또는 대화형:
-co cr create
-```
+```markdown
+**작업 완료 위치**
+- 브랜치: `<type>/<slug>`
+- 워크트리: `.claude/worktrees/<slug>` (정리 완료 / 유지 중)
+- push: `origin/<type>/<slug>` ✅
 
-- `-H/--head` 미지정 시 현재 브랜치 사용.
-- `-B/--base` 는 항상 `main`.
-- `--repo` 는 git remote 에서 자동 추출되므로 worktree 안에서 실행하면 생략 가능.
-- description 첫 줄 또는 본문에 `Closes Issue-<key>` 형태로 1 단계 이슈를 명시한다 (트래킹용).
+**제목**
+<국문 한 줄 제목 — 아래 5단계 규칙 준수>
 
-### 6. Bot attribution (AI agent 가 만든 CR)
-
-**Claude / AI agent 로 동작 중일 때는 항상 bot 흐름으로 CR 을 띄운다.** title 에 `🤖 [BETA] ` 접두사가 자동 부착되고, description 끝에 어떤 모델로 만들어졌는지 footer 가 붙어 사람이 만든 CR 과 명확히 구분된다.
-
-```bash
-CLAUDECODE=1 \
-CO_BOT_AGENT="Claude Code" \
-CO_BOT_MODEL="Opus 4.7" \
-  co cr create -t "<제목>" -B main -b "$(cat <<'EOF'
+**본문**
 ## 문제 상황
 - ...
 
@@ -459,17 +436,14 @@ CO_BOT_MODEL="Opus 4.7" \
 
 ## 수정
 - ...
-EOF
-)"
 ```
 
-- `CLAUDECODE=1` 또는 `CO_AS_BOT=1` 환경변수 / `--bot` 플래그 → bot 흐름 활성화 (title prefix + attribution footer).
-- agent 이름 결정 우선순위: `--bot-agent <name>` > `CO_BOT_AGENT` > (`CLAUDECODE=1` 일 때 기본 `Claude Code`).
-- 모델 이름 결정 우선순위: `--bot-model <name>` > `CO_BOT_MODEL`. 둘 다 비어 있으면 footer 가 붙지 않음 → **AI agent 로 동작할 때는 항상 `CO_BOT_MODEL` 을 셋업한다.**
-- 사람이 직접 만든 CR 에는 prefix / footer 를 붙이지 않는다.
-- 중복 방지: description 에 `<!-- co:bot-attribution -->` 마커가 이미 있으면 footer 를 다시 붙이지 않는다.
+- 제목 / 본문은 5단계의 Title / Description 규칙을 그대로 따른다.
+- 본문은 사용자가 복사해서 붙여넣을 수 있게 **마크다운 원문 그대로** 출력한다.
+- `🤖 [BETA] ` 접두사나 attribution footer 는 붙이지 않는다 — 사람이 CR 을 만들기 때문.
+- 커밋 SHA / 변경 파일 요약을 덧붙이면 좋지만, 본문 안이 아니라 보고 블록 아래에 따로 적는다.
 
-### 7. Title / Description 규칙
+### 5. Title / Description 규칙
 
 **Title (국문, 포괄적 — 한 줄에 변경의 핵심을 담는다)**:
 
@@ -480,7 +454,6 @@ HTTP clone 동시성 처리에서 dangling lock 회수 보강
 - 영문 prefix(`feat:` 등) 는 커밋 메시지에서만 쓰고, CR 제목에는 붙이지 않는다.
 - "수정", "추가", "정리", "보강" 같은 동작 동사로 끝맺는다.
 - 50 자 내외, 너무 길지 않게.
-- bot 흐름이면 `🤖 [BETA] ` 접두사가 자동 부착된다.
 
 **Description (불릿, 3 섹션)**:
 
@@ -504,16 +477,16 @@ HTTP clone 동시성 처리에서 dangling lock 회수 보강
 - 모든 섹션은 불릿. 산문 금지.
 - "왜 이렇게 했는지" (원인 + 트레이드오프) 를 코드보다 길지 않게.
 - 스크린샷 / 로그가 있으면 그 아래 별도 섹션으로 첨부.
-- description 첫 줄에 `Closes Issue-<key>` 명시.
+- 사용자가 이슈 번호를 준 경우에만 첫 줄에 `Closes Issue-<key>` 명시.
 
-### 8. CR 생성 후 워크트리 정리
+### 6. 보고 후 워크트리 정리
 
-CR 번호를 받고 머지 대기에 들어가면 로컬 worktree 는 정리한다. **반드시 메인 레포 경로로 먼저 이동한 뒤** 실행 — worktree 디렉토리 안에서 정리하면 CWD 가 삭제된 경로를 가리켜 이후 모든 git / 파일 명령이 실패한다.
+push + 채팅 보고까지 끝났으면 로컬 worktree 는 정리한다. **반드시 메인 레포 경로로 먼저 이동한 뒤** 실행 — worktree 디렉토리 안에서 정리하면 CWD 가 삭제된 경로를 가리켜 이후 모든 git / 파일 명령이 실패한다.
 
 ```bash
 # 반드시 메인 레포로 이동한 뒤 실행
 cd /Users/seungbaek/Desktop/code/collabops-git-executor
-git worktree remove .claude/worktrees/<issue-key>-<slug>
+git worktree remove .claude/worktrees/<slug>
 # 로컬 topic 브랜치는 삭제하지 않는다 — CR 머지 전까지 남겨둔다
 ```
 
@@ -531,7 +504,8 @@ git switch main && git pull --ff-only
 
 ## Git ground rules
 
-- main 에 직접 commit / push / merge 금지 (항상 worktree + 브랜치 + CR).
+- main 에 직접 commit / push / merge 금지 (항상 worktree + topic 브랜치 + CR).
+- `co` CLI 실행 금지 — 이슈/CR 생성은 사람이 한다. 에이전트는 채팅 보고까지만.
 - `--no-verify`, `git push --force`, `git commit --amend` 금지. 재 push 가 필요하면 `--force-with-lease` 만 사용.
 - 시크릿(.env, 토큰, GPG 키) 은 절대 커밋 안 함.
 - 핸들러 / 스키마 / 라우트 변경 시 `make specs` 결과물(OpenAPI 스펙) 도 함께 커밋.
