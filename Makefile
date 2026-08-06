@@ -147,6 +147,27 @@ guard-errcodes: ## errcode ratchet (bare NewHTTPError / HTTP 422 금지)
 guard-specs: ## OpenAPI dangling $ref 가드 (downstream codegen 보호)
 	@bash scripts/check-openapi-refs.sh
 
+# [GUARD] make guard-spec-drift
+# Description: 핸들러 = OpenAPI 스펙 SoT (HTTP-PROTOCOL §3). 스펙을 재생성(make specs)해
+# 커밋본과 diff — 드리프트 시 fail. guard-specs(dangling $ref)와 상보적(핸들러↔스펙 동기).
+.PHONY: guard-spec-drift
+guard-spec-drift: ## OpenAPI 스펙 드리프트 — 재생성 후 커밋본과 diff (핸들러=SoT)
+	@bash scripts/check-spec-drift.sh
+
+# [GUARD] make guard-git-native
+# Description: #6272 big-rule-1 — git/ssh substrate 를 native 로. go-git import 래칫
+# + os.Chdir 금지(동시 push 안전) + 비-Context exec.Command 래칫(취소가능 git). GO-STANDARD §4/§7.
+.PHONY: guard-git-native
+guard-git-native: ## git/ssh substrate: native git(go-git 래칫)+os.Chdir 0+CommandContext
+	@bash scripts/check-git-native.sh
+
+# [GUARD] make guard-http-catalog
+# Description: HTTP-PROTOCOL §1/§2 — http 응답을 에러 카탈로그(api.NewCoded)로.
+# ad-hoc gin.H 응답 래칫(신규 유입 차단, legacy 는 NewCoded 로 수렴).
+.PHONY: guard-http-catalog
+guard-http-catalog: ## http substrate: 응답을 에러 카탈로그로 — ad-hoc gin.H 래칫
+	@bash scripts/check-http-catalog.sh
+
 # 하위호환: 기존 `make format` 호출은 표준 `fmt` 로 위임
 .PHONY: format
 format: fmt

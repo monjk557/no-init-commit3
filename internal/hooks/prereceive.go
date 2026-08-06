@@ -114,7 +114,7 @@ func RunPreReceive() int {
 func runWithRecover(fn func() int) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "GITEXEC-HOOK: internal panic, allowing push: %v\n", r)
+			_, _ = fmt.Fprintf(os.Stderr, "GITEXEC-HOOK: internal panic, allowing push: %v\n", r)
 			code = 0
 		}
 	}()
@@ -151,13 +151,13 @@ func runPreReceive(stdin io.Reader, stderrW io.Writer) int {
 		}
 		if d := validateRef(repoPath, bundle, oldHash, newHash, ref, stderrW); d != nil {
 			// GitLab-style: surface the reason so the git client shows *why*.
-			fmt.Fprintf(stderrW, "GITEXEC-HOOK-ERR: %s: %s\n", ref, d.Error())
+			_, _ = fmt.Fprintf(stderrW, "GITEXEC-HOOK-ERR: %s: %s\n", ref, d.Error())
 			denied = true
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		// Couldn't read the ref list → fail-open (never block on our own error).
-		fmt.Fprintf(stderrW, "GITEXEC-HOOK: read stdin failed (allowing): %v\n", err)
+		_, _ = fmt.Fprintf(stderrW, "GITEXEC-HOOK: read stdin failed (allowing): %v\n", err)
 		return 0
 	}
 	if denied {
@@ -254,28 +254,15 @@ func printRejectionFeedback(stderrW io.Writer, ref string, violations []ruleguar
 		}
 		byRuleset[key] = append(byRuleset[key], v.Kind)
 	}
-	fmt.Fprintf(stderrW, "\n")
-	fmt.Fprintf(stderrW, "⛔ Push to %q was blocked by repository ruleset policy:\n", branch)
+	_, _ = fmt.Fprintf(stderrW, "\n")
+	_, _ = fmt.Fprintf(stderrW, "⛔ Push to %q was blocked by repository ruleset policy:\n", branch)
 	for _, key := range order {
-		fmt.Fprintf(stderrW, "\n   ruleset %s\n", label[key])
+		_, _ = fmt.Fprintf(stderrW, "\n   ruleset %s\n", label[key])
 		for _, kind := range byRuleset[key] {
-			fmt.Fprintf(stderrW, "     · %s\n", kind)
+			_, _ = fmt.Fprintf(stderrW, "     · %s\n", kind)
 		}
 	}
-	fmt.Fprintf(stderrW, "\n")
-}
-
-// formatViolations renders the local blocking violations for the mismatch log —
-// which ruleset/rule the local evaluator would have blocked on.
-func formatViolations(vs []ruleguard.RuleViolation) string {
-	if len(vs) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(vs))
-	for _, v := range vs {
-		parts = append(parts, fmt.Sprintf("ruleset=%d(%q) rule=%d kind=%q", v.RulesetID, v.RulesetName, v.RuleID, v.Kind))
-	}
-	return " local_violations=[" + strings.Join(parts, "; ") + "]"
+	_, _ = fmt.Fprintf(stderrW, "\n")
 }
 
 // logShadowSkip logs, once per push, why local evaluation was skipped for this
@@ -299,5 +286,5 @@ func logShadowSkip(src ruleguard.BundleSource, stderrW io.Writer) {
 	case ruleguard.BundleDecodeError:
 		reason = fmt.Sprintf("rule bundle decode failed: %v", src.Err)
 	}
-	fmt.Fprintf(stderrW, "GITEXEC-HOOK: push proceeds WITHOUT ruleset enforcement: %s\n", reason)
+	_, _ = fmt.Fprintf(stderrW, "GITEXEC-HOOK: push proceeds WITHOUT ruleset enforcement: %s\n", reason)
 }

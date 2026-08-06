@@ -1,0 +1,8 @@
+# 이 레포가 소유한 필수 도메인 가드 — go-guard(harness) 의 guard-presence step 이
+# 각 항목이 ①Makefile 에 정의됨 ②CI 에서 make <타깃> 로 호출됨 을 대조한다.
+# 조용히 삭제되면 CI fail. (도메인 가드는 레포 소유, harness 는 존재만 검증)
+guard-errcodes     # 에러 코드 카탈로그 ratchet — bare NewHTTPError / HTTP 422 금지 (check-error-codes.sh)
+guard-specs        # OpenAPI dangling $ref 가드 — downstream codegen 보호 (check-openapi-refs.sh)
+guard-spec-drift   # OpenAPI 스펙 드리프트 — 핸들러=SoT, 재생성 후 커밋본과 diff (check-spec-drift.sh)
+guard-git-native   # git/ssh substrate: native git(go-git 래칫)+os.Chdir 0+CommandContext (#6272, check-git-native.sh)
+guard-http-catalog # http substrate: 응답을 에러 카탈로그로 — ad-hoc gin.H 래칫 (HTTP-PROTOCOL, check-http-catalog.sh)

@@ -14,6 +14,9 @@ env:
   LOCAL_REGISTRY: collabops-registry.collabops-onprem-stage.svc.cluster.local:5000
 
 jobs:
+  go-guard:
+    include: "collabops-one/collabops-code-harness/go-guard@v4"
+
   test:
     resources:
       requests:
@@ -74,6 +77,34 @@ jobs:
           set -eu
           cd /workspace/source
           make guard-specs
+
+      # 핸들러 = OpenAPI 스펙 SoT: 스펙을 재생성해 커밋본과 diff. 핸들러/스키마를 바꾸고
+      # 스펙 재생성·커밋을 안 하면 downstream(orchestrator DTO codegen)이 낡은 스펙을
+      # 쓰므로 여기서 드리프트를 차단한다. (dangling $ref 가드와 상보적)
+      - name: spec drift guard
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make guard-spec-drift
+
+      # #6272 big-rule-1: git/ssh substrate 를 native 로 다룬다. go-git 재확장·os.Chdir·
+      # 비-Context exec.Command 를 래칫으로 막아 native git 이행이 역행하지 않게 한다.
+      - name: git-native guard
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make guard-git-native
+
+      # HTTP-PROTOCOL §1/§2: http 응답을 에러 카탈로그(api.NewCoded)로. ad-hoc gin.H
+      # 응답 유입을 래칫으로 차단(엔벨로프 일관성).
+      - name: http-catalog guard
+        image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
+        run: |
+          set -eu
+          cd /workspace/source
+          make guard-http-catalog
 
       # - name: Lint
       #   image: ${{ env.GAR_MIRROR }}/golang:1.25.5-bookworm
@@ -442,5 +473,3 @@ jobs:
           curl -sS -X POST -H 'Content-type: application/json' \
             --data "{\"text\": \"🚀 *${IMAGE}* image pushed to Artifact Registry! ✅\n📦 Tags: ${VERSION_TAGS} → QA1 auto-deployment\n💬 ${COMMIT_TITLE}\n👤 Contributor: ${ACTOR} | 🕐 Time: ${KST_TIME}\"}" \
             "${SLACK_WEBHOOK_URL}"
-
-

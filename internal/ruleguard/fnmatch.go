@@ -105,9 +105,10 @@ func translateClass(stuff string) string {
 	}
 	// Escape RE2 set-operation chars so they stay literal inside the class.
 	stuff = classSetOps.ReplaceAllString(stuff, `\$1`)
-	if stuff[0] == '!' {
+	switch stuff[0] {
+	case '!':
 		stuff = "^" + stuff[1:]
-	} else if stuff[0] == '^' || stuff[0] == '[' {
+	case '^', '[':
 		stuff = `\` + stuff
 	}
 	return "[" + stuff + "]"
