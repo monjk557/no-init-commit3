@@ -82,6 +82,46 @@ func TestNewManager_TracingEnabled(t *testing.T) {
 	assert.NotPanics(t, func() { _ = m.Shutdown(context.Background()) })
 }
 
+// NewManager 가 config.TracingConfig 를 observability.TracingConfig 로 옮길 때
+// SamplingRate/ExporterType 을 침묵 속에 지우지 않는지 확인한다 (Issue-7835).
+//
+// 예전에는 override 블록이 obsConfig.Tracing 을 구조체 리터럴로 통째로 교체해
+// SamplingRate 가 Go 제로값(0.0)이 됐다 — trace.TraceIDRatioBased(0) 는 모든
+// span 을 non-sampled 로 만들어, exporter 를 OTLP 로 고쳐도 아무것도 Tempo 로
+// 나가지 않는 상태였다.
+func TestNewManager_TracingPreservesSamplingRateAndPicksExporter(t *testing.T) {
+	t.Run("endpoint 없으면 SamplingRate 1.0 유지, exporter 는 stdout", func(t *testing.T) {
+		cfg := newManagerTestConfig(t)
+		cfg.Observability.Tracing = config.TracingConfig{Enabled: true}
+
+		m, err := NewManager(cfg, "v1.0.0")
+		require.NoError(t, err)
+		defer func() { _ = m.Shutdown(context.Background()) }()
+
+		require.NotNil(t, m.tracingManager)
+		assert.Equal(t, 1.0, m.tracingManager.config.SamplingRate,
+			"SamplingRate 가 지워지면 TraceIDRatioBased(0) 라 모든 span 이 non-sampled 된다")
+		assert.Equal(t, "stdout", m.tracingManager.config.ExporterType)
+	})
+
+	t.Run("endpoint 있으면 exporter 는 otlp, SamplingRate 도 그대로", func(t *testing.T) {
+		cfg := newManagerTestConfig(t)
+		cfg.Observability.Tracing = config.TracingConfig{
+			Enabled:  true,
+			Endpoint: "127.0.0.1:4317",
+		}
+
+		m, err := NewManager(cfg, "v1.0.0")
+		require.NoError(t, err)
+		defer func() { _ = m.Shutdown(context.Background()) }()
+
+		require.NotNil(t, m.tracingManager)
+		assert.Equal(t, "otlp", m.tracingManager.config.ExporterType)
+		assert.Equal(t, "127.0.0.1:4317", m.tracingManager.config.ExporterEndpoint)
+		assert.Equal(t, 1.0, m.tracingManager.config.SamplingRate)
+	})
+}
+
 func TestManager_SetupMiddleware(t *testing.T) {
 	m, err := NewManager(newManagerTestConfig(t), "v1.0.0")
 	require.NoError(t, err)

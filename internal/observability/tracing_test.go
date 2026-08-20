@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/stretchr/testify/assert"
@@ -57,6 +58,19 @@ func TestCreateExporter(t *testing.T) {
 	exp2, err := createExporter(TracingConfig{ExporterType: "unknown"})
 	require.NoError(t, err)
 	require.NotNil(t, exp2)
+}
+
+// createExporter("otlp") 가 실제로 OTLP gRPC exporter 를 반환하는지 확인한다
+// (Issue-7835 — exporter_type 에 "otlp" 케이스 자체가 없어 span 이 Tempo 로
+// 전혀 나가지 못하던 결함).
+func TestCreateExporter_OTLP(t *testing.T) {
+	exp, err := createExporter(TracingConfig{
+		ExporterType:     "otlp",
+		ExporterEndpoint: "127.0.0.1:4317",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, exp)
+	assert.IsType(t, &otlptrace.Exporter{}, exp)
 }
 
 func TestTracingManager_HTTPMiddleware_Disabled(t *testing.T) {

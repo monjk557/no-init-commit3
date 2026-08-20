@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -110,14 +111,24 @@ func NewTracingManager(config TracingConfig) (*TracingManager, error) {
 	}, nil
 }
 
-// createExporter creates a trace exporter based on configuration
+// createExporter creates a trace exporter based on configuration.
+//
+// "otlp" 는 ExporterEndpoint 로 gRPC OTLP exporter 를 만든다(Alloy→Tempo).
+// 이게 없으면 span 은 프로세스 안에서 생성되고 로그의 trace_id 는 올바르게 채워지지만,
+// Tempo 로 전혀 전송되지 않아 Loki derivedFields 링크가 아무것도 찾지 못한다
+// (Issue-7835 — OTel 계측이 있어도 exporter 가 없어 waterfall 자체가 비는 사례).
 func createExporter(config TracingConfig) (trace.SpanExporter, error) {
 	switch config.ExporterType {
+	case "otlp":
+		return otlptracegrpc.New(
+			context.Background(),
+			otlptracegrpc.WithEndpoint(config.ExporterEndpoint),
+			otlptracegrpc.WithInsecure(),
+		)
 	case "stdout":
 		return stdouttrace.New(stdouttrace.WithPrettyPrint())
 	default:
-		// Default to stdout for now
-		// In production, you'd want to add support for Jaeger, OTLP, etc.
+		// exporter_type 미지정(로컬 개발 기본값) — stdout 으로 남는다.
 		return stdouttrace.New(stdouttrace.WithPrettyPrint())
 	}
 }

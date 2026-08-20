@@ -143,21 +143,25 @@ func GinRequestLogger(logger *Logger) gin.HandlerFunc {
 
 		metadata := map[string]interface{}{}
 
-		// OpenTelemetry trace context 추출 — Loki↔Tempo 연동
-		var traceID, spanID string
-		span := trace.SpanFromContext(c.Request.Context())
-		sc := span.SpanContext()
-		if sc.HasTraceID() {
-			traceID = sc.TraceID().String()
-			spanID = sc.SpanID().String()
-		}
-
 		fields := []zap.Field{
 			zap.String("event", "http_request"),
 			zap.String("request_id", requestID),
 			zap.String("global_trace_id", globalTraceID),
-			zap.String("trace_id", traceID),
-			zap.String("span_id", spanID),
+		}
+
+		// OpenTelemetry trace context 추출 — Loki↔Tempo 연동. span 이 없으면
+		// (tracing 비활성 / probe 경로 등) trace_id/span_id 키 자체를 싣지
+		// 않는다 — 빈 문자열 키를 박으면 커버리지 측정(`|= "trace_id"`
+		// substring 매칭)이 "계측됨"으로 오분류한다.
+		sc := trace.SpanFromContext(c.Request.Context()).SpanContext()
+		if sc.HasTraceID() {
+			fields = append(fields,
+				zap.String("trace_id", sc.TraceID().String()),
+				zap.String("span_id", sc.SpanID().String()),
+			)
+		}
+
+		fields = append(fields,
 			zap.String("method", method),
 			zap.String("path", path),
 			zap.Any("metadata", metadata),
@@ -166,7 +170,7 @@ func GinRequestLogger(logger *Logger) gin.HandlerFunc {
 			zap.Int64("request_size_bytes", requestSizeBytes),
 			zap.String("request_content_type", requestContentType),
 			zap.Strings("request_body_keys", requestBodyKeys),
-		}
+		)
 
 		switch level {
 		case "error":

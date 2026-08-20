@@ -496,7 +496,10 @@ func parseObservabilityConfig() ObservabilityConfig {
 
 	// 기본값 하드코딩
 	tracingEnabled := true
-	tracingEndpoint := ""
+	// OTEL_EXPORTER_OTLP_ENDPOINT (Issue-7835) — 이 조직의 다른 서비스와 동일한 env.
+	// 미설정이면 observability.createExporter 가 stdout 으로 남아 span 은 로그의
+	// trace_id 는 채우되 Tempo 로는 나가지 않는다(no-op 아님, 다만 Tempo 연동만 빠짐).
+	tracingEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	tracingServiceName := "collabops-git-executor"
 	tracingServiceVersion := "1.0.0"
 	metricsEnabled := true

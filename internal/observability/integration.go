@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
@@ -73,13 +74,26 @@ func NewManager(cfg *config.Config, version string) (*Manager, error) {
 
 	obsConfig := DefaultObservabilityConfig()
 
-	// Override with config settings if provided
+	// Override with config settings if provided.
+	//
+	// obsConfig.Tracing 은 이미 DefaultObservabilityConfig() → DefaultTracingConfig() 로
+	// 채워져 있다(SamplingRate 1.0, ExporterType "stdout"). 필드별로 override 한다 —
+	// 예전처럼 구조체 리터럴 통째로 교체하면 SamplingRate 가 명시되지 않아 Go 제로값(0.0)
+	// 이 되고, trace.TraceIDRatioBased(0) 는 모든 span 을 non-sampled 로 만든다. 그러면
+	// exporter 를 OTLP 로 고쳐도 BatchSpanProcessor 가 하나도 export 하지 않는다
+	// (Issue-7835 — trace_id 는 로그에 채워지는데 Tempo 에는 영원히 안 보이는 상태).
 	if cfg.Observability.Tracing.Enabled {
-		obsConfig.Tracing = TracingConfig{
-			Enabled:          cfg.Observability.Tracing.Enabled,
-			ExporterEndpoint: cfg.Observability.Tracing.Endpoint,
-			ServiceName:      ServiceName,
-			ServiceVersion:   cfg.Observability.Tracing.ServiceVersion,
+		obsConfig.Tracing.Enabled = cfg.Observability.Tracing.Enabled
+		obsConfig.Tracing.ExporterEndpoint = cfg.Observability.Tracing.Endpoint
+		obsConfig.Tracing.ServiceName = ServiceName
+		obsConfig.Tracing.ServiceVersion = cfg.Observability.Tracing.ServiceVersion
+		if env := os.Getenv("APP_ENV"); env != "" {
+			obsConfig.Tracing.Environment = env
+		}
+		// endpoint 가 있을 때만 OTLP 로 — 미설정 시 기존 stdout 기본값 유지(no-op 아님,
+		// span 은 계속 생성되고 로그의 trace_id 는 채워지되 Tempo 로만 안 나간다).
+		if obsConfig.Tracing.ExporterEndpoint != "" {
+			obsConfig.Tracing.ExporterType = "otlp"
 		}
 	}
 
@@ -174,6 +188,12 @@ func (m *Manager) ginTracingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Wrap the Gin context in a standard HTTP handler
 		httpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// otelhttp hands us a *new* *http.Request carrying the
+			// span-populated context (r.WithContext(spanCtx)). Gin's
+			// c.Request must be repointed at it, otherwise the span never
+			// reaches c.Next() (downstream handlers/loggers keep reading the
+			// original, span-less c.Request) and trace_id is always empty.
+			c.Request = r
 			c.Next()
 		})).ServeHTTP(c.Writer, c.Request)
 	}
