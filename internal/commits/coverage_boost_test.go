@@ -483,16 +483,28 @@ func Test_validateMultiFileOperation_DeleteNoContent_OK(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_validateMultiFileOperation_CreateMissingContent_ReturnsError(t *testing.T) {
+func Test_validateMultiFileOperation_CreateEmptyContent_OK(t *testing.T) {
 	t.Parallel()
 
+	// 빈 파일 생성은 허용한다 (GitHub PUT /contents 의 content:"" 와 동일).
 	err := validateMultiFileOperation(&MultiFileOperation{
 		Path:      "a.txt",
 		Operation: OperationCreate,
 	})
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "content is required")
+	require.NoError(t, err)
+}
+
+func Test_validateMultiFileOperation_UpdateEmptyContent_OK(t *testing.T) {
+	t.Parallel()
+
+	// update 로 기존 파일을 빈 파일로 만드는 것도 허용한다.
+	err := validateMultiFileOperation(&MultiFileOperation{
+		Path:      "a.txt",
+		Operation: OperationUpdate,
+	})
+
+	require.NoError(t, err)
 }
 
 func Test_validateMultiFileOperation_UpdateWithContent_OK(t *testing.T) {
@@ -864,6 +876,92 @@ func Test_ExecuteFastImportCommit_RootCommit_CreatesFiles(t *testing.T) {
 	}
 	require.True(t, paths["a.txt"])
 	require.True(t, paths["dir/b.txt"])
+}
+
+// 빈 파일 생성이 실제로 git 의 빈 blob 으로 커밋되는지 확인한다.
+// validator 만 풀고 하위 경로가 빈 내용을 못 다루면 여기서 깨진다.
+func Test_ExecuteFastImportCommit_EmptyContent_CreatesEmptyBlob(t *testing.T) {
+	t.Parallel()
+
+	const gitEmptyBlob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+
+	repoPath := newBareRepoNative(t)
+	ctx := context.Background()
+	author := NativeSignature{Name: "T", Email: "t@e.com", When: time.Date(2024, 6, 5, 12, 0, 0, 0, time.UTC)}
+
+	res, err := ExecuteFastImportCommit(ctx, &FastImportCommitRequest{
+		RepoPath:     repoPath,
+		Branch:       "main",
+		BaseTreeHash: "",
+		Changes: []FileChange{
+			{Operation: FileOperationCreate, Path: "empty.txt"},
+			{Operation: FileOperationCreate, Path: "nonempty.txt", Content: []byte("x")},
+		},
+		CommitInfo: CommitInfo{Message: "empty file", Author: author},
+	})
+
+	require.NoError(t, err)
+
+	entries, err := nativeLsTree(ctx, repoPath, res.TreeHash)
+	require.NoError(t, err)
+
+	byPath := map[string]nativeLsTreeEntry{}
+	for _, e := range entries {
+		byPath[e.Path] = e
+	}
+
+	empty, ok := byPath["empty.txt"]
+	require.True(t, ok, "empty.txt 가 트리에 없음")
+	require.Equal(t, gitEmptyBlob, empty.Hash)
+	require.Equal(t, "100644", empty.Mode)
+
+	// 같은 커밋의 일반 파일은 영향 없음
+	require.Equal(t, "nonempty.txt", byPath["nonempty.txt"].Path)
+	require.NotEqual(t, gitEmptyBlob, byPath["nonempty.txt"].Hash)
+}
+
+// update 로 기존 파일을 빈 파일로 만드는 경로. 내용이 있던 blob 이 실제로
+// 빈 blob 으로 교체되는지 확인한다.
+func Test_ExecuteFastImportCommit_UpdateToEmpty_TruncatesBlob(t *testing.T) {
+	t.Parallel()
+
+	const gitEmptyBlob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+
+	repoPath := newBareRepoNative(t)
+	ctx := context.Background()
+	author := NativeSignature{Name: "T", Email: "t@e.com", When: time.Date(2024, 6, 6, 12, 0, 0, 0, time.UTC)}
+
+	base, err := ExecuteFastImportCommit(ctx, &FastImportCommitRequest{
+		RepoPath:     repoPath,
+		Branch:       "main",
+		BaseTreeHash: "",
+		Changes: []FileChange{
+			{Operation: FileOperationCreate, Path: "f.txt", Content: []byte("has content")},
+		},
+		CommitInfo: CommitInfo{Message: "base", Author: author},
+	})
+	require.NoError(t, err)
+
+	res, err := ExecuteFastImportCommit(ctx, &FastImportCommitRequest{
+		RepoPath:     repoPath,
+		Branch:       "main",
+		BaseTreeHash: base.TreeHash,
+		Changes: []FileChange{
+			{Operation: FileOperationUpdate, Path: "f.txt"},
+		},
+		CommitInfo: CommitInfo{
+			Message: "truncate",
+			Author:  author,
+			Parents: []string{base.CommitHash},
+		},
+	})
+	require.NoError(t, err)
+
+	entries, err := nativeLsTree(ctx, repoPath, res.TreeHash)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "f.txt", entries[0].Path)
+	require.Equal(t, gitEmptyBlob, entries[0].Hash)
 }
 
 func Test_ExecuteFastImportCommit_UpdateDeleteMove_AppliesAll(t *testing.T) {

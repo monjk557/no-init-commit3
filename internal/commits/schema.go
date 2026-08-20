@@ -209,7 +209,7 @@ type MultiFileCommitRequest struct {
 type MultiFileOperation struct {
 	Path         string    `json:"path" binding:"required"`
 	Operation    Operation `json:"operation" binding:"required"` // "create", "update", "delete", "move"
-	Content      string    `json:"content,omitempty"`            // required for create/update, optional for move
+	Content      string    `json:"content,omitempty"`            // optional — empty means empty file for create/update; unused for delete
 	Encoding     string    `json:"encoding,omitempty"`           // optional, defaults to utf-8
 	Mode         string    `json:"mode,omitempty"`               // optional file mode
 	OriginalPath string    `json:"original_path,omitempty"`      // required for move operation

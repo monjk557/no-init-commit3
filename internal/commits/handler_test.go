@@ -322,26 +322,36 @@ func Test_MultiFileCommit_UpdateNonExistent_Returns404(t *testing.T) {
 	requireBodyContains(t, w, "not found")
 }
 
-// Test_MultiFileCommit_EmptyContent_Returns400
-// 회귀: create/update는 content가 필수 (현재 구현은 빈 문자열 거부)
-func Test_MultiFileCommit_EmptyContent_Returns400(t *testing.T) {
+// Test_MultiFileCommit_EmptyContent_NotRejected
+// 회귀: create/update 모두 빈 content 를 허용한다 (빈 파일, GitHub 과 동일).
+// 이 핸들러 테스트의 레포는 존재하지 않으므로 400(검증 거부)만 아니면 된다 —
+// 빈 blob 이 실제로 커밋되는지는
+// Test_ExecuteFastImportCommit_EmptyContent_CreatesEmptyBlob 가 검증한다.
+func Test_MultiFileCommit_EmptyContent_NotRejected(t *testing.T) {
 	t.Parallel()
 
-	handler := newCommitsHandler(t)
+	for _, op := range []Operation{OperationCreate, OperationUpdate} {
+		t.Run(string(op), func(t *testing.T) {
+			t.Parallel()
 
-	req := MultiFileCommitRequest{
-		Message: "Empty content",
-		Branch:  "main",
-		Operations: []MultiFileOperation{
-			{Path: "empty.txt", Operation: "create", Content: ""},
-		},
-		Author: &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+			handler := newCommitsHandler(t)
+
+			req := MultiFileCommitRequest{
+				Message: "Empty file",
+				Branch:  "main",
+				Operations: []MultiFileOperation{
+					{Path: "empty.txt", Operation: op, Content: ""},
+				},
+				Author: &CommitAuthor{Name: "Test User", Email: "test@example.com"},
+			}
+			c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
+			c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
+			invokeTyped(c, handler.HandleMultiFileCommit)
+
+			require.NotEqual(t, http.StatusBadRequest, w.Code,
+				"빈 content 로 %s 가 검증에서 거부되면 안 됨: %s", op, w.Body.String())
+		})
 	}
-	c, w := newRequest(t, "POST", "/repos/testowner/testrepo/commits", req)
-	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
-	invokeTyped(c, handler.HandleMultiFileCommit)
-
-	requireStatus(t, w, http.StatusBadRequest)
 }
 
 // Test_MultiFileCommit_LargeFile_ReturnsSuccess
