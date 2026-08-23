@@ -1,3 +1,17 @@
+# ---------------------------------------------------------------------------
+# 개발 도구 버전 — 반드시 고정한다.
+#
+# `@latest` 는 go.mod 의 toolchain 고정(go1.25.13)과 정면충돌한다. 도구가 더 높은
+# Go 를 요구하는 버전을 내는 순간, 아무 커밋도 하지 않았는데 CI 가 깨진다.
+# 실제로 staticcheck v0.8.0(go>=1.26)이 나오면서 install 단계가 실패했다.
+#
+# 올릴 때는 Go 요구사항을 먼저 확인한다:
+#     go list -m -f '{{.GoVersion}}' honnef.co/go/tools@<version>
+# 결과가 go.mod 의 toolchain 보다 높으면 올리지 않는다(또는 toolchain 을 먼저 올린다).
+# golangci-lint 버전은 아래 fmt/lint 섹션의 GOLANGCI_LINT_VERSION 하나로 관리한다.
+GOIMPORTS_VERSION   ?= v0.49.0
+STATICCHECK_VERSION ?= v0.7.0
+
 # [MANUAL 0] make install base|local|qa|stage|prod
 # Description: Install Go dependencies and tools
 # Used: go.mod, go.sum
@@ -11,15 +25,12 @@ install:
 	@cd tests && go mod download && go mod tidy
 	@if [ "$(filter local,$(MAKECMDGOALS))" ] || [ "$(words $(MAKECMDGOALS))" -eq 1 ]; then \
 		echo "🔧 Installing local development tools..."; \
-		command -v golangci-lint >/dev/null 2>&1 || { \
-			echo "Installing golangci-lint..."; \
-			curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin; \
-		}; \
-		go install golang.org/x/tools/cmd/goimports@latest; \
-		go install honnef.co/go/tools/cmd/staticcheck@latest; \
+		$(MAKE) --no-print-directory ensure-golangci-lint; \
+		go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION); \
+		go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION); \
 	elif [ "$(filter qa,$(MAKECMDGOALS))" ] || [ "$(filter stage,$(MAKECMDGOALS))" ] || [ "$(filter prod,$(MAKECMDGOALS))" ]; then \
 		echo "🏗️  Installing production tools..."; \
-		go install honnef.co/go/tools/cmd/staticcheck@latest; \
+		go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION); \
 	fi
 	@echo "✅ Dependencies installed!"
 
@@ -254,10 +265,10 @@ test:
 .PHONY: test-cover
 test-cover:
 	@echo "🧪 Running coverage over ./internal/... + cmd/git-executor..."
-	@GOTOOLCHAIN=go1.25.10 go test -coverprofile=coverage.out \
+	@GOTOOLCHAIN=go1.25.13 go test -coverprofile=coverage.out \
 		./internal/... ./cmd/git-executor
 	@echo "📊 Total coverage:"
-	@GOTOOLCHAIN=go1.25.10 go tool cover -func=coverage.out | tail -1
+	@GOTOOLCHAIN=go1.25.13 go tool cover -func=coverage.out | tail -1
 
 # [MANUAL 7] make clean
 # Description: Gracefully stop all services and clean up everything
