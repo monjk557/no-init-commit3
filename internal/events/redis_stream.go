@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -41,6 +42,16 @@ type CommitEvent struct {
 	CommitMessage string          // Commit message
 	Timestamp     time.Time       // Event timestamp (commit time)
 	PushedAt      time.Time       // Push received timestamp
+
+	// Commits 는 이번 ref 갱신으로 새로 도달 가능해진 커밋들이다 (기여 집계용).
+	//
+	// CommitHash 는 ref 의 새 tip 하나뿐이라 "이 push 에 커밋이 몇 개였나" 를
+	// 소비자가 알 수 없었다. 소비자가 되묻게 하면 왕복이 늘고 그 사이 force-push
+	// 로 커밋이 사라지는 레이스가 생기므로, 발행 시점 스냅샷을 그대로 싣는다.
+	//
+	// 커밋이 1개인 경로(merge/revert/fork/commit API)는 gitutil.ListCommitRange
+	// 없이 직접 채운다. 비어 있으면 소비자는 기여 집계를 건너뛴다.
+	Commits []gitutil.CommitMeta
 }
 
 // eventData represents the JSON structure for Redis Stream data field
@@ -56,6 +67,8 @@ type eventData struct {
 	OldRef        string `json:"old_ref,omitempty"` // For rename: previous ref name
 	UserID        string `json:"user_id,omitempty"`
 	PushedAt      string `json:"pushed_at,omitempty"`
+	// Commits 는 비어 있으면 생략한다 — 기존 소비자의 payload 를 넓히지 않는다.
+	Commits []gitutil.CommitMeta `json:"commits,omitempty"`
 }
 
 // RedisStreamClient provides an interface for publishing commit events to Redis Stream
@@ -391,6 +404,7 @@ func (r *redisStreamClient) AddCommitEventToStream(ctx context.Context, event *C
 		Ref:           event.RefName,
 		EventType:     string(event.EventType),
 		CommitMessage: event.CommitMessage,
+		Commits:       event.Commits,
 	}
 	switch event.EventType {
 	case EventTypeBranchDelete, EventTypeTagDelete:

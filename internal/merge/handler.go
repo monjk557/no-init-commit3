@@ -17,6 +17,7 @@ import (
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/diffs"
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"go.uber.org/zap"
@@ -566,7 +567,7 @@ func (h *MergePreviewHandler) validatePath(owner, repo string) error {
 }
 
 // publishMergeCommitEvent publishes a merge commit event to Redis Stream
-func (h *MergeOperationsHandler) publishMergeCommitEvent(_ context.Context, repoPath string, oldHash string, commit *NativeCommit, refName, owner, repoName, userID string) {
+func (h *MergeOperationsHandler) publishMergeCommitEvent(ctx context.Context, repoPath string, oldHash string, commit *NativeCommit, refName, owner, repoName, userID string) {
 	if h.eventsClient == nil || commit == nil {
 		return
 	}
@@ -592,6 +593,9 @@ func (h *MergeOperationsHandler) publishMergeCommitEvent(_ context.Context, repo
 		CommitMessage: commit.Message,
 		Timestamp:     commit.Committer.When,
 		PushedAt:      time.Now(),
+		// squash 는 커밋 1개, 일반 merge 는 source 쪽 커밋 전부가 잡힌다. 후자는
+		// feature 브랜치 push 때 이미 집계됐지만 같은 sha 라 소비자에서 흡수된다.
+		Commits: gitutil.ListCommitRangeBestEffort(ctx, repoPath, oldHash, commit.Hash, refName),
 	}
 
 	go func() {

@@ -20,15 +20,17 @@ const tag = "Commits"
 // (default *HTTPError 매핑이 그대로 사용됨).
 func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	var (
-		listCommits       func(*gin.Context, CommitsListRequest) (CommitsResponse, error)
-		commitActivity    func(*gin.Context, CommitActivityRequest) (CommitActivityResponse, error)
-		comparisonSummary func(*gin.Context, ComparisonSummaryRequest) (ComparisonSummaryResponse, error)
-		commitDetail      func(*gin.Context) (CommitDetailResponse, error)
-		multiFileCommit   func(*gin.Context) (MultiFileCommitResponse, error)
+		listCommits         func(*gin.Context, CommitsListRequest) (CommitsResponse, error)
+		commitActivity      func(*gin.Context, CommitActivityRequest) (CommitActivityResponse, error)
+		commitContributions func(*gin.Context, ContributionsRequest) (ContributionsResponse, error)
+		comparisonSummary   func(*gin.Context, ComparisonSummaryRequest) (ComparisonSummaryResponse, error)
+		commitDetail        func(*gin.Context) (CommitDetailResponse, error)
+		multiFileCommit     func(*gin.Context) (MultiFileCommitResponse, error)
 	)
 	if h != nil {
 		listCommits = h.HandleCommitsAPI
 		commitActivity = h.HandleCommitActivity
+		commitContributions = h.HandleCommitContributions
 		comparisonSummary = h.HandleComparisonSummary
 		commitDetail = h.HandleGetCommitDetail
 		multiFileCommit = h.HandleMultiFileCommit
@@ -51,6 +53,13 @@ func RegisterRoutes(g gin.IRouter, h *CommitsHandler) {
 	typed.RegisterGetWithQuery(g, "/commits/activity", tag,
 		commitActivity,
 		typed.WithSummary("HandleCommitActivity"),
+	)
+
+	// GET /commits/contributions — 기여 히트맵 백필용 전 ref 커밋 목록.
+	// activity 와 같은 이유로 /:sha 보다 먼저 등록한다.
+	typed.RegisterGetWithQuery(g, "/commits/contributions", tag,
+		commitContributions,
+		typed.WithSummary("HandleCommitContributions"),
 	)
 
 	// GET /commits/compare/summary — lightweight comparison.

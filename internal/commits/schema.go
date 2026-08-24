@@ -86,6 +86,42 @@ const (
 	MinActivityDays     = 1
 )
 
+// ContributionsRequest 는 GET /commits/contributions 의 query parameter 다.
+//
+// 기여 히트맵(잔디) 백필용 — 레포 전 ref 의 커밋을 sha/author email/author date
+// 삼중항으로만 페이지네이션해 내려준다. 라이브 경로는 push 이벤트 payload 로
+// 받으므로 이 엔드포인트는 백필에서만 쓴다.
+type ContributionsRequest struct {
+	Offset string `form:"offset"` // default 0
+	Limit  string `form:"limit"`  // default 1000, 1..5000
+}
+
+// ContributionCommit 은 기여 집계에 필요한 최소 커밋 정보다.
+//
+// AuthoredAt 은 커밋 자체의 타임존 오프셋을 보존한 RFC3339 문자열이다 — 소비자가
+// 이 오프셋 기준으로 날짜를 자른다. UTC 로 정규화하면 KST 오전 커밋이 전날로 밀린다.
+type ContributionCommit struct {
+	SHA         string `json:"sha"`
+	AuthorEmail string `json:"author_email"`
+	AuthoredAt  string `json:"authored_at"`
+}
+
+// ContributionsResponse 는 GET /commits/contributions 의 응답이다.
+type ContributionsResponse struct {
+	Success bool                 `json:"success"`
+	Offset  int                  `json:"offset"`
+	Limit   int                  `json:"limit"`
+	HasMore bool                 `json:"has_more"` // true 면 offset+limit 으로 다음 페이지
+	Commits []ContributionCommit `json:"commits"`
+}
+
+// 기여 백필 페이지 크기 기본/최소/최대.
+const (
+	DefaultContributionsLimit = 1000
+	MaxContributionsLimit     = 5000
+	MinContributionsLimit     = 1
+)
+
 // ComparisonSummaryResponse는 두 커밋 간 비교 요약 응답입니다.
 type ComparisonSummaryResponse struct {
 	Success          bool   `json:"success"`

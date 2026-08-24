@@ -189,6 +189,66 @@ func (h *CommitsHandler) HandleCommitActivity(c *gin.Context, req CommitActivity
 	return buildActivityResponse(ref, days, dates), nil
 }
 
+// HandleCommitContributions 는 GET /repos/{owner}/{repo}/commits/contributions
+// 요청을 처리한다.
+//
+// 기여 히트맵(잔디) **백필 전용** 이다. 라이브 경로는 push 이벤트 payload 로
+// 커밋 목록을 받으므로 이 엔드포인트를 타지 않는다. 백필을 push 이벤트 재생으로
+// 처리하면 파이프라인 트리거까지 재발화하므로, 별도 pull 경로가 필요하다.
+func (h *CommitsHandler) HandleCommitContributions(c *gin.Context, req ContributionsRequest) (ContributionsResponse, error) {
+	ctx := c.Request.Context()
+
+	offset, limit, err := parseContributionsPaging(req)
+	if err != nil {
+		return ContributionsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
+	}
+
+	// ref 를 받지 않는다 — --all 이 대상이므로 검증할 ref 가 없다.
+	repoCtx, err := h.validateAndGetRepoPath(c.Param("owner"), c.Param("repo"), "HEAD")
+	if err != nil {
+		return ContributionsResponse{}, err
+	}
+
+	commits, hasMore, err := nativeAllCommits(ctx, repoCtx.repoPath, offset, limit)
+	if err != nil {
+		return ContributionsResponse{}, api.NewCoded(api.ErrCodeInvalidInput, err.Error())
+	}
+
+	return ContributionsResponse{
+		Success: true,
+		Offset:  offset,
+		Limit:   limit,
+		HasMore: hasMore,
+		Commits: commits,
+	}, nil
+}
+
+// parseContributionsPaging 은 offset/limit 을 파싱/검증한다. 빈 값이면 default.
+func parseContributionsPaging(req ContributionsRequest) (int, int, error) {
+	offset := 0
+	if raw := strings.TrimSpace(req.Offset); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			return 0, 0, fmt.Errorf("invalid offset parameter: must be a non-negative integer")
+		}
+		offset = parsed
+	}
+
+	limit := DefaultContributionsLimit
+	if raw := strings.TrimSpace(req.Limit); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid limit parameter: must be an integer")
+		}
+		if parsed < MinContributionsLimit || parsed > MaxContributionsLimit {
+			return 0, 0, fmt.Errorf("invalid limit parameter: must be between %d and %d",
+				MinContributionsLimit, MaxContributionsLimit)
+		}
+		limit = parsed
+	}
+	return offset, limit, nil
+}
+
 // parseActivityDays 는 days query 파라미터를 파싱/검증한다. 빈 값이면 default.
 func parseActivityDays(raw string) (int, error) {
 	raw = strings.TrimSpace(raw)

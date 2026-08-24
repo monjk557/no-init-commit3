@@ -15,6 +15,7 @@ import (
 
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/orchestrator"
 	"github.com/collabops/git-executor/internal/performance"
 	"github.com/collabops/git-executor/internal/protocol/gitcmd"
@@ -703,6 +704,9 @@ func (h *SSHProtocolHandler) addSSHCommitEventToStream(ctx context.Context, repo
 		CommitMessage: commitInfo.Message,
 		Timestamp:     commitInfo.CommitterDate,
 		PushedAt:      time.Now(),
+		// 이번 갱신으로 새로 도달 가능해진 커밋들 (기여 집계용). 실패해도
+		// push 이벤트 발행은 계속된다 — 집계는 push 의 부수 기능이다.
+		Commits: gitutil.ListCommitRangeBestEffort(ctx, repoPath, oldHash, commitHash, refName),
 	}
 
 	// Publish asynchronously to avoid blocking

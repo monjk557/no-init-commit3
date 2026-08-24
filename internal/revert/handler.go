@@ -10,6 +10,7 @@ import (
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"go.uber.org/zap"
@@ -124,7 +125,7 @@ func (h *RevertHandler) validateRevertRequest(req *RevertRequest) error {
 }
 
 // publishRevertEvent publishes a revert commit event to Redis Stream.
-func (h *RevertHandler) publishRevertEvent(_ context.Context, repoPath string, result *RevertResponse, targetRef, owner, repoName, userID string) {
+func (h *RevertHandler) publishRevertEvent(ctx context.Context, repoPath string, result *RevertResponse, targetRef, owner, repoName, userID string) {
 	if h.eventsClient == nil || result.RevertCommit == nil {
 		return
 	}
@@ -147,6 +148,9 @@ func (h *RevertHandler) publishRevertEvent(_ context.Context, repoPath string, r
 		CommitMessage: result.RevertCommit.Message,
 		Timestamp:     result.RevertCommit.Author.Date,
 		PushedAt:      time.Now(),
+		// revert 는 항상 커밋 1개를 새로 만든다. OldRev 가 없어 범위 조회를 쓸 수
+		// 없고, 쓸 필요도 없다. 단 default branch 일 때만 기여로 센다 (D9).
+		Commits: revertContribution(ctx, repoPath, refName, result.RevertCommit),
 	}
 
 	go func() {
@@ -160,4 +164,19 @@ func (h *RevertHandler) publishRevertEvent(_ context.Context, repoPath string, r
 				zap.Error(pubErr))
 		}
 	}()
+}
+
+// revertContribution 은 revert 커밋을 기여 목록으로 변환한다. default branch 가
+// 아니면 비운다 — 기여는 default branch 도달 커밋만 센다 (설계 D9).
+func revertContribution(
+	ctx context.Context, repoPath, refName string, commit *CommitInfo,
+) []gitutil.CommitMeta {
+	if commit == nil || !gitutil.IsDefaultBranch(ctx, repoPath, refName) {
+		return nil
+	}
+	return []gitutil.CommitMeta{{
+		SHA:         commit.SHA,
+		AuthorEmail: commit.Author.Email,
+		AuthoredAt:  commit.Author.Date.Format(time.RFC3339),
+	}}
 }

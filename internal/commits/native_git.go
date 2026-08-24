@@ -554,3 +554,59 @@ func nativeGetCommitFullMessage(ctx context.Context, repoPath, hash string) (str
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// nativeAllCommits 는 **default branch** 도달 커밋을 sha/author email/author date
+// 로 페이지네이션해 반환한다. 기여 히트맵 백필 전용이다.
+//
+// --all 이 아니라 HEAD 인 이유: 기여는 default branch 도달 커밋만 센다 (설계 D9).
+// 라이브 경로와 같은 기준이어야 백필 결과가 어긋나지 않는다. 머지되지 않은 브랜치
+// 커밋은 머지 시점에 집계된다.
+//
+// ponytail: offset 페이지네이션이라 git 이 매 페이지마다 앞부분을 다시 훑는다
+// (전체 O(n^2/limit)). 일회성 백필이고 최대급 레포가 1.2만 커밋이라 감당되는
+// 수준이다 — 상시 조회가 생기면 sha 커서로 바꿀 것.
+func nativeAllCommits(ctx context.Context, repoPath string, offset, limit int) ([]ContributionCommit, bool, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	// limit+1 을 요청해 다음 페이지 존재 여부를 추가 호출 없이 판정한다.
+	args := []string{
+		"--git-dir", repoPath, "log", "HEAD",
+		"--pretty=%H%x09%aE%x09%aI",
+		fmt.Sprintf("--skip=%d", offset),
+		fmt.Sprintf("--max-count=%d", limit+1),
+	}
+
+	cmd := exec.CommandContext(cmdCtx, "git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to list commits: %s", strings.TrimSpace(stderr.String()))
+	}
+
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return []ContributionCommit{}, false, nil
+	}
+
+	lines := strings.Split(raw, "\n")
+	hasMore := len(lines) > limit
+	if hasMore {
+		lines = lines[:limit]
+	}
+
+	commits := make([]ContributionCommit, 0, len(lines))
+	for _, line := range lines {
+		parts := strings.Split(strings.TrimSpace(line), "\t")
+		if len(parts) != 3 || parts[0] == "" {
+			continue
+		}
+		commits = append(commits, ContributionCommit{
+			SHA:         parts[0],
+			AuthorEmail: parts[1],
+			AuthoredAt:  parts[2],
+		})
+	}
+	return commits, hasMore, nil
+}

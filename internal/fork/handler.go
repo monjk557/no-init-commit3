@@ -105,6 +105,8 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context, req ForkRepositoryReq
 
 	if h.eventsClient != nil {
 		relativePath := events.GetRelativeRepoPath(result.TargetPath, h.pathConfig.GetRepoRoot())
+		// fork 이벤트에는 Commits 를 싣지 않는다 — 포크는 기존 커밋을 복제할 뿐
+		// 새 기여가 아니다. 실으면 원저자의 잔디가 포크 수만큼 부푼다.
 		event := &events.CommitEvent{
 			RepoPath:      relativePath,
 			EventType:     EventTypeFork,

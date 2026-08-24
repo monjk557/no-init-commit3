@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -746,6 +747,7 @@ func (s *CommitsService) addCommitEventToStream(ctx context.Context, repoPath, o
 		CommitMessage: commit.Message,
 		Timestamp:     commit.Committer.Date,
 		PushedAt:      time.Now(),
+		Commits:       gitutil.ListCommitRangeBestEffort(ctx, repoPath, oldHash, commitHash, refName),
 	}
 
 	s.logger.Debug("Creating commit event with user context",

@@ -451,6 +451,32 @@ paths:
                 $ref: '#/components/schemas/ComparisonSummaryResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/commits/contributions:
+    get:
+      summary: HandleCommitContributions
+      operationId: handlecommitcontributions
+      tags:
+        - Commits
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+        - name: offset
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContributionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/commits/{sha}:
     get:
       summary: HandleGetCommitDetail
@@ -2194,6 +2220,43 @@ components:
         - diff_files
         - success
         - workflows
+    ContributionCommit:
+      type: object
+      properties:
+        sha:
+          type: string
+        author_email:
+          type: string
+        authored_at:
+          type: string
+      required:
+        - author_email
+        - authored_at
+        - sha
+    ContributionsRequest:
+      type: object
+    ContributionsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        offset:
+          type: integer
+        limit:
+          type: integer
+        has_more:
+          type: boolean
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContributionCommit'
+          nullable: true
+      required:
+        - commits
+        - has_more
+        - limit
+        - offset
+        - success
     CountSummary:
       type: object
       properties:
