@@ -1085,6 +1085,29 @@ func Test_CreateBranch_RefsHeads_Returns400(t *testing.T) {
 	requireBodyContains(t, w, "branch name")
 }
 
+// Test_CreateBranch_SHALikeName_Returns400WithCatalogCode
+// 회귀: SHA-1(40 hex)/SHA-256(64 hex) 형태의 브랜치 이름은 400으로 거절되고,
+// 응답 body 에 카탈로그 code "INVALID_INPUT" 이 실려야 한다 (GitLab/GitHub 동일 정책).
+func Test_CreateBranch_SHALikeName_Returns400WithCatalogCode(t *testing.T) {
+	t.Parallel()
+
+	handler, repoDir := newHandler(t)
+	initBareRepo(t, repoDir, "testowner", "testrepo")
+
+	router := gin.New()
+	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
+
+	body := `{"name": "92919a083f900ac779e7a86fc698887fc77896aa", "source": "master"}`
+	req := httptest.NewRequest("POST", "/repository/testowner/testrepo/branches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusBadRequest)
+	requireBodyContains(t, w, "SHA-1 or SHA-256")
+	requireBodyContains(t, w, `"code":"INVALID_INPUT"`)
+}
+
 // Test_CreateBranch_SpecialChars_Returns400
 // 회귀: 특수문자(^, :)가 포함된 브랜치 이름은 400으로 거절되어야 함
 func Test_CreateBranch_SpecialChars_Returns400(t *testing.T) {

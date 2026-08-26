@@ -41,6 +41,7 @@ func TestValidateBranchName_AllBranches(t *testing.T) {
 		"feature.lock":    "component ends with .lock",
 		"foo~bar":         "invalid char via pattern",
 		"foo:bar":         "invalid char colon",
+		"92919a083f900ac779e7a86fc698887fc77896aa": "SHA-1-like name (40 hex chars)",
 	}
 	for name, why := range invalid {
 		if err := h.validateBranchName(name); err == nil {

@@ -80,5 +80,23 @@ func (h *BranchOperationsHandler) validateBranchName(name string) error {
 		return fmt.Errorf("branch name contains invalid characters")
 	}
 
+	// GitHub/GitLab 정책: SHA-1(40) 또는 SHA-256(64) 해시와 동일한 형태의 이름은
+	// commit-ish 참조와 모호해지므로 금지 (예: "92919a08...896a")
+	if isSHALikeName(name) {
+		return fmt.Errorf("branch name cannot be a valid SHA-1 or SHA-256 hash")
+	}
+
 	return nil
+}
+
+func isSHALikeName(name string) bool {
+	if len(name) != 40 && len(name) != 64 {
+		return false
+	}
+	for _, r := range name {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
