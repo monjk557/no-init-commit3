@@ -1,10 +1,13 @@
 package blob
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/api"
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -58,7 +61,7 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 
 	// owner, repo, path, ref 검증 (빈 값·잘못된 형식 시 400)
 	if err := ValidateBlobParams(owner, repo, path, ref); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		writeCatalogError(c, api.NewCoded(api.ErrCodeInvalidInput, err.Error()))
 		return
 	}
 
@@ -66,7 +69,7 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 	if rangeHeader := c.GetHeader("Range"); rangeHeader != "" {
 		if !parseRangeValid(rangeHeader) {
 			c.Header("Content-Range", "*")
-			c.JSON(http.StatusRequestedRangeNotSatisfiable, gin.H{"success": false, "error": "invalid range"})
+			writeCatalogError(c, api.NewCoded(api.ErrCodeRangeNotSatisfiable))
 			return
 		}
 	}
@@ -79,7 +82,7 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 	// 저장소 경로 검증
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "repository not found"})
+		writeCatalogError(c, api.NewCoded(api.ErrCodeRepositoryNotFound))
 		return
 	}
 
@@ -87,17 +90,12 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 	content, contentType, err := h.service.GetBlobContent(ctx, repoPath, path, ref)
 	if err != nil {
 		// 파일이 너무 큰 경우 특별 처리
-		if strings.Contains(err.Error(), "too large") {
+		if errors.Is(err, ErrBlobTooLarge) {
 			h.logger.Warn("File too large to display", zap.String("path", path))
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-				"success": false,
-				"error":   "This file is too large to display",
-				"reason":  err.Error(),
-			})
+			writeCatalogError(c, api.NewCoded(api.ErrCodeRequestTooLarge, "This file is too large to display: "+err.Error()))
 			return
 		}
-		statusCode := h.getErrorStatusCode(err)
-		h.sendError(c, err, statusCode)
+		writeCatalogError(c, classifyBlobError(err))
 		return
 	}
 
@@ -119,34 +117,48 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 	c.Data(http.StatusOK, contentType, content)
 }
 
-// sendError는 에러 응답을 전송합니다.
-func (h *BlobHandler) sendError(c *gin.Context, err error, statusCode int) {
-	c.JSON(statusCode, gin.H{"success": false, "error": err.Error()})
+// writeCatalogError 는 *typed.HTTPError 를 표준 envelope 로 응답한다. /blob
+// 은 typed.RegisterRaw 로 등록돼 JSON wrapper 를 안 거치므로(binary streaming)
+// handler 가 직접 쓴다 — wrapper.go 의 writeErrorWithCode 와 동일한 shape.
+func writeCatalogError(c *gin.Context, he *typed.HTTPError) {
+	body := gin.H{"success": false, "error": he.Message}
+	if he.Code != "" {
+		body["code"] = he.Code
+	}
+	c.JSON(he.Status, body)
 }
 
-// getErrorStatusCode는 에러에 따라 적절한 HTTP 상태 코드를 반환합니다.
-func (h *BlobHandler) getErrorStatusCode(err error) int {
+// classifyBlobError 는 GetBlobContent 의 raw 에러를 카탈로그 code 를 가진
+// *typed.HTTPError 로 변환한다. 자체 발생 에러는 sentinel(errors.Is)로
+// 우선 분류하고 — 메시지 문구가 바뀌어도 매핑이 안 깨진다 — 그 외(하위
+// 계층의 자유 문자열 등)는 기존 substring 매칭으로 폴백한다(status 는
+// legacy 와 동일).
+func classifyBlobError(err error) *typed.HTTPError {
 	errMsg := err.Error()
 
-	if strings.Contains(errMsg, "path is a directory") {
-		return http.StatusBadRequest
-	}
-	if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "file not found") {
-		return http.StatusNotFound
-	}
-	if strings.Contains(errMsg, "missing") || strings.Contains(errMsg, "invalid") {
-		return http.StatusBadRequest
-	}
-
-	if strings.Contains(errMsg, "permission") || strings.Contains(errMsg, "access denied") {
-		return http.StatusForbidden
+	switch {
+	case errors.Is(err, ErrBlobIsDirectory):
+		return api.NewCoded(api.ErrCodeInvalidInput, errMsg)
+	case errors.Is(err, ErrBlobTooLarge):
+		return api.NewCoded(api.ErrCodeRequestTooLarge, errMsg)
+	case errors.Is(err, ErrBlobNotFound):
+		return api.NewCoded(api.ErrCodeFileNotFound, errMsg)
 	}
 
-	if strings.Contains(errMsg, "authentication") {
-		return http.StatusUnauthorized
+	switch {
+	case strings.Contains(errMsg, "path is a directory"):
+		return api.NewCoded(api.ErrCodeInvalidInput, errMsg)
+	case strings.Contains(errMsg, "not found"), strings.Contains(errMsg, "file not found"):
+		return api.NewCoded(api.ErrCodeFileNotFound, errMsg)
+	case strings.Contains(errMsg, "missing"), strings.Contains(errMsg, "invalid"):
+		return api.NewCoded(api.ErrCodeInvalidInput, errMsg)
+	case strings.Contains(errMsg, "permission"), strings.Contains(errMsg, "access denied"):
+		return api.NewCoded(api.ErrCodeForbidden, errMsg)
+	case strings.Contains(errMsg, "authentication"):
+		return api.NewCoded(api.ErrCodeUnauthorized, errMsg)
 	}
 
-	return http.StatusInternalServerError
+	return api.NewCoded(api.ErrCodeInternalError, errMsg)
 }
 
 // parseRangeValid returns true if the Range header is valid (e.g. bytes=0-499).

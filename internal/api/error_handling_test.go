@@ -1,4 +1,8 @@
-package api
+// package api_test (external) — tree 가 internal/api 를 import 하게 되면서
+// (카탈로그 마이그레이션) package api 내부 테스트로 두면 api → tree → api
+// import cycle 이 생긴다. 이 파일은 blob/tree/repositories 의 exported 표면만
+// 쓰는 순수 black-box 통합 테스트라 외부 테스트 패키지로 옮겨도 손실이 없다.
+package api_test
 
 import (
 	"encoding/json"

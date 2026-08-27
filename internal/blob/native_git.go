@@ -39,14 +39,14 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 		// Overflow past the read cap means the blob is larger than MaxBlobSize.
 		// Surface a distinct "too large" error so the handler returns 413.
 		if strings.Contains(err.Error(), "output exceeded limit") {
-			return nil, fmt.Errorf("file is too large (exceeds %d bytes)", MaxBlobSize)
+			return nil, fmt.Errorf("%w (exceeds %d bytes)", ErrBlobTooLarge, MaxBlobSize)
 		}
 
 		errMsg := strings.TrimSpace(stderr.String())
 
 		// 경로가 디렉토리인 경우 감지
 		if strings.Contains(errMsg, "is a tree") {
-			return nil, fmt.Errorf("path is a directory")
+			return nil, ErrBlobIsDirectory
 		}
 
 		// 파일이 존재하지 않는 경우
@@ -68,7 +68,7 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 	// git show succeeds for tree objects (directories) too - check object type
 	isDir, _ := NativeIsDirectory(ctx, repoPath, ref, path)
 	if isDir {
-		return nil, fmt.Errorf("path is a directory")
+		return nil, ErrBlobIsDirectory
 	}
 
 	return out, nil

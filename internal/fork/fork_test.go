@@ -451,7 +451,8 @@ func adapt[Resp any](fn func(*gin.Context) (Resp, error)) gin.HandlerFunc {
 }
 
 // adaptNoBody 는 body 없는 typed handler 를 mapper 와 함께 mount 한다 —
-// RegisterNoBody + WithErrorMapper wrapper mirror.
+// RegisterNoBody wrapper mirror. mapper 가 nil 이면 default *typed.HTTPError
+// 해석을 사용한다 (커스텀 ErrorMapper 가 없는 도메인용).
 func adaptNoBody[Resp any](
 	fn func(*gin.Context) (Resp, error),
 	mapper func(error) (int, any),
@@ -459,8 +460,17 @@ func adaptNoBody[Resp any](
 	return func(c *gin.Context) {
 		resp, err := fn(c)
 		if err != nil {
-			status, body := mapper(err)
-			c.JSON(status, body)
+			if mapper != nil {
+				status, body := mapper(err)
+				c.JSON(status, body)
+				return
+			}
+			var he *typed.HTTPError
+			if errors.As(err, &he) {
+				c.JSON(he.Status, gin.H{"success": false, "error": he.Message})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, resp)
@@ -528,7 +538,7 @@ func TestHandler_ForkRepository_Created(t *testing.T) {
 	h := newHandler(t, root)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, forkRepositoryErrorMapper))
+	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, nil))
 
 	body := strings.NewReader(`{"owner":"bob","repo":"proj"}`)
 	req := httptest.NewRequest(http.MethodPost, "/repos/alice/proj/forks", body)
@@ -558,7 +568,7 @@ func TestHandler_ForkRepository_DefaultRepoNameAndBranch(t *testing.T) {
 	h := newHandler(t, root)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, forkRepositoryErrorMapper))
+	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, nil))
 
 	// repo 미지정 → source repo 이름 재사용, default_branch override 적용
 	body := strings.NewReader(`{"owner":"carol","default_branch":"develop"}`)
@@ -581,7 +591,7 @@ func TestHandler_ForkRepository_InvalidTargetPath(t *testing.T) {
 	h := newHandler(t, root)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, forkRepositoryErrorMapper))
+	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, nil))
 
 	// body 의 타겟 owner 에 traversal 시도 → 타겟 path 검증 400
 	body := strings.NewReader(`{"owner":"../escape","repo":"proj"}`)
@@ -600,7 +610,7 @@ func TestHandler_ForkRepository_SourceNotFound(t *testing.T) {
 	h := newHandler(t, root)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, forkRepositoryErrorMapper))
+	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, nil))
 
 	body := strings.NewReader(`{"owner":"bob","repo":"proj"}`)
 	req := httptest.NewRequest(http.MethodPost, "/repos/ghost/missing/forks", body)
@@ -619,7 +629,7 @@ func TestHandler_ForkRepository_MissingOwner(t *testing.T) {
 	h := newHandler(t, root)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, forkRepositoryErrorMapper))
+	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, nil))
 
 	// owner 누락 → binding:"required" 위반 → 400
 	body := strings.NewReader(`{"repo":"proj"}`)
@@ -639,7 +649,7 @@ func TestHandler_GetForkInfo(t *testing.T) {
 
 	router := gin.New()
 	router.GET("/repos/:owner/:repo/fork", adapt(h.HandleGetForkInfo))
-	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, forkRepositoryErrorMapper))
+	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, nil))
 
 	// 1) 포크 전 → is_fork=false
 	req := httptest.NewRequest(http.MethodGet, "/repos/alice/proj/fork", nil)
@@ -700,7 +710,7 @@ func TestHandler_SyncUpstream(t *testing.T) {
 	_ = res
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/fork/sync", adaptNoBody(h.HandleSyncUpstream, syncUpstreamErrorMapper))
+	router.POST("/repos/:owner/:repo/fork/sync", adaptNoBody(h.HandleSyncUpstream, nil))
 
 	req := httptest.NewRequest(http.MethodPost, "/repos/bob/proj/fork/sync", nil)
 	w := httptest.NewRecorder()
@@ -720,7 +730,7 @@ func TestHandler_SyncUpstream_NotFound(t *testing.T) {
 	h := newHandler(t, root)
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/fork/sync", adaptNoBody(h.HandleSyncUpstream, syncUpstreamErrorMapper))
+	router.POST("/repos/:owner/:repo/fork/sync", adaptNoBody(h.HandleSyncUpstream, nil))
 
 	req := httptest.NewRequest(http.MethodPost, "/repos/ghost/missing/fork/sync", nil)
 	w := httptest.NewRecorder()
@@ -761,40 +771,48 @@ func TestRegisterRoutes_WithHandler(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 }
 
-func TestForkRepositoryErrorMapper(t *testing.T) {
-	t.Run("HTTPError takes precedence", func(t *testing.T) {
-		status, _ := forkRepositoryErrorMapper(typed.NewHTTPError(http.StatusBadRequest, "bad"))
-		assert.Equal(t, http.StatusBadRequest, status)
-	})
+func TestClassifyForkRepositoryError(t *testing.T) {
+	asHTTPError := func(t *testing.T, err error) *typed.HTTPError {
+		t.Helper()
+		var he *typed.HTTPError
+		require.ErrorAs(t, err, &he)
+		return he
+	}
 	t.Run("ErrSourceNotFound -> 404", func(t *testing.T) {
-		status, _ := forkRepositoryErrorMapper(ErrSourceNotFound)
-		assert.Equal(t, http.StatusNotFound, status)
+		he := asHTTPError(t, classifyForkRepositoryError(ErrSourceNotFound))
+		assert.Equal(t, http.StatusNotFound, he.Status)
+		assert.Equal(t, "REPOSITORY_NOT_FOUND", he.Code)
 	})
 	t.Run("ErrForkAlreadyExists -> 409", func(t *testing.T) {
-		status, _ := forkRepositoryErrorMapper(ErrForkAlreadyExists)
-		assert.Equal(t, http.StatusConflict, status)
+		he := asHTTPError(t, classifyForkRepositoryError(ErrForkAlreadyExists))
+		assert.Equal(t, http.StatusConflict, he.Status)
+		assert.Equal(t, "CONFLICT", he.Code)
 	})
 	t.Run("unknown -> 500", func(t *testing.T) {
-		status, _ := forkRepositoryErrorMapper(errors.New("boom"))
-		assert.Equal(t, http.StatusInternalServerError, status)
+		he := asHTTPError(t, classifyForkRepositoryError(errors.New("boom")))
+		assert.Equal(t, http.StatusInternalServerError, he.Status)
 	})
 }
 
-func TestSyncUpstreamErrorMapper(t *testing.T) {
-	t.Run("HTTPError takes precedence", func(t *testing.T) {
-		status, _ := syncUpstreamErrorMapper(typed.NewHTTPError(http.StatusTeapot, "x"))
-		assert.Equal(t, http.StatusTeapot, status)
-	})
+func TestClassifySyncUpstreamError(t *testing.T) {
+	asHTTPError := func(t *testing.T, err error) *typed.HTTPError {
+		t.Helper()
+		var he *typed.HTTPError
+		require.ErrorAs(t, err, &he)
+		return he
+	}
 	t.Run("ErrNotAFork -> 400", func(t *testing.T) {
-		status, _ := syncUpstreamErrorMapper(ErrNotAFork)
-		assert.Equal(t, http.StatusBadRequest, status)
+		he := asHTTPError(t, classifySyncUpstreamError(ErrNotAFork))
+		assert.Equal(t, http.StatusBadRequest, he.Status)
+		assert.Equal(t, "INVALID_INPUT", he.Code)
 	})
 	t.Run("ErrUpstreamNotFound -> 404", func(t *testing.T) {
-		status, _ := syncUpstreamErrorMapper(ErrUpstreamNotFound)
-		assert.Equal(t, http.StatusNotFound, status)
+		he := asHTTPError(t, classifySyncUpstreamError(ErrUpstreamNotFound))
+		assert.Equal(t, http.StatusNotFound, he.Status)
+		assert.Equal(t, "REPOSITORY_NOT_FOUND", he.Code)
 	})
 	t.Run("unknown -> 500", func(t *testing.T) {
-		status, _ := syncUpstreamErrorMapper(errors.New("boom"))
-		assert.Equal(t, http.StatusInternalServerError, status)
+		he := asHTTPError(t, classifySyncUpstreamError(errors.New("boom")))
+		assert.Equal(t, http.StatusInternalServerError, he.Status)
 	})
 }

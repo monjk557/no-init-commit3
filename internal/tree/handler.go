@@ -3,7 +3,9 @@ package tree
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/logging"
@@ -56,8 +58,8 @@ func NewTreeHandler(cfg *config.Config) (*TreeHandler, error) {
 //
 // Typed handler — query string 은 typed.RegisterGetWithQuery wrapper 가
 // TreeAPIRequest 로 자동 바인딩한다. substring 기반 status 매핑
-// ("path is not a tree" → 400) 은 routes.go 의 ErrorMapper 가 담당.
-// 단순 4xx 는 api.NewCoded.
+// ("path is not a tree" → 400) 은 classifyTreeError 가 카탈로그 code 로
+// 변환한다 (routes.go 에 커스텀 ErrorMapper 없음). 단순 4xx 는 api.NewCoded.
 func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEntriesRecursiveResponse, error) {
 	ctx := c.Request.Context()
 
@@ -100,7 +102,7 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEnt
 	if recursive {
 		treeMap, err := h.getTreeStructureRecursive(repoPath, ref, path)
 		if err != nil {
-			return TreeEntriesRecursiveResponse{}, err
+			return TreeEntriesRecursiveResponse{}, classifyTreeError(err)
 		}
 		return TreeEntriesRecursiveResponse{
 			Success: true,
@@ -110,7 +112,7 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEnt
 
 	treeEntries, err := h.getTreeStructure(repoPath, ref, path)
 	if err != nil {
-		return TreeEntriesRecursiveResponse{}, err
+		return TreeEntriesRecursiveResponse{}, classifyTreeError(err)
 	}
 
 	pathKey := path
@@ -126,11 +128,23 @@ func (h *TreeHandler) HandleTreeAPI(c *gin.Context, req TreeAPIRequest) (TreeEnt
 	}, nil
 }
 
+// classifyTreeError 는 getTreeStructure(Recursive) 의 raw 에러를 카탈로그
+// code 를 가진 *typed.HTTPError 로 변환한다. "path is not a tree" → 400
+// INVALID_INPUT, 그 외(ref/path 불명 등) → 404 NOT_FOUND — 기존 substring
+// ErrorMapper 와 status 동일, message 는 err.Error() 그대로(override) 유지.
+func classifyTreeError(err error) error {
+	if strings.Contains(err.Error(), "path is not a tree") {
+		return api.NewCoded(api.ErrCodeInvalidInput, err.Error())
+	}
+	return api.NewCoded(api.ErrCodeNotFound, err.Error())
+}
+
 // HandleTreeSearch handles GET /repos/{owner}/{repo}/tree/search?ref=&query=&limit=
 //
 // Typed handler — query string 은 typed.RegisterGetWithQuery wrapper 가
 // TreeSearchRequest 로 자동 바인딩한다. "failed to resolve reference" → 404,
-// 그 외 raw 는 500. 단순 4xx 는 api.NewCoded.
+// 그 외 raw 는 500. classifyTreeSearchError 가 카탈로그 code 로 변환한다
+// (routes.go 에 커스텀 ErrorMapper 없음). 단순 4xx 는 api.NewCoded.
 func (h *TreeHandler) HandleTreeSearch(c *gin.Context, req TreeSearchRequest) (TreeSearchResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -166,7 +180,7 @@ func (h *TreeHandler) HandleTreeSearch(c *gin.Context, req TreeSearchRequest) (T
 
 	entries, totalMatches, err := SearchFiles(repoPath, ref, query, limit)
 	if err != nil {
-		return TreeSearchResponse{}, err
+		return TreeSearchResponse{}, classifyTreeSearchError(err)
 	}
 
 	return TreeSearchResponse{
@@ -176,4 +190,15 @@ func (h *TreeHandler) HandleTreeSearch(c *gin.Context, req TreeSearchRequest) (T
 		TotalCount: totalMatches,
 		Truncated:  totalMatches > limit,
 	}, nil
+}
+
+// classifyTreeSearchError 는 SearchFiles 의 raw 에러를 카탈로그 code 를 가진
+// *typed.HTTPError 로 변환한다. "failed to resolve reference" → 404
+// REF_NOT_FOUND, 그 외 → 500 INTERNAL_ERROR — 기존 substring ErrorMapper 와
+// status 동일.
+func classifyTreeSearchError(err error) error {
+	if strings.Contains(err.Error(), "failed to resolve reference") {
+		return api.NewCoded(api.ErrCodeRefNotFound, err.Error())
+	}
+	return api.NewCoded(api.ErrCodeInternalError, err.Error())
 }

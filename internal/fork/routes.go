@@ -1,11 +1,10 @@
 // fork 도메인의 typed 라우트 등록.
 //
-// archetype #2 — sentinel 에러를 status code 로 매핑하는 WithErrorMapper
-// 패턴 검증 (POST /forks 의 404/409, POST /fork/sync 의 400/404).
+// archetype #2 (과거) — sentinel 에러를 status code 로 매핑하던 WithErrorMapper
+// 패턴을 classify*Error 헬퍼 + 카탈로그로 이관했다.
 package fork
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -34,13 +33,13 @@ func RegisterRoutes(g gin.IRouter, h *ForkHandler) {
 	// 그대로 등록되어 기존 호출은 계속 작동한다.
 	hidden := typed.WithExcludeFromSpec()
 
-	// POST /forks: 201 Created. service ErrSourceNotFound / ErrForkAlreadyExists
-	// 매핑.
+	// POST /forks: 201 Created. classifyForkRepositoryError 가 카탈로그
+	// code 를 가진 *typed.HTTPError 를 이미 반환하므로 커스텀 ErrorMapper
+	// 불필요.
 	typed.RegisterJSON(g, "POST", "/forks", tag,
 		forkRepo,
 		typed.WithSummary("HandleForkRepository"),
 		typed.WithStatus(http.StatusCreated),
-		typed.WithErrorMapper(forkRepositoryErrorMapper),
 		typed.WithResponse(http.StatusNotFound, nil, "Source repository not found"),
 		typed.WithResponse(http.StatusConflict, nil, "Fork target already exists"),
 		hidden,
@@ -54,43 +53,12 @@ func RegisterRoutes(g gin.IRouter, h *ForkHandler) {
 		hidden,
 	)
 
-	// POST /fork/sync: ErrNotAFork → 400, ErrUpstreamNotFound → 404.
+	// POST /fork/sync: classifySyncUpstreamError 가 카탈로그 code 를 가진
+	// *typed.HTTPError 를 이미 반환하므로 커스텀 ErrorMapper 불필요.
 	typed.RegisterNoBody(g, "POST", "/fork/sync", tag,
 		sync,
 		typed.WithSummary("HandleSyncUpstream"),
-		typed.WithErrorMapper(syncUpstreamErrorMapper),
 		typed.WithResponse(http.StatusNotFound, nil, "Repository or upstream not found"),
 		hidden,
 	)
-}
-
-// forkRepositoryErrorMapper 는 service 의 sentinel 에러를 status + 응답으로
-// 변환한다. typed.HTTPError 가 이미 wrap 되어 있으면 그것을 우선 사용.
-func forkRepositoryErrorMapper(err error) (int, any) {
-	var he *typed.HTTPError
-	if errors.As(err, &he) {
-		return he.Status, gin.H{"success": false, "error": he.Message}
-	}
-	switch {
-	case errors.Is(err, ErrSourceNotFound):
-		return http.StatusNotFound, gin.H{"success": false, "error": err.Error()}
-	case errors.Is(err, ErrForkAlreadyExists):
-		return http.StatusConflict, gin.H{"success": false, "error": err.Error()}
-	}
-	return http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()}
-}
-
-// syncUpstreamErrorMapper 는 sync sentinel 매핑.
-func syncUpstreamErrorMapper(err error) (int, any) {
-	var he *typed.HTTPError
-	if errors.As(err, &he) {
-		return he.Status, gin.H{"success": false, "error": he.Message}
-	}
-	switch {
-	case errors.Is(err, ErrNotAFork):
-		return http.StatusBadRequest, gin.H{"success": false, "error": err.Error()}
-	case errors.Is(err, ErrUpstreamNotFound):
-		return http.StatusNotFound, gin.H{"success": false, "error": err.Error()}
-	}
-	return http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()}
 }

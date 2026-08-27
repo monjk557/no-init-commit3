@@ -2,7 +2,9 @@ package revert
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -55,7 +57,9 @@ func NewRevertHandler(cfg *config.Config) (*RevertHandler, error) {
 //
 // Typed handler — bind error 의 사용자 친화 메시지 보존을 위해 RegisterNoBody +
 // WithRequestBody 조합 (lenient bind archetype). performRevert 의 sentinel /
-// substring 기반 status 매핑은 routes.go 의 WithErrorMapper 가 담당.
+// substring 기반 status 매핑은 classifyRevertError 가 카탈로그 code 로 변환한다
+// (routes.go 에 커스텀 ErrorMapper 없음 — 모든 에러가 이미 *typed.HTTPError 라
+// wrapper 의 default 해석으로 충분).
 func (h *RevertHandler) HandleRevert(c *gin.Context) (RevertResponse, error) {
 	ctx := c.Request.Context()
 	owner := c.Param("owner")
@@ -86,7 +90,7 @@ func (h *RevertHandler) HandleRevert(c *gin.Context) (RevertResponse, error) {
 
 	result, err := performRevert(ctx, repoPath, &req)
 	if err != nil {
-		return RevertResponse{}, err
+		return RevertResponse{}, classifyRevertError(err)
 	}
 
 	// Publish revert commit event (legacy 와 동일하게 응답 직전 호출).
@@ -96,6 +100,36 @@ func (h *RevertHandler) HandleRevert(c *gin.Context) (RevertResponse, error) {
 	}
 
 	return *result, nil
+}
+
+// classifyRevertError 는 performRevert 의 sentinel/substring 에러를 카탈로그
+// code 를 가진 *typed.HTTPError 로 변환한다. BranchExistsError 의 extra
+// field(branch_name/tip_commit) 는 NewCodedWithParams 의 params 로 실린다 —
+// 과거의 flat revert_branch/revert_commit 최상위 필드에서 params.branch_name
+// / params.tip_commit 중첩 구조로 shape 이 바뀐다 (consumer 동시 수정 필요).
+func classifyRevertError(err error) error {
+	var branchExistsErr *BranchExistsError
+	if errors.As(err, &branchExistsErr) {
+		tipSHA := ""
+		if branchExistsErr.TipCommit != nil {
+			tipSHA = branchExistsErr.TipCommit.SHA
+		}
+		return api.NewCodedWithParams(api.ErrCodeBranchAlreadyExists, branchExistsErr.Error(), map[string]string{
+			"branch_name": branchExistsErr.BranchName,
+			"tip_commit":  tipSHA,
+		})
+	}
+
+	errMsg := err.Error()
+	switch {
+	case strings.Contains(errMsg, "conflicts"):
+		return api.NewCoded(api.ErrCodeRevertConflict, errMsg)
+	case strings.Contains(errMsg, "unknown revision") || strings.Contains(errMsg, "failed to read commit"):
+		return api.NewCoded(api.ErrCodeCommitNotFound, errMsg)
+	case strings.Contains(errMsg, "invalid parent_number"):
+		return api.NewCoded(api.ErrCodeInvalidParent, errMsg)
+	}
+	return api.NewCoded(api.ErrCodeInternalError, errMsg)
 }
 
 // validatePath validates the owner and repo path components.

@@ -15,6 +15,15 @@ import (
 	"github.com/collabops/git-executor/internal/repositories"
 )
 
+// asHTTPError 는 classifyRevertError 가 항상 *typed.HTTPError 를 반환한다는
+// 계약을 테스트에서 강제 unwrap 하는 헬퍼.
+func asHTTPError(t *testing.T, err error) *typed.HTTPError {
+	t.Helper()
+	var he *typed.HTTPError
+	require.ErrorAs(t, err, &he, "classifyRevertError 는 항상 *typed.HTTPError 를 반환해야 함")
+	return he
+}
+
 // RegisterRoutes 는 nil handler (spec-only) 와 실제 handler 양쪽에서
 // panic 없이 동작해야 한다.
 func TestRegisterRoutes_NilHandler(t *testing.T) {
@@ -46,44 +55,46 @@ func TestRegisterRoutes_RealHandler(t *testing.T) {
 	})
 }
 
-// revertErrorMapper 의 각 분기를 직접 검증한다.
-func TestRevertErrorMapper(t *testing.T) {
-	// typed.HTTPError → 그대로 status + {success,error}.
-	status, body := revertErrorMapper(typed.NewHTTPError(http.StatusBadRequest, "bad"))
-	assert.Equal(t, http.StatusBadRequest, status)
-	assert.Equal(t, false, body.(gin.H)["success"])
-
-	// BranchExistsError → 409 + extra 필드.
-	status, body = revertErrorMapper(&BranchExistsError{
+// classifyRevertError 의 각 분기를 직접 검증한다 — 카탈로그 code 로 이관된
+// 뒤에도 legacy 와 동일한 status 를 내는지 확인 (message 는 override 로
+// err.Error() 그대로 유지).
+func TestClassifyRevertError(t *testing.T) {
+	// BranchExistsError → 409 + params(branch_name/tip_commit).
+	he := asHTTPError(t, classifyRevertError(&BranchExistsError{
 		BranchName: "revert/x",
 		TipCommit:  &CommitInfo{SHA: "abc"},
-	})
-	assert.Equal(t, http.StatusConflict, status)
-	assert.Equal(t, "BRANCH_ALREADY_EXISTS", body.(gin.H)["code"])
-	assert.Equal(t, "revert/x", body.(gin.H)["revert_branch"])
+	}))
+	assert.Equal(t, http.StatusConflict, he.Status)
+	assert.Equal(t, "BRANCH_ALREADY_EXISTS", he.Code)
+	assert.Equal(t, "revert/x", he.Params["branch_name"])
+	assert.Equal(t, "abc", he.Params["tip_commit"])
+
+	// BranchExistsError 의 TipCommit 이 nil 이어도 panic 하지 않는다.
+	he = asHTTPError(t, classifyRevertError(&BranchExistsError{BranchName: "revert/y"}))
+	assert.Equal(t, "", he.Params["tip_commit"])
 
 	// substring "conflicts" → 409 REVERT_CONFLICT.
-	status, body = revertErrorMapper(errors.New("revert produced conflicts in tree"))
-	assert.Equal(t, http.StatusConflict, status)
-	assert.Equal(t, "REVERT_CONFLICT", body.(gin.H)["code"])
+	he = asHTTPError(t, classifyRevertError(errors.New("revert produced conflicts in tree")))
+	assert.Equal(t, http.StatusConflict, he.Status)
+	assert.Equal(t, "REVERT_CONFLICT", he.Code)
 
 	// substring "unknown revision" → 404 COMMIT_NOT_FOUND.
-	status, body = revertErrorMapper(errors.New("unknown revision deadbeef"))
-	assert.Equal(t, http.StatusNotFound, status)
-	assert.Equal(t, "COMMIT_NOT_FOUND", body.(gin.H)["code"])
+	he = asHTTPError(t, classifyRevertError(errors.New("unknown revision deadbeef")))
+	assert.Equal(t, http.StatusNotFound, he.Status)
+	assert.Equal(t, "COMMIT_NOT_FOUND", he.Code)
 
 	// substring "failed to read commit" → 404 COMMIT_NOT_FOUND.
-	status, body = revertErrorMapper(errors.New("failed to read commit object"))
-	assert.Equal(t, http.StatusNotFound, status)
-	assert.Equal(t, "COMMIT_NOT_FOUND", body.(gin.H)["code"])
+	he = asHTTPError(t, classifyRevertError(errors.New("failed to read commit object")))
+	assert.Equal(t, http.StatusNotFound, he.Status)
+	assert.Equal(t, "COMMIT_NOT_FOUND", he.Code)
 
 	// substring "invalid parent_number" → 400 INVALID_PARENT.
-	status, body = revertErrorMapper(errors.New("invalid parent_number 5"))
-	assert.Equal(t, http.StatusBadRequest, status)
-	assert.Equal(t, "INVALID_PARENT", body.(gin.H)["code"])
+	he = asHTTPError(t, classifyRevertError(errors.New("invalid parent_number 5")))
+	assert.Equal(t, http.StatusBadRequest, he.Status)
+	assert.Equal(t, "INVALID_PARENT", he.Code)
 
-	// 그 외 → 500.
-	status, body = revertErrorMapper(errors.New("some unexpected failure"))
-	assert.Equal(t, http.StatusInternalServerError, status)
-	assert.Equal(t, false, body.(gin.H)["success"])
+	// 그 외 → 500 INTERNAL_ERROR.
+	he = asHTTPError(t, classifyRevertError(errors.New("some unexpected failure")))
+	assert.Equal(t, http.StatusInternalServerError, he.Status)
+	assert.Equal(t, "INTERNAL_ERROR", he.Code)
 }

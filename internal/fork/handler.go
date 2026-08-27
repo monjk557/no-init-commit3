@@ -2,6 +2,7 @@ package fork
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,7 +60,8 @@ func NewForkHandler(cfg *config.Config) (*ForkHandler, error) {
 //
 // Typed handler — RegisterJSON wrapper 가 invalid JSON body 시 400 으로
 // 응답한다. service 의 sentinel 에러 (ErrSourceNotFound, ErrForkAlreadyExists)
-// 는 routes.go 의 WithErrorMapper 가 status 매핑.
+// 는 classifyForkRepositoryError 가 카탈로그 code 로 변환한다 (routes.go 에
+// 커스텀 ErrorMapper 없음).
 func (h *ForkHandler) HandleForkRepository(c *gin.Context, req ForkRepositoryRequest) (ForkRepositoryResponse, error) {
 	ctx := c.Request.Context()
 
@@ -86,10 +88,9 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context, req ForkRepositoryReq
 
 	userID := c.GetHeader("X-USER-ID")
 
-	// service error 는 raw 로 반환 — WithErrorMapper 가 sentinel 매핑.
 	result, err := h.service.ForkRepository(ctx, sourceOwner, sourceRepo, req.Owner, targetRepo, userID)
 	if err != nil {
-		return ForkRepositoryResponse{}, err
+		return ForkRepositoryResponse{}, classifyForkRepositoryError(err)
 	}
 
 	if req.DefaultBranch != "" {
@@ -139,6 +140,32 @@ func (h *ForkHandler) HandleForkRepository(c *gin.Context, req ForkRepositoryReq
 	}, nil
 }
 
+// classifyForkRepositoryError 는 ForkRepository 의 sentinel 에러를 카탈로그
+// code 를 가진 *typed.HTTPError 로 변환한다. fork 도메인은 전용 catalog
+// code 가 없어 (미사용 도메인) 가장 가까운 범용 code 를 재사용하되
+// message 는 override 로 legacy 텍스트 그대로 유지한다.
+func classifyForkRepositoryError(err error) error {
+	switch {
+	case errors.Is(err, ErrSourceNotFound):
+		return api.NewCoded(api.ErrCodeRepositoryNotFound, err.Error())
+	case errors.Is(err, ErrForkAlreadyExists):
+		return api.NewCoded(api.ErrCodeConflict, err.Error())
+	}
+	return api.NewCoded(api.ErrCodeInternalError, err.Error())
+}
+
+// classifySyncUpstreamError 는 SyncUpstream 의 sentinel 에러를 카탈로그
+// code 를 가진 *typed.HTTPError 로 변환한다.
+func classifySyncUpstreamError(err error) error {
+	switch {
+	case errors.Is(err, ErrNotAFork):
+		return api.NewCoded(api.ErrCodeInvalidInput, err.Error())
+	case errors.Is(err, ErrUpstreamNotFound):
+		return api.NewCoded(api.ErrCodeRepositoryNotFound, err.Error())
+	}
+	return api.NewCoded(api.ErrCodeInternalError, err.Error())
+}
+
 // HandleGetForkInfo handles GET /repos/{owner}/{repo}/fork.
 func (h *ForkHandler) HandleGetForkInfo(c *gin.Context) (ForkInfoResponse, error) {
 	owner := c.Param("owner")
@@ -176,8 +203,9 @@ func (h *ForkHandler) HandleGetForkInfo(c *gin.Context) (ForkInfoResponse, error
 
 // HandleSyncUpstream handles POST /repos/{owner}/{repo}/fork/sync.
 //
-// service 의 sentinel 에러 (ErrNotAFork, ErrUpstreamNotFound) 는 routes.go
-// 의 WithErrorMapper 가 status 매핑.
+// service 의 sentinel 에러 (ErrNotAFork, ErrUpstreamNotFound) 는
+// classifySyncUpstreamError 가 카탈로그 code 로 변환한다 (routes.go 에
+// 커스텀 ErrorMapper 없음).
 func (h *ForkHandler) HandleSyncUpstream(c *gin.Context) (SyncUpstreamResponse, error) {
 	ctx := c.Request.Context()
 
@@ -200,7 +228,7 @@ func (h *ForkHandler) HandleSyncUpstream(c *gin.Context) (SyncUpstreamResponse, 
 
 	result, err := h.service.SyncUpstream(ctx, repoPath)
 	if err != nil {
-		return SyncUpstreamResponse{}, err
+		return SyncUpstreamResponse{}, classifySyncUpstreamError(err)
 	}
 
 	synced := result.BranchesSynced

@@ -10,39 +10,35 @@ import (
 
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// coverage_extra_test.go — routes.go 의 pure error mapper, NewTreeHandler 의
+// coverage_extra_test.go — classifyTree(Search)Error, NewTreeHandler 의
 // 에러 경로, service.go 의 getTreeStructureRecursive 를 커버한다.
 
-func TestTreeSearchErrorMapper(t *testing.T) {
+func TestClassifyTreeSearchError(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name       string
 		err        error
 		wantStatus int
+		wantCode   string
 		wantMsg    string
 	}{
-		{
-			name:       "typed HTTPError preserved",
-			err:        typed.NewHTTPError(http.StatusBadRequest, "bad query"),
-			wantStatus: http.StatusBadRequest,
-			wantMsg:    "bad query",
-		},
 		{
 			name:       "resolve reference maps to 404",
 			err:        errors.New("failed to resolve reference: nope"),
 			wantStatus: http.StatusNotFound,
+			wantCode:   "REF_NOT_FOUND",
 			wantMsg:    "failed to resolve reference: nope",
 		},
 		{
 			name:       "unknown error maps to 500",
 			err:        errors.New("boom"),
 			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL_ERROR",
 			wantMsg:    "boom",
 		},
 	}
@@ -51,12 +47,46 @@ func TestTreeSearchErrorMapper(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			status, body := treeSearchErrorMapper(tc.err)
-			assert.Equal(t, tc.wantStatus, status)
-			m, ok := body.(gin.H)
-			require.True(t, ok)
-			assert.Equal(t, false, m["success"])
-			assert.Equal(t, tc.wantMsg, m["error"])
+			var he *typed.HTTPError
+			require.ErrorAs(t, classifyTreeSearchError(tc.err), &he)
+			assert.Equal(t, tc.wantStatus, he.Status)
+			assert.Equal(t, tc.wantCode, he.Code)
+			assert.Equal(t, tc.wantMsg, he.Message)
+		})
+	}
+}
+
+func TestClassifyTreeError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "not a tree maps to 400",
+			err:        errors.New("path is not a tree: src/file.go"),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "INVALID_INPUT",
+		},
+		{
+			name:       "unresolvable ref/path maps to 404",
+			err:        errors.New("failed to resolve reference: nope"),
+			wantStatus: http.StatusNotFound,
+			wantCode:   "NOT_FOUND",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var he *typed.HTTPError
+			require.ErrorAs(t, classifyTreeError(tc.err), &he)
+			assert.Equal(t, tc.wantStatus, he.Status)
+			assert.Equal(t, tc.wantCode, he.Code)
 		})
 	}
 }

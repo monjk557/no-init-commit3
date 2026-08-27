@@ -2,6 +2,7 @@ package blob
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -28,17 +29,16 @@ func NewBlobService() *BlobService {
 func (s *BlobService) GetBlobContent(ctx context.Context, repoPath, path, ref string) ([]byte, string, error) {
 	content, err := NativeGetBlobContent(ctx, repoPath, ref, path)
 	if err != nil {
-		// "too large" 에러는 그대로 전달해 handler가 413으로 매핑하도록 한다.
-		// (file not found 로 뭉개면 404가 되어 의미가 사라짐)
-		if strings.Contains(err.Error(), "too large") {
+		// too-large/directory 는 이미 분류된 카테고리이므로 그대로 전달한다.
+		if errors.Is(err, ErrBlobTooLarge) || errors.Is(err, ErrBlobIsDirectory) {
 			return nil, "", err
 		}
-		return nil, "", fmt.Errorf("file not found: %w", err)
+		return nil, "", fmt.Errorf("%w: %w", ErrBlobNotFound, err)
 	}
 
 	// 파일 크기 체크 (방어적: native reader가 cap+1 까지만 읽으므로 보통 위에서 걸림)
 	if len(content) > MaxBlobSize {
-		return nil, "", fmt.Errorf("file is too large (%d bytes > %d bytes)", len(content), MaxBlobSize)
+		return nil, "", fmt.Errorf("%w (%d bytes > %d bytes)", ErrBlobTooLarge, len(content), MaxBlobSize)
 	}
 
 	// Content-Type 감지

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/events"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
@@ -30,15 +32,27 @@ func init() {
 
 // ---------------------------------------------------------------------------
 // adapt / invokeTyped — typed handler 를 gin.HandlerFunc 로 감싸는 헬퍼.
-// revert 는 WithErrorMapper(revertErrorMapper) 를 쓰므로 wrapper 를 그대로 mirror.
+// revert 는 커스텀 ErrorMapper 가 없으므로 (classifyRevertError 가 이미
+// *typed.HTTPError 를 반환) production wrapper 의 default *HTTPError 해석을
+// 그대로 mirror — branches 도메인의 handler_typed_test.go 와 동일 패턴.
 // ---------------------------------------------------------------------------
 
 func invokeTyped[Resp any](c *gin.Context, fn func(*gin.Context) (Resp, error)) {
 	resp, err := fn(c)
 	if err != nil {
-		// routes.go 의 revertErrorMapper 와 동일한 매핑을 적용.
-		status, body := revertErrorMapper(err)
-		c.JSON(status, body)
+		var he *typed.HTTPError
+		if errors.As(err, &he) {
+			body := gin.H{"success": false, "error": he.Message}
+			if he.Code != "" {
+				body["code"] = he.Code
+			}
+			if len(he.Params) > 0 {
+				body["params"] = he.Params
+			}
+			c.JSON(he.Status, body)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, resp)

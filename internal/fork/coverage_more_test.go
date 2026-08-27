@@ -50,7 +50,7 @@ func TestHandler_ForkRepository_PublishesEvent(t *testing.T) {
 	})
 
 	router := gin.New()
-	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, forkRepositoryErrorMapper))
+	router.POST("/repos/:owner/:repo/forks", adaptJSON(h.HandleForkRepository, nil))
 
 	// default_branch 를 지정해 symbolic-ref 세팅 경로도 함께 커버.
 	body := strings.NewReader(`{"owner":"bob","repo":"proj","default_branch":"main"}`)

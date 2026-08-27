@@ -1,6 +1,7 @@
 package tags
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -46,22 +47,47 @@ func NewTagsHandler(cfg *config.Config) (*TagsHandler, error) {
 	return &TagsHandler{pathConfig: pathConfig, eventsClient: eventsClient}, nil
 }
 
-// invalidBindErr 는 c.ShouldBindJSON 실패를 details 포함 응답으로 변환하기
-// 위한 wrapper. routes.go 의 ErrorMapper 가 이 타입을 인식해서 legacy 와
-// 동일한 {success, error: "Invalid request body", details: <err.Error>} 응답을
-// 만든다.
-type invalidBindErr struct {
-	inner error
+// classifyGetTagsError 는 GetTagsSorted 의 raw 에러를 카탈로그 code 를 가진
+// *typed.HTTPError 로 변환한다. legacy 의 별도 error/details 2-필드 응답을
+// "{error}: {details}" 하나의 message 로 합친다 (typed.HTTPError 에는 details
+// 개념이 없음 — 섹션 08 결정).
+func classifyGetTagsError(err error) error {
+	return api.NewCoded(api.ErrCodeInvalidInput, "Failed to get tags: "+err.Error())
 }
 
-func (e *invalidBindErr) Error() string { return e.inner.Error() }
+// classifyCreateTagError 는 CreateTag 의 raw 에러를 카탈로그 code 를 가진
+// *typed.HTTPError 로 변환한다.
+//   - ErrTagAlreadyExists → 409 TAG_ALREADY_EXISTS
+//   - substring "not found"/"commit not found" → 404 NOT_FOUND
+//   - 그 외 → 400 INVALID_INPUT
+func classifyCreateTagError(err error) error {
+	if errors.Is(err, ErrTagAlreadyExists) {
+		return api.NewCoded(api.ErrCodeTagAlreadyExists, "Failed to create tag: tag already exists")
+	}
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "commit not found") {
+		return api.NewCoded(api.ErrCodeNotFound, "Failed to create tag: "+errMsg)
+	}
+	return api.NewCoded(api.ErrCodeInvalidInput, "Failed to create tag: "+errMsg)
+}
+
+// classifyDeleteTagError 는 DeleteTag 의 raw 에러를 카탈로그 code 를 가진
+// *typed.HTTPError 로 변환한다. substring "not found" → 404 NOT_FOUND, 그 외
+// → 400 INVALID_INPUT (legacy substring 분류와 status 동일).
+func classifyDeleteTagError(err error) error {
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "not found") {
+		return api.NewCoded(api.ErrCodeNotFound, "Failed to delete tag: "+errMsg)
+	}
+	return api.NewCoded(api.ErrCodeInvalidInput, "Failed to delete tag: "+errMsg)
+}
 
 // HandleGetTags 는 GET /repos/{owner}/{repo}/tags 를 처리한다.
 //
 // Typed handler — limit/skip/sort 는 GetTagsRequest query struct 로 바인딩
 // (RegisterGetWithQuery, 브랜치 list 와 동일 패턴). 단순 4xx 는
-// api.NewCoded, GetTags 실패는 raw error 로 반환하여 ErrorMapper 가
-// details 필드를 첨부.
+// api.NewCoded, GetTags 실패는 classifyGetTagsError 가 카탈로그 code 로
+// 변환한다 (routes.go 에 커스텀 ErrorMapper 없음).
 func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -106,7 +132,7 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsRes
 
 	tagList, totalCount, err := GetTagsSorted(c.Request.Context(), repoPath, limit, skip, searchQuery, sort)
 	if err != nil {
-		return TagsResponse{}, err
+		return TagsResponse{}, classifyGetTagsError(err)
 	}
 
 	if tagList == nil {
@@ -137,17 +163,17 @@ func (h *TagsHandler) HandleGetTags(c *gin.Context, req GetTagsRequest) (TagsRes
 
 // HandleCreateTag 는 POST /repos/{owner}/{repo}/tags 를 처리한다.
 //
-// Typed handler — bind error 의 사용자 친화 메시지/details 형식 보존을 위해
-// 본문에서 c.ShouldBindJSON 직접 수행 (lenient bind archetype). 다중 status
-// 매핑 (409 already exists, 404 not found, 400 default) 은 routes.go 의
-// ErrorMapper 가 담당.
+// Typed handler — bind error 의 사용자 친화 메시지 보존을 위해 본문에서
+// c.ShouldBindJSON 직접 수행 (lenient bind archetype). 다중 status 매핑
+// (409 already exists, 404 not found, 400 default) 은 classifyCreateTagError
+// 가 카탈로그 code 로 변환한다 (routes.go 에 커스텀 ErrorMapper 없음).
 func (h *TagsHandler) HandleCreateTag(c *gin.Context) (CreateTagResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
 
 	var req CreateTagRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return CreateTagResponse{}, &invalidBindErr{inner: err}
+		return CreateTagResponse{}, api.NewCoded(api.ErrCodeInvalidInput, "Invalid request body: "+err.Error())
 	}
 
 	repoPath, err := repositories.GetAndValidateRepoPath(h.pathConfig, owner, repo)
@@ -157,7 +183,7 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) (CreateTagResponse, error)
 
 	tag, err := CreateTag(c.Request.Context(), repoPath, &req)
 	if err != nil {
-		return CreateTagResponse{}, err
+		return CreateTagResponse{}, classifyCreateTagError(err)
 	}
 
 	// Mirror the git-push path: emit a tag_push event so downstream consumers
@@ -171,7 +197,8 @@ func (h *TagsHandler) HandleCreateTag(c *gin.Context) (CreateTagResponse, error)
 //
 // Typed handler — wildcard `*tag` 의 leading `/` 를 strings.TrimPrefix 로
 // 제거 (legacy 와 동일). 다중 status 매핑 (404 not found, 400 default) 은
-// routes.go 의 ErrorMapper 가 담당.
+// classifyDeleteTagError 가 카탈로그 code 로 변환한다 (routes.go 에 커스텀
+// ErrorMapper 없음).
 func (h *TagsHandler) HandleDeleteTag(c *gin.Context) (DeleteTagResponse, error) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -188,7 +215,7 @@ func (h *TagsHandler) HandleDeleteTag(c *gin.Context) (DeleteTagResponse, error)
 	oldCommit, _ := gitcmd.PeelToCommit(ctx, repoPath, "refs/tags/"+tagName)
 
 	if err := DeleteTag(ctx, repoPath, tagName); err != nil {
-		return DeleteTagResponse{}, err
+		return DeleteTagResponse{}, classifyDeleteTagError(err)
 	}
 
 	h.publishTagDelete(owner, repo, tagName, oldCommit, c.GetHeader(userIDHeader))

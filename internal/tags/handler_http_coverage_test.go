@@ -211,11 +211,14 @@ func Test_HandleGetTags_RepoNotFound_404(t *testing.T) {
 	root, _ := newBareRepoFixture(t, "owner", "repo")
 	r := newTagsRouter(t, root)
 
-	// 존재하지 않는 owner/repo → GetTagsSorted 가 native git 실패 → mapper 가
-	// details 첨부 400 으로 매핑 (path validation 은 통과하지만 git dir 부재).
+	// 존재하지 않는 owner/repo → GetTagsSorted 가 native git 실패 →
+	// classifyGetTagsError 가 400 INVALID_INPUT 으로 매핑 (path validation 은
+	// 통과하지만 git dir 부재). 에러 상세는 details 필드가 아니라 message 에
+	// 병합되어 나간다 (섹션 08 결정).
 	w := doReq(t, r, http.MethodGet, "/repos/ghost/missing/tags", nil)
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-	assert.Contains(t, w.Body.String(), "details")
+	assert.Contains(t, w.Body.String(), "Failed to get tags")
+	assert.Contains(t, w.Body.String(), "INVALID_INPUT")
 }
 
 // ------------------------------------------------------------
@@ -265,7 +268,7 @@ func Test_HandleCreateTag_InvalidBody_400(t *testing.T) {
 	root, _ := newBareRepoFixture(t, "owner", "repo")
 	r := newTagsRouter(t, root)
 
-	// name/hash 누락 → ShouldBindJSON 실패 → invalidBindErr → 400 + details.
+	// name/hash 누락 → ShouldBindJSON 실패 → api.NewCoded(ErrCodeInvalidInput) → 400.
 	w := doReq(t, r, http.MethodPost, "/repos/owner/repo/tags", map[string]string{})
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), "Invalid request body")

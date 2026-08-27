@@ -36,6 +36,8 @@ const (
 	ErrCodeConflict ErrorCodeEnum = "CONFLICT"
 	// ErrCodeFileNotFound: 대상 파일을 찾을 수 없음 (diffs 404).
 	ErrCodeFileNotFound ErrorCodeEnum = "FILE_NOT_FOUND"
+	// ErrCodeForbidden: 접근 권한 없음 (blob 403).
+	ErrCodeForbidden ErrorCodeEnum = "FORBIDDEN"
 	// ErrCodeInternalError: 내부 서버 에러 (merge 500).
 	ErrCodeInternalError ErrorCodeEnum = "INTERNAL_ERROR"
 	// ErrCodeInvalidInput: 요청 입력 검증 실패 (merge 400).
@@ -63,6 +65,8 @@ const (
 	ErrCodeOverloaded ErrorCodeEnum = "OVERLOADED"
 	// ErrCodePanic: 패닉 복구 후 변환된 에러 (500).
 	ErrCodePanic ErrorCodeEnum = "PANIC"
+	// ErrCodeRangeNotSatisfiable: Range 헤더가 유효하지 않음 (blob 416).
+	ErrCodeRangeNotSatisfiable ErrorCodeEnum = "RANGE_NOT_SATISFIABLE"
 	// ErrCodeRateLimitExceeded: 요청 빈도 한도 초과 (rate limiter 429).
 	ErrCodeRateLimitExceeded ErrorCodeEnum = "RATE_LIMIT_EXCEEDED"
 	// ErrCodeRefNotFound: branch/tag/ref 를 찾을 수 없음 (merge/diffs 404).
@@ -83,9 +87,13 @@ const (
 	ErrCodeRequestTooLarge ErrorCodeEnum = "REQUEST_TOO_LARGE"
 	// ErrCodeRevertConflict: revert 적용 충돌 (revert 409).
 	ErrCodeRevertConflict ErrorCodeEnum = "REVERT_CONFLICT"
+	// ErrCodeTagAlreadyExists: 생성하려는 tag 가 이미 존재 (tags 409).
+	ErrCodeTagAlreadyExists ErrorCodeEnum = "TAG_ALREADY_EXISTS"
 	// ErrCodeTimeout: 작업이 deadline 초과 — 부하로 느려짐 (server 429, retry
 	// 유도지만 BFF auto-retry 는 안 함). Issue-5071 retry-storm 회피.
 	ErrCodeTimeout ErrorCodeEnum = "TIMEOUT"
+	// ErrCodeUnauthorized: 인증 필요/실패 (blob 401).
+	ErrCodeUnauthorized ErrorCodeEnum = "UNAUTHORIZED"
 	// ErrCodeUnknown: 분류되지 않은 에러 (merge 500).
 	ErrCodeUnknown ErrorCodeEnum = "UNKNOWN"
 	// ErrCodeUnknownError: 래핑되지 않은 미상 에러 (internal 500).
@@ -102,6 +110,7 @@ var AllErrorCodes = []ErrorCodeEnum{
 	ErrCodeConcurrentUpdate,
 	ErrCodeConflict,
 	ErrCodeFileNotFound,
+	ErrCodeForbidden,
 	ErrCodeInternalError,
 	ErrCodeInvalidInput,
 	ErrCodeInvalidParent,
@@ -114,6 +123,7 @@ var AllErrorCodes = []ErrorCodeEnum{
 	ErrCodeObjectNotFound,
 	ErrCodeOverloaded,
 	ErrCodePanic,
+	ErrCodeRangeNotSatisfiable,
 	ErrCodeRateLimitExceeded,
 	ErrCodeRefNotFound,
 	ErrCodeRepositoryCorrupted,
@@ -121,7 +131,9 @@ var AllErrorCodes = []ErrorCodeEnum{
 	ErrCodeRepositoryNotFound,
 	ErrCodeRequestTooLarge,
 	ErrCodeRevertConflict,
+	ErrCodeTagAlreadyExists,
 	ErrCodeTimeout,
+	ErrCodeUnauthorized,
 	ErrCodeUnknown,
 	ErrCodeUnknownError,
 }

@@ -14,27 +14,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getErrorStatusCode 는 에러 메시지 -> HTTP 상태 코드 매핑 (순수 함수).
-func TestGetErrorStatusCode(t *testing.T) {
-	h := &BlobHandler{}
+// classifyBlobError 는 에러 메시지 -> 카탈로그 code 를 가진 *typed.HTTPError
+// 매핑 (순수 함수).
+func TestClassifyBlobError(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want int
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
 	}{
-		{"directory", errors.New("path is a directory"), http.StatusBadRequest},
-		{"file not found", errors.New("file not found: x.go"), http.StatusNotFound},
-		{"generic not found", errors.New("ref not found"), http.StatusNotFound},
-		{"missing param", errors.New("missing owner parameter"), http.StatusBadRequest},
-		{"invalid input", errors.New("invalid ref"), http.StatusBadRequest},
-		{"permission", errors.New("permission denied"), http.StatusForbidden},
-		{"access denied", errors.New("access denied for repo"), http.StatusForbidden},
-		{"authentication", errors.New("authentication required"), http.StatusUnauthorized},
-		{"unknown -> 500", errors.New("something exploded"), http.StatusInternalServerError},
+		{"directory", errors.New("path is a directory"), http.StatusBadRequest, "INVALID_INPUT"},
+		{"file not found", errors.New("file not found: x.go"), http.StatusNotFound, "FILE_NOT_FOUND"},
+		{"generic not found", errors.New("ref not found"), http.StatusNotFound, "FILE_NOT_FOUND"},
+		{"missing param", errors.New("missing owner parameter"), http.StatusBadRequest, "INVALID_INPUT"},
+		{"invalid input", errors.New("invalid ref"), http.StatusBadRequest, "INVALID_INPUT"},
+		{"permission", errors.New("permission denied"), http.StatusForbidden, "FORBIDDEN"},
+		{"access denied", errors.New("access denied for repo"), http.StatusForbidden, "FORBIDDEN"},
+		{"authentication", errors.New("authentication required"), http.StatusUnauthorized, "UNAUTHORIZED"},
+		{"unknown -> 500", errors.New("something exploded"), http.StatusInternalServerError, "INTERNAL_ERROR"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, h.getErrorStatusCode(tt.err))
+			he := classifyBlobError(tt.err)
+			assert.Equal(t, tt.wantStatus, he.Status)
+			assert.Equal(t, tt.wantCode, he.Code)
 		})
 	}
 }
