@@ -224,6 +224,11 @@ bench-overview-check:
 #   - api: Run API endpoint tests
 #   - integration: Run integration tests
 #   - e2e: Run end-to-end tests
+# 로그 라인 계약 검증 (Issue-8015) — 실제 로거 출력을 계약 사본으로 대조
+.PHONY: guard-logshape
+guard-logshape:
+	go test ./internal/logging/ -run 'Contract|Probe|Level|Error|Reserved|Masking|Secret' -count=1
+
 .PHONY: test all unit api integration e2e core config util perf
 test:
 	@if [ "$(filter all,$(MAKECMDGOALS))" ]; then \

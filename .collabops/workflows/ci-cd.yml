@@ -17,6 +17,13 @@ jobs:
   go-guard:
     include: "collabops-one/collabops-code-harness/go-guard@v4"
 
+  # 로그 라인 계약 (Issue-8015) — 계약 사본 동기 + 가드 배선만 정적 대조.
+  # 실제 검증은 test job 의 `make guard-logshape` 가 한다.
+  log-guard:
+    include: "collabops-one/collabops-code-harness/log-guard@v6"
+    env:
+      HARNESS_REF: v6   # ← include 의 @vN 과 반드시 같은 값
+
   test:
     resources:
       requests:
@@ -123,6 +130,10 @@ jobs:
           make test
           # 커버리지 리포트 생성 (SonarQube import용, doc-522 ①)
           # 게이트는 위 `make test` 가 담당하고, 이 단계는 리포트 생성 전용(best-effort)이라 실패해도 빌드를 막지 않는다.
+          echo "🔒 로그 라인 계약 (Issue-8015)..."
+          # harness 의 log-guard 가 이 호출의 존재를 대조하므로 make 로 부른다.
+          # 이 가드는 `|| true` 로 무르지 않는다 — 계약 위반은 차단 대상이다.
+          make guard-logshape
           go test -coverprofile=coverage.out -covermode=atomic ./... || true
 
   build:

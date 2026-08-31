@@ -64,10 +64,15 @@ func NewLogger(cfg config.LoggingConfig) (*Logger, error) {
 	}
 
 	// Create encoder based on format
+	//
+	// JSON 은 수집(Loki) 대상이라 **로그 라인 계약(Issue-8015)** 을 강제하는 인코더를
+	// 쓴다. 위 EncoderConfig 는 timestamp·caller·function 을 top-level 에 싣고 event 가
+	// 없어 계약(additionalProperties: false)을 벗어난다 — stage 실측으로 확인된
+	// 위반이다. 값은 버리지 않고 metadata 로 접힌다.
 	var encoder zapcore.Encoder
 	switch cfg.Format {
 	case "json":
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
+		encoder = NewContractEncoder()
 	case "text":
 		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 		encoderConfig.EncodeTime = zapcore.RFC3339TimeEncoder

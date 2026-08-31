@@ -6,3 +6,4 @@ guard-specs        # OpenAPI dangling $ref 가드 — downstream codegen 보호 
 guard-spec-drift   # OpenAPI 스펙 드리프트 — 핸들러=SoT, 재생성 후 커밋본과 diff (check-spec-drift.sh)
 guard-git-native   # git/ssh substrate: native git(go-git 래칫)+os.Chdir 0+CommandContext (#6272, check-git-native.sh)
 guard-http-catalog # http substrate: 응답을 에러 카탈로그로 — ad-hoc gin.H 래칫 (HTTP-PROTOCOL, check-http-catalog.sh)
+guard-logshape     # 로그 라인 계약 — log-probe 출력을 .collabops/log.schema.json 으로 검증 (Issue-8015)
