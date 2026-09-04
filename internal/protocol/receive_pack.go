@@ -465,6 +465,10 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 	// api-service verify endpoint 가 책임진다. push 시점에는 pointer blob 자체만
 	// git object 로 저장되고, 실제 byte 부재는 fetch / pull 시점에 드러난다.
 
+	// 초기 커밋 없는 저장소의 첫 push 를 위해, 이 push 가 만드는 브랜치 중 어느
+	// 것을 default branch 로 삼을지 미리 정한다 (HEAD 가 unborn 일 때만 실제 승격).
+	adoptTarget := gitutil.PreferAdoptionRef(createdBranchRefs(req.Commands))
+
 	// Process ref updates. Ruleset git-factors are enforced here (Point B): the
 	// packfile is indexed so pushed objects are readable, but refs are not yet
 	// moved — a denial rejects the ref (`ng`) and leaves the objects dangling.
@@ -475,7 +479,7 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 			}
 			continue
 		}
-		err := h.processRefUpdate(ctx, repoPath, cmd, owner, repoName, userID)
+		err := h.processRefUpdate(ctx, repoPath, cmd, owner, repoName, userID, adoptTarget)
 		if err != nil {
 			statusLine := fmt.Sprintf("ng %s %s", cmd.RefName, err.Error())
 			if err := pktWriter.WriteLine(statusLine); err != nil {
@@ -496,7 +500,21 @@ func (h *ReceivePackHandler) processReceivePackRequest(ctx context.Context, repo
 	return nil
 }
 
-func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repoPath string, cmd RefUpdateCommand, owner, repoName, userID string) error {
+// adoptTarget 은 이번 push 에서 default branch 로 승격할 ref (없으면 빈 문자열).
+// push 전체의 신규 브랜치를 보고 미리 정하기 때문에, 여러 브랜치를 한 번에
+// 올려도 ref 처리 순서와 무관하게 같은 브랜치가 선택된다.
+// createdBranchRefs 는 push 커맨드 중 "브랜치 신규 생성" 만 골라낸다.
+func createdBranchRefs(cmds []RefUpdateCommand) []string {
+	created := make([]string, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd.OldHash == zeroHash && strings.HasPrefix(cmd.RefName, gitutil.BranchRefPrefix) {
+			created = append(created, cmd.RefName)
+		}
+	}
+	return created
+}
+
+func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repoPath string, cmd RefUpdateCommand, owner, repoName, userID, adoptTarget string) error {
 	if !isValidRefName(cmd.RefName) {
 		return fmt.Errorf("invalid reference name: %s", cmd.RefName)
 	}
@@ -530,6 +548,25 @@ func (h *ReceivePackHandler) processRefUpdate(ctx context.Context, repoPath stri
 	}}
 	if err := gitcmd.AtomicRefUpdate(ctx, repoPath, updates); err != nil {
 		return fmt.Errorf("failed to update reference %s: %w", cmd.RefName, err)
+	}
+
+	// 첫 push 로 생긴 브랜치를 default branch 로 승격한다 (HEAD 가 실재하지 않는
+	// 브랜치를 가리키고 있을 때만). git 은 이걸 자동으로 해주지 않아서, 초기
+	// 커밋 없는 저장소에 main 이 아닌 브랜치를 처음 올리면 HEAD 가 계속 unborn
+	// main 을 가리키고 clone 이 아무것도 체크아웃하지 못한다.
+	//
+	// 이벤트 발행보다 먼저 수행해야 한다 — 소비자(BFF)가 이벤트를 받고 곧바로
+	// /state 로 default branch 를 되물으므로, 순서가 뒤바뀌면 옛 HEAD 를 읽는다.
+	if adoptTarget != "" && cmd.RefName == adoptTarget {
+		adopted, adoptErr := gitutil.AdoptHeadIfUnborn(ctx, repoPath, []string{cmd.RefName})
+		switch {
+		case adoptErr != nil:
+			// 승격 실패로 push 를 실패시키지 않는다 — ref 는 이미 올라갔고 HEAD 는
+			// 다음 push 나 default branch API 로 고칠 수 있다.
+			fmt.Printf("[receive-pack] HEAD adoption failed for %s: %v\n", cmd.RefName, adoptErr)
+		case adopted != "":
+			fmt.Printf("[receive-pack] default branch adopted from first push: %s\n", adopted)
+		}
 	}
 
 	// Emit event for branch/tag updates

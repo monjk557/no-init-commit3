@@ -48,18 +48,24 @@ type BlobOverviewRequest struct {
 // sources those from DRF. remotes was dropped — not meaningful for
 // server-hosted bare repos.
 type RepositoryOverviewResponse struct {
-	Success    bool                     `json:"success"`
-	Message    string                   `json:"message"`
-	IsEmpty    bool                     `json:"is_empty"`
-	Repository string                   `json:"repository"`
-	Owner      string                   `json:"owner"`
-	Name       string                   `json:"name"`
-	Path       string                   `json:"path"`
-	Tree       []GitTreeEntryWithCommit `json:"tree"`
-	Branches   []GitBranch              `json:"branches"`
-	Tags       []GitTag                 `json:"tags"`
-	Count      RepositoryCount          `json:"count"`
-	Readme     string                   `json:"readme"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	IsEmpty bool   `json:"is_empty"`
+	// DefaultBranch 는 HEAD 가 가리키는 브랜치다 (bare 저장소의 git 쪽 진실).
+	// 메타데이터 DB 의 default_branch 는 push·설정변경 뒤 비동기로 따라오므로,
+	// 읽기 경로가 그 값을 쓰면 아직 갱신 전인 브랜치를 조회하게 된다.
+	// HEAD 가 unborn(=커밋 없는 저장소)이어도 가리키는 이름은 그대로 싣는다 —
+	// "이 브랜치로 첫 push 하라" 안내가 그 값을 쓴다.
+	DefaultBranch string                   `json:"default_branch"`
+	Repository    string                   `json:"repository"`
+	Owner         string                   `json:"owner"`
+	Name          string                   `json:"name"`
+	Path          string                   `json:"path"`
+	Tree          []GitTreeEntryWithCommit `json:"tree"`
+	Branches      []GitBranch              `json:"branches"`
+	Tags          []GitTag                 `json:"tags"`
+	Count         RepositoryCount          `json:"count"`
+	Readme        string                   `json:"readme"`
 }
 
 // RepositoryCount provides counts of different repository types.

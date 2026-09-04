@@ -816,6 +816,30 @@ paths:
                 $ref: '#/components/schemas/DiffFileSearchResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+  /repos/{owner}/{repo}/head:
+    put:
+      summary: HandleSetDefaultBranch
+      operationId: handlesetdefaultbranch
+      tags:
+        - Repository Management
+      parameters:
+        - $ref: '#/components/parameters/Owner'
+        - $ref: '#/components/parameters/Repo'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetDefaultBranchRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetDefaultBranchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /repos/{owner}/{repo}/languages:
     get:
       summary: HandleGetLanguageStats
@@ -2302,15 +2326,12 @@ components:
     CreateBranchDetails:
       type: object
       properties:
-        checkout:
-          type: boolean
         force_used:
           type: boolean
         author:
           type: string
       required:
         - author
-        - checkout
         - force_used
     CreateBranchRequest:
       type: object
@@ -2322,8 +2343,6 @@ components:
         source_branch:
           type: string
         force:
-          type: boolean
-        checkout:
           type: boolean
         author_name:
           type: string
@@ -3845,6 +3864,8 @@ components:
           type: string
         is_empty:
           type: boolean
+        default_branch:
+          type: string
         repository:
           type: string
         owner:
@@ -3875,6 +3896,7 @@ components:
       required:
         - branches
         - count
+        - default_branch
         - is_empty
         - message
         - name
@@ -4002,6 +4024,31 @@ components:
       required:
         - message
         - revert_branch
+        - success
+    SetDefaultBranchRequest:
+      type: object
+      properties:
+        branch:
+          type: string
+      required:
+        - branch
+    SetDefaultBranchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        owner:
+          type: string
+        name:
+          type: string
+        default_branch:
+          type: string
+        previous_default_branch:
+          type: string
+      required:
+        - default_branch
+        - name
+        - owner
         - success
     SimpleBranchInfo:
       type: object

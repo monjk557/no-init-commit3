@@ -188,20 +188,20 @@ func Test_BranchService_UpdateBranchCommit(t *testing.T) {
 func Test_BranchService_CreateBranch_ExtraPaths(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("checkout repoints HEAD to new branch", func(t *testing.T) {
+	t.Run("HEAD is never repointed by branch creation", func(t *testing.T) {
 		t.Parallel()
 		repoPath, _ := newBareRepoWithMainNative(t)
 		svc := newBranchService(t)
+		headBefore := nativeSymbolicHead(t, repoPath)
 
-		res, err := svc.CreateBranch(ctx, repoPath, CreateBranchRequest{
-			Name:     "checked-out",
-			Source:   "main",
-			Checkout: true,
+		_, err := svc.CreateBranch(ctx, repoPath, CreateBranchRequest{
+			Name:   "not-checked-out",
+			Source: "main",
 		})
 
 		require.NoError(t, err)
-		require.True(t, res.Details.Checkout)
-		require.Equal(t, "refs/heads/checked-out", nativeSymbolicHead(t, repoPath))
+		require.Equal(t, headBefore, nativeSymbolicHead(t, repoPath),
+			"기본 브랜치 변경은 PUT /head 전용 endpoint 가 담당한다")
 	})
 
 	t.Run("source_branch field used when source empty", func(t *testing.T) {

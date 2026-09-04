@@ -31,4 +31,16 @@ func RegisterRoutes(g gin.IRouter, h *RepositoryCreationHandler) {
 		typed.WithStatus(201),
 		typed.WithRequestBody(reflect.TypeOf(CreateRepositoryRequest{})),
 	)
+
+	// PUT /repos/{owner}/{repo}/head: default branch 지정. body 는 handler 본문
+	// 에서 직접 bind 하므로 (친화 에러 메시지 보존) RegisterNoBody + WithRequestBody.
+	var setHead func(*gin.Context) (SetDefaultBranchResponse, error)
+	if h != nil {
+		setHead = h.HandleSetDefaultBranch
+	}
+	typed.RegisterNoBody(g, "PUT", "/head", tag,
+		setHead,
+		typed.WithSummary("HandleSetDefaultBranch"),
+		typed.WithRequestBody(reflect.TypeOf(SetDefaultBranchRequest{})),
+	)
 }

@@ -137,7 +137,7 @@ func TestProcessRefUpdate_TagPush_PublishesTagPushEvent(t *testing.T) {
 		OldHash: tagEventZeroHash,
 		NewHash: fx.tagObjectSHA, // pushing the annotated tag object
 	}
-	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1"))
+	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1", ""))
 
 	ev := awaitEvent(t, raw)
 	require.Equal(t, string(events.EventTypeTagPush), ev["event_type"])
@@ -160,7 +160,7 @@ func TestProcessRefUpdate_TagDelete_PublishesTagDeleteEvent(t *testing.T) {
 		OldHash: fx.tagObjectSHA,
 		NewHash: tagEventZeroHash, // delete
 	}
-	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1"))
+	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1", ""))
 
 	ev := awaitEvent(t, raw)
 	require.Equal(t, string(events.EventTypeTagDelete), ev["event_type"])
@@ -180,7 +180,7 @@ func TestProcessRefUpdate_BranchPush_StillPublishesPushEvent(t *testing.T) {
 		OldHash: tagEventZeroHash,
 		NewHash: fx.commitSHA,
 	}
-	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1"))
+	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1", ""))
 
 	ev := awaitEvent(t, raw)
 	require.Equal(t, string(events.EventTypePush), ev["event_type"])
@@ -199,7 +199,7 @@ func TestProcessRefUpdate_TagNoOp_SkipsEvent(t *testing.T) {
 		OldHash: fx.tagObjectSHA,
 		NewHash: fx.tagObjectSHA,
 	}
-	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1"))
+	require.NoError(t, h.processRefUpdate(context.Background(), fx.repoPath, cmd, fx.owner, fx.repo, "user-1", ""))
 
 	// Give any erroneous goroutine a chance to publish, then assert emptiness.
 	time.Sleep(200 * time.Millisecond)

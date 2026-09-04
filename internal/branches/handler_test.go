@@ -61,13 +61,20 @@ func Test_CreateBranch_ValidRequest_ReturnsSuccess(t *testing.T) {
 	require.True(t, resp.IsNewBranch)
 }
 
-// Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue
-// 회귀: checkout=true 옵션이 응답에 반영되어야 함
-func Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue(t *testing.T) {
+// Test_CreateBranch_CheckoutFieldIgnored_HeadUnchanged
+// 회귀: 브랜치 생성은 default branch(HEAD)를 절대 바꾸지 않는다.
+//
+// 과거 이 API 는 `checkout: true` 로 HEAD 를 새 브랜치로 옮겼다. bare 저장소에는
+// 워킹트리가 없어 checkout 이라는 동작 자체가 성립하지 않았고, 실제 효과는
+// "기본 브랜치 변경" 이었다. 기본 브랜치 변경은 PUT /head 전용 endpoint 가
+// 담당하므로 이 필드는 제거되었다. 옛 필드를 계속 보내는 호출자가 있어도
+// 무시되어야 한다.
+func Test_CreateBranch_CheckoutFieldIgnored_HeadUnchanged(t *testing.T) {
 	t.Parallel()
 
 	handler, repoDir := newHandler(t)
-	initBareRepo(t, repoDir, "testowner", "testrepo")
+	repoPath := initBareRepo(t, repoDir, "testowner", "testrepo")
+	headBefore := nativeSymbolicHead(t, repoPath)
 
 	router := gin.New()
 	router.POST("/repository/:owner/:repo/branches", adapt(handler.HandleCreateBranch))
@@ -83,7 +90,8 @@ func Test_CreateBranch_WithCheckout_ReturnsCheckoutTrue(t *testing.T) {
 	var resp CreateBranchResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
-	require.True(t, resp.Details.Checkout)
+	require.Equal(t, headBefore, nativeSymbolicHead(t, repoPath),
+		"브랜치 생성은 HEAD 를 옮기지 않아야 한다")
 }
 
 // Test_CreateBranch_DuplicateName_Returns409

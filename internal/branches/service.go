@@ -93,15 +93,6 @@ func (s *BranchService) CreateBranch(ctx context.Context, repoPath string, req C
 		return nil, fmt.Errorf("failed to create branch: %w", err)
 	}
 
-	// Update HEAD if checkout is requested
-	if req.Checkout {
-		if err := NativeSetSymbolicRef(ctx, repoPath, refPath); err != nil {
-			s.logger.Warn("Failed to update HEAD to new branch",
-				zap.String("branch", req.Name),
-				zap.Error(err))
-		}
-	}
-
 	result := &CreateBranchResult{
 		BranchName:  req.Name,
 		CommitSHA:   sourceCommitHash,
@@ -111,7 +102,6 @@ func (s *BranchService) CreateBranch(ctx context.Context, repoPath string, req C
 		Message:     fmt.Sprintf("Branch '%s' created successfully", req.Name),
 		CreatedAt:   time.Now(),
 		Details: CreateBranchDetails{
-			Checkout:  req.Checkout,
 			ForceUsed: req.Force && branchExists,
 			Author:    req.AuthorName,
 		},
@@ -122,8 +112,7 @@ func (s *BranchService) CreateBranch(ctx context.Context, repoPath string, req C
 		zap.String("branch", req.Name),
 		zap.String("commit_sha", sourceCommitHash),
 		zap.String("source", source),
-		zap.Bool("is_new_branch", !branchExists),
-		zap.Bool("checkout", req.Checkout))
+		zap.Bool("is_new_branch", !branchExists))
 
 	return result, nil
 }

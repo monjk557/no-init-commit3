@@ -132,7 +132,6 @@ type BranchStatsResponse struct {
 
 // CreateBranchDetails는 브랜치 생성의 추가 세부 정보를 포함합니다.
 type CreateBranchDetails struct {
-	Checkout  bool   `json:"checkout"`
 	ForceUsed bool   `json:"force_used"`
 	Author    string `json:"author"`
 }
@@ -217,7 +216,6 @@ type CreateBranchRequest struct {
 	Source       string            `json:"source,omitempty"`        // for unit test compatibility
 	SourceBranch string            `json:"source_branch,omitempty"` // for integration test compatibility
 	Force        bool              `json:"force,omitempty"`         // force creation even if branch exists
-	Checkout     bool              `json:"checkout,omitempty"`      // set as default branch (HEAD)
 	AuthorName   string            `json:"author_name,omitempty"`   // author name (for compatibility)
 	AuthorEmail  string            `json:"author_email,omitempty"`  // author email (for compatibility)
 	Metadata     map[string]string `json:"metadata,omitempty"`      // additional metadata

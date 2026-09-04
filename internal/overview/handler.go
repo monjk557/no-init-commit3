@@ -13,6 +13,7 @@ import (
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/lfs"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/observability"
@@ -303,6 +304,19 @@ func isObjectNotFoundForPack(res overviewResult) bool {
 	return false
 }
 
+// defaultBranchName 은 HEAD 가 가리키는 브랜치 이름을 반환한다 (detached 이거나
+// 읽기 실패면 빈 문자열). 조회 실패로 overview 전체를 실패시키지 않는다.
+func defaultBranchName(ctx context.Context, repoPath string) string {
+	if repoPath == "" {
+		return ""
+	}
+	head, err := gitutil.HeadRefName(ctx, repoPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(head, gitutil.BranchRefPrefix)
+}
+
 // HandleGetRepositoryOverview는 저장소 개요를 위한 GET /overview 요청을 처리한다.
 //
 // pack 미반영 시 object not found 가 나올 수 있으므로 캐시 무효화 후 한 번
@@ -356,18 +370,19 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context, 
 
 	if refHash == "" {
 		return RepositoryOverviewResponse{
-			Success:    true,
-			Message:    "Repository overview fetched successfully",
-			IsEmpty:    true,
-			Repository: fmt.Sprintf("%s/%s", owner, repo),
-			Owner:      owner,
-			Name:       repo,
-			Path:       repoPath,
-			Tree:       []GitTreeEntryWithCommit{},
-			Branches:   []GitBranch{},
-			Tags:       []GitTag{},
-			Count:      RepositoryCount{},
-			Readme:     "",
+			Success:       true,
+			Message:       "Repository overview fetched successfully",
+			IsEmpty:       true,
+			DefaultBranch: defaultBranchName(ctx, repoPath),
+			Repository:    fmt.Sprintf("%s/%s", owner, repo),
+			Owner:         owner,
+			Name:          repo,
+			Path:          repoPath,
+			Tree:          []GitTreeEntryWithCommit{},
+			Branches:      []GitBranch{},
+			Tags:          []GitTag{},
+			Count:         RepositoryCount{},
+			Readme:        "",
 		}, nil
 	}
 
@@ -389,15 +404,16 @@ func (h *RepositoryOverviewHandler) HandleGetRepositoryOverview(c *gin.Context, 
 	}
 
 	return RepositoryOverviewResponse{
-		Success:    true,
-		Message:    "Repository overview fetched successfully",
-		Repository: fmt.Sprintf("%s/%s", owner, repo),
-		Owner:      owner,
-		Name:       repo,
-		Path:       repoPath,
-		Tree:       res.treeEntriesWithCommit,
-		Branches:   []GitBranch{},
-		Tags:       res.nativeTagsList,
+		Success:       true,
+		Message:       "Repository overview fetched successfully",
+		DefaultBranch: defaultBranchName(ctx, repoPath),
+		Repository:    fmt.Sprintf("%s/%s", owner, repo),
+		Owner:         owner,
+		Name:          repo,
+		Path:          repoPath,
+		Tree:          res.treeEntriesWithCommit,
+		Branches:      []GitBranch{},
+		Tags:          res.nativeTagsList,
 		Count: RepositoryCount{
 			Commits:            res.commitsCount,
 			Branches:           res.branchesCount,

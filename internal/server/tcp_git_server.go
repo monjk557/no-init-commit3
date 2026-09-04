@@ -748,6 +748,29 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 
 	// Detect ref changes via snapshot diff and publish events
 	refsAfter := s.snapshotRefs(postPushCtx, repoPath)
+
+	// 첫 push 로 생긴 브랜치를 default branch 로 승격한다 (HEAD 가 실재하지 않는
+	// 브랜치를 가리키고 있을 때만). git receive-pack 은 HEAD 를 자동으로 옮기지
+	// 않으므로, 초기 커밋 없는 저장소에 main 이 아닌 브랜치를 처음 올리면 HEAD 가
+	// unborn main 을 계속 가리켜 clone 이 아무것도 체크아웃하지 못한다.
+	//
+	// 이벤트 발행보다 먼저 수행한다 — 소비자(BFF)가 이벤트를 받고 곧바로 /state 로
+	// default branch 를 되물으므로, 순서가 뒤바뀌면 옛 HEAD 를 읽는다.
+	if created := createdBranchRefs(refsBefore, refsAfter); len(created) > 0 {
+		adopted, adoptErr := gitutil.AdoptHeadIfUnborn(postPushCtx, repoPath, created)
+		switch {
+		case adoptErr != nil:
+			// push 자체는 이미 성공했다 — 승격 실패로 되돌리지 않는다.
+			s.logger.Warn("HEAD adoption failed after push",
+				zap.String("repo_path", repoPath),
+				zap.Error(adoptErr))
+		case adopted != "":
+			s.logger.Info("Default branch adopted from first push",
+				zap.String("repo_path", repoPath),
+				zap.String("ref", adopted))
+		}
+	}
+
 	_, _, userID, _ := conn.GetConnectionInfo()
 	s.publishRefChangeEvents(postPushCtx, repoPath, owner, repo, userID, refsBefore, refsAfter)
 
@@ -756,6 +779,21 @@ func (s *DuplexTCPServer) handleReceivePack(conn *connection.ProgressAwareConnec
 	// (여기 있던 비활성 runAutoGC 호출과 메서드는 Issue-6364 에서 제거)
 
 	return nil
+}
+
+// createdBranchRefs 는 이번 push 로 새로 생긴 브랜치 ref 만 골라낸다.
+// (갱신된 기존 브랜치는 제외 — default branch 승격 후보는 "새로 생긴" 것뿐이다.)
+func createdBranchRefs(before, after map[string]string) []string {
+	created := make([]string, 0, len(after))
+	for refName := range after {
+		if !strings.HasPrefix(refName, gitutil.BranchRefPrefix) {
+			continue
+		}
+		if _, existed := before[refName]; !existed {
+			created = append(created, refName)
+		}
+	}
+	return created
 }
 
 // snapshotRefs returns a map of refName → objectHash for all refs in the repository.

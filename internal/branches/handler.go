@@ -668,7 +668,6 @@ func (h *BranchOperationsHandler) HandleCreateBranch(c *gin.Context) (CreateBran
 		Message:     result.Message,
 		CreatedAt:   result.CreatedAt,
 		Details: CreateBranchDetails{
-			Checkout:  result.Details.Checkout,
 			ForceUsed: result.Details.ForceUsed,
 			Author:    result.Details.Author,
 		},

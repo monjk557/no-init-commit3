@@ -51,6 +51,22 @@ type CreateRepositoryRequest struct {
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
+// SetDefaultBranchRequest 는 PUT /repos/{owner}/{repo}/head 의 요청 본문이다.
+// 이미 존재하는 브랜치 이름만 받는다 (`refs/heads/` 접두는 있어도 되고 없어도 된다).
+type SetDefaultBranchRequest struct {
+	Branch string `json:"branch" binding:"required"`
+}
+
+// SetDefaultBranchResponse 는 default branch 변경 결과다. PreviousDefaultBranch
+// 는 호출자가 되돌리기/감사로그를 남길 수 있도록 함께 싣는다.
+type SetDefaultBranchResponse struct {
+	Success               bool   `json:"success"`
+	Owner                 string `json:"owner"`
+	Name                  string `json:"name"`
+	DefaultBranch         string `json:"default_branch"`
+	PreviousDefaultBranch string `json:"previous_default_branch,omitempty"`
+}
+
 type CommitAuthor struct {
 	Name  string    `json:"name"`
 	Email string    `json:"email"`
