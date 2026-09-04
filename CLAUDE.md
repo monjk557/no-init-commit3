@@ -144,9 +144,11 @@ git status              # ✅ Ready to commit
 
 Issue-2164 (Phase 0~2.14, 2026-05-03 완료) 에서 13 REST 도메인 / 45 endpoint
 를 typed handler 로 일괄 마이그레이션했다. **신규 REST endpoint 는 반드시
-이 패턴을 따라야 함**. 자세한 마이그레이션 가이드는
-`docs/architecture/typed-handler-resume-guide.md`,
-`docs/architecture/typed-handler-migration-plan.md` 참조.
+이 패턴을 따라야 함** — 핵심 원칙은 아래에 요약되어 있으니 이 CLAUDE.md만
+읽으면 충분하다. 마이그레이션이 실제로 어떻게 진행됐는지(당시 계획/PR 구조)
+는 `docs/_archive/architecture/typed-handler-resume-guide.md`,
+`docs/_archive/architecture/typed-handler-migration-plan.md`에 기록으로만
+남아 있다.
 
 LFS 도메인은 별도 트랙 — Git LFS 가 별도 프로토콜이라 OpenAPI 와 무관.
 

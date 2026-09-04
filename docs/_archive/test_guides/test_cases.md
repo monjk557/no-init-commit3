@@ -2,62 +2,7 @@
 
 > **목적**: 도메인별 edge case를 탑다운으로 나열하여 테스트 커버리지 갭 식별
 > **원칙**: "이 테스트가 막는 회귀"를 1문장으로 설명 가능해야 함
-
----
-
-## 0. 차이 나는 축 (Cross-Cutting Concerns)
-
-> go-git/호스팅별로 동작이 갈라지기 쉬운 9개 축. 각 도메인에 "주입"하여 커버리지 갭 최소화.
-
-| 축 | 설명 | 회귀 문장 템플릿 |
-|----|------|-----------------|
-| **Ref 문법/해석** | branch/tag/sha/"특수 ref" (HEAD, @{-1}, refs/pull/*, refs/merge-requests/*) | "사용자 입력 ref가 tag/branch/sha로 해석이 갈려도 결과가 비결정적으로 바뀌지 않는다" |
-| **권한/보호 정책** | protected branch, required status checks, fast-forward only, signed commits | "보호 브랜치/FF-only 정책이 활성화돼도 우회되거나 애매한 상태코드가 나오지 않는다" |
-| **대용량/제한** | diff/patch truncation, max files, max blob size, pack/stream | "대용량 diff/blob에서 응답이 잘려도 클라이언트가 깨지지 않도록 계약이 유지된다" |
-| **비결정성/경합** | concurrent delete/rename/merge, GC/packing 중 읽기 | "동시 업데이트에서 repo ref가 손상되거나 부분 적용되지 않는다" |
-| **파일 시스템** | case sensitivity(mac), unicode normalization, symlink/submodule | "대소문자/유니코드/심볼릭링크가 섞여도 path/branch가 충돌하거나 탈출하지 않는다" |
-| **프로토콜** | smart HTTP/SSH, LFS, partial clone, shallow clone | "실제 git 클라이언트가 기대하는 handshake를 만족하며, 실패 시 원인이 명확히 표현된다" |
-| **Object Format/Storage** | pack/loose 혼재, packed-refs, bitmap, commit-graph, alternates | "repo 저장 포맷(pack/loose/packed-refs)이 달라도 결과가 동일하고 성능만 달라진다" |
-| **Lineage/History Oddities** | future timestamp, identical committer time, non-monotonic time, grafts, rewritten refs | "커밋 타임스탬프가 이상해도 merge-base/정렬이 비결정적으로 바뀌지 않는다" |
-| **Error Observability** | request_id, error.code, retry-after, correlation id, redaction | "실패 시 원인이 machine-readable(error.code)로 고정되며 민감 정보가 노출되지 않는다" |
-
----
-
-## 0.1 Ref Input Contract
-
-> **목적**: ref 입력 지원 범위/실패 코드를 고정하여 404/409 혼선을 제거한다.
-> **원칙**: "지원 안 하는 ref는 400(UNSUPPORTED_REF)로 명확히 거절", "존재하지 않는 ref는 404(REF_NOT_FOUND)".
-
-| 입력 | 지원 | 실패 코드 | 실패 reason (error.code) |
-|------|------|----------|-------------------------|
-| `main` (branch) | ✅ | 404 | `REF_NOT_FOUND` |
-| `v1.0.0` (tag) | ✅ | 404 | `REF_NOT_FOUND` |
-| `a1b2c3d4e5f6...` (full sha) | ✅ | 404 | `OBJECT_NOT_FOUND` |
-| `a1b2c3d` (short sha, 7+) | ✅ (권장) | 404 | `OBJECT_NOT_FOUND` |
-| `xyz` (malformed sha) | - | 400 | `INVALID_REF` (길이/hex 아님) |
-| `deadbee` (sha-like branch) | ✅ | - | **branch 우선** (tag 충돌 시만 `AMBIGUOUS_REF`) |
-| `refs/heads/main` (full ref) | ❌ | 400 | `UNSUPPORTED_REF` (내부 ref 직접 입력 금지) |
-| `refs/tags/v1.0.0` (full tag ref) | ❌ | 400 | `UNSUPPORTED_REF` (내부 ref 일관성) |
-| `HEAD` | 정책 | 400 | `UNSUPPORTED_REF` |
-| `origin/main` | ❌ | 400 | `UNSUPPORTED_REF` |
-| `refs/pull/1/head` | GitHub only | 400 | `UNSUPPORTED_REF` |
-| `refs/merge-requests/1/head` | GitLab only | 400 | `UNSUPPORTED_REF` |
-| `@{-1}` | ❌ | 400 | `UNSUPPORTED_REF` |
-| `main^`, `main~1` | ❌ | 400 | `UNSUPPORTED_REF` (rev-parse 표현식 금지) |
-| `main:README.md` | ❌ | 400 | `UNSUPPORTED_REF` (tree-ish:path 금지) |
-| `FETCH_HEAD`, `ORIG_HEAD` | ❌ | 400 | `UNSUPPORTED_REF` (로컬 state ref 금지) |
-| `feature ` (공백/개행) | ❌ | 400 | `INVALID_REF` |
-| `` (빈 문자열), `.`, `..` | ❌ | 400 | `INVALID_REF` |
-
-### Ref Resolution 규칙
-
-1. **branch 우선**: sha-like 이름이 branch로 존재하면 branch로 해석 (sha 모양일 뿐, ambiguous 아님)
-2. **tag dereference**: annotated tag → commit으로 역참조, lightweight tag → commit 직접
-3. **명시적 거절**: 지원하지 않는 ref 문법은 400 + `UNSUPPORTED_REF`
-4. **404 vs 400**: 존재하지 않으면 404, 문법 오류면 400
-5. **ambiguous는 branch vs tag 충돌에만**: 같은 이름의 branch와 tag가 동시에 존재할 때만 400 + `AMBIGUOUS_REF`
-
----
+> 원래 있던 "0. 차이 나는 축", "0.1 Ref Input Contract" 절은 각각 `006_test-writing-guide.md`(0-A), `004_git-ref-rules.md`(2부)로 흡수 통합됐다. 이 문서는 도메인별 커버리지 갭 추적용 체크리스트만 남긴다.
 
 ## 1. Merge / MergePreview (가장 복잡)
 

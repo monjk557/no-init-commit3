@@ -1,4 +1,4 @@
-# Go 테스트 작성 가이드
+# 006. Go 테스트 작성 가이드
 
 > **Go 철학**: 테스트도 코드다. **코드 자체가 읽혀야 한다.** 주석이나 형식이 아니라, **이름과 구조로 의도를 전달**한다.
 
@@ -29,6 +29,26 @@
 > - 프로덕션 코드 복잡도 증가
 > - 테스트가 통과해도 실제 버그를 못 잡음
 > - **해결**: HTTP 엔드포인트 테스트 (실제 요청/응답 검증)
+
+---
+
+## 0-A. 도메인 테스트 커버리지 갭 점검 (9개 축)
+
+> go-git/호스팅별로 동작이 갈라지기 쉬운 9개 축이다. 새 도메인의 테스트를 설계할 때 이 축들을 "주입"해서 커버리지 갭을 최소화한다. (원래 `test_guides__test_cases.md`의 "0. 차이 나는 축" 절을 여기로 흡수 통합했다.)
+
+| 축 | 설명 | 회귀 문장 템플릿 |
+|----|------|-----------------|
+| **Ref 문법/해석** | branch/tag/sha/"특수 ref" (HEAD, @{-1}, refs/pull/*, refs/merge-requests/*) | "사용자 입력 ref가 tag/branch/sha로 해석이 갈려도 결과가 비결정적으로 바뀌지 않는다" |
+| **권한/보호 정책** | protected branch, required status checks, fast-forward only, signed commits | "보호 브랜치/FF-only 정책이 활성화돼도 우회되거나 애매한 상태코드가 나오지 않는다" |
+| **대용량/제한** | diff/patch truncation, max files, max blob size, pack/stream | "대용량 diff/blob에서 응답이 잘려도 클라이언트가 깨지지 않도록 계약이 유지된다" |
+| **비결정성/경합** | concurrent delete/rename/merge, GC/packing 중 읽기 | "동시 업데이트에서 repo ref가 손상되거나 부분 적용되지 않는다" |
+| **파일 시스템** | case sensitivity(mac), unicode normalization, symlink/submodule | "대소문자/유니코드/심볼릭링크가 섞여도 path/branch가 충돌하거나 탈출하지 않는다" |
+| **프로토콜** | smart HTTP/SSH, LFS, partial clone, shallow clone | "실제 git 클라이언트가 기대하는 handshake를 만족하며, 실패 시 원인이 명확히 표현된다" |
+| **Object Format/Storage** | pack/loose 혼재, packed-refs, bitmap, commit-graph, alternates | "repo 저장 포맷(pack/loose/packed-refs)이 달라도 결과가 동일하고 성능만 달라진다" |
+| **Lineage/History Oddities** | future timestamp, identical committer time, non-monotonic time, grafts, rewritten refs | "커밋 타임스탬프가 이상해도 merge-base/정렬이 비결정적으로 바뀌지 않는다" |
+| **Error Observability** | request_id, error.code, retry-after, correlation id, redaction | "실패 시 원인이 machine-readable(error.code)로 고정되며 민감 정보가 노출되지 않는다" |
+
+ref 문법/해석 축의 구체적인 입력별 지원 여부는 `004_git-ref-rules.md`의 "Ref Input Contract"를 따른다.
 
 ---
 

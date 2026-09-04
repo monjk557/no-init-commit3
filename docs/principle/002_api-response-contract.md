@@ -1,6 +1,6 @@
-# API 응답 규약 (Response Contract)
+# 002. API 응답 규약
 
-분석 결과(`api_response_format_analysis.md`)를 바탕으로, **최소 수정**으로 일관성을 만족하기 위한 규칙 정의.
+모든 REST API JSON 응답이 지켜야 하는 규칙.
 
 ---
 
@@ -46,17 +46,6 @@
 
 ---
 
-## 4. 구현 체크리스트 (최소 수정)
+## 4. 참조
 
-| 대상 | 현재 | 조치 |
-|------|------|------|
-| `internal/blob/handler.go` 에러 응답 | `{ "error": "..." }` | `{ "success": false, "error": "..." }` 로 수정 |
-| 그 외 JSON 에러 응답 | 대부분 `success: false` 포함 | `success` 누락 구간이 있으면 추가 |
-| 성공 응답 | 기존 `data` 래핑 사용처 | **flat 응답으로 전환** (data 제거, payload 최상위 노출) |
-
----
-
-## 5. 참조
-
-- 분석 근거: `docs/api_response_format_analysis.md`
-- 에러 처리 패턴: `docs/error_handling_guidelines.md`
+- 에러 처리 패턴: `003_error-handling.md`
