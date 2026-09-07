@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/gitsig"
 	"github.com/collabops/git-executor/internal/ruleguard"
 )
 
@@ -191,7 +192,12 @@ func validateRef(
 	ctx, cancel := context.WithTimeout(context.Background(), validateTimeout)
 	defer cancel()
 
-	res, evaluated := ruleguard.LocalEvaluateRef(ctx, bundle, repoPath, oldHash, newHash, ref)
+	// 서명 판정을 먼저 만든다. 앵커가 없거나 판독에 실패하면 nil 이고, 그때는 사실을
+	// 생산하지 않아 기본값 false 가 쓰인다 — 계산하지 못한 것으로 거부하지 않는다는
+	// 원칙은 규칙 쪽에서 fail-policy 가 지킨다.
+	verified := signatureFact(ctx, repoPath, bundle, oldHash, newHash, stderrW)
+
+	res, evaluated := ruleguard.LocalEvaluateRefWithSignature(ctx, bundle, repoPath, oldHash, newHash, ref, verified)
 	if !evaluated || res.Allowed {
 		return nil
 	}
@@ -287,4 +293,42 @@ func logShadowSkip(src ruleguard.BundleSource, stderrW io.Writer) {
 		reason = fmt.Sprintf("rule bundle decode failed: %v", src.Err)
 	}
 	_, _ = fmt.Fprintf(stderrW, "GITEXEC-HOOK: push proceeds WITHOUT ruleset enforcement: %s\n", reason)
+}
+
+// signatureFact 는 범위의 서명 판정을 만들고 그 결과를 캐시에 적재한다.
+//
+// 범위 안의 모든 커밋이 통과해야 true 다. 하나라도 미검증이면 그 push 는 서명된
+// push 가 아니다.
+//
+// 판정을 캐시에 넣는 것은 조회 경로를 위한 것이다. 조회 시점에는 앵커가 없어 다시
+// 계산할 수 없으므로, push 때 만든 이 판정이 배지의 유일한 근거다.
+func signatureFact(
+	ctx context.Context,
+	repoPath string,
+	bundle *ruleguard.Bundle,
+	oldHash, newHash string,
+	stderrW io.Writer,
+) *bool {
+	if len(bundle.Signers) == 0 {
+		return nil
+	}
+
+	verdicts, err := gitsig.EvaluateRangeSignatures(ctx, repoPath, oldHash, newHash, bundle.Signers)
+	if err != nil {
+		// 삼키면 "서명이 없어서 미검증" 과 "판정을 못 해서 미검증" 이 구분되지 않는다.
+		_, _ = fmt.Fprintf(stderrW, "GITEXEC-HOOK: signature verdict failed (unverified): %v\n", err)
+		return nil
+	}
+	if len(verdicts) == 0 {
+		return nil
+	}
+
+	allVerified := true
+	for _, v := range verdicts {
+		gitsig.Default().Put(repoPath, v.SHA, v.Verification)
+		if !v.Verified() {
+			allVerified = false
+		}
+	}
+	return &allVerified
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 )
 
 // SupportedBundleSchemaVersion is the only bundle schema this executor knows how
@@ -43,6 +44,30 @@ type Bundle struct {
 	// evaluated — see EvaluateBundle. When the producer starts emitting them their
 	// aggregation semantics must be defined jointly with api-service.
 	LegacyRules []BundleRule `json:"legacy_rules"`
+	// Signers 는 커밋 서명 검증의 신뢰 앵커다. 서명 판정은 push 도중에 내려야 하는데
+	// 훅은 바깥으로 나가지 않으므로, 판정에 필요한 공개키가 여기 실려 온다.
+	// 구버전 서버는 이 필드를 보내지 않는다 — 그때는 서명 사실을 만들지 않는다.
+	Signers []BundleSigner `json:"signers"`
+}
+
+// BundleSigner 는 등록된 서명 키 하나다.
+//
+// 폐기·만료된 키도 시각과 함께 실려 온다. 목록에서 빼면 등록되지 않은 키와 구분되지
+// 않아, "서명 시점이 폐기 이전이라 유효" 인 경우를 판정할 수 없다.
+type BundleSigner struct {
+	UserID      string `json:"user_id"`
+	Fingerprint string `json:"fingerprint"`
+	// KeyFormat 은 ssh | gpg | x509. 앵커를 만드는 방법이 형식마다 다르다.
+	KeyFormat string `json:"key_format"`
+	// PublicKey 는 형식별 원문이다. 이것이 없으면 앵커를 만들 수 없다.
+	PublicKey string `json:"public_key"`
+	// Emails 는 키 주인의 검증된 이메일이다. orchestrator 가 채운다. 비어 있으면
+	// committer 동일인 대조를 할 수 없어 그 키의 서명은 미검증으로 남는다.
+	Emails []string `json:"emails"`
+	// RevokedAt 이후의 서명만 무효다. 그 이전 서명은 유효하게 남는다.
+	RevokedAt *time.Time `json:"revoked_at"`
+	// ExpiresAt 이후의 서명은 무효다.
+	ExpiresAt *time.Time `json:"expires_at"`
 }
 
 // BundleActor is the push actor with role vocabulary already collapsed to integer

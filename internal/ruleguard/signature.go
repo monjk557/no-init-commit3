@@ -64,12 +64,12 @@ const sigFormat = "%H%x09%G?%x09%GK%x09%GS"
 //
 // allowedSigners 가 비어 있으면 앵커 없이 묻는 것이라 모든 커밋이 N/E 로 떨어진다.
 // 그건 오류가 아니라 "판정할 수 없음" 이므로 호출부가 미검증으로 다룬다.
-func ReadRangeSignatures(ctx context.Context, repoPath, oldHash, newHash string, allowedSigners string) ([]CommitSignature, error) {
+func ReadRangeSignatures(ctx context.Context, repoPath, oldHash, newHash string, anchor *Anchor) ([]CommitSignature, error) {
 	rangeSpec := oldHash + ".." + newHash
 	if oldHash == zeroOID {
 		rangeSpec = newHash
 	}
-	return readSignatures(ctx, repoPath, allowedSigners, rangeSpec)
+	return readSignatures(ctx, repoPath, anchor, rangeSpec)
 }
 
 // ReadCommitSignatures 는 임의의 커밋 목록을 한 번에 판독한다 (--no-walk).
@@ -77,27 +77,19 @@ func ReadRangeSignatures(ctx context.Context, repoPath, oldHash, newHash string,
 // 조회 화면은 범위가 아니라 "이 페이지에 보이는 커밋들" 이라 조상까지 따라갈 이유가
 // 없다. 그래도 프로세스는 한 번이어야 한다 — 목록 한 화면이 커밋 수만큼 git 을 띄우면
 // 그게 곧 조회 지연이 된다.
-func ReadCommitSignatures(ctx context.Context, repoPath string, allowedSigners string, shas []string) ([]CommitSignature, error) {
+func ReadCommitSignatures(ctx context.Context, repoPath string, anchor *Anchor, shas []string) ([]CommitSignature, error) {
 	if len(shas) == 0 {
 		return nil, nil
 	}
-	return readSignatures(ctx, repoPath, allowedSigners, append([]string{"--no-walk"}, shas...)...)
+	return readSignatures(ctx, repoPath, anchor, append([]string{"--no-walk"}, shas...)...)
 }
 
 // readSignatures 는 앵커 주입과 판독을 한 곳에 모은다 — 앵커를 요청 단위 임시 파일로
 // 주는 규칙이 호출 경로마다 갈라지면, 한쪽만 전역 gitconfig 를 건드리는 사고가 난다.
-func readSignatures(ctx context.Context, repoPath, allowedSigners string, revArgs ...string) ([]CommitSignature, error) {
+func readSignatures(ctx context.Context, repoPath string, anchor *Anchor, revArgs ...string) ([]CommitSignature, error) {
 	args := []string{}
-
-	if allowedSigners != "" {
-		path, cleanup, err := writeAllowedSigners(allowedSigners)
-		if err != nil {
-			return nil, err
-		}
-		defer cleanup()
-		// 호출 단위 주입 — 저장소/전역 gitconfig 를 건드리지 않는다. 동시 push 가
-		// 서로의 앵커를 덮어쓰는 사고를 원천적으로 없앤다.
-		args = append(args, "-c", "gpg.ssh.allowedSignersFile="+path)
+	if anchor != nil {
+		args = append(args, anchor.GitArgs...)
 	}
 
 	args = append(args, "log", "--no-abbrev", "--format="+sigFormat)
@@ -105,6 +97,9 @@ func readSignatures(ctx context.Context, repoPath, allowedSigners string, revArg
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repoPath
+	if anchor != nil && len(anchor.Env) > 0 {
+		cmd.Env = append(os.Environ(), anchor.Env...)
+	}
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.DefaultMaxOutput)
 	if err != nil {
 		return nil, err
@@ -133,24 +128,4 @@ func parseSignatureLines(out string) []CommitSignature {
 		sigs = append(sigs, sig)
 	}
 	return sigs
-}
-
-// writeAllowedSigners 는 앵커를 임시 파일로 만든다. git 이 파일 경로만 받기 때문이고,
-// 요청 단위로 만들고 지워 다른 push 와 섞이지 않게 한다.
-func writeAllowedSigners(content string) (path string, cleanup func(), err error) {
-	f, err := os.CreateTemp("", "allowed_signers-*")
-	if err != nil {
-		return "", func() {}, err
-	}
-	cleanup = func() { _ = os.Remove(f.Name()) }
-	if _, err := f.WriteString(content); err != nil {
-		_ = f.Close()
-		cleanup()
-		return "", func() {}, err
-	}
-	if err := f.Close(); err != nil {
-		cleanup()
-		return "", func() {}, err
-	}
-	return f.Name(), cleanup, nil
 }

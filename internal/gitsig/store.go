@@ -100,7 +100,7 @@ func (s *Store) Annotate(ctx context.Context, repoPath string, shas []string) ma
 
 	// 키 식별자는 판독으로만 얻을 수 있다. 실패해도 판정은 만든다 — 키 이름이 비는 것과
 	// 판정을 못 내리는 것은 다르다.
-	read, readErr := ruleguard.ReadCommitSignatures(ctx, repoPath, "", missing)
+	read, readErr := ruleguard.ReadCommitSignatures(ctx, repoPath, nil, missing)
 	if readErr != nil {
 		s.warn(ctx, "서명 판독 실패 — 키 식별자 없이 판정한다",
 			zap.String("event", "signature_read_failed"),

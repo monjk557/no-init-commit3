@@ -242,12 +242,32 @@ func buildEvalFacts(pushFacts map[string]any, refType, refName string, actorRepo
 // them with the bundle actor, and evaluate. Used by the Phase-1 shadow comparison
 // (shadow.go) and, in Phase 2, would become the authoritative path.
 func LocalEvaluateRef(ctx context.Context, b *Bundle, repoPath, oldHash, newHash, ref string) (BundleEvalResult, bool) {
+	return LocalEvaluateRefWithSignature(ctx, b, repoPath, oldHash, newHash, ref, nil)
+}
+
+// LocalEvaluateRefWithSignature 는 서명 사실을 함께 넣어 평가한다.
+//
+// signatureVerified 가 nil 이면 서명 사실을 생산하지 못했다는 뜻이고, 기본값 false 가
+// 그대로 쓰인다. 판정을 못 내린 것과 판정이 거짓인 것을 여기서 구분하지는 않는다 —
+// 둘 다 "검증되지 않음" 이며, 그 차이는 배지의 reason 이 설명한다.
+//
+// 사실을 밖에서 받는 이유는 판정이 화면 계약(gitsig)에 닿아 있기 때문이다. 규칙 평가는
+// 그 계약을 몰라야 하므로 불리언 하나만 건네받는다.
+func LocalEvaluateRefWithSignature(
+	ctx context.Context,
+	b *Bundle,
+	repoPath, oldHash, newHash, ref string,
+	signatureVerified *bool,
+) (BundleEvalResult, bool) {
 	rt := ClassifyRef(ref)
 	if rt.Type == "" {
 		return BundleEvalResult{Allowed: true}, false // not a ruleset target (refs/notes etc.)
 	}
 	pushFacts := BuildPushFacts(ctx, repoPath, oldHash, newHash, rt.Name)
 	facts := buildEvalFacts(pushFacts, rt.Type, rt.Name, b.Actor.RepoRoleRank, b.Actor.WorkspaceRoleRank)
+	if signatureVerified != nil {
+		facts["commit.signature.verified"] = *signatureVerified
+	}
 	return EvaluateBundleRef(b, rt.Type, rt.Name, facts), true
 }
 

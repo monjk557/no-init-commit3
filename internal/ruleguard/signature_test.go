@@ -26,8 +26,8 @@ func signingKey(t *testing.T) (pubPath, pubLine string) {
 	return pubPath, strings.TrimSpace(string(raw))
 }
 
-// signedRepo 는 초기 커밋 + 서명 커밋 1개를 가진 저장소를 만든다.
-func signedRepo(t *testing.T) (repo, base, signed, allowedSigners string) {
+// signedRepo 는 초기 커밋 + 서명 커밋 1개를 가진 저장소와, 그 키로 만든 앵커를 준다.
+func signedRepo(t *testing.T) (repo, base, signed string, anchor *Anchor) {
 	t.Helper()
 	pubPath, pubLine := signingKey(t)
 	repo, base = initRepo(t)
@@ -39,7 +39,18 @@ func signedRepo(t *testing.T) (repo, base, signed, allowedSigners string) {
 	gitInRepo(t, repo, "commit", "-q", "-S", "-m", "signed")
 	signed = gitInRepo(t, repo, "rev-parse", "HEAD")
 
-	return repo, base, signed, "signer@example.com " + pubLine + "\n"
+	anchor, err := BuildAnchor(context.Background(), []BundleSigner{{
+		Fingerprint: "SHA256:test",
+		KeyFormat:   "ssh",
+		PublicKey:   pubLine,
+		Emails:      []string{"signer@example.com"},
+	}})
+	if err != nil {
+		t.Fatalf("BuildAnchor: %v", err)
+	}
+	t.Cleanup(anchor.Cleanup)
+
+	return repo, base, signed, anchor
 }
 
 func sigBySHA(sigs []CommitSignature, sha string) (CommitSignature, bool) {
@@ -54,10 +65,10 @@ func sigBySHA(sigs []CommitSignature, sha string) (CommitSignature, bool) {
 // 앵커(allowed_signers)가 판정을 바꾼다 — 같은 커밋, 같은 저장소, 앵커 유무만 다르다.
 // 이게 "git 은 물어봐야만 알고, 물어볼 때 앵커를 줘야 한다"의 실증이다.
 func TestReadRangeSignatures_AnchorDecidesTrust(t *testing.T) {
-	repo, base, signed, allowed := signedRepo(t)
+	repo, base, signed, anchor := signedRepo(t)
 	ctx := context.Background()
 
-	withoutAnchor, err := ReadRangeSignatures(ctx, repo, base, signed, "")
+	withoutAnchor, err := ReadRangeSignatures(ctx, repo, base, signed, nil)
 	if err != nil {
 		t.Fatalf("anchor 없이 판독 실패: %v", err)
 	}
@@ -69,7 +80,7 @@ func TestReadRangeSignatures_AnchorDecidesTrust(t *testing.T) {
 		t.Errorf("앵커 없이 신뢰로 판정됐다: %+v", got)
 	}
 
-	withAnchor, err := ReadRangeSignatures(ctx, repo, base, signed, allowed)
+	withAnchor, err := ReadRangeSignatures(ctx, repo, base, signed, anchor)
 	if err != nil {
 		t.Fatalf("anchor 판독 실패: %v", err)
 	}
@@ -86,13 +97,13 @@ func TestReadRangeSignatures_AnchorDecidesTrust(t *testing.T) {
 }
 
 func TestReadRangeSignatures_UnsignedIsAbsenceNotViolation(t *testing.T) {
-	repo, base, signed, allowed := signedRepo(t)
+	repo, base, signed, anchor := signedRepo(t)
 	writeFile(t, repo, "b.txt", "b\n")
 	gitInRepo(t, repo, "add", "b.txt")
 	gitInRepo(t, repo, "commit", "-q", "-m", "unsigned")
 	unsigned := gitInRepo(t, repo, "rev-parse", "HEAD")
 
-	sigs, err := ReadRangeSignatures(context.Background(), repo, base, unsigned, allowed)
+	sigs, err := ReadRangeSignatures(context.Background(), repo, base, unsigned, anchor)
 	if err != nil {
 		t.Fatalf("판독 실패: %v", err)
 	}
@@ -117,7 +128,7 @@ func TestReadRangeSignatures_UnsignedIsAbsenceNotViolation(t *testing.T) {
 // payload 를 한 바이트라도 고치면 서명이 깨진다 — 서명은 커밋 오브젝트에 묶여 있고
 // 다른 커밋으로 옮겨 붙일 수 없다.
 func TestReadRangeSignatures_TamperedPayloadIsBad(t *testing.T) {
-	repo, base, signed, allowed := signedRepo(t)
+	repo, base, signed, anchor := signedRepo(t)
 
 	raw := gitInRepo(t, repo, "cat-file", "commit", signed)
 	tampered := strings.Replace(raw, "committer tester", "committer forged", 1)
@@ -134,7 +145,7 @@ func TestReadRangeSignatures_TamperedPayloadIsBad(t *testing.T) {
 	}
 	forged := strings.TrimSpace(string(out))
 
-	sigs, err := ReadRangeSignatures(context.Background(), repo, base, forged, allowed)
+	sigs, err := ReadRangeSignatures(context.Background(), repo, base, forged, anchor)
 	if err != nil {
 		t.Fatalf("판독 실패: %v", err)
 	}
@@ -153,7 +164,7 @@ func TestReadRangeSignatures_TamperedPayloadIsBad(t *testing.T) {
 // 범위 전체를 프로세스 한 번으로 읽는다는 계약 — 커밋마다 verify-commit 을 부르면
 // push 초크 포인트에서 프로세스가 범위 크기만큼 뜬다.
 func TestReadRangeSignatures_ReadsWholeRangeAtOnce(t *testing.T) {
-	repo, base, _, allowed := signedRepo(t)
+	repo, base, _, anchor := signedRepo(t)
 	for _, name := range []string{"c1", "c2", "c3"} {
 		writeFile(t, repo, name+".txt", name+"\n")
 		gitInRepo(t, repo, "add", name+".txt")
@@ -161,7 +172,7 @@ func TestReadRangeSignatures_ReadsWholeRangeAtOnce(t *testing.T) {
 	}
 	head := gitInRepo(t, repo, "rev-parse", "HEAD")
 
-	sigs, err := ReadRangeSignatures(context.Background(), repo, base, head, allowed)
+	sigs, err := ReadRangeSignatures(context.Background(), repo, base, head, anchor)
 	if err != nil {
 		t.Fatalf("판독 실패: %v", err)
 	}
