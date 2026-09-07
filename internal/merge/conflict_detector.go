@@ -510,15 +510,6 @@ func (cd *ConflictDetector) analyzeContentConflicts(ctx context.Context, repoPat
 	return regions, nil
 }
 
-func (cd *ConflictDetector) isBinaryContent(data []byte) bool {
-	for _, b := range data {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
-}
-
 func (cd *ConflictDetector) calculateSeverityBreakdown(conflicts []FileConflict) map[ConflictSeverity]int {
 	breakdown := make(map[ConflictSeverity]int)
 	for _, conflict := range conflicts {

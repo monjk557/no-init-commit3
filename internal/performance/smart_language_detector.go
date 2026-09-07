@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/go-enry/go-enry/v2"
 	"github.com/go-enry/go-enry/v2/data"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -259,7 +260,7 @@ func (sld *SmartLanguageDetector) detectBySampling(file *object.File) SmartLangu
 	sample := sampleBuffer[:bytesRead]
 
 	// Check if binary
-	if enry.IsBinary(sample) {
+	if contentkind.IsBinary(sample) {
 		return SmartLanguageResult{Skipped: true, SkipReason: "binary"}
 	}
 

@@ -8,5 +8,4 @@ import "errors"
 var (
 	ErrBlobNotFound    = errors.New("blob not found")
 	ErrBlobIsDirectory = errors.New("path is a directory")
-	ErrBlobTooLarge    = errors.New("blob too large")
 )

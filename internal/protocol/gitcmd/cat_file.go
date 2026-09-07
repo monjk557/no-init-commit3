@@ -114,7 +114,8 @@ func CatBlob(ctx context.Context, repoPath string, oid string) ([]byte, error) {
 	cmd.Dir = repoPath
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
+	// Blob content is capped at gitutil.MaxOutputLarge (50MB) — this path buffers
+	// the whole object, unlike the streaming raw /blob endpoint.
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
 	if err != nil {
 		return nil, fmt.Errorf("cat-file blob %s: %w (stderr: %s)", oid, err, stderr.String())

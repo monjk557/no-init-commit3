@@ -97,16 +97,6 @@ func TestCalculateConflictSeverity(t *testing.T) {
 	}
 }
 
-func TestIsBinaryContent(t *testing.T) {
-	cd := NewConflictDetector(nil, nil)
-	if !cd.isBinaryContent([]byte{1, 2, 0, 3}) {
-		t.Error("expected binary for NUL byte")
-	}
-	if cd.isBinaryContent([]byte("plain text")) {
-		t.Error("expected non-binary for text")
-	}
-}
-
 func TestSeverityBreakdownAndResolutionTime(t *testing.T) {
 	cd := NewConflictDetector(nil, nil)
 	conflicts := []FileConflict{

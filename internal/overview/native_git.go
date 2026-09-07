@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/repositories"
 )
@@ -568,8 +569,9 @@ func NativeGetBlobContent(ctx context.Context, repoPath, ref, path string) ([]by
 	cmd := exec.CommandContext(cmdCtx, "git", "-c", "core.quotePath=false", "--git-dir", repoPath, "show", spec)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
-	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
+	// inline 미리보기용 읽기만 이 경로를 쓴다 — 상한 초과 여부는 호출 전에
+	// NativeStatBlob 으로 이미 걸러지므로, 여기서는 방어적 상한이다.
+	out, err := gitutil.OutputWithLimit(cmd, blob.MaxInlinePreviewBytes)
 	if err != nil {
 		return nil, fmt.Errorf("git show %s: %s: %w", spec, strings.TrimSpace(stderr.String()), err)
 	}

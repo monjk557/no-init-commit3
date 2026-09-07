@@ -1,14 +1,18 @@
 package blob
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/config"
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -86,35 +90,45 @@ func (h *BlobHandler) HandleBlobAPI(c *gin.Context) {
 		return
 	}
 
-	// Blob 내용 가져오기 (native git 사용)
-	content, contentType, err := h.service.GetBlobContent(ctx, repoPath, path, ref)
+	// 1) 내용을 읽기 전에 메타데이터부터 — blob 크기와 무관하게 상수 비용이고,
+	// 여기서 실패 원인(없음/디렉토리/타임아웃)이 정확히 갈린다.
+	stat, err := h.service.StatBlob(ctx, repoPath, path, ref)
 	if err != nil {
-		// 파일이 너무 큰 경우 특별 처리
-		if errors.Is(err, ErrBlobTooLarge) {
-			h.logger.Warn("File too large to display", zap.String("path", path))
-			writeCatalogError(c, api.NewCoded(api.ErrCodeRequestTooLarge, "This file is too large to display: "+err.Error()))
-			return
-		}
 		writeCatalogError(c, classifyBlobError(err))
+		return
+	}
+
+	// 2) 스트리밍으로 연다 — 전체를 메모리에 올리지 않으므로 크기 상한이 필요
+	// 없다. 100MB 빌드 산출물도 그대로 다운로드된다.
+	stream, err := h.service.OpenBlob(ctx, repoPath, stat.OID)
+	if err != nil {
+		h.logger.Error("Failed to open blob stream", zap.String("path", path), zap.Error(err))
+		writeCatalogError(c, classifyBlobError(err))
+		return
+	}
+	defer func() { _ = stream.Close() }()
+
+	// 3) 앞부분만 엿봐 content-type / binary 여부를 정한다. 엿본 바이트는
+	// bufio 버퍼에 남아 있어 본문 스트림에서 누락되지 않는다.
+	buffered := bufio.NewReaderSize(stream, contentkind.SniffBytes)
+	head, err := buffered.Peek(contentkind.SniffBytes)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+		h.logger.Error("Failed to read blob head", zap.String("path", path), zap.Error(err))
+		writeCatalogError(c, api.NewCoded(api.ErrCodeInternalError, err.Error()))
 		return
 	}
 
 	// LFS pointer 라도 binary streaming 으로 통일한다 (Issue-2327). client 는
 	// /overview/blob 의 IsLFSPointer / LFS 필드로 메타데이터를 얻고, /blob 은
 	// 단일 application/octet-stream contract 만 노출한다.
+	contentType := DetectContentType(head, path)
 
-	// 헤더 설정
-	c.Header("Content-Type", contentType)
-	c.Header("Content-Length", fmt.Sprintf("%d", len(content)))
-	c.Header("Cache-Control", "public, max-age=3600")
-
-	// 바이너리 콘텐츠인 경우
-	if IsBinaryContent(content, contentType) {
-		c.Header("X-Content-Encoding", "binary")
+	extraHeaders := map[string]string{"Cache-Control": "public, max-age=3600"}
+	if contentkind.IsBinary(head) {
+		extraHeaders["X-Content-Encoding"] = "binary"
 	}
 
-	// 응답 전송
-	c.Data(http.StatusOK, contentType, content)
+	c.DataFromReader(http.StatusOK, stat.Size, contentType, buffered, extraHeaders)
 }
 
 // writeCatalogError 는 *typed.HTTPError 를 표준 envelope 로 응답한다. /blob
@@ -139,8 +153,8 @@ func classifyBlobError(err error) *typed.HTTPError {
 	switch {
 	case errors.Is(err, ErrBlobIsDirectory):
 		return api.NewCoded(api.ErrCodeInvalidInput, errMsg)
-	case errors.Is(err, ErrBlobTooLarge):
-		return api.NewCoded(api.ErrCodeRequestTooLarge, errMsg)
+	case errors.Is(err, context.DeadlineExceeded):
+		return api.NewCoded(api.ErrCodeTimeout, errMsg)
 	case errors.Is(err, ErrBlobNotFound):
 		return api.NewCoded(api.ErrCodeFileNotFound, errMsg)
 	}

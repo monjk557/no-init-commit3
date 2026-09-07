@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -629,15 +630,17 @@ func Test_Blob_BinaryFile_ReturnsBase64(t *testing.T) {
 	assert.Equal(t, "binary", w.Header().Get("X-Content-Encoding"))
 }
 
-// Test_Blob_LargeFile_Truncates 대용량 파일은 제한되어 413을 반환한다.
-func Test_Blob_LargeFile_Truncates(t *testing.T) {
+// Test_Blob_LargeFile_Streams 대용량 파일도 스트리밍으로 전량 전달된다.
+// (이전에는 50MB 상한을 넘으면 413 — Go 빌드 산출물 다운로드가 불가능했다.)
+func Test_Blob_LargeFile_Streams(t *testing.T) {
 	tempDir := t.TempDir()
 	repoPath := filepath.Join(tempDir, "testowner", "testrepo.git")
 	require.NoError(t, os.MkdirAll(filepath.Dir(repoPath), 0755))
 	gitRepo, err := git.PlainInit(repoPath, true)
 	require.NoError(t, err)
-	// MaxBlobSize + 1 bytes
-	large := make([]byte, 50*1024*1024+1)
+	// 과거 상한(50MB) + 1 bytes
+	const size = 50*1024*1024 + 1
+	large := make([]byte, size)
 	for i := range large {
 		large[i] = 'x'
 	}
@@ -650,7 +653,9 @@ func Test_Blob_LargeFile_Truncates(t *testing.T) {
 	c, w := createGinContext("GET", "/repos/testowner/testrepo/blob?path=big.bin&ref=main")
 	c.Params = gin.Params{{Key: "owner", Value: "testowner"}, {Key: "repo", Value: "testrepo"}}
 	handler.HandleBlobAPI(c)
-	require.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, strconv.Itoa(size), w.Header().Get("Content-Length"))
+	assert.Equal(t, size, w.Body.Len())
 }
 
 // Test_Blob_EmptyFile_ReturnsEmpty 빈 파일은 빈 본문으로 200을 반환한다.

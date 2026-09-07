@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/go-enry/go-enry/v2"
 	"github.com/go-enry/go-enry/v2/data"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -218,7 +219,7 @@ func (ptp *ParallelTreeProcessor) processFile(ctx context.Context, file *object.
 	}
 
 	// Skip binary files
-	if enry.IsBinary(content) {
+	if contentkind.IsBinary(content) {
 		return FileProcessResult{Skipped: true, SkipReason: "binary"}
 	}
 

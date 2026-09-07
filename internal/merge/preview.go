@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/collabops/git-executor/internal/diffs"
 )
 
@@ -189,7 +190,7 @@ func (h *MergePreviewHandler) compareRepositoryTrees(ctx context.Context, repoPa
 			fileDiff.Path = de.NewPath
 		}
 
-		fileDiff.IsBinary = isBinaryByExtension(filePath)
+		fileDiff.IsBinary = contentkind.IsBinaryPath(filePath)
 
 		fileChange := &FileChange{
 			FileDiff: fileDiff,
@@ -276,24 +277,6 @@ func diffEntryToStatus(status string) diffs.FileDiffStatus {
 	default:
 		return diffs.FileDiffStatusModified
 	}
-}
-
-// isBinaryByExtension checks if a file is binary based on extension.
-func isBinaryByExtension(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	binaryExtensions := []string{
-		".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",
-		".pdf", ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z",
-		".exe", ".bin", ".dll", ".so", ".dylib",
-		".woff", ".woff2", ".ttf", ".eot",
-		".mp3", ".mp4", ".avi", ".mov", ".wav",
-	}
-	for _, binExt := range binaryExtensions {
-		if ext == binExt {
-			return true
-		}
-	}
-	return false
 }
 
 // generatePreviewRecommendations generates actionable recommendations.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/api"
+	"github.com/collabops/git-executor/internal/api/typed"
 	"github.com/collabops/git-executor/internal/blob"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/gitutil"
@@ -498,13 +500,32 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context, req Bl
 	}
 	defer repositories.GetRepoRWLock(repoCtx.repoPath).RUnlock()
 
-	blobContent, err := NativeGetBlobContent(ctx, repoCtx.repoPath, repoCtx.ref, path)
+	// 내용을 읽기 전에 stat — "미리보기할 파일인가" 는 크기가 아니라 종류로
+	// 결정돼야 하고, 그 판정 자체가 blob 을 메모리에 올리는 비용을 치르면 안
+	// 된다. 미리보기 상한을 넘는 blob 은 읽지 않고 바로 "미리보기 없음" 으로
+	// 응답한다 (raw /blob 스트리밍으로 받거나 다운로드하면 된다).
+	stat, err := blob.NativeStatBlob(ctx, repoCtx.repoPath, repoCtx.ref, path)
 	if err != nil {
-		return BlobOverviewResponse{}, api.NewCoded(api.ErrCodeFileNotFound)
+		return BlobOverviewResponse{}, classifyBlobStatError(err)
+	}
+	if stat.Type != "blob" {
+		return BlobOverviewResponse{}, api.NewCoded(api.ErrCodeInvalidInput,
+			fmt.Sprintf("path is not a file: %s", path))
 	}
 
-	contentType := blob.DetectContentType(blobContent, path)
-	isBinary := blob.IsBinaryContent(blobContent, contentType)
+	// 미리보기 판정/본문 확보는 blob 도메인의 정책 함수 한 곳으로 위임한다.
+	// 바이너리면 앞 8KB 만 읽고 끝나므로, 미리보기하지 않을 파일을 위해 본문을
+	// 메모리에 올리는 일이 없다.
+	preview, err := blob.PreviewBlob(ctx, repoCtx.repoPath, stat, path)
+	if err != nil {
+		// stat 이 성공했으므로 파일은 존재한다 — 여기서의 실패는 "없음" 이
+		// 아니라 내부 오류다. 404 로 뭉개면 원인이 사라진다.
+		h.logger.Error("Failed to read blob preview", zap.String("path", path), zap.Error(err))
+		return BlobOverviewResponse{}, api.NewCoded(api.ErrCodeInternalError, err.Error())
+	}
+	blobContent := preview.Content
+	contentType := preview.ContentType
+	isBinary := preview.IsBinary
 
 	// LFS pointer 감지 — pointer 일 때 Content/Lines 비우고 LFS 메타데이터를
 	// 응답에 첨부하여 client 가 raw /blob 응답의 LFS JSON 분기에 의존하지
@@ -564,12 +585,27 @@ func (h *RepositoryOverviewHandler) HandleGetBlobOverview(c *gin.Context, req Bl
 		Content:      content,
 		ContentType:  contentType,
 		Lines:        lines,
-		Size:         int64(len(blobContent)),
+		Size:         stat.Size,
 		Tree:         treeEntries,
 		Branches:     []GitBranch{},
 		LatestCommit: latestCommit,
 		Commits:      commitsList,
 	}, nil
+}
+
+// classifyBlobStatError 는 blob stat 실패를 원인별 카탈로그 code 로 매핑한다.
+// 이전에는 모든 실패를 FILE_NOT_FOUND 로 뭉개서, 크기 초과/타임아웃이 전부
+// "파일 없음" 으로 보였다.
+func classifyBlobStatError(err error) *typed.HTTPError {
+	switch {
+	case errors.Is(err, blob.ErrBlobIsDirectory):
+		return api.NewCoded(api.ErrCodeInvalidInput, err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		return api.NewCoded(api.ErrCodeTimeout, err.Error())
+	case errors.Is(err, blob.ErrBlobNotFound):
+		return api.NewCoded(api.ErrCodeFileNotFound)
+	}
+	return api.NewCoded(api.ErrCodeInternalError, err.Error())
 }
 
 // HandleGetTreeWithCommitOverview handles GET /overview/tree/commits.

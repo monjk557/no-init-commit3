@@ -93,16 +93,6 @@ func Test_diffEntryToStatus(t *testing.T) {
 	require.Equal(t, "modified", string(diffEntryToStatus("Z"))) // unknown → modified
 }
 
-func Test_isBinaryByExtension(t *testing.T) {
-	t.Parallel()
-
-	require.True(t, isBinaryByExtension("logo.png"))
-	require.True(t, isBinaryByExtension("archive.ZIP")) // case-insensitive
-	require.True(t, isBinaryByExtension("lib.so"))
-	require.False(t, isBinaryByExtension("main.go"))
-	require.False(t, isBinaryByExtension("noext"))
-}
-
 func Test_detectFileType(t *testing.T) {
 	t.Parallel()
 
@@ -211,15 +201,6 @@ func Test_calculateConflictSeverity(t *testing.T) {
 	require.Equal(t, ConflictSeverityCritical, cd.calculateConflictSeverity(ConflictTypeContent,
 		&FileVersion{IsBinary: true}, nil))
 	require.Equal(t, ConflictSeverityMedium, cd.calculateConflictSeverity(ConflictTypeSymlink, nil, nil))
-}
-
-func Test_isBinaryContent(t *testing.T) {
-	t.Parallel()
-
-	cd := &ConflictDetector{}
-	require.True(t, cd.isBinaryContent([]byte{0x01, 0x00, 0x02}))
-	require.False(t, cd.isBinaryContent([]byte("plain text")))
-	require.False(t, cd.isBinaryContent([]byte{}))
 }
 
 func Test_calculateSeverityBreakdown(t *testing.T) {

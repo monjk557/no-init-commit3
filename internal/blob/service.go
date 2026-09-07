@@ -1,20 +1,28 @@
 package blob
 
 import (
+	"bufio"
 	"context"
 	"errors"
-	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
-	"strings"
-	"unicode/utf8"
 
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/go-enry/go-enry/v2"
 )
 
-// MaxBlobSize는 blob의 최대 크기입니다 (50MB)
-const MaxBlobSize = 50 * 1024 * 1024
+// MaxInlinePreviewBytes 는 blob 을 메모리에 올려 inline 미리보기(텍스트 렌더,
+// binary 판정, line count)를 시도하는 상한이다.
+//
+// 이 상한을 넘는 blob 은 "미리보기 대상이 아님" 으로 즉시 판정한다 — 내용을
+// 읽지 않으므로 요청당 메모리가 blob 크기와 무관하게 상수로 유지된다. raw
+// 다운로드(/blob)는 스트리밍이라 이 상한의 영향을 받지 않는다.
+//
+// 5MB: 사람이 실제로 읽는 소스/문서의 상한선 (GitHub 의 inline 렌더 한도는
+// 이보다도 낮다). 올리려면 동시 요청 수 × 상한 만큼 힙이 늘어남을 감안할 것.
+const MaxInlinePreviewBytes int64 = 5 * 1024 * 1024
 
 // BlobService는 blob 관련 비즈니스 로직을 처리하는 서비스입니다.
 type BlobService struct{}
@@ -24,27 +32,66 @@ func NewBlobService() *BlobService {
 	return &BlobService{}
 }
 
-// GetBlobContent는 저장소에서 blob 내용을 가져옵니다.
-// native git show를 사용합니다 (go-git 대체).
-func (s *BlobService) GetBlobContent(ctx context.Context, repoPath, path, ref string) ([]byte, string, error) {
-	content, err := NativeGetBlobContent(ctx, repoPath, ref, path)
+// StatBlob 은 내용을 읽지 않고 blob 메타데이터(type/size/oid)를 조회한다.
+func (s *BlobService) StatBlob(ctx context.Context, repoPath, path, ref string) (BlobStat, error) {
+	stat, err := NativeStatBlob(ctx, repoPath, ref, path)
 	if err != nil {
-		// too-large/directory 는 이미 분류된 카테고리이므로 그대로 전달한다.
-		if errors.Is(err, ErrBlobTooLarge) || errors.Is(err, ErrBlobIsDirectory) {
-			return nil, "", err
-		}
-		return nil, "", fmt.Errorf("%w: %w", ErrBlobNotFound, err)
+		return BlobStat{}, err
+	}
+	if stat.Type == "tree" {
+		return BlobStat{}, ErrBlobIsDirectory
+	}
+	return stat, nil
+}
+
+// OpenBlob 은 blob 내용 스트림을 연다. 호출자가 Close 책임을 진다.
+func (s *BlobService) OpenBlob(ctx context.Context, repoPath, oid string) (io.ReadCloser, error) {
+	return NativeOpenBlob(ctx, repoPath, oid)
+}
+
+// BlobPreview 는 미리보기 판정 결과다. Content 는 inline 렌더 대상일 때만
+// 채워진다.
+type BlobPreview struct {
+	ContentType string
+	IsBinary    bool
+	Content     []byte
+}
+
+// PreviewBlob 은 미리보기 정책을 한 곳에서 적용한다.
+//
+// 판정(content-type / binary)은 앞 contentkind.SniffBytes 만으로 끝나므로, 바이너리로
+// 판명되면 **나머지 바이트는 아예 읽지 않는다** — 4MB 바이너리를 "미리보기
+// 안 할 파일" 이라고 결론내리기 위해 4MB 를 메모리에 올릴 이유가 없다.
+// 메모리에 올리는 건 inline 렌더할 텍스트 뿐이고, 그것도 상한까지만이다.
+func PreviewBlob(ctx context.Context, repoPath string, stat BlobStat, path string) (BlobPreview, error) {
+	stream, err := NativeOpenBlob(ctx, repoPath, stat.OID)
+	if err != nil {
+		return BlobPreview{}, err
+	}
+	// 조기 반환 시 파이프가 닫히며 git 이 SIGPIPE 로 끝난다 — 남은 바이트를
+	// 흘려보내지 않는다.
+	defer func() { _ = stream.Close() }()
+
+	buffered := bufio.NewReaderSize(stream, contentkind.SniffBytes)
+	head, err := buffered.Peek(contentkind.SniffBytes)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+		return BlobPreview{}, err
 	}
 
-	// 파일 크기 체크 (방어적: native reader가 cap+1 까지만 읽으므로 보통 위에서 걸림)
-	if len(content) > MaxBlobSize {
-		return nil, "", fmt.Errorf("%w (%d bytes > %d bytes)", ErrBlobTooLarge, len(content), MaxBlobSize)
+	preview := BlobPreview{ContentType: DetectContentType(head, path)}
+	// 상한 초과는 내용이 온전치 않으므로 inline 렌더 대상이 아니다 — client
+	// 계약상 IsBinary 가 곧 "inline 렌더 안 함" 이다.
+	preview.IsBinary = stat.Size > MaxInlinePreviewBytes || contentkind.IsBinary(head)
+	if preview.IsBinary {
+		return preview, nil
 	}
 
-	// Content-Type 감지
-	contentType := DetectContentType(content, path)
-
-	return content, contentType, nil
+	content, err := io.ReadAll(io.LimitReader(buffered, MaxInlinePreviewBytes))
+	if err != nil {
+		return BlobPreview{}, err
+	}
+	preview.Content = content
+	return preview, nil
 }
 
 // DetectContentType는 파일 내용과 이름을 기반으로 Content-Type을 결정합니다.
@@ -102,18 +149,4 @@ func normalizeMIMEType(mt string) string {
 		return v
 	}
 	return mt
-}
-
-// IsBinaryContent는 내용이 바이너리인지 확인합니다.
-func IsBinaryContent(content []byte, contentType string) bool {
-	// Content-Type 확인
-	if strings.HasPrefix(contentType, "text/") ||
-		strings.HasPrefix(contentType, "application/json") ||
-		strings.HasPrefix(contentType, "application/xml") ||
-		strings.HasPrefix(contentType, "application/javascript") {
-		return false
-	}
-
-	// UTF-8 유효성 확인
-	return !utf8.Valid(content)
 }

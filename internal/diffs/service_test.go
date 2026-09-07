@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -626,54 +625,8 @@ func TestBinaryFileDetection_ByExtension(t *testing.T) {
 	}
 }
 
-// TestBinaryFileDetection_ByContent tests binary file detection by null bytes
-func TestBinaryFileDetection_ByContent(t *testing.T) {
-	testCases := []struct {
-		name     string
-		content  string
-		expected bool
-	}{
-		{"text without null", "Hello World\nLine 2\nLine 3", false},
-		{"text with null", "Hello World\x00null byte here", true},
-		{"empty", "", false},
-		{"only null", "\x00", true},
-		{"null at start", "\x00Hello World", true},
-		{"null at end", "Hello World\x00", true},
-		{"large text without null", strings.Repeat("Hello World\n", 1000), false},
-		{"large text with null", strings.Repeat("Hello World\n", 500) + "\x00" + strings.Repeat("More text\n", 500), true},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := isBinaryContent(tc.content)
-			assert.Equal(t, tc.expected, result, "Content should be detected as binary=%v", tc.expected)
-		})
-	}
-}
-
-// TestBinaryFileDetection_First8KB tests that only first 8KB is scanned
-func TestBinaryFileDetection_First8KB(t *testing.T) {
-	// Create content larger than 8KB
-	largeText := strings.Repeat("Hello World\n", 10000) // Much larger than 8KB
-	assert.False(t, isBinaryContent(largeText), "Large text without null should not be binary")
-
-	// Add null byte within first 8KB (at position ~1000)
-	// "Hello World\n" is 12 bytes, so 1000 repetitions = ~12KB, but we need null within first 8KB
-	// Let's put null at position ~5000 bytes (within 8KB)
-	firstPart := strings.Repeat("Hello World\n", 400) // ~4800 bytes
-	nullByte := "\x00"
-	secondPart := strings.Repeat("More text\n", 1000)
-	largeTextWithNull := firstPart + nullByte + secondPart
-	assert.True(t, isBinaryContent(largeTextWithNull), "Text with null within first 8KB should be binary")
-
-	// Add null byte after 8KB (beyond scan limit)
-	// First 8KB without null
-	first8KB := strings.Repeat("A", 8*1024)
-	// Then null at exactly 8KB+1 position
-	textWithNullAt8KBPlus1 := first8KB + "\x00" + strings.Repeat("B", 1000)
-	// This should NOT be detected as binary because null is after 8KB scan limit
-	assert.False(t, isBinaryContent(textWithNullAt8KBPlus1), "Null byte after 8KB should not be detected")
-}
+// 바이너리 판정 규칙(NUL 스캔 / 8KB 경계)의 검증은 internal/contentkind 로
+// 이관됐다 — diffs 는 그 규칙을 소유하지 않고 사용만 한다.
 
 // TestTimeoutPrevention_AllFilesMetadata tests that all files metadata is included even when changes are limited
 func TestTimeoutPrevention_AllFilesMetadata(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/go-enry/go-enry/v2"
 )
 
@@ -121,7 +122,7 @@ func SampleAndResolve(ctx context.Context, repoPath string, groups map[string]*e
 		filesSampled++
 
 		// Skip binary files
-		if enry.IsBinary(content) {
+		if contentkind.IsBinary(content) {
 			continue
 		}
 

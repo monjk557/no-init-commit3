@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/collabops/git-executor/internal/cache"
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/collabops/git-executor/internal/indexing"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/performance"
@@ -345,7 +346,7 @@ func (s *RepositoryOverviewService) GetLanguageDistribution(ctx context.Context,
 				}
 
 				// 파일이 바이너리인지 확인
-				if enry.IsBinary(content) {
+				if contentkind.IsBinary(content) {
 					return nil
 				}
 

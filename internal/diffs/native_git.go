@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1081,24 +1080,4 @@ func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, f
 		StartNew: fromNew,
 		Count:    len(result),
 	}, nil
-}
-
-// isBinaryByExtensionForDiff는 파일 확장자로 바이너리 여부를 판단합니다.
-// diffs 패키지에서 사용하는 래퍼 함수입니다.
-func isBinaryByExtensionForDiff(fileName string) bool {
-	ext := strings.ToLower(filepath.Ext(fileName))
-	if ext == "" {
-		return false
-	}
-	binaryExtensions := map[string]bool{
-		".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".bmp": true, ".ico": true, ".svg": true,
-		".pdf": true, ".zip": true, ".tar": true, ".gz": true, ".bz2": true, ".xz": true, ".7z": true,
-		".exe": true, ".dll": true, ".so": true, ".dylib": true, ".bin": true,
-		".mp3": true, ".mp4": true, ".avi": true, ".mov": true, ".wmv": true,
-		".woff": true, ".woff2": true, ".ttf": true, ".eot": true,
-		".jar": true, ".war": true, ".class": true,
-		".pyc": true, ".o": true, ".a": true, ".lib": true,
-		".db": true, ".sqlite": true, ".sqlite3": true,
-	}
-	return binaryExtensions[ext]
 }

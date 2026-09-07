@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/collabops/git-executor/internal/contentkind"
 	"github.com/gin-gonic/gin"
-	"github.com/go-enry/go-enry/v2"
 )
 
 // generatePatch는 커밋 범위에 대한 Git patch 형식 출력을 생성합니다.
@@ -347,27 +346,6 @@ func parseDiffMode(c *gin.Context, defaultMode DiffMode) DiffMode {
 	return mode
 }
 
-// isBinaryContent는 콘텐츠가 바이너리로 보이는지 확인합니다
-// 처음 8KB만 스캔하여 null 바이트(\0)가 하나라도 있으면 바이너리로 판단합니다
-func isBinaryContent(content string) bool {
-	const scanSize = 8 * 1024 // 8KB
-
-	contentBytes := []byte(content)
-	scanLength := len(contentBytes)
-	if scanLength > scanSize {
-		scanLength = scanSize
-	}
-
-	// 처음 8KB만 스캔하여 null 바이트 체크
-	for i := 0; i < scanLength; i++ {
-		if contentBytes[i] == 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
 // validateAndExtractParams는 요청에서 공통 파라미터를 추출하고 검증합니다
 func (h *DiffHandler) validateAndExtractParams(c *gin.Context) (*RequestParams, error) {
 	// 경로 파라미터 추출
@@ -436,41 +414,9 @@ func paginateFiles(files []FileDiff, pagination PaginationParams) ([]FileDiff, P
 	return files[start:end], pagination
 }
 
-// IsBinaryFile은 콘텐츠와 확장자를 기반으로 파일이 바이너리인지 확인합니다
-// 처음 8KB만 스캔하여 효율성을 높입니다
-func IsBinaryFile(content string) bool {
-	const scanSize = 8 * 1024 // 8KB
-
-	contentBytes := []byte(content)
-	scanLength := len(contentBytes)
-	if scanLength > scanSize {
-		scanLength = scanSize
-	}
-
-	// 처음 8KB만 enry 라이브러리에 전달
-	return enry.IsBinary(contentBytes[:scanLength])
-}
-
-// isBinaryFileByExtension는 파일 확장자를 기반으로 바이너리 파일인지 확인합니다
+// isBinaryFileByExtension 는 경로만으로 바이너리 여부를 추정한다 (diff 는
+// blob 을 열지 않고 이름만 아는 자리가 있다). 판정 자체는 contentkind 가
+// 단일 소스.
 func isBinaryFileByExtension(fileName string) bool {
-	ext := strings.ToLower(filepath.Ext(fileName))
-	if ext == "" {
-		return false
-	}
-
-	// 일반적인 바이너리 파일 확장자 목록
-	binaryExtensions := map[string]bool{
-		".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".bmp": true, ".ico": true, ".svg": true,
-		".pdf": true, ".zip": true, ".tar": true, ".gz": true, ".bz2": true, ".xz": true, ".7z": true,
-		".exe": true, ".dll": true, ".so": true, ".dylib": true, ".bin": true,
-		".mp3": true, ".mp4": true, ".avi": true, ".mov": true, ".wmv": true,
-		".doc": true, ".docx": true, ".xls": true, ".xlsx": true, ".ppt": true, ".pptx": true,
-		".woff": true, ".woff2": true, ".ttf": true, ".eot": true,
-		".jar": true, ".war": true, ".ear": true, ".class": true,
-		".pyc": true, ".pyo": true, ".o": true, ".a": true, ".lib": true,
-		".db": true, ".sqlite": true, ".sqlite3": true,
-		".dmg": true, ".iso": true, ".img": true,
-	}
-
-	return binaryExtensions[ext]
+	return contentkind.IsBinaryPath(fileName)
 }

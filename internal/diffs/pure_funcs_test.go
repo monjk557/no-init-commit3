@@ -200,16 +200,8 @@ func TestPaginateFiles_PageBeyondTotalReturnsEmpty(t *testing.T) {
 	assert.Equal(t, 3, p.Total)
 }
 
-func TestIsBinaryFile(t *testing.T) {
-	t.Parallel()
-	// null 바이트 포함 → 바이너리.
-	assert.True(t, IsBinaryFile("abc\x00def"))
-	// 일반 텍스트 → 비바이너리.
-	assert.False(t, IsBinaryFile("hello world\nsecond line\n"))
-}
-
 // ----------------------------------------------------------------------------
-// native_git.go — parseFileStatus / zeroSHAToEmpty / isBinaryByExtensionForDiff
+// native_git.go — parseFileStatus / zeroSHAToEmpty
 // ----------------------------------------------------------------------------
 
 func TestParseFileStatus(t *testing.T) {
@@ -237,10 +229,13 @@ func TestZeroSHAToEmpty(t *testing.T) {
 	assert.Equal(t, "abc123", zeroSHAToEmpty("abc123"))
 }
 
-func TestIsBinaryByExtensionForDiff(t *testing.T) {
+// isBinaryFileByExtension 은 contentkind.IsBinaryPath 위임 wrapper — 판정
+// 규칙 자체의 검증은 internal/contentkind 테스트에 있다. 여기서는 diff 경로가
+// 그 규칙을 실제로 태우는지만 확인한다.
+func TestIsBinaryFileByExtension(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isBinaryByExtensionForDiff("image.PNG"))
-	assert.True(t, isBinaryByExtensionForDiff("archive.zip"))
-	assert.False(t, isBinaryByExtensionForDiff("source.go"))
-	assert.False(t, isBinaryByExtensionForDiff("README")) // 확장자 없음.
+	assert.True(t, isBinaryFileByExtension("image.PNG"))
+	assert.True(t, isBinaryFileByExtension("archive.zip"))
+	assert.False(t, isBinaryFileByExtension("source.go"))
+	assert.False(t, isBinaryFileByExtension("README")) // 확장자 없음.
 }

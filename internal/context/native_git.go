@@ -91,7 +91,8 @@ func nativeShowFile(ctx context.Context, repoPath, sha, filePath string) (string
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	// Blob content can be up to MaxBlobSize (50MB) per blob.service.MaxBlobSize.
+	// Blob content is capped at gitutil.MaxOutputLarge (50MB) — this path buffers
+	// the whole object, unlike the streaming raw /blob endpoint.
 	out, err := gitutil.OutputWithLimit(cmd, gitutil.MaxOutputLarge)
 	if err != nil {
 		return "", fmt.Errorf("git show %s failed: %s: %w", spec, strings.TrimSpace(stderr.String()), err)
