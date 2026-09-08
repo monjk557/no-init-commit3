@@ -3,6 +3,7 @@ package diffs
 import (
 	"fmt"
 
+	"github.com/collabops/git-executor/internal/gitsig"
 	"github.com/collabops/git-executor/internal/repositories"
 )
 
@@ -133,6 +134,9 @@ type CommitMetadata struct {
 	Date    string   `json:"date"`
 	Message string   `json:"message"`
 	Parents []string `json:"parents"`
+	// Verification 은 서명 배지를 그리는 데 필요한 판정이다. 배지를 누를 때 따로 조회하지
+	// 않고 커밋과 함께 실어 보낸다. 판정을 만들지 못한 응답에서는 비어 있다.
+	Verification *gitsig.Verification `json:"verification,omitempty"`
 }
 
 // CommitStats는 브랜치 비교를 위한 커밋 수 차이를 나타냅니다

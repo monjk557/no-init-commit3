@@ -1,6 +1,7 @@
 package commits
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/collabops/git-executor/internal/api"
 	"github.com/collabops/git-executor/internal/config"
 	"github.com/collabops/git-executor/internal/events"
+	"github.com/collabops/git-executor/internal/gitsig"
 	"github.com/collabops/git-executor/internal/logging"
 	"github.com/collabops/git-executor/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -21,6 +23,7 @@ type CommitsHandler struct {
 	logger        *logging.Logger
 	pathValidator *repositories.GitAPIPathValidator
 	service       *CommitsService
+	signatures    *gitsig.Store
 }
 
 // NewCommitsHandler는 새로운 commits 핸들러를 생성합니다.
@@ -50,12 +53,16 @@ func NewCommitsHandler(cfg *config.Config) (*CommitsHandler, error) {
 
 	service := NewCommitsService(logger, transactionManager, eventsClient)
 
+	// 판정 캐시는 프로세스 하나를 공유하므로 로거도 여기서 한 번만 붙인다.
+	gitsig.SetDefaultLogger(logger)
+
 	return &CommitsHandler{
 		config:        cfg,
 		pathConfig:    pathConfig,
 		logger:        logger,
 		pathValidator: pathValidator,
 		service:       service,
+		signatures:    gitsig.Default(),
 	}, nil
 }
 
@@ -130,6 +137,7 @@ func (h *CommitsHandler) HandleCommitsAPI(c *gin.Context, req CommitsListRequest
 	if grouped == nil {
 		grouped = []CommitsByDate{}
 	}
+	h.annotateVerifications(ctx, repoCtx.repoPath, grouped)
 
 	pagination := buildPagination(totalCount, params.Skip/params.Limit+1, params.Limit, c.Request.URL.String())
 
@@ -423,9 +431,23 @@ func (h *CommitsHandler) HandleGetCommitDetail(c *gin.Context) (CommitDetailResp
 			Email: commit.Committer.Email,
 			Date:  commit.Committer.Date.UTC().Format("2006-01-02T15:04:05Z"),
 		},
-		Parents:  parents,
-		TreeHash: commit.TreeHash,
+		Parents:      parents,
+		TreeHash:     commit.TreeHash,
+		Verification: h.verificationOf(ctx, repoCtx.repoPath, commit.Sha),
 	}, nil
+}
+
+// verificationOf 는 커밋 하나의 서명 판정을 돌려준다. 판정이 없으면 nil 이고, 그때 화면은
+// 배지를 그리지 않는다.
+func (h *CommitsHandler) verificationOf(ctx context.Context, repoPath, sha string) *gitsig.Verification {
+	if h.signatures == nil {
+		return nil
+	}
+	sigs := h.signatures.Annotate(ctx, repoPath, []string{sha})
+	if sig, ok := sigs[sha]; ok {
+		return &sig
+	}
+	return nil
 }
 
 // HandleMultiFileCommit는 POST /repos/{owner}/{repo}/commits 요청을 처리합니다.

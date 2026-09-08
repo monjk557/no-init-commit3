@@ -615,6 +615,7 @@ func schemaFilePaths() []string {
 		"internal/context/schema.go",
 		"internal/langstats/schema.go",
 		"internal/maintenance/schema.go",
+		"internal/gitsig/schema.go",
 	}
 }
 

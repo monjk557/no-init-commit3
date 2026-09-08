@@ -770,3 +770,33 @@ func (s *CommitsService) addCommitEventToStream(ctx context.Context, repoPath, o
 		}
 	}()
 }
+
+// annotateVerifications 는 한 페이지의 커밋에 서명 판정을 붙인다.
+//
+// 커밋마다 묻지 않고 페이지 단위로 한 번에 묻는다. 목록 한 화면이 커밋 수만큼 git 을
+// 띄우면 그것이 그대로 조회 지연이 된다.
+func (h *CommitsHandler) annotateVerifications(ctx context.Context, repoPath string, grouped []CommitsByDate) {
+	if h.signatures == nil {
+		return
+	}
+
+	var shas []string
+	for _, day := range grouped {
+		for _, commit := range day.Commits {
+			shas = append(shas, commit.SHA)
+		}
+	}
+
+	sigs := h.signatures.Annotate(ctx, repoPath, shas)
+	if len(sigs) == 0 {
+		return
+	}
+
+	for di := range grouped {
+		for ci := range grouped[di].Commits {
+			if sig, ok := sigs[grouped[di].Commits[ci].SHA]; ok {
+				grouped[di].Commits[ci].Verification = &sig
+			}
+		}
+	}
+}

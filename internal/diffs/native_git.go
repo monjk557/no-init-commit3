@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/collabops/git-executor/internal/gitsig"
 	"github.com/collabops/git-executor/internal/gitutil"
 	"github.com/collabops/git-executor/internal/repositories"
 )
@@ -733,14 +734,18 @@ func nativeGetCommitMetadata(ctx context.Context, repoPath, sha string) (*Commit
 		parents = strings.Split(parts[5], " ")
 	}
 
-	return &CommitMetadata{
+	meta := &CommitMetadata{
 		SHA:     parts[0],
 		Author:  parts[1],
 		Email:   parts[2],
 		Date:    parts[3],
 		Message: strings.TrimSpace(parts[4]),
 		Parents: parents,
-	}, nil
+	}
+	if sig, ok := gitsig.Default().Annotate(ctx, repoPath, []string{meta.SHA})[meta.SHA]; ok {
+		meta.Verification = &sig
+	}
+	return meta, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -972,6 +977,7 @@ func nativeGetCommitsByDate(ctx context.Context, repoPath, from, to string) ([]C
 			Commits: commits,
 		})
 	}
+	annotateVerifications(ctx, repoPath, result)
 
 	// 날짜 내림차순 정렬
 	sort.Slice(result, func(i, j int) bool {
@@ -1080,4 +1086,30 @@ func nativeExpandContextLines(ctx context.Context, repoPath, ref, path string, f
 		StartNew: fromNew,
 		Count:    len(result),
 	}, nil
+}
+
+// annotateVerifications 는 날짜별 커밋 묶음에 서명 판정을 붙인다.
+//
+// 커밋마다 묻지 않고 묶음 단위로 한 번에 묻는다. 브랜치 비교는 커밋이 수백 건까지
+// 늘어나므로 여기서 프로세스를 반복하면 비교 화면 전체가 느려진다.
+func annotateVerifications(ctx context.Context, repoPath string, grouped []CommitsByDate) {
+	var shas []string
+	for _, day := range grouped {
+		for _, commit := range day.Commits {
+			shas = append(shas, commit.SHA)
+		}
+	}
+
+	sigs := gitsig.Default().Annotate(ctx, repoPath, shas)
+	if len(sigs) == 0 {
+		return
+	}
+
+	for di := range grouped {
+		for ci := range grouped[di].Commits {
+			if sig, ok := sigs[grouped[di].Commits[ci].SHA]; ok {
+				grouped[di].Commits[ci].Verification = &sig
+			}
+		}
+	}
 }

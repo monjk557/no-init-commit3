@@ -1,6 +1,10 @@
 package commits
 
-import "time"
+import (
+	"time"
+
+	"github.com/collabops/git-executor/internal/gitsig"
+)
 
 // CommitDetailResponse는 단일 커밋의 메타데이터 응답 구조를 나타냅니다.
 type CommitDetailResponse struct {
@@ -11,6 +15,8 @@ type CommitDetailResponse struct {
 	Committer CommitAuthorDetail `json:"committer"`
 	Parents   []string           `json:"parents"`
 	TreeHash  string             `json:"tree_hash"`
+	// Verification 은 커밋 상세 화면의 배지 판정이다. 목록과 같은 계약을 쓴다.
+	Verification *gitsig.Verification `json:"verification,omitempty"`
 }
 
 // CommitAuthorDetail는 커밋 작성자/실행자의 상세 정보입니다.
@@ -196,6 +202,9 @@ type CommitMetadata struct {
 	Date    string   `json:"date"`
 	Message string   `json:"message"`
 	Parents []string `json:"parents"`
+	// Verification 은 서명 배지를 그리는 데 필요한 판정이다. 배지를 누를 때 따로 조회하지
+	// 않고 커밋과 함께 실어 보낸다. 판정을 만들지 못한 응답에서는 비어 있다.
+	Verification *gitsig.Verification `json:"verification,omitempty"`
 }
 
 // CommitStats는 브랜치 비교를 위한 커밋 수 차이를 나타냅니다

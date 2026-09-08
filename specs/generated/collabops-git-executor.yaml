@@ -1953,6 +1953,8 @@ components:
           nullable: true
         tree_hash:
           type: string
+        verification:
+          $ref: '#/components/schemas/Verification'
       required:
         - author
         - committer
@@ -1979,6 +1981,8 @@ components:
           items:
             type: string
           nullable: true
+        verification:
+          $ref: '#/components/schemas/Verification'
       required:
         - author
         - date
@@ -3735,6 +3739,9 @@ components:
         - files_analyzed
         - objects_traversed
         - tree_comparison_time
+    ReasonEnum:
+      type: string
+      enum: [verified, unsigned, anchor-unavailable, unknown-key, email-mismatch, bad-signature, revoked-key, expired-key]
     ReferenceCount:
       type: object
       properties:
@@ -4050,6 +4057,22 @@ components:
         - name
         - owner
         - success
+    Signer:
+      type: object
+      properties:
+        email:
+          type: string
+        fingerprint:
+          type: string
+        key_id:
+          type: string
+      required:
+        - email
+        - fingerprint
+        - key_id
+    SignerTypeEnum:
+      type: string
+      enum: [user, system]
     SimpleBranchInfo:
       type: object
     SingleCommitDiffResponse:
@@ -4122,6 +4145,9 @@ components:
         - created_at
         - message
         - sha
+    StateEnum:
+      type: string
+      enum: [verified, unverified, unsigned, key-unavailable]
     StateRepositoryInfo:
       type: object
       properties:
@@ -4520,6 +4546,25 @@ components:
         - source_commit_sha
         - success
         - target_commit_sha
+    Verification:
+      type: object
+      properties:
+        state:
+          $ref: '#/components/schemas/StateEnum'
+        signer_type:
+          $ref: '#/components/schemas/SignerTypeEnum'
+        signer:
+          $ref: '#/components/schemas/Signer'
+        reason:
+          $ref: '#/components/schemas/ReasonEnum'
+        verified_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - reason
+        - signer_type
+        - state
 
 
   responses:
