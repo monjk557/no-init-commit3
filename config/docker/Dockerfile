@@ -38,7 +38,12 @@ CMD ["nginx", "-g", "daemon off;"]
 # 애플리케이션 런타임 이미지 (기본 타겟 - 기존 CI/CD와 호환)
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata curl git
+# gnupg 와 openssh-keygen 은 커밋 서명 검증에 필요하다 (Issue-8633).
+# git 은 서명을 스스로 검사하지 않고 형식별 도구에 위임한다 — openpgp 와 x509 는
+# gpg/gpgsm, ssh 는 ssh-keygen 이다. 도구가 없으면 %G? 가 서명이 달린 커밋에도
+# "서명 없음"(N) 을 돌려주므로, 서명한 커밋이 미서명으로 표시된다.
+# gnupg 하나에 gpg 와 gpgsm 이 함께 들어온다.
+RUN apk add --no-cache ca-certificates tzdata curl git gnupg openssh-keygen
 
 WORKDIR /app
 

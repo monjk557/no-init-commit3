@@ -28,7 +28,7 @@ RUN mkdir -p /usr/local/bin && \
 # 런타임 이미지
 FROM golang:1.25.5-alpine
 
-RUN apk add --no-cache ca-certificates tzdata curl git bash build-base
+RUN apk add --no-cache ca-certificates tzdata curl git bash build-base gnupg openssh-keygen
 
 WORKDIR /app
 
