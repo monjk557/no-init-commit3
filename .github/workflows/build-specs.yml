@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Verify OpenAPI prerequisites
         run: |
@@ -236,7 +236,7 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download OpenAPI specifications
         uses: actions/download-artifact@v4
