@@ -9,7 +9,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/prometheus/client_golang v1.23.2
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.28.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
